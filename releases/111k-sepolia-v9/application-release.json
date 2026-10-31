@@ -1,0 +1,71 @@
+{
+  "checkedAt": "2026-10-31T11:24:04.436286+00:00",
+  "implementationRevision": "256ca7f58472be7bbffb6cae223e0844bbf11e6e",
+  "configurationRevision": "1d8cba745a80a1ae525934e14a7639a4eab9a4cc",
+  "api": {
+    "before": {
+      "id": "c205f3d4-3389-4b83-b1ee-0d0fc9dd5891",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "43532e6b-01dd-4eae-a5ff-abf0c66a539c",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-31T10:08:13.973451Z"
+    },
+    "after": {
+      "id": "16565f0c-acd1-4f23-b117-070a26426127",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "75b3dc59-eed0-4373-a1af-e50c8bbb946e",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-31T11:13:37.254528Z"
+    }
+  },
+  "frontend": {
+    "before": {
+      "id": "b71adc1a-cd44-4d73-a98e-e388e28b6aea",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "253b5cb3-2ef4-4467-8d95-ad5b77f74b65",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-31T10:09:56.963698Z"
+    },
+    "after": {
+      "id": "12e7787c-905b-46c9-b13f-c3ca7b17ea5c",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "fc843ae6-18c6-4ed3-80df-a6c58017ee21",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-31T11:17:31.64583Z"
+    }
+  },
+  "frontendAsset": "/assets/index-DaFK4y9J.js",
+  "frontendAssetSha256": "3b2b0d306af67524cb277fc8cc43ca91d80a1575dc1da06d19cf5655d8f9c5c0"
+}

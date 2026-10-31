@@ -1,0 +1,169 @@
+{
+  "chainId": 31337,
+  "contract": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+  "gas": {
+    "deploy": "5706633",
+    "mintDiscountedCrate": "176553",
+    "mintWarehouse": "187879",
+    "unboxWarehouse": "349636",
+    "unboxCrate": "111886",
+    "redeemArtwork": "136043",
+    "redeemCrate": "116816",
+    "claimCrate": "603137",
+    "unboxCrates15IncludingBonus": "1198701",
+    "unboxCrates15SeparateTransactions": "1699477",
+    "unboxSpecialCrate": "133073",
+    "claimSpecialCrate": "889148",
+    "apiSignedDelivery": "116840",
+    "apiSignedClaim": "603113",
+    "apiSignedMixedDelivery": "259341",
+    "checkoutLostHashScheduled": "179288",
+    "checkoutLostHashRefresh": "116852",
+    "releaseAllMint": "304340",
+    "releaseDelivery": "84450",
+    "deploy32Recipients": "6982805",
+    "mint32Recipients": "142888",
+    "releaseAllMint32AfterIndividual": "2025762",
+    "mintMonuments2": "236101",
+    "unboxMonument": "2896229",
+    "redeemMonument": "134260",
+    "redeemMixedMonument": "217487"
+  },
+  "batching": {
+    "metadata30ResponseBytes": 7846,
+    "confirm311ContractCalls": 3,
+    "monumentInventoryRequests": 2
+  },
+  "checkoutRecovery": [
+    {
+      "recovery": "scheduled reconciliation",
+      "checkoutId": "518ef6d3-ae74-4511-8a18-ae60430e65f7",
+      "orderId": 479313803,
+      "transactionHash": "0x0efc7976137f90c12e78d15c5ec26495b157f2ef2097e2a7714798775f8bbb98",
+      "fulfillmentOrders": 1,
+      "confirmations": 3
+    },
+    {
+      "recovery": "anonymous refresh",
+      "checkoutId": "ac0795ef-bd7d-43ac-9949-887fbcf57ea3",
+      "orderId": 1830521846,
+      "transactionHash": "0x2a9300c431b18a209bed5a53c7abe7a472d8092e9048e0845527bc0ffc099105",
+      "fulfillmentOrders": 1,
+      "confirmations": 3
+    }
+  ],
+  "metadataChecks": [
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/111111.json",
+      "kind": "artwork",
+      "displayId": 111111,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/116666.json",
+      "kind": "crate",
+      "displayId": 5555,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/117171.json",
+      "kind": "warehouse",
+      "displayId": 505,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/1111111.json",
+      "kind": "artwork_receipt",
+      "displayId": 111111,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/2005555.json",
+      "kind": "crate_receipt",
+      "displayId": 5555,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/117172.json",
+      "kind": "monument",
+      "displayId": 1,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/117189.json",
+      "kind": "monument",
+      "displayId": 18,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/3000001.json",
+      "kind": "monument_receipt",
+      "displayId": 1,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/3000018.json",
+      "kind": "monument_receipt",
+      "displayId": 18,
+      "apiMatchesSource": true
+    }
+  ],
+  "passed": [
+    "mint receipts reconcile to canonical purchase events",
+    "permissionless mint payouts match configured shares",
+    "shipping fees remain separate and follow receiver rotation",
+    "32-recipient deployment, mint, individual and batch payouts",
+    "mixed-case recipients and a former payout caller as payee receive exact payouts",
+    "draft allowlist proof and one discounted crate",
+    "wallet stats and discounted transaction confirmation",
+    "allowance increase to three preserves usage",
+    "public crates and warehouses do not consume discounts",
+    "warehouse mint/unpack",
+    "mixed direct supply",
+    "artwork identity equals token ID across opening order",
+    "transfers preserve artwork identity",
+    "signed artwork delivery",
+    "signed crate delivery",
+    "transferred receipt claim",
+    "supply exhaustion",
+    "15-crate batch with 311 artwork identities and exact aggregate proof",
+    "batch opening saves gas against separate transactions",
+    "311-artwork first-inclusion confirmation and inventory recovery",
+    "150-token-info and 30-metadata contract reads with bounded RPC envelopes",
+    "31-artwork digital unpack",
+    "31-artwork physical receipt claim",
+    "replay rejection",
+    "Ethereum API login and encrypted profile",
+    "API quote and real-chain redemption",
+    "three-confirmation fulfillment publication",
+    "API orphaned crate redelivery under a new order",
+    "token identity and receipt authorization stay stable after opening-order reorg",
+    "API secret-code claim and real-chain receipts",
+    "mixed inventory ownership read",
+    "unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment",
+    "checkout create and submission start retries are idempotent",
+    "unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation",
+    "anonymous checkout refresh recovers a lost transaction hash without a wallet",
+    "checkout public status excludes shipping and callback details",
+    "monument mint, distinct imagery, transfer, 111-crate unpack and complete inventory recovery across two requests",
+    "monument lifetime count and crate reservations survive unpacking",
+    "all seven metadata types match the selected metadata source",
+    "monument-only and mixed real-chain delivery with matching terminal receipts, fulfillment identity, and no monument claim codes",
+    "monument receipts transfer but reject unpacking, redelivery, and signed crate claims while preserving consumed allocations",
+    "first-confirmation reveal, private pending allocations, local R2 publication, immutable reorg handling, and hash-free token recovery"
+  ],
+  "reveal": {
+    "deploymentId": "local-a513e6e4b8f2a923d98304ec87f64353c4d5c853",
+    "contractAddress": "0xa513e6e4b8f2a923d98304ec87f64353c4d5c853",
+    "transactionHash": "0xbaa1c982219ea2f6027c2a0f392052c363713e300c351cb6cf07fdc7dfde6a03",
+    "recoveryHash": "0xe2d364dbcb6f148666a05df95f168cabc2b76d84fe56954ade7c4f68bf5574c0",
+    "pendingMediaHidden": true,
+    "firstConfirmationArtworkCount": 20,
+    "metadataStorage": "isolated-local-r2",
+    "immutableAfterReorg": true,
+    "tokenRecovery": true
+  },
+  "monumentContract": "0xa513e6e4b8f2a923d98304ec87f64353c4d5c853",
+  "metadataSource": "generated-files",
+  "metadataObjectCount": 344984
+}

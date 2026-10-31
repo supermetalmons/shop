@@ -1,0 +1,14 @@
+[
+  {
+    "network": "sepolia",
+    "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+    "bucket": "cdn-mons-shop",
+    "prefix": "111k-sepolia/v9/",
+    "uploaded": 344984,
+    "skipped": 0,
+    "initialized": true,
+    "objectsSha256": "a5d3b2fcf8a09223a6750fc859ee7c5d961addb344b187d1249131488eb1afab",
+    "complete": true,
+    "finishedAt": "2026-10-31T11:04:34.505Z"
+  }
+]

@@ -1,0 +1,348 @@
+{
+  "releaseId": "111k-v9-2026-10-31T10-53-22-972Z-c0bdae2b",
+  "manifestSha256": "786b64654d180462a719f545dd1129a226ef5e25ef22661b8ec5cc77d3a1b68b",
+  "sourceRevision": "256ca7f58472be7bbffb6cae223e0844bbf11e6e",
+  "chainId": 11155111,
+  "deploymentId": "v9",
+  "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/v9/",
+  "previousContract": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+  "previousSaleActive": true,
+  "previousRedemptionsPaused": false,
+  "saleActive": false,
+  "totalSupply": "0",
+  "counters": {
+    "totalSupply": "0",
+    "allocatedCrates": "0",
+    "warehousesMinted": "0",
+    "monumentsMinted": "0",
+    "artworksMinted": "0",
+    "remainingCrates": "5555"
+  },
+  "walletStats": [
+    {
+      "wallet": "0x0000000000000000000000000000000000000000",
+      "values": [
+        "0",
+        "0",
+        "0",
+        "100000000000000",
+        "1100000000000000",
+        false,
+        "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+        "50000000000000",
+        "1",
+        "0",
+        "0",
+        "8800000000000000"
+      ]
+    },
+    {
+      "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "values": [
+        "0",
+        "0",
+        "0",
+        "100000000000000",
+        "1100000000000000",
+        false,
+        "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+        "50000000000000",
+        "1",
+        "0",
+        "0",
+        "8800000000000000"
+      ]
+    },
+    {
+      "wallet": "0x000533f50ddd7f2fc4efd06137b0c1a12cfb7bb9",
+      "values": [
+        "0",
+        "0",
+        "0",
+        "100000000000000",
+        "1100000000000000",
+        false,
+        "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+        "50000000000000",
+        "1",
+        "0",
+        "0",
+        "8800000000000000"
+      ]
+    }
+  ],
+  "proceeds": {
+    "mintRecipients": [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    "mintSharesBps": [
+      5000,
+      2500,
+      1500,
+      1000
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555"
+  },
+  "proceedsVerification": {
+    "recipients": [
+      {
+        "address": "0x1111111111111111111111111111111111111111",
+        "shareBps": "5000",
+        "released": "0",
+        "releasable": "0"
+      },
+      {
+        "address": "0x2222222222222222222222222222222222222222",
+        "shareBps": "2500",
+        "released": "0",
+        "releasable": "0"
+      },
+      {
+        "address": "0x3333333333333333333333333333333333333333",
+        "shareBps": "1500",
+        "released": "0",
+        "releasable": "0"
+      },
+      {
+        "address": "0x4444444444444444444444444444444444444444",
+        "shareBps": "1000",
+        "released": "0",
+        "releasable": "0"
+      }
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555",
+    "totalMintReceived": "0",
+    "totalMintReleased": "0",
+    "totalDeliveryReceived": "0",
+    "totalDeliveryReleased": "0",
+    "releasableDelivery": "0",
+    "contractBalanceWei": "0"
+  },
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "authorizationSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "ownershipRenunciationDisabled": true,
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "discountAllowance": 1,
+  "zeroIssuanceAttestation": {
+    "mintTransferLogs": 0,
+    "purchaseLogs": 0,
+    "fromBlock": 12033427,
+    "throughBlock": 12033429,
+    "throughBlockHash": "0x608dd269a4e39285c6a24b37956ce52d79de3bd43a916865ff86b1a034552e86",
+    "counters": {
+      "totalSupply": "0",
+      "allocatedCrates": "0",
+      "warehousesMinted": "0",
+      "monumentsMinted": "0",
+      "artworksMinted": "0",
+      "remainingCrates": "5555"
+    },
+    "proceedsAllZero": true,
+    "allTwelveStatsChecked": true
+  },
+  "metadataVerification": {
+    "file": "releases/111k-sepolia-v9/metadata-verification.json",
+    "sha256": "b4db15289351e995ac7447d005430bc65af1fa5640363c1b4b2e55b8a037d82d",
+    "objectsSha256": "a5d3b2fcf8a09223a6750fc859ee7c5d961addb344b187d1249131488eb1afab",
+    "objectCount": 344984
+  },
+  "metadataPreviews": [
+    {
+      "kind": 1,
+      "displayId": 1,
+      "tokenId": "1",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/1.json",
+      "name": "1",
+      "metadataSha256": "ee3d3f43808a2bcfb82c1897e7fd4e53a4fe0d89c7f0ad6f533437ba1f8b43f4"
+    },
+    {
+      "kind": 1,
+      "displayId": 111111,
+      "tokenId": "111111",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/111111.json",
+      "name": "111111",
+      "metadataSha256": "0c15eb535abbb5556ca0a08607c040ab1c5259c00300273e803fbb34d6cd6469"
+    },
+    {
+      "kind": 2,
+      "displayId": 1,
+      "tokenId": "111112",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/111112.json",
+      "name": "Crate #1",
+      "metadataSha256": "46b8bcb99a5a3dca2b524373bfda0a61e6317a0295287e2554d0629789d3a5db"
+    },
+    {
+      "kind": 2,
+      "displayId": 5555,
+      "tokenId": "116666",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/116666.json",
+      "name": "Crate #5555",
+      "metadataSha256": "c7f8f6737bcb7d90b88f1f3635a79ce1310dfd03761bdf49bedfe6b3924f8d59"
+    },
+    {
+      "kind": 3,
+      "displayId": 1,
+      "tokenId": "116667",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/116667.json",
+      "name": "Warehouse #1",
+      "metadataSha256": "3f410d9466e66e2542ee6c15504990a1a4214fd8df4bf7df5b297a8fb59ad47d"
+    },
+    {
+      "kind": 3,
+      "displayId": 505,
+      "tokenId": "117171",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/117171.json",
+      "name": "Warehouse #505",
+      "metadataSha256": "ecc795304b1322ef3bdeea17ead57e16de4895fc247ab9cbce88cc6f78381f6f"
+    },
+    {
+      "kind": 4,
+      "displayId": 1,
+      "tokenId": "1000001",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/1000001.json",
+      "name": "Receipt #1",
+      "metadataSha256": "d504dc5f41df5b9d41b9b3c99b5e8a271f8f1b4b541e2083a14706521dd8e7e9"
+    },
+    {
+      "kind": 4,
+      "displayId": 111111,
+      "tokenId": "1111111",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/1111111.json",
+      "name": "Receipt #111111",
+      "metadataSha256": "ff8fb014f40021a83ba6419e2838f72ea7886ee28227f42ccbd95158fe1a195b"
+    },
+    {
+      "kind": 4,
+      "displayId": 111112,
+      "tokenId": "1111112",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/1111112.json",
+      "name": "Receipt #111112",
+      "metadataSha256": "e926f5184ccf4a67c771262ceded8de8cedc8d0461e5398c2d70ee57e7ccbfff"
+    },
+    {
+      "kind": 4,
+      "displayId": 222222,
+      "tokenId": "1222222",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/1222222.json",
+      "name": "Receipt #222222",
+      "metadataSha256": "91faa6a43da1532760d8ee29bd46c0e6b46d61e281f54a306c16d1c0076e3191"
+    },
+    {
+      "kind": 5,
+      "displayId": 1,
+      "tokenId": "2000001",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/2000001.json",
+      "name": "Crate Receipt #1",
+      "metadataSha256": "70058901970ee6465c3abdd93742c0639eaead55807daabbed0ab4ae261b3f7f"
+    },
+    {
+      "kind": 5,
+      "displayId": 5555,
+      "tokenId": "2005555",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/2005555.json",
+      "name": "Crate Receipt #5555",
+      "metadataSha256": "61da4376478cd9068cdc7960a35dfd12e9a2f72bb6097bef37ff5e1859e4a138"
+    },
+    {
+      "kind": 6,
+      "displayId": 1,
+      "tokenId": "117172",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/117172.json",
+      "name": "Monument #1",
+      "metadataSha256": "0ce4a074bd44c17f9fb9614b571a263b8f30bbb883ce583e8bafaf7fe867922e"
+    },
+    {
+      "kind": 6,
+      "displayId": 18,
+      "tokenId": "117189",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/117189.json",
+      "name": "Monument #18",
+      "metadataSha256": "c9b47f3d663253457c9d8d0f1226aa1590fb7b29b88202168d018f9756ddbb3b"
+    },
+    {
+      "kind": 7,
+      "displayId": 1,
+      "tokenId": "3000001",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/3000001.json",
+      "name": "Monument Receipt #1",
+      "metadataSha256": "eec08e63d8d56a23d4fcd940aa78c55fc8a9b246c1c35058c1729e8e0048c3c5"
+    },
+    {
+      "kind": 7,
+      "displayId": 18,
+      "tokenId": "3000018",
+      "uri": "https://cdn.mons.shop/111k-sepolia/v9/3000018.json",
+      "name": "Monument Receipt #18",
+      "metadataSha256": "b2011995a33b4dcce1b6ddd38181e756203d60c6a2522f2691be5a207f028fd9"
+    }
+  ],
+  "contracts": {
+    "NFT111K": {
+      "address": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+      "runtimeBytes": 23273,
+      "runtimeSha256": "93187c902bd27aea9ef11896a02e41760cc7f7ab9f48a66654ed4e7923297397",
+      "runtimeKeccak256": "0xa58a9acaf590fd5b70456b1b38dcda4371cef7358ac023d6f344308b1be0f039",
+      "immutableReferencesChecked": true
+    }
+  },
+  "deploymentBlock": 12033427,
+  "deploymentTransactionHash": "0xcc2face2cfc1dff178251d56732093c76fc06ee8e96673c2d74c6cc8ad69452d",
+  "verifiedBlock": 12033429,
+  "verifiedBlockHash": "0x608dd269a4e39285c6a24b37956ce52d79de3bd43a916865ff86b1a034552e86",
+  "verifiedAt": "2026-10-31T11:06:52.950Z",
+  "transactions": [
+    {
+      "action": "deploy",
+      "hash": "0xcc2face2cfc1dff178251d56732093c76fc06ee8e96673c2d74c6cc8ad69452d",
+      "to": null,
+      "nonce": 39,
+      "gasEstimate": "39239996",
+      "gasLimit": "47137996",
+      "gasPrice": "1000",
+      "maximumFeeWei": "47137996000",
+      "predictedContract": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+      "signedAt": "2026-10-31T11:06:02.035Z",
+      "broadcastAttemptedAt": "2026-10-31T11:06:02.717Z",
+      "confirmedAt": "2026-10-31T11:06:41.163Z",
+      "confirmations": 3,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x61cd3cb",
+        "logs": [
+          {
+            "address": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+            "topics": [
+              "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0",
+              "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "0x000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93"
+            ],
+            "data": "0x",
+            "blockHash": "0x8844582f916d514e8476216f3bd8caf27c01ec9069f403421ff3478b7946fa6b",
+            "blockNumber": "0xb79d93",
+            "blockTimestamp": "0x6ae5cba4",
+            "transactionHash": "0xcc2face2cfc1dff178251d56732093c76fc06ee8e96673c2d74c6cc8ad69452d",
+            "transactionIndex": "0x4a",
+            "logIndex": "0x8f",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000000000000800000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000020001000000000000000000000000000080000000020000000000000000000800000000000000000000000000000000400000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000010000000000",
+        "transactionHash": "0xcc2face2cfc1dff178251d56732093c76fc06ee8e96673c2d74c6cc8ad69452d",
+        "transactionIndex": "0x4a",
+        "blockHash": "0x8844582f916d514e8476216f3bd8caf27c01ec9069f403421ff3478b7946fa6b",
+        "blockNumber": "0xb79d93",
+        "gasUsed": "0x25205c6",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": null,
+        "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8"
+      }
+    }
+  ],
+  "issuanceMayIncreaseAfterOpening": false
+}

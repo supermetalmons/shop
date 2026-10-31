@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "manifestSha256": "e3fa31f3ce1513c4a9001462cdd37d1c7719a033a3440e88b823ff6701bff3b0",
+  "objectsSha256": "a5d3b2fcf8a09223a6750fc859ee7c5d961addb344b187d1249131488eb1afab",
+  "objectCount": 344984,
+  "totalBytes": 71176030,
+  "templateSha256": {
+    "artwork": "7f55fe6733d79ddd5da7c4de60cde80e19f9f1d01eb5fcb6be08820f2e3bee17",
+    "crate": "1c7e6a48a08e8f625f4d32ac54435c2ea91d8c8765d2522a256e3f12858141f9",
+    "warehouse": "53001409fb307945670d4e8b67ea2a69cddbb2c96dc5ce9ee07ac3d9941c554f",
+    "artwork_receipt": "600662656f86202a9e81b6f4b20fd7e70d43a01eceb033052cc5621d15be98c1",
+    "crate_receipt": "3547c4599e05da5c2753ccb17d6a795c7c71fabb1db89da7fef93840bc26d04a",
+    "monument": "90e17badaffd1f4a47267c7119300112daf4fa93b6b864ee1c11e21fc397127e",
+    "monument_receipt": "100a9319050ad2bcf416183bdfdcfa50ddffcb3733d14271837f0d6fe5270c67"
+  }
+}

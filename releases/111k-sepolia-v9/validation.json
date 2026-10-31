@@ -1,0 +1,56 @@
+{
+  "checkedAt": "2026-10-31T10:57:38.655252+00:00",
+  "sourceRevision": "256ca7f58472be7bbffb6cae223e0844bbf11e6e",
+  "frontend": {
+    "passed": 4762,
+    "additionalWorkerAndClientTests": 34,
+    "failed": 0,
+    "build": true,
+    "browserBundleValidated": true
+  },
+  "api": {
+    "passed": 2880,
+    "runtimePassed": 49,
+    "failed": 0,
+    "bundleValidated": true,
+    "startupChecked": true
+  },
+  "contracts": {
+    "passed": 175,
+    "failed": 0,
+    "optionalForkSkipped": 3,
+    "invariantRuns": 128,
+    "invariantCalls": 8192,
+    "invariantReverts": 0
+  },
+  "gasBenchmarks": 127,
+  "contractToolingTests": 21,
+  "localDeploymentTests": 8,
+  "localLifecycle": {
+    "passed": true,
+    "metadataSource": "generated-files",
+    "metadataObjectCount": 344984
+  },
+  "releaseHelperTests": 7,
+  "runtimeBytes": 23273,
+  "creationBytes": 27105,
+  "toolingTypecheck": true,
+  "sourceReview": {
+    "contractProtocolMetadata": true,
+    "checkoutFulfillment": true,
+    "releaseHelpers": true
+  },
+  "logSha256": {
+    "frontend": "d0cc6d304af87103e248566455a30ca505d8380d46213a792e1e6bcf057390af",
+    "api": "2cf23786f2411840c77bcb486f78e0a472e16f611f681d6563776e40477be49f",
+    "contracts": "5b1aca2218b7b5c0eb7033efe047e3215c734beee450cb716610544710889a1f",
+    "gas": "9ba71129b6032aa6f1a9b815420629d543101ace409a649df2d080a195d2362e",
+    "localDeployment": "4de9fe31143e7f9e5a3257855df52bcf0f93f6dc2a61acc7e0a4520ee09dd409",
+    "localLifecycle": "f8f0a736c5a46fd628d2bb94dcb3178a5c906d821affbf182871c428793a23b5",
+    "releaseHelpers": "d30f693a12bb75b08460ac299ad57a236dcdfd53324029c765a03aa6e5012d2b"
+  },
+  "notes": [
+    "The focused metadata restoration test initially timed out under concurrent load; its isolated retry and the complete frontend run passed without timeout changes.",
+    "Deployment integration boundaries were extended after the full contract run; all four deployment tests passed again."
+  ]
+}

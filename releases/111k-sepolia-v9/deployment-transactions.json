@@ -1,0 +1,197 @@
+{
+  "releaseId": "111k-v9-2026-10-31T10-53-22-972Z-c0bdae2b",
+  "manifestSha256": "786b64654d180462a719f545dd1129a226ef5e25ef22661b8ec5cc77d3a1b68b",
+  "chainId": 11155111,
+  "deploymentId": "v9",
+  "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+  "previousContract": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+  "previousSaleActive": false,
+  "previousRedemptionsPaused": true,
+  "saleActive": true,
+  "transactions": [
+    {
+      "action": "deploy",
+      "hash": "0xcc2face2cfc1dff178251d56732093c76fc06ee8e96673c2d74c6cc8ad69452d",
+      "to": null,
+      "nonce": 39,
+      "gasEstimate": "39239996",
+      "gasLimit": "47137996",
+      "gasPrice": "1000",
+      "maximumFeeWei": "47137996000",
+      "predictedContract": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+      "signedAt": "2026-10-31T11:06:02.035Z",
+      "broadcastAttemptedAt": "2026-10-31T11:06:02.717Z",
+      "confirmedAt": "2026-10-31T11:06:41.163Z",
+      "confirmations": 3,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x61cd3cb",
+        "logs": [
+          {
+            "address": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+            "topics": [
+              "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0",
+              "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "0x000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93"
+            ],
+            "data": "0x",
+            "blockHash": "0x8844582f916d514e8476216f3bd8caf27c01ec9069f403421ff3478b7946fa6b",
+            "blockNumber": "0xb79d93",
+            "blockTimestamp": "0x6ae5cba4",
+            "transactionHash": "0xcc2face2cfc1dff178251d56732093c76fc06ee8e96673c2d74c6cc8ad69452d",
+            "transactionIndex": "0x4a",
+            "logIndex": "0x8f",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000000000000800000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000020001000000000000000000000000000080000000020000000000000000000800000000000000000000000000000000400000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000010000000000",
+        "transactionHash": "0xcc2face2cfc1dff178251d56732093c76fc06ee8e96673c2d74c6cc8ad69452d",
+        "transactionIndex": "0x4a",
+        "blockHash": "0x8844582f916d514e8476216f3bd8caf27c01ec9069f403421ff3478b7946fa6b",
+        "blockNumber": "0xb79d93",
+        "gasUsed": "0x25205c6",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": null,
+        "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8"
+      }
+    },
+    {
+      "action": "pause-old",
+      "hash": "0xbd18268fc2c3e3ff42644f97d8b5a21eaa0d313fee601f55af9e456af784efe7",
+      "to": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+      "nonce": 40,
+      "gasEstimate": "31441",
+      "gasLimit": "87730",
+      "gasPrice": "1000",
+      "maximumFeeWei": "87730000",
+      "signedAt": "2026-10-31T11:12:01.899Z",
+      "broadcastAttemptedAt": "2026-10-31T11:12:02.576Z",
+      "confirmedAt": "2026-10-31T11:12:40.658Z",
+      "confirmations": 3,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x367d535",
+        "logs": [
+          {
+            "address": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+            "topics": [
+              "0xc75413bb803e9f5f8572b10a8262838386a1bc5db1743ff399db4f5c32f4691e"
+            ],
+            "data": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "blockHash": "0xd4005f149fd3f42671f66f8e4b9a8464d854adfa02bc59c46a4e8b34f98edeaa",
+            "blockNumber": "0xb79db1",
+            "blockTimestamp": "0x6ae5cd0c",
+            "transactionHash": "0xbd18268fc2c3e3ff42644f97d8b5a21eaa0d313fee601f55af9e456af784efe7",
+            "transactionIndex": "0x34",
+            "logIndex": "0x7f",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "transactionHash": "0xbd18268fc2c3e3ff42644f97d8b5a21eaa0d313fee601f55af9e456af784efe7",
+        "transactionIndex": "0x34",
+        "blockHash": "0xd4005f149fd3f42671f66f8e4b9a8464d854adfa02bc59c46a4e8b34f98edeaa",
+        "blockNumber": "0xb79db1",
+        "gasUsed": "0x7971",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "pause-old-redemptions",
+      "hash": "0xc9d125662f6c6f89b57597d6ac3f0b38bc4c83dc66d8ad8f8ff562dc5574d1dd",
+      "to": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+      "nonce": 41,
+      "gasEstimate": "31427",
+      "gasLimit": "87713",
+      "gasPrice": "1000",
+      "maximumFeeWei": "87713000",
+      "signedAt": "2026-10-31T11:12:43.897Z",
+      "broadcastAttemptedAt": "2026-10-31T11:12:44.590Z",
+      "confirmedAt": "2026-10-31T11:13:22.766Z",
+      "confirmations": 3,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x436d0d6",
+        "logs": [
+          {
+            "address": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+            "topics": [
+              "0x0acf9ff8dbe4bf1508790f2e6855c7e959464ff6f7f49e55a2adca5b347e8a05"
+            ],
+            "data": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "blockHash": "0x9757f50896958e2d6266186df8b8ec15596d42bc381f130bbc48f242a87c665f",
+            "blockNumber": "0xb79db4",
+            "blockTimestamp": "0x6ae5cd30",
+            "transactionHash": "0xc9d125662f6c6f89b57597d6ac3f0b38bc4c83dc66d8ad8f8ff562dc5574d1dd",
+            "transactionIndex": "0x41",
+            "logIndex": "0x49",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000080000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000100000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000000000000",
+        "transactionHash": "0xc9d125662f6c6f89b57597d6ac3f0b38bc4c83dc66d8ad8f8ff562dc5574d1dd",
+        "transactionIndex": "0x41",
+        "blockHash": "0x9757f50896958e2d6266186df8b8ec15596d42bc381f130bbc48f242a87c665f",
+        "blockNumber": "0xb79db4",
+        "gasUsed": "0x7963",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "open-new",
+      "hash": "0x20a93ca0e5bf9409eec8c131ce75a2fb4909530fe449133ba4e42d026e5e060c",
+      "to": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+      "nonce": 42,
+      "gasEstimate": "31453",
+      "gasLimit": "87744",
+      "gasPrice": "1000",
+      "maximumFeeWei": "87744000",
+      "signedAt": "2026-10-31T11:20:07.674Z",
+      "broadcastAttemptedAt": "2026-10-31T11:20:09.972Z",
+      "confirmedAt": "2026-10-31T11:20:48.084Z",
+      "confirmations": 3,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x3c62faa",
+        "logs": [
+          {
+            "address": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+            "topics": [
+              "0xc75413bb803e9f5f8572b10a8262838386a1bc5db1743ff399db4f5c32f4691e"
+            ],
+            "data": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "blockHash": "0x7381867ce54b7185d6d8d390927ee117d44351f59de9f807490b6166a2b8ec28",
+            "blockNumber": "0xb79dd9",
+            "blockTimestamp": "0x6ae5ceec",
+            "transactionHash": "0x20a93ca0e5bf9409eec8c131ce75a2fb4909530fe449133ba4e42d026e5e060c",
+            "transactionIndex": "0x45",
+            "logIndex": "0x99",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000",
+        "transactionHash": "0x20a93ca0e5bf9409eec8c131ce75a2fb4909530fe449133ba4e42d026e5e060c",
+        "transactionIndex": "0x45",
+        "blockHash": "0x7381867ce54b7185d6d8d390927ee117d44351f59de9f807490b6166a2b8ec28",
+        "blockNumber": "0xb79dd9",
+        "gasUsed": "0x797d",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+        "contractAddress": null
+      }
+    }
+  ],
+  "reportedAt": "2026-10-31T11:21:00.034Z"
+}

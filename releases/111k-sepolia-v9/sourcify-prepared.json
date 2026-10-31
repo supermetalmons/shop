@@ -1,0 +1,19 @@
+{
+  "manifestSha256": "786b64654d180462a719f545dd1129a226ef5e25ef22661b8ec5cc77d3a1b68b",
+  "remoteSubmissionPerformed": false,
+  "contracts": [
+    {
+      "name": "NFT111K",
+      "address": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+      "endpoint": "https://sourcify.dev/server/v2/verify/11155111/0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+      "file": "NFT111K.sourcify-request.json",
+      "requestSha256": "077ee0c7114d1ac50231940ee83e145514bfa5f40369a43ff34c87adf552b4a7",
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "viaIR": false,
+      "metadataHash": "none",
+      "sourceCount": 22,
+      "creationTransactionHash": null,
+      "deploymentConfirmed": false
+    }
+  ]
+}

@@ -81,7 +81,7 @@ claims remain supported. The `/wip` routes remain available. See
 
 The active 111K Sepolia configuration and maintenance controls are documented in
 [111K setup](scripts/docs/111k_testnet.md); the
-[v8 monument release](releases/111k-sepolia-v8/README.md) records its deployment.
+[v9 monument receipt release](releases/111k-sepolia-v9/README.md) records its deployment.
 Metadata JSONs on public R2 at `cdn.mons.shop` are authoritative for both the shop
 and local development, with permissive CORS and `no-store` caching. No local artwork
 generator or metadata server is used; see [111K metadata](scripts/docs/111k_metadata.md).

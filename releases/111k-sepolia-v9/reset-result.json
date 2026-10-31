@@ -1,0 +1,27 @@
+{
+  "dryRun": false,
+  "completed": true,
+  "reconciled": false,
+  "resetId": "9373e389-690c-4299-8295-4e33c8eccbb3",
+  "scope": {
+    "chainId": 11155111,
+    "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7"
+  },
+  "expectedRevision": 23,
+  "counts": {
+    "documents": 0,
+    "recovery": 0,
+    "notifications": 0,
+    "pack_outbox": 0,
+    "inventory": 0,
+    "available_dudes": 0,
+    "inventory_initializations": 0,
+    "linked_documents": 0,
+    "quotes": 0,
+    "checkouts": 0,
+    "attempts": 0,
+    "claims": 0,
+    "cursors": 1
+  },
+  "backupPath": "/Users/ivan/.mons-shop-backups/ethereum111k/9373e389-690c-4299-8295-4e33c8eccbb3.json"
+}

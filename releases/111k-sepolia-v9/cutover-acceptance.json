@@ -1,0 +1,16 @@
+{
+  "releaseId": "111k-v9-2026-10-31T10-53-22-972Z-c0bdae2b",
+  "manifestSha256": "786b64654d180462a719f545dd1129a226ef5e25ef22661b8ec5cc77d3a1b68b",
+  "chainId": 11155111,
+  "deploymentId": "v9",
+  "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v9/",
+  "previousContract": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+  "mainnetChainUnchanged": true,
+  "mainnetRegistryUnchanged": true,
+  "approvedCdnDiffVerified": true,
+  "revealActive": true,
+  "matchingIds": true,
+  "commerceEnabled": true,
+  "checkedAt": "2026-10-31T11:18:56.026Z"
+}

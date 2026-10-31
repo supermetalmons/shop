@@ -1,0 +1,238 @@
+{
+  "releaseId": "111k-v9-2026-10-31T10-53-22-972Z-c0bdae2b",
+  "manifestSha256": "786b64654d180462a719f545dd1129a226ef5e25ef22661b8ec5cc77d3a1b68b",
+  "sourceRevision": "256ca7f58472be7bbffb6cae223e0844bbf11e6e",
+  "frozenAt": "2026-10-31T10:53:22.973Z",
+  "chainId": 11155111,
+  "deploymentId": "v9",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/v9/",
+  "predictedContract": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+  "startNonce": 39,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "authorizationSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "previousContract": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+  "sources": {
+    "node_modules/@openzeppelin/contracts/access/Ownable.sol": {
+      "sha256": "38578bd71c0a909840e67202db527cc6b4e6b437e0f39f0c909da32c1e30cb81",
+      "keccak256": "0xff6d0bb2e285473e5311d9d3caacb525ae3538a80758c10649a4d61029b017bb"
+    },
+    "node_modules/@openzeppelin/contracts/access/Ownable2Step.sol": {
+      "sha256": "c75345d7b9feef17ae29f2a800ca2f65f8021cf80436a41d6ec00f57f5180f36",
+      "keccak256": "0xdcad8898fda432696597752e8ec361b87d85c82cb258115427af006dacf7128c"
+    },
+    "node_modules/@openzeppelin/contracts/interfaces/IERC5267.sol": {
+      "sha256": "f89772d2d4fafcbef8b73bb10ee9a3373edec2eedb2f1b302320915b351dc3d1",
+      "keccak256": "0xfb223a85dd0b2175cfbbaa325a744e2cd74ecd17c3df2b77b0722f991d2725ee"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Bytes.sol": {
+      "sha256": "3ce9120a27934c75a074cb785d3a88868069ef6529dbe4dc6b845af0836f3c70",
+      "keccak256": "0xf80e4b96b6849936ea0fabd76cf81b13d7276295fddb1e1c07afb3ddf650b0ac"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Context.sol": {
+      "sha256": "847fda5460fee70f56f4200f59b82ae622bb03c79c77e67af010e31b7e2cc5b6",
+      "keccak256": "0x493033a8d1b176a037b2cc6a04dad01a5c157722049bbecf632ca876224dd4b2"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Panic.sol": {
+      "sha256": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
+      "keccak256": "0xf7fe324703a64fc51702311dc51562d5cb1497734f074e4f483bfb6717572d7a"
+    },
+    "node_modules/@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol": {
+      "sha256": "cff7c20aed945d939b764d876adbd42e1b7725d62d5b1f2bd303db237567b575",
+      "keccak256": "0x8b95459390767d84c984d18faee298ce913e69cf0be8d2fe7785e2ad487ffed8"
+    },
+    "node_modules/@openzeppelin/contracts/utils/ShortStrings.sol": {
+      "sha256": "1cfa08d3c551e9ec0b9cd249b09987f04e7e90f352e1a5e3b0d6a3bc426b3de7",
+      "keccak256": "0x0768b3bdb701fe4994b3be932ca8635551dfebe04c645f77500322741bebf57c"
+    },
+    "node_modules/@openzeppelin/contracts/utils/StorageSlot.sol": {
+      "sha256": "75704538dcb223239280c6726d9a31cf769a7816718517c997fc7d63bdb70778",
+      "keccak256": "0xcf74f855663ce2ae00ed8352666b7935f6cddea2932fdf2c3ecd30a9b1cd0e97"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Strings.sol": {
+      "sha256": "e318709bbe73a7831d64c1351e8bdc43780b245f25191234e361e6ab9b98c67b",
+      "keccak256": "0x1fdc2de9585ab0f1c417f02a873a2b6343cd64bb7ffec6b00ffa11a4a158d9e8"
+    },
+    "node_modules/@openzeppelin/contracts/utils/TransientSlot.sol": {
+      "sha256": "ea92f361d697ba8b1fbd322b4d84b989998862c21fbebfa4b45289dc94a9eea2",
+      "keccak256": "0xac673fa1e374d9e6107504af363333e3e5f6344d2e83faf57d9bfd41d77cc946"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/ECDSA.sol": {
+      "sha256": "ba7c2d314fcd61c9783e0b3f0c664d004b76b408fda6a84edc8267d17c5012d6",
+      "keccak256": "0xbeb5cad8aaabe0d35d2ec1a8414d91e81e5a8ca679add4cf57e2f33476861f40"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/EIP712.sol": {
+      "sha256": "2845caaaf70757b6cce612ae4ffbec2c382cb3d1cb9765c98fa649c0f5f1c794",
+      "keccak256": "0x8440117ea216b97a7bad690a67449fd372c840d073c8375822667e14702782b4"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/Hashes.sol": {
+      "sha256": "ecdbce11c5ecdf32b306e26b8ab1b878327c08154b4ccd04518b6b64b298cf31",
+      "keccak256": "0x8cbd338f083224b4b6f0ff42cbda641a0a6c31ffcdca197452b97fe4d0918269"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/MerkleProof.sol": {
+      "sha256": "fd5635e85da7518bf1a153eaa99d3fad8bb6700f9d5d9cb70ddde75935cb122c",
+      "keccak256": "0x5e27273c7ebdbcfe7d2bad2866feb635a49db139abfe5643bdeacec4a0880225"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol": {
+      "sha256": "538a0d7c4f0ec5a8562f58561890f7b49d14580674ecf58bc5f505b45c73df65",
+      "keccak256": "0x6d8579873b9650426bfbd2a754092d1725049ca05e4e3c8c2c82dd9f3453129d"
+    },
+    "node_modules/@openzeppelin/contracts/utils/math/Math.sol": {
+      "sha256": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
+      "keccak256": "0x59973a93b1f983f94e10529f46ca46544a9fec2b5f56fb1390bbe9e0dc79f857"
+    },
+    "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": {
+      "sha256": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
+      "keccak256": "0xc8cae21c9ae4a46e5162ff9bf5b351d6fa6a6eba72d515f3bc1bdfeda7fdf083"
+    },
+    "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": {
+      "sha256": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
+      "keccak256": "0xb1970fac7b64e6c09611e6691791e848d5e3fe410fa5899e7df2e0afd77a99e3"
+    },
+    "node_modules/erc721a/contracts/ERC721A.sol": {
+      "sha256": "79a309548fceac7996545154fc705947728932b187794e4de4fd9c354b156ac0",
+      "keccak256": "0xede758d13ccce2f54a4bcd16816456109b290759d43988205539cf632f4c8a55"
+    },
+    "node_modules/erc721a/contracts/IERC721A.sol": {
+      "sha256": "cd411799895996e5c1ec6074306ef0b75c42e8ae1b969aa36757640433fdc144",
+      "keccak256": "0xc9a2a00612e0d121aef3f716877ada17177d5b2d5a4c780d22cade46da2ff294"
+    },
+    "src/NFT111K.sol": {
+      "sha256": "631500da79e4f9a8d20a733f141dea6a0bec7196f24e22194915d17f282b35a0",
+      "keccak256": "0x90a47946bf5bd310812387c164c3d57bcb5039a688a6ba8b9a30c905d2b53159"
+    }
+  },
+  "contracts": {
+    "NFT111K": {
+      "fullyQualifiedName": "src/NFT111K.sol:NFT111K",
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "sourceCount": 22,
+      "settings": {
+        "remappings": [
+          "@openzeppelin/=node_modules/@openzeppelin/",
+          "erc721a/=node_modules/erc721a/"
+        ],
+        "optimizer": {
+          "enabled": true,
+          "runs": 1000
+        },
+        "metadata": {
+          "bytecodeHash": "none"
+        },
+        "evmVersion": "prague",
+        "libraries": {},
+        "viaIR": false,
+        "outputSelection": {
+          "*": {
+            "*": [
+              "abi",
+              "evm.bytecode",
+              "evm.deployedBytecode",
+              "metadata"
+            ]
+          }
+        }
+      },
+      "creationBytes": 27105,
+      "runtimeBytes": 23273,
+      "creationSha256": "352af866007355d6b256f856d36ccd1b561f89fc1eb9d807c057e6b51e3c9955",
+      "runtimeSha256": "3407701419b0436db5c04f12a32f912c6398e1b5a4f1d5465ee5f57bd8b15cd3",
+      "immutableReferences": {
+        "3764": [
+          {
+            "start": 18584,
+            "length": 32
+          }
+        ],
+        "3766": [
+          {
+            "start": 18542,
+            "length": 32
+          }
+        ],
+        "3768": [
+          {
+            "start": 18500,
+            "length": 32
+          }
+        ],
+        "3770": [
+          {
+            "start": 18665,
+            "length": 32
+          }
+        ],
+        "3772": [
+          {
+            "start": 18705,
+            "length": 32
+          }
+        ],
+        "3775": [
+          {
+            "start": 15665,
+            "length": 32
+          }
+        ],
+        "3778": [
+          {
+            "start": 15710,
+            "length": 32
+          }
+        ]
+      }
+    }
+  },
+  "helpers": {
+    "release-common.cjs": "719834019a524a3fc198331d96e8e2983c4ce5707ad9cf96e55aa360876481a9",
+    "freeze-release.cjs": "a848bba804416985fcc333f052c54c7c581d5c34c09fd8ae410a2713c09e0edc",
+    "deploy-live.cjs": "f904ccdba1a28e7d82e7c0bf94d54a8a9cca9fbb154e2a51cc26e9623d207fef",
+    "verify-deployment.cjs": "a9e0be6f3cb35a859535b50ab85ce9f181fc50437468b3b1df3670783e0e2bc8",
+    "sourcify.cjs": "dc28936a748d6d6950199a1a0feaa13e777bd6a8f6ec470cc4084aacc66701be",
+    "metadata-expectation.json": "ad8d544d17e1d0afb9ad45140e42ebb01f0384abf7c5758100c8c0755d282648",
+    "controls.ts": "9037960e43950fd849f985a7d00c3fca8b5df907dc90cebdd0812ec12dd28ed2",
+    "reveal-register.ts": "79b6da8225457f716b628f778ca00b72236ed7c1122dfa5e4ac2a3033369b55d",
+    "metadata-ops.ts": "25acc30b99d0baa3cfb9c5650bd759db4f1bb639c8c9660113a2ed04c4a4f2fd",
+    "with-r2-auth.ts": "dbd55e4a6fdd07b3ad3cfcebceecb3ff01bac40957630c53534047dbc38f40ec",
+    "state.ts": "9baa4843ceb47072c488b7a8ee83de503cbef910fa3460e84bce80470e96b453"
+  },
+  "files": {
+    "NFT111K.artifact.json": "e07833c48a65aa7cc62eb9620d5d0a1b743b9bdf753a2d96bc0dbc5f97be2f78",
+    "NFT111K.standard-input.json": "a85d211336fefb21d6edf7b9144b7471761e3915c437a702b72f8663879c7348",
+    "NFT111K.compiler-output.json": "987fe217aa5d2b51b4f843e135cc0fe6a365cb23d5f138667b28dd85429f6d1c",
+    "NFT111K.constructor-arguments.txt": "e043a2518e9e661272d64ee6b7d2f620647572bf328a82b7a2dbb3057a1d1903",
+    "proceeds.config.json": "a2526ac727f44d32328f83f3e53d58fe23cc17977aad9fb75fbb8d8d89eacfeb"
+  },
+  "repositoryFiles": {
+    "onchain/ethereum/src/NFT111K.sol": "631500da79e4f9a8d20a733f141dea6a0bec7196f24e22194915d17f282b35a0",
+    "onchain/ethereum/script/Deploy111K.s.sol": "67b0b48bbaabfb19de016aba00ed10865da0d1d965e1ffebfecca4e1de7d8fba",
+    "onchain/ethereum/foundry.toml": "b0ba3a152c5c03369eba70cb6a066d5d1241ca212c5f7afb647592664b35d308",
+    "onchain/ethereum/package.json": "28111869aa1483a662720e58f7c013590e38f0ebcb0bcc97b5b3c6ee16047aed",
+    "onchain/ethereum/package-lock.json": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b",
+    "onchain/ethereum/config/proceeds.json": "a2526ac727f44d32328f83f3e53d58fe23cc17977aad9fb75fbb8d8d89eacfeb",
+    "src/ethereum/discounts/111k.json": "a1daf47d60ed412c5ca8109cf3ce1510c88309749d94dd0e8bc8a71e5aa36186",
+    "shared/ethereum/abi.ts": "d2ad1a3f6cd2c66ead2260e80a649d0c12d7cebe901f3691771031e9c9a2926c",
+    "shared/ethereum/protocol.ts": "f1b591ca43d165c614b6a55a00febb7341f123d0d852a8685ff23a1679070b20",
+    "shared/ethereum/abi.generated.ts": "f188ac546b8aa594babb4412dddfab8e26dc983433ec04096544b493a688d6af",
+    "package.json": "bf028f616836f9a5d6dcee33f89a4716446010317a0d0f3a16bbc3f95e101932",
+    "package-lock.json": "7135dd0b4cbdd89d7de817e0d60584cd87fe40ecb3c0e2bcfa0a644cfcafa7db"
+  },
+  "constructorArguments": "000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93000000000000000000000000cc4c8bfd93af9f36d46215a0206954bf6a14c3ca000000000000000000000000555555555555555555555555555555555555555500000000000000000000000000000000000000000000000000000000000000e08f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001e0000000000000000000000000000000000000000000000000000000000000002668747470733a2f2f63646e2e6d6f6e732e73686f702f3131316b2d7365706f6c69612f76392f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000011111111111111111111111111111111111111110000000000000000000000002222222222222222222222222222222222222222000000000000000000000000333333333333333333333333333333333333333300000000000000000000000044444444444444444444444444444444444444440000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000138800000000000000000000000000000000000000000000000000000000000009c400000000000000000000000000000000000000000000000000000000000005dc00000000000000000000000000000000000000000000000000000000000003e8",
+  "proceeds": {
+    "mintRecipients": [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    "mintSharesBps": [
+      5000,
+      2500,
+      1500,
+      1000
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555"
+  },
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "defaultSaleActive": false,
+  "workingTreeChangesIncluded": false
+}

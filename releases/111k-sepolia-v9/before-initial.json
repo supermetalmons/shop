@@ -1,0 +1,124 @@
+{
+  "checkedAt": "2026-10-31T10:49:04.926Z",
+  "stage": "before",
+  "config": {
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "chainName": "Sepolia",
+    "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v8/",
+    "deploymentBlock": 12032655,
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "enabled": true,
+    "testnet": true,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "monumentPriceWei": "8800000000000000",
+    "deliveryFeeWei": "100000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15,
+    "maxDeliveryItems": 50
+  },
+  "stats": {
+    "chainId": 11155111,
+    "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+    "owner": null,
+    "allocatedCrates": 0,
+    "warehousesMinted": 0,
+    "artworksMinted": 0,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": true,
+    "remainingCrates": 5555,
+    "remainingWarehouses": 505,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "monumentsMinted": 0,
+    "monumentPriceWei": "8800000000000000",
+    "remainingMonuments": 18
+  },
+  "commerce": {
+    "control": {
+      "paused": false,
+      "revision": 22,
+      "pausedAtMs": null,
+      "chainId": 11155111,
+      "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+      "resetGuardId": null,
+      "lastResetId": "e6eba7df-19a6-4760-9991-2302440fbdaa",
+      "updatedAtMs": 1793436255000
+    }
+  },
+  "reveal": {
+    "deployments": [
+      {
+        "deploymentId": "sepolia-8b4044db",
+        "dropId": "111k_devnet",
+        "chainId": 11155111,
+        "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/",
+        "deploymentBlock": 12005467,
+        "catalogVersion": "111k-v1",
+        "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+        "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+        "state": "paused",
+        "revision": 4,
+        "createdAtMs": 1793277369000,
+        "updatedAtMs": 1793443508732,
+        "activatedAtMs": 1793277778000,
+        "provisionedAtMs": 1793277612362,
+        "lastError": null
+      },
+      {
+        "deploymentId": "v7",
+        "dropId": "111k_devnet",
+        "chainId": 11155111,
+        "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v7/",
+        "deploymentBlock": 12029091,
+        "catalogVersion": "111k-v1",
+        "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+        "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+        "state": "paused",
+        "revision": 4,
+        "createdAtMs": 1793392774000,
+        "updatedAtMs": 1793443508731,
+        "activatedAtMs": 1793393972000,
+        "provisionedAtMs": 1793392812258,
+        "lastError": null
+      },
+      {
+        "deploymentId": "v8",
+        "dropId": "111k_devnet",
+        "chainId": 11155111,
+        "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v8/",
+        "deploymentBlock": 12032655,
+        "catalogVersion": "111k-v1",
+        "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+        "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+        "state": "active",
+        "revision": 3,
+        "createdAtMs": 1793435871000,
+        "updatedAtMs": 1793443508744,
+        "activatedAtMs": 1793436262000,
+        "provisionedAtMs": 1793436012274,
+        "lastError": null
+      }
+    ]
+  },
+  "counts": [
+    {
+      "quotes": 0,
+      "checkouts": 0,
+      "attempts": 0,
+      "claims": 0,
+      "orders": 0,
+      "cursors": 1
+    }
+  ]
+}
