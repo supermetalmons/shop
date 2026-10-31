@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-10-31T08:54:13.340Z",
+  "url": "https://mons.shop/111k_devnet",
+  "selectedContainer": "Monument",
+  "displayedAvailability": "18 / 18 left",
+  "mintButton": "Mint 0.0088 ETH",
+  "mintButtonEnabled": true,
+  "pausedMintButtonDisabled": true,
+  "liveQaMints": 0,
+  "screenshots": [
+    "storefront-paused.jpg",
+    "storefront-preopening.jpg",
+    "storefront-open.jpg"
+  ]
+}

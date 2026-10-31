@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "status": "live",
+  "deploymentId": "v8",
+  "chainId": 11155111,
+  "dropId": "111k_devnet",
+  "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v8/",
+  "deploymentBlock": 12032655,
+  "deploymentTransactionHash": "0x63d9d9227cac2cef0c004b626d66a49857aff2e759dae5e8d6dd7dd41640bbc8",
+  "openingTransactionHash": "0xdf2aee7656421469d0dbf2ba1d8812255955617c4268422938708ffc0e9e7bda",
+  "openingBlock": 12032756,
+  "saleActive": true,
+  "maxMonuments": 18,
+  "cratesPerMonument": 111,
+  "previousContract": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+  "previousSaleActive": false,
+  "zeroSupplyCheckpoint": {
+    "mintTransferLogs": 0,
+    "purchaseLogs": 0,
+    "fromBlock": 12032655,
+    "throughBlock": 12032722,
+    "throughBlockHash": "0xb1835f475bca493f5815b4f32fe7ae50fb0e9d344f26bbaa8958ed19704795ac",
+    "counters": {
+      "totalSupply": "0",
+      "allocatedCrates": "0",
+      "warehousesMinted": "0",
+      "monumentsMinted": "0",
+      "artworksMinted": "0",
+      "remainingCrates": "5555"
+    },
+    "proceedsAllZero": true,
+    "allTwelveStatsChecked": true
+  },
+  "observedSupplyAtPostOpeningVerification": "0",
+  "observedApiStats": {
+    "chainId": 11155111,
+    "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+    "owner": null,
+    "allocatedCrates": 0,
+    "warehousesMinted": 0,
+    "artworksMinted": 0,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": true,
+    "remainingCrates": 5555,
+    "remainingWarehouses": 505,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "monumentsMinted": 0,
+    "monumentPriceWei": "8800000000000000",
+    "remainingMonuments": 18
+  },
+  "liveQaMints": 0,
+  "metadataObjectCount": 344966,
+  "legacyMetadataObjectsRenamed": 90,
+  "legacyMetadataCoveragePreserved": true,
+  "initialArtworkPlaceholderObjects": 111111,
+  "initialArtworkReceiptPlaceholderObjects": 222222,
+  "initialRevealPoolAvailable": 111111,
+  "initialReserved": 0,
+  "initialFrozen": 0,
+  "mainnetRegistryUnchanged": true,
+  "mainnetTransactionsSubmitted": 0,
+  "mainnetMetadataChanges": 30,
+  "mainnetInventorySha256": "68d10a369cd0ceae2f2261bb59681ec49310a7b07989084a8b74a1ad03826689",
+  "resetId": "e6eba7df-19a6-4760-9991-2302440fbdaa",
+  "sourceVerification": "Sourcify: frozen sources, creation bytecode, runtime bytecode and constructor arguments matched",
+  "application": {
+    "api": {
+      "id": "a0148492-8683-4e9e-9903-8d4254ba5da6",
+      "createdAt": "2026-10-31T08:36:09.899874Z",
+      "versions": [
+        {
+          "version_id": "c28a8d83-0841-48d4-80bf-1079586de38e",
+          "percentage": 100
+        }
+      ]
+    },
+    "frontend": {
+      "id": "dfe40210-c24f-45d8-8110-8beb52f9353c",
+      "createdAt": "2026-10-31T08:42:54.444427Z",
+      "versions": [
+        {
+          "version_id": "d3293620-99c8-45c1-8841-ffcbac592e92",
+          "percentage": 100
+        }
+      ]
+    }
+  },
+  "completedAt": "2026-10-31T08:54:13.338Z"
+}

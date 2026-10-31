@@ -1,0 +1,46 @@
+{
+  "command": "apply",
+  "planSha256": "70050dc32bff7b96aa72730bfdd6a4f73f0054e3e9510c70d7cc8b8209dbf1cd",
+  "written": 90,
+  "skipped": 0,
+  "finishedAt": "2026-10-31T08:12:01.992Z",
+  "destination": {
+    "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+    "bucket": "cdn-mons-shop"
+  },
+  "prefixes": 5,
+  "objects": 90,
+  "changes": 90,
+  "scopes": [
+    {
+      "prefix": "111k-sepolia/",
+      "registered": true,
+      "objects": 0,
+      "changes": 0
+    },
+    {
+      "prefix": "111k-sepolia/reliquaries-v1/",
+      "registered": false,
+      "objects": 30,
+      "changes": 30
+    },
+    {
+      "prefix": "111k-sepolia/v7/",
+      "registered": true,
+      "objects": 30,
+      "changes": 30
+    },
+    {
+      "prefix": "111k/",
+      "registered": false,
+      "objects": 0,
+      "changes": 0
+    },
+    {
+      "prefix": "111k/reliquaries-v1/",
+      "registered": false,
+      "objects": 30,
+      "changes": 30
+    }
+  ]
+}

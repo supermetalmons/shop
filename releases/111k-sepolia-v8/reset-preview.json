@@ -1,0 +1,25 @@
+{
+  "dryRun": true,
+  "resetId": "e6eba7df-19a6-4760-9991-2302440fbdaa",
+  "scope": {
+    "chainId": 11155111,
+    "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec"
+  },
+  "expectedRevision": 20,
+  "counts": {
+    "documents": 0,
+    "recovery": 0,
+    "notifications": 0,
+    "pack_outbox": 0,
+    "inventory": 0,
+    "available_dudes": 0,
+    "inventory_initializations": 0,
+    "linked_documents": 0,
+    "quotes": 0,
+    "checkouts": 0,
+    "attempts": 0,
+    "claims": 0,
+    "cursors": 1
+  },
+  "pausedForMs": 399000
+}

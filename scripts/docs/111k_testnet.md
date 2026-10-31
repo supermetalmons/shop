@@ -102,7 +102,9 @@ Local deployment loads the committed root from `src/ethereum/discounts/111k.json
 
 ## Sepolia configuration
 
-The monument replacement uses deployment ID `v8`, metadata under `https://cdn.mons.shop/111k-sepolia/v8/`, and a lifetime cap of 18 monuments, each reserving 111 crates. The collection address and creation block come from the fresh deployment receipt and must match the API configuration and reveal registration. The [v7 release](../../releases/111k-sepolia-v7/README.md) records the preceding collection at `0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec`, block `12029091`; preserve its metadata and reveal ledger when replacing it. Earlier release records remain historical. Estimate deployment gas against the live Sepolia RPC and verify the exact creation payload with `eth_call`; local Prague benchmarks are not deployment gas limits. The API uses these settings:
+The [v8 release](../../releases/111k-sepolia-v8/README.md) records the monument collection at `0xab705be519d707a56f43abd63f0869e88fc882b7`, deployed at Sepolia block `12032655` in [transaction 0x63d9d922…41640bbc8](https://sepolia.etherscan.io/tx/0x63d9d9227cac2cef0c004b626d66a49857aff2e759dae5e8d6dd7dd41640bbc8). It was deployed with sales closed and its [source is verified on Sourcify](https://repo.sourcify.dev/11155111/0xab705be519d707a56f43abd63f0869e88fc882b7). Deployment ID `v8` uses metadata under `https://cdn.mons.shop/111k-sepolia/v8/` and a lifetime cap of 18 monuments, each reserving 111 crates. The API configuration and reveal registration must use that exact contract, creation block, and metadata prefix. Consult the release for subsequent cutover and sale-opening results.
+
+The [v7 release](../../releases/111k-sepolia-v7/README.md) records the preceding collection at `0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec`, block `12029091`; preserve its metadata and reveal ledger when replacing it. Earlier release records remain historical. Estimate deployment gas against the live Sepolia RPC and verify the exact creation payload with `eth_call`; local Prague benchmarks are not deployment gas limits. The API uses these settings:
 
 | Setting | Meaning |
 | --- | --- |

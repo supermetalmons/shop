@@ -1,0 +1,44 @@
+{
+  "authorityState": "d1",
+  "authorityRevision": 25,
+  "inventoryMode": "rows",
+  "notificationOutboxMode": "table",
+  "notificationOutboxPreparation": "ready",
+  "notificationOutboxGroups": 119,
+  "notificationOutboxFailures": [],
+  "receiptClaimFailureOutboxRows": 5,
+  "receiptClaimFailureOutboxStates": [
+    {
+      "state": "queued",
+      "last_error_code": null,
+      "count": 5,
+      "oldest_pending_at_ms": null
+    }
+  ],
+  "stripeCheckoutStateMode": "table",
+  "stripeCheckoutStatePreparation": "ready",
+  "stripeCheckoutStateRows": 323,
+  "packStatusOutboxMode": "table",
+  "packStatusOutboxPreparation": "ready",
+  "packStatusOutboxRows": 10,
+  "deliveryRecoveryStateMode": "table",
+  "deliveryRecoveryStatePreparation": "ready",
+  "deliveryRecoveryStateRows": 593,
+  "inventoryDrops": 8,
+  "availableDudes": 5290,
+  "authoritativeDocuments": 16048,
+  "deliveryOwnerRevisions": 29,
+  "documentPathRevisions": 16053,
+  "kindCounts": {
+    "admin_irl_redeem_pack_marker": 110,
+    "admin_irl_redeem_receipt_marker": 116,
+    "admin_irl_redeem_request": 35,
+    "box_assignment": 3863,
+    "claim_code": 595,
+    "delivery_order": 593,
+    "dude_assignment": 10287,
+    "dude_pool": 6,
+    "offchain_order": 120,
+    "stripe_checkout": 323
+  }
+}

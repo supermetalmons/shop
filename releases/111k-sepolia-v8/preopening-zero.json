@@ -1,0 +1,17 @@
+{
+  "mintTransferLogs": 0,
+  "purchaseLogs": 0,
+  "fromBlock": 12032655,
+  "throughBlock": 12032722,
+  "throughBlockHash": "0xb1835f475bca493f5815b4f32fe7ae50fb0e9d344f26bbaa8958ed19704795ac",
+  "counters": {
+    "totalSupply": "0",
+    "allocatedCrates": "0",
+    "warehousesMinted": "0",
+    "monumentsMinted": "0",
+    "artworksMinted": "0",
+    "remainingCrates": "5555"
+  },
+  "proceedsAllZero": true,
+  "allTwelveStatsChecked": true
+}

@@ -1,0 +1,73 @@
+{
+  "checkedAt": "2026-10-31T08:02:13.152Z",
+  "contractTestsPassed": 171,
+  "optionalForkTestsSkipped": 3,
+  "ethereumTypescriptTestsPassed": 734,
+  "gasBenchmarksPassed": 125,
+  "frontendTestsPassed": 5054,
+  "frontendCancelledTest": "Full-collection restoration timed out during overlapping suites; passed in the clean 734-test Ethereum rerun.",
+  "apiTestsPassed": 2879,
+  "apiRetry": {
+    "file": "profileLifecycle.test.ts",
+    "testsPassed": 19,
+    "reason": "Profile reconciliation exceeded its deadline during overlapping suites; full file passed on retry."
+  },
+  "apiRuntimeTestsPassed": 49,
+  "localLifecyclePassed": true,
+  "metadataObjectsValidated": 344966,
+  "buildPassed": true,
+  "browserBundlePassed": true,
+  "apiBundlePassed": true,
+  "apiStartupPassed": true,
+  "deadCodePassed": true,
+  "typechecksPassed": [
+    "frontend",
+    "api",
+    "tools"
+  ],
+  "logs": {
+    "ethereum": {
+      "sha256": "0428a9f3340d510fbb800ce30e9c20fcc124ee598629d849ad0aa5f0193d272b"
+    },
+    "frontend": {
+      "sha256": "94d272244b6c250d9fd901ad1056976cc50280fd790ee1de33377be5cd2e7797"
+    },
+    "api": {
+      "sha256": "e16175b6cc28896704110eaae96a129556d904bd9f01a2ff8dfd87807d0ddb6f"
+    },
+    "profileLifecycleRetry": {
+      "sha256": "d0152d60b5dab1889d69ea5f5b4accecf5426ee856bb0307a435f5282d87e747"
+    },
+    "apiRuntime": {
+      "sha256": "73642326ea05ab406730328bb53485f7d0237d93857919ecd181dda1ad54d7dc"
+    },
+    "localLifecycle": {
+      "sha256": "3ef84b7c89c8f8d69f675e06bf13f512a5f562d7bf35ce65a977b34453837f42"
+    },
+    "build": {
+      "sha256": "1e4a8e17611de390426706bd46def2223a1500a41501d247c25c009237d83b91"
+    },
+    "browserBundle": {
+      "sha256": "0bf1d3ccc8222f5c7d738d0201ed25db19658b852a0c5c03267f46d3c4710fd6"
+    },
+    "apiBundle": {
+      "sha256": "ccbb92a446efef1779da5d7f55d122cfad71e4784dfed55757a4f9854d40a096"
+    },
+    "apiStartup": {
+      "sha256": "d661652728caa6df2d2158c7349dcc0ddd3975ef5fd4cdb3c70f5209a65443db"
+    },
+    "deadCode": {
+      "sha256": "dae042789c2814ceea708dd999925071adaeabe6942c7840afe12b7ad6b7e7ff"
+    },
+    "releaseHelpers": {
+      "sha256": "f2057eaa09166d2d31de9e69887a49604540593b6ffca61cb51a6097fd28fa91"
+    }
+  },
+  "monumentMigrationTestsPassed": 17,
+  "monumentMigrationScanning": "Bounded parallel lexical ranges preserve complete coverage and deterministic inventory hashes.",
+  "remotePreflight": {
+    "packStatus": "passed",
+    "ops": "passed",
+    "commerceForDeployment": "passed"
+  }
+}

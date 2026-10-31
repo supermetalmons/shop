@@ -1,0 +1,51 @@
+{
+  "releaseId": "111k-v8-2026-10-31T07-57-42-880Z-fa4d787b",
+  "manifestSha256": "c2bec04df68456965e69a0ba61eda4db42f907317929447a3e19b1f3ded2a1fc",
+  "readOnly": true,
+  "checkedAt": "2026-10-31T08:31:38.273Z",
+  "chainId": 11155111,
+  "previousContract": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+  "previousSaleActive": true,
+  "nonceLatest": 36,
+  "noncePending": 36,
+  "balanceWei": "2823954567869829175",
+  "credentialMetadata": {
+    "encryptedKeystoresPresent": true,
+    "keychainReferencesConfigured": true,
+    "unlockingPerformed": false
+  },
+  "deploymentId": "v8",
+  "baseURI": "https://cdn.mons.shop/111k-sepolia/v8/",
+  "predictedContract": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+  "sourceRevision": "443dd0675495424d72ca8eeb13d41b086d761fbb",
+  "fullMetadataReady": true,
+  "metadataVerification": {
+    "file": "releases/111k-sepolia-v8/metadata-verification.json",
+    "sha256": "c945e91807e1318f52a167a538117016529e3bbfb10e4101bbafe731009c3412",
+    "complete": true,
+    "objectCount": 344966
+  },
+  "estimates": {
+    "collection": {
+      "action": "deploy",
+      "to": null,
+      "nonce": "0x24",
+      "predictedContract": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+      "gasEstimate": "39012464",
+      "gasLimit": "46864957",
+      "gasPrice": "1000",
+      "maximumFeeWei": "46864957000",
+      "simulatedRuntime": {
+        "runtimeBytes": 23127,
+        "runtimeSha256": "82a616df6b3f77bf20cf652a1b8cec98fb4cc37c8d0e20bd367523c28390dc12",
+        "runtimeKeccak256": "0x7a50fc5c662dacfa4f8bc2c816576a69201a60d00b729c6f43a8c9cee9c4d4aa",
+        "immutableReferencesChecked": true
+      },
+      "estimatedAtBlock": 12032654,
+      "liveBlockGasLimit": "199998857"
+    }
+  },
+  "maximumReleaseFeeWei": "5000000000000000",
+  "maximumReservedFeeWei": "47064957000",
+  "transactions": []
+}

@@ -1,0 +1,16 @@
+{
+  "dryRun": true,
+  "completed": true,
+  "reconciled": true,
+  "resetId": "e6eba7df-19a6-4760-9991-2302440fbdaa",
+  "control": {
+    "paused": true,
+    "revision": 21,
+    "pausedAtMs": 1793435729000,
+    "chainId": 11155111,
+    "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+    "resetGuardId": null,
+    "lastResetId": "e6eba7df-19a6-4760-9991-2302440fbdaa",
+    "updatedAtMs": 1793436142000
+  }
+}

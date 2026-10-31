@@ -1,0 +1,114 @@
+{
+  "checkedAt": "2026-10-31T08:04:42.684Z",
+  "count": 18,
+  "images": [
+    {
+      "displayId": 1,
+      "url": "https://wip.lil.org/111k/monuments/1.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 2,
+      "url": "https://wip.lil.org/111k/monuments/2.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 3,
+      "url": "https://wip.lil.org/111k/monuments/3.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 4,
+      "url": "https://wip.lil.org/111k/monuments/4.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 5,
+      "url": "https://wip.lil.org/111k/monuments/5.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 6,
+      "url": "https://wip.lil.org/111k/monuments/6.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 7,
+      "url": "https://wip.lil.org/111k/monuments/7.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 8,
+      "url": "https://wip.lil.org/111k/monuments/8.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 9,
+      "url": "https://wip.lil.org/111k/monuments/9.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 10,
+      "url": "https://wip.lil.org/111k/monuments/10.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 11,
+      "url": "https://wip.lil.org/111k/monuments/11.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 12,
+      "url": "https://wip.lil.org/111k/monuments/12.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 13,
+      "url": "https://wip.lil.org/111k/monuments/13.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 14,
+      "url": "https://wip.lil.org/111k/monuments/14.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 15,
+      "url": "https://wip.lil.org/111k/monuments/15.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 16,
+      "url": "https://wip.lil.org/111k/monuments/16.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 17,
+      "url": "https://wip.lil.org/111k/monuments/17.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    },
+    {
+      "displayId": 18,
+      "url": "https://wip.lil.org/111k/monuments/18.webp",
+      "status": 200,
+      "contentType": "image/webp"
+    }
+  ]
+}

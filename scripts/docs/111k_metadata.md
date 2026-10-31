@@ -1,6 +1,6 @@
 # 111K offchain metadata
 
-The monument collection uses the Sepolia deployment ID `v8` and metadata prefix `https://cdn.mons.shop/111k-sepolia/v8/`. Its complete baseline contains 344966 objects, including monument tokens `117172.json`–`117189.json`. The preceding [v7 release](../../releases/111k-sepolia-v7/README.md) remains historical evidence; its registered prefix belongs to that original contract.
+The [v8 monument collection](../../releases/111k-sepolia-v8/README.md) uses the Sepolia deployment ID `v8` and metadata prefix `https://cdn.mons.shop/111k-sepolia/v8/`. Its complete baseline contains 344966 objects, including monument tokens `117172.json`–`117189.json`. The preceding [v7 release](../../releases/111k-sepolia-v7/README.md) remains historical evidence; its registered prefix belongs to that original contract.
 
 Deployment IDs are globally unique across networks. Later replacements must choose an unused ID. A future mainnet deployment can use a distinct ID such as `mainnet-monuments-v1`, with the same ID in its prefix suffix. Publish and verify the complete collection at each new prefix before deployment and registration. Existing reveal-managed prefixes remain associated with their original deployments.
 
