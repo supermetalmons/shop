@@ -25,17 +25,18 @@ async function publicationFixture(t: TestContext) {
   const digests = new Map<string, ReturnType<typeof digest>>();
   const files: string[] = [];
   const monumentIds: string[] = [];
+  const monumentReceiptIds: string[] = [];
   const ledger = await open(join(directory, 'objects.jsonl'), 'w');
   let rows: string[] = [];
   let totalBytes = 0;
   try {
     for (const identity of metadataIdentities()) {
       let checksum = placeholderDigest;
-      if (identity.kind === 'monument') {
+      if (identity.kind === 'monument' || identity.kind === 'monument_receipt') {
         const body = Buffer.from(metadataBody(identity, templates));
         bodies.set(identity.file, body);
         digests.set(identity.file, checksum = digest(body));
-        monumentIds.push(identity.tokenId);
+        (identity.kind === 'monument' ? monumentIds : monumentReceiptIds).push(identity.tokenId);
       }
       files.push(identity.file);
       totalBytes += checksum.bytes;
@@ -47,7 +48,7 @@ async function publicationFixture(t: TestContext) {
   const bodyFor = (file: string) => bodies.get(file) ?? placeholder;
   const digestFor = (file: string) => digests.get(file) ?? placeholderDigest;
   const publicSamples = ['1', '55556', '111111', '111112', '116666', '116667', '117171',
-    '1000001', '1111111', '1111112', '1222222', '2000001', '2005555', ...monumentIds];
+    '1000001', '1111111', '1111112', '1222222', '2000001', '2005555', ...monumentIds, ...monumentReceiptIds];
   await Promise.all(publicSamples.map(id => writeFile(join(directory, `${id}.json`), bodyFor(`${id}.json`))));
   const manifest: MetadataManifest = { version: 1, objectCount: files.length, totalBytes, counts: metadataCounts(),
     objectsFile: 'objects.jsonl', objectsSha256: await fileSha256(join(directory, 'objects.jsonl')),
@@ -58,13 +59,14 @@ async function publicationFixture(t: TestContext) {
     objectCount: manifest.objectCount, totalBytes,
   }));
   files.sort();
-  return { directory, manifest, files, monumentIds, bodyFor, digestFor };
+  return { directory, manifest, files, monumentIds, monumentReceiptIds, bodyFor, digestFor };
 }
 
-test('both deployment networks require the complete six-kind publication before reveal registration', async t => {
+test('both deployment networks require the complete seven-kind publication before reveal registration', async t => {
   const publication = await publicationFixture(t);
-  assert.equal(publication.manifest.objectCount, 344966);
+  assert.equal(publication.manifest.objectCount, 344984);
   assert.deepEqual(publication.monumentIds, Array.from({ length: 18 }, (_, index) => String(117172 + index)));
+  assert.deepEqual(publication.monumentReceiptIds, Array.from({ length: 18 }, (_, index) => String(3000001 + index)));
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', import.meta.url), 'utf8'));
@@ -145,13 +147,15 @@ test('both deployment networks require the complete six-kind publication before 
         assert.equal(verified, undefined);
         await writeFile(deploymentFile, JSON.stringify(deployment));
       }
-      await assert.rejects(register(), /inventory is incomplete: 18\/344966/);
+      await assert.rejects(register(), /inventory is incomplete: 18\/344984/);
       assert.equal(chainChecks, 0);
       assert.equal(database.prepare('SELECT COUNT(*) AS count FROM ethereum_reveal_deployments').get()!.count, existingDeployments);
       assert.equal(database.prepare('SELECT COUNT(*) AS count FROM ethereum_metadata_publication_leases').get()!.count, 0);
       complete = true;
       missing = `${prefix}117186.json`;
-      await assert.rejects(verifyMetadata(publication.directory, network, { storage, prefix }), /inventory is incomplete: 344965\/344966/);
+      await assert.rejects(verifyMetadata(publication.directory, network, { storage, prefix }), /inventory is incomplete: 344983\/344984/);
+      missing = `${prefix}3000018.json`;
+      await assert.rejects(verifyMetadata(publication.directory, network, { storage, prefix }), /inventory is incomplete: 344983\/344984/);
       missing = undefined;
       corrupted = `${prefix}117186.json`;
       await assert.rejects(verifyMetadata(publication.directory, network, { storage, prefix }), /Remote metadata checksum mismatch: .*117186\.json/);
@@ -160,10 +164,12 @@ test('both deployment networks require the complete six-kind publication before 
       assert.equal('deployment' in registered && 'state' in registered.deployment && registered.deployment.state, 'provisioning');
       assert.equal(chainChecks, 1);
       assert.equal(verified![0].complete, true);
-      assert.equal(verified![0].objectCount, 344966);
+      assert.equal(verified![0].objectCount, 344984);
       assert.equal(verified![0].totalBytes, publication.manifest.totalBytes);
       assert.deepEqual(verified![0].samples.filter(value => Number(value.tokenId) >= 117172 && Number(value.tokenId) <= 117189)
         .map(value => value.tokenId), ['117172', '117189']);
+      assert.deepEqual(verified![0].samples.filter(value => Number(value.tokenId) >= 3000001)
+        .map(value => value.tokenId), ['3000001', '3000018']);
       assert.equal(database.prepare('SELECT COUNT(*) AS count FROM ethereum_metadata_publication_leases').get()!.count, 0);
     });
   }

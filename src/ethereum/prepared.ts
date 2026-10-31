@@ -1,7 +1,7 @@
 import type { Ethereum111kConfig, EthereumClaimPrepareResponse, EthereumDeliveryPrepareResponse, EthereumInventoryItem, EthereumPreparedTransaction } from '../../shared/ethereum/api';
 import { encodeCall } from '../../shared/ethereum/abi';
 import { ethereumReceiptIdsHash } from '../../shared/ethereum/crypto';
-import { ETHEREUM_FUNCTIONS, ethereumReceiptTokenId, normalizeEthereumAddress } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ethereumReceiptTokenId, isEthereumDeliveryKind, normalizeEthereumAddress } from '../../shared/ethereum/protocol';
 
 function checkedTransaction(transaction: EthereumPreparedTransaction, config: Ethereum111kConfig, expectedData: string, expectedValue: string): EthereumPreparedTransaction {
   if (normalizeEthereumAddress(transaction.to) !== config.contractAddress || transaction.chainId !== config.chainId ||
@@ -24,7 +24,7 @@ export function checkedEthereumDelivery(prepared: EthereumDeliveryPrepareRespons
     throw new Error('The delivery quote does not match your wallet or fee. Please try again.');
   }
   const receiptIdsHash = ethereumReceiptIdsHash(selected.map(item => {
-    if (item.kind !== 'artwork' && item.kind !== 'crate') throw new Error('Select artworks or crates for delivery.');
+    if (!isEthereumDeliveryKind(item.kind)) throw new Error('Select artworks, crates or monuments for delivery.');
     return ethereumReceiptTokenId(item.kind, item.displayId);
   }));
   if (typeof quote.receiptIdsHash !== 'string' || quote.receiptIdsHash.toLowerCase() !== receiptIdsHash) {

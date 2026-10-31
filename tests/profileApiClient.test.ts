@@ -398,7 +398,7 @@ test('fulfillment orders preserve empty and populated card-claims arrays', async
   ]) {
     const client = createFulfillmentApiClient(async () => ({ orders: [{ ...order, cardClaims }], nextCursor: null }));
     assert.deepEqual(await client.listFulfillmentOrders({ dropId: order.dropId }), {
-      orders: [{ ...order, cardClaims }], nextCursor: null,
+      orders: [{ ...order, cardClaims, monuments: [] }], nextCursor: null,
     });
   }
 });

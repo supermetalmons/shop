@@ -267,7 +267,7 @@ test('Ethereum inventory and confirmations preserve metadata while container pre
   assert.deepEqual((await ethereumApi.inventory(config, owner, null)).items, [artwork]);
   assert.deepEqual((await ethereumApi.confirm(hash, config, owner)).items, [artwork]);
   assert.deepEqual(ethereumInventoryView(artwork).attributes, artwork.attributes);
-  for (const kind of ['artwork', 'artwork_receipt', 'crate_receipt', 'monument'] as const) {
+  for (const kind of ['artwork', 'artwork_receipt', 'crate_receipt', 'monument', 'monument_receipt'] as const) {
     const view = ethereumInventoryView({ ...artwork, kind });
     assert.equal(view.image, artwork.image);
     assert.equal(view.imageDimensions, undefined);
@@ -410,6 +410,19 @@ test('Ethereum selection caps delivery at 50 and keeps warehouses separate from 
   assert.deepEqual([...toggleEthereumSelection(selected, warehouse, index, 50)], [warehouse.id]);
   assert.deepEqual([...toggleEthereumSelection(new Set([warehouse.id]), rows[0], index, 50)], [rows[0].id]);
   assert.equal(toggleEthereumSelection(selected, receipt, index, 50).size, 50);
+});
+
+test('monuments join artwork and crate selections while their receipts remain unselectable', () => {
+  const artwork = item('1');
+  const crate = item('111112', 'crate');
+  const monuments = [item('117172', 'monument'), item('117173', 'monument')];
+  const receipt = item('3000001', 'monument_receipt');
+  const index = new Map([artwork, crate, ...monuments, receipt].map(row => [row.id, row]));
+  let selected = new Set([artwork.id, crate.id]);
+  for (const monument of monuments) selected = toggleEthereumSelection(selected, monument, index, 50);
+  assert.deepEqual([...selected], [artwork.id, crate.id, ...monuments.map(row => row.id)]);
+  assert.deepEqual(toggleEthereumSelection(selected, receipt, index, 50), selected);
+  assert.equal(toggleEthereumSelection(new Set([monuments[0].id]), monuments[1], index, 1).size, 1);
 });
 
 test('delivery authorization bytes must match the selected IDs, wallet, order, signature and exact fee', async () => {

@@ -5,7 +5,7 @@ import {
   type EthereumCheckoutState, type EthereumCheckoutStatusResponse, type EthereumCheckoutSubmissionRequest,
   type EthereumCheckoutSubmissionResponse,
 } from '../../shared/ethereum/checkout';
-import { normalizeEthereumAddress } from '../../shared/ethereum/protocol';
+import { isEthereumDeliveryKind, normalizeEthereumAddress } from '../../shared/ethereum/protocol';
 import { EthereumApiError, parseEthereumConfig, parseEthereumInventoryItem } from '../ethereum/api';
 import { requestEthereumJson, type EthereumRequestOptions } from '../ethereum/request';
 
@@ -60,7 +60,7 @@ function parseCheckoutStatus(value: unknown, expectedId?: string): EthereumCheck
   const items = value.items.map(item => {
     if (!record(item) || !normalizeEthereumAddress(item.owner)) return invalid();
     const parsed = parseEthereumInventoryItem(item, config, normalizeEthereumAddress(item.owner)!);
-    if (!ids.has(parsed.tokenId) || !['crate', 'artwork'].includes(parsed.kind)) return invalid();
+    if (!ids.has(parsed.tokenId) || !isEthereumDeliveryKind(parsed.kind)) return invalid();
     return parsed;
   });
   if (new Set(items.map(item => item.tokenId)).size !== items.length || value.unavailableTokenIds.some(id => typeof id !== 'string' || !ids.has(id)) ||

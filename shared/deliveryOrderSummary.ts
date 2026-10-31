@@ -34,7 +34,7 @@ export function parseDeliveryOrderSummary(value: unknown): DeliveryOrderSummary 
       const entry = item as Record<string, unknown>;
       const kind = entry.kind;
       const refId = isPositiveSafeInteger(entry.refId) ? entry.refId : undefined;
-      if ((kind !== 'box' && kind !== 'dude') || refId === undefined) return null;
+      if ((kind !== 'box' && kind !== 'dude' && kind !== 'monument') || refId === undefined) return null;
       return { kind, refId };
     })
     .filter((item): item is DeliveryOrderSummary['items'][number] => Boolean(item));

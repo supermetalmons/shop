@@ -97,6 +97,7 @@ contract NFT111KInvariantHandler is TestSupport {
         _purchaseMonument(actors[0]);
         _unboxMonument(117172);
         _purchaseMonument(actors[1]);
+        _deliver(117173);
     }
 
     function purchaseCrates(uint256 actorSeed, uint256 quantitySeed) external {
@@ -218,6 +219,11 @@ contract NFT111KInvariantHandler is TestSupport {
         if (id != 0) _deliver(id);
     }
 
+    function deliverMonument(uint256 seed) external {
+        uint256 id = _select(6, seed);
+        if (id != 0) _deliver(id);
+    }
+
     function claim(uint256 seed) external {
         uint256 id = _select(5, seed);
         if (id != 0) _claim(id);
@@ -321,7 +327,7 @@ contract NFT111KInvariantHandler is TestSupport {
         }
 
         uint256[3] memory balances;
-        uint256[7] memory liveKinds;
+        uint256[8] memory liveKinds;
         for (uint256 i; i < touched.length; ++i) {
             uint256 id = touched[i];
             ModelToken storage expected = model[id];
@@ -346,6 +352,7 @@ contract NFT111KInvariantHandler is TestSupport {
             assertTrue(knownActor);
             if (kind == 4) assertEq(id, 1000000 + displayId);
             if (kind == 5) assertEq(id, 2000000 + displayId);
+            if (kind == 7) assertEq(id, 3000000 + displayId);
         }
         uint256 liveTotal;
         for (uint256 i; i < actors.length; ++i) {
@@ -357,7 +364,8 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(token.totalSupply(), liveTotal);
         assertEq(
             allocations,
-            liveKinds[6] * 111 + liveKinds[3] * 11 + liveKinds[2] + liveKinds[5] + openedCrates + claimedCrates
+            (liveKinds[6] + liveKinds[7]) * 111 + liveKinds[3] * 11 + liveKinds[2] + liveKinds[5] + openedCrates
+                + claimedCrates
         );
         assertEq(artworkCount, openedCrates * 20);
         assertEq(liveKinds[1], artworkCount - redeemedArtworks);
@@ -473,8 +481,8 @@ contract NFT111KInvariantHandler is TestSupport {
         if (paused) return;
         ModelToken storage original = model[id];
         original.live = false;
-        uint256 receipt = (original.kind == 1 ? 1000000 : 2000000) + original.displayId;
-        _issue(receipt, original.kind == 1 ? 4 : 5, original.displayId, original.holder);
+        uint256 receipt = (original.kind == 1 ? 1000000 : original.kind == 2 ? 2000000 : 3000000) + original.displayId;
+        _issue(receipt, original.kind == 1 ? 4 : original.kind == 2 ? 5 : 7, original.displayId, original.holder);
         if (original.kind == 1) ++redeemedArtworks;
         deliveryRevenue += quote.fee;
         consumedOrders.push(orderId);
@@ -521,7 +529,7 @@ contract NFT111KInvariantHandler is TestSupport {
 
     function _quote(uint256 id, uint256 orderId) private view returns (NFT111K.DeliveryQuote memory) {
         ModelToken storage original = model[id];
-        uint256 receipt = (original.kind == 1 ? 1000000 : 2000000) + original.displayId;
+        uint256 receipt = (original.kind == 1 ? 1000000 : original.kind == 2 ? 2000000 : 3000000) + original.displayId;
         return NFT111K.DeliveryQuote(
             orderId, original.holder, DELIVERY_FEE, block.timestamp + 300, keccak256(abi.encode(_one(receipt)))
         );
@@ -629,7 +637,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](21);
+        bytes4[] memory selectors = new bytes4[](22);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -651,6 +659,7 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[18] = handler.purchaseMonument.selector;
         selectors[19] = handler.unboxMonument.selector;
         selectors[20] = handler.releaseAllMint.selector;
+        selectors[21] = handler.deliverMonument.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

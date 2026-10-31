@@ -31,6 +31,7 @@ function order(overrides: Partial<FulfillmentOrder> = {}): FulfillmentOrder {
     },
     boxes: [],
     looseDudes: [],
+    monuments: [],
     cardClaims: [],
     ...overrides,
   };
@@ -61,6 +62,25 @@ function figureMetadata(...ids: number[]): Props['figureMetadataByKey'] {
 test('an unknown drop renders no order or actions', () => {
   const view = render(createElement(FulfillmentOrderCard, props({ drop: undefined })));
   assert.equal(view.container.childElementCount, 0);
+});
+
+test('Ethereum monument fulfillment shows the matching monument without contents or code actions', async (t) => {
+  const urls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = String(input);
+    urls.push(url);
+    return Response.json({ image: 'https://wip.lil.org/111k/receipt_background.webp' });
+  });
+  const view = render(createElement(FulfillmentOrderCard, props({
+    order: order({ dropId: '111k_devnet', source: 'ethereum', monuments: [18] }), drop: undefined,
+  })));
+  assert.ok(view.getByText('Monument #18'));
+  const image = await view.findByRole('img', { name: 'monument receipt #18' });
+  assert.equal(image.getAttribute('src'), 'https://wip.lil.org/111k/receipt_background.webp');
+  assert.ok(urls.some(url => new URL(url).searchParams.get('kind') === 'monument_receipt'));
+  assert.equal(view.queryByRole('button', { name: 'Show contents' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Download code PNG' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Print Label' }), null);
 });
 
 for (const dropId of [cardDrop.dropId, '111k_devnet']) {

@@ -35,6 +35,7 @@ function order(): FulfillmentOrder {
     status: 'processed',
     address: { countryCode: 'US' },
     boxes: [],
+    monuments: [],
     cardClaims: [],
     looseDudes: [1],
     shipstationShipmentId: 'se-42',

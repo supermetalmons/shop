@@ -289,6 +289,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "MONUMENT_RECEIPT_OFFSET",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MONUMENT_TOKEN_START",
     "inputs": [],
     "outputs": [

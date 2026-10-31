@@ -446,6 +446,7 @@ for (const differentArtworkOrder of [false, true]) test(`delivery sorts a copy o
   t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
   t.mock.method(ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'saved-ethereum-address' } }));
   const selected: EthereumInventoryItem[] = [
+    { ...token(owner, '117189'), kind: 'monument', displayId: 18, name: 'Monument #18' },
     token(),
     { ...token(owner, '10'), kind: 'artwork', displayId: 850, name: 'Artwork #850' },
     { ...token(owner, '2'), kind: 'artwork', displayId: 842, name: 'Artwork #842' },
@@ -456,8 +457,8 @@ for (const differentArtworkOrder of [false, true]) test(`delivery sorts a copy o
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: selected, nextCursor: null, observedBlock: 1 }));
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const signature = `0x${'ab'.repeat(65)}`;
-  const tokenIds = differentArtworkOrder ? ['2', '10', '21', '111112'] : ['2', '10', '111112'];
-  const receiptIdsHash = ethereumReceiptIdsHash(differentArtworkOrder ? ['1000842', '1000850', '1000001', '2000001'] : ['1000842', '1000850', '2000001']);
+  const tokenIds = differentArtworkOrder ? ['2', '10', '21', '111112', '117189'] : ['2', '10', '111112', '117189'];
+  const receiptIdsHash = ethereumReceiptIdsHash(differentArtworkOrder ? ['1000842', '1000850', '1000001', '2000001', '3000018'] : ['1000842', '1000850', '2000001', '3000018']);
   const prepare = t.mock.method(ethereumApi, 'prepareDelivery', async ids => {
     assert.deepEqual(ids, tokenIds);
     return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash },
@@ -799,6 +800,27 @@ for (const kind of ['warehouse', 'monument'] as const) test(`opening rejects dup
   await act(async () => { assert.equal(await view.result.current.unbox([warehouse]), true); });
   assert.equal(connected.sent.length, 1);
   assert.equal((connected.sent[0] as [{ data: string }])[0].data, encodeCall(kind === 'warehouse' ? ETHEREUM_FUNCTIONS.unboxWarehouse : ETHEREUM_FUNCTIONS.unboxMonument, ['uint256'], [firstId]));
+});
+
+test('monument receipts reject opening, delivery and claims while remaining transferable', async t => {
+  const receipt: EthereumInventoryItem = { ...token(owner, '3000018'), kind: 'monument_receipt', displayId: 18, name: 'Monument Receipt #18' };
+  const prepareClaim = t.mock.method(ethereumApi, 'prepareClaim');
+  const prepareDelivery = t.mock.method(ethereumApi, 'prepareDelivery');
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.ok(view.result.current.scope));
+  await act(async () => { assert.equal(await view.result.current.unbox([receipt]), false); });
+  await act(async () => { assert.equal(await view.result.current.deliver([receipt], {
+    formatted: 'Test Name\n123 Example Street', country: 'United States', countryCode: 'US', email: 'test@example.com',
+  }), false); });
+  await act(async () => { assert.equal(await view.result.current.claim(receipt, 'ABCDEF123456'), false); });
+  assert.equal(prepareClaim.mock.callCount(), 0);
+  assert.equal(prepareDelivery.mock.callCount(), 0);
+  assert.equal(connected.sent.length, 0);
+  await act(async () => { assert.equal(await view.result.current.transfer(receipt, other), true); });
+  assert.equal(connected.sent.length, 1);
+  assert.equal((connected.sent[0] as [{ data: string }])[0].data,
+    encodeCall(ETHEREUM_FUNCTIONS.transfer, ['address', 'address', 'uint256'], [owner, other, receipt.tokenId]));
 });
 
 test('a fifteen-crate bonus batch retains all 311 artworks through first inclusion, stale indexing and reload', async t => {

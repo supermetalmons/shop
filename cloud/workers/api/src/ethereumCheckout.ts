@@ -5,7 +5,7 @@ import {
   type EthereumCheckoutSubmissionResponse,
 } from '../../../../shared/ethereum/checkout.js';
 import { decodeEventLogs, decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.js';
-import { ETHEREUM_111K_DROP_ID, ethereumHexQuantity, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.js';
+import { ETHEREUM_111K_DROP_ID, ethereumHexQuantity, isEthereumDeliveryKind, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.js';
 import { EthereumApiError, readEthereumBody } from './ethereumError.js';
 import { ethereumRequestOrigin, limitEthereumRequest, verifyEthereumSession } from './ethereumAuth.js';
 import { isAllowedProfileOrigin } from './profileReadSupport.js';
@@ -172,7 +172,7 @@ async function createCheckout(request: Request, context: EthereumContext): Promi
     return checkoutStatus(context, checkout, true);
   }
   const snapshot = await ethereumBlockSnapshot(context);
-  const infos = (await ethereumTokenInfos(context, tokenIds, snapshot.blockHash)).filter(item => item.kind === 'artwork' || item.kind === 'crate');
+  const infos = (await ethereumTokenInfos(context, tokenIds, snapshot.blockHash)).filter(item => isEthereumDeliveryKind(item.kind));
   const items = await ethereumInventoryItems(context, infos);
   await verifyEthereumBlockSnapshot(context, snapshot);
   const itemsJson = JSON.stringify(items);

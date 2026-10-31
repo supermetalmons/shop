@@ -35,6 +35,7 @@ function order(): FulfillmentOrder {
     status: 'ready_to_ship',
     address: { full: 'Ada\n123 Main St\nUS', countryCode: 'US', email: 'ada@example.com' },
     boxes: [{ boxId: 11, receiptClaimCode: 'PACK-SECRET', dudeIds: [101] }],
+    monuments: [],
     cardClaims: [{ figureId: 102, receiptClaimCode: 'CARD-SECRET', receiptClaimStatus: 'unclaimed' }],
     looseDudes: [],
   };

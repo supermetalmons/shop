@@ -105,5 +105,8 @@ export function EthereumFulfillmentCard({ order, showContactInfo, showFullAddres
     {order.looseDudes.length ? <div className="figure-grid">{order.looseDudes.map((id) => <div className="figure-tile" key={id}>
       <EthereumPreview kind="artwork_receipt" displayId={id} scope={previewScope} /><span className="muted small">Artwork #{id}</span>
     </div>)}</div> : null}
+    {order.monuments.length ? <div className="figure-grid">{order.monuments.map((id) => <div className="figure-tile" key={id}>
+      <EthereumPreview kind="monument_receipt" displayId={id} scope={previewScope} /><span className="muted small">Monument #{id}</span>
+    </div>)}</div> : null}
   </div>;
 }

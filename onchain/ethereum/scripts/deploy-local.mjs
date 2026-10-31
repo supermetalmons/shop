@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseProceedsConfig } from './proceeds-config.mjs';
 
 const root = new URL('../', import.meta.url);
-const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v8/';
+const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v9/';
 const metadataUrl = new URL(metadataBaseURI);
 const hostedMetadata = metadataUrl.origin === 'https://cdn.mons.shop' &&
   /^\/111k(?:-sepolia)?\/(?:[a-z0-9][a-z0-9-]{0,63}\/)?$/.test(metadataUrl.pathname);
@@ -65,7 +65,7 @@ if (!collection.contractAddress || Number(collection.status) !== 1) throw new Er
 if (collection.contractAddress.toLowerCase() !== predictedCollection.toLowerCase()) throw new Error('Unexpected collection deployment address.');
 
 const result = {
-  protocolVersion: 10,
+  protocolVersion: 11,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, deliveryPaymentReceiver, mintRecipients, mintSharesBps, discountRoot,

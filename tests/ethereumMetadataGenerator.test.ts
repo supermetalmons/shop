@@ -23,6 +23,7 @@ const examples: Array<{ kind: EthereumItemKind; name: string; image: string; typ
   { kind: 'crate', name: 'Crate #1', image: 'crate.jpg', type: 'crate' },
   { kind: 'crate_receipt', name: 'Crate Receipt #1', image: 'crate_receipt.webp', type: 'crate receipt' },
   { kind: 'artwork_receipt', name: 'Receipt #1', image: 'artwork_placeholder_receipt.webp', type: 'receipt' },
+  { kind: 'monument_receipt', name: 'Monument Receipt #1', image: 'receipt_background.webp', type: 'monument receipt' },
 ];
 
 test('the editable templates produce the approved metadata format', async () => {
@@ -53,6 +54,17 @@ test('all eighteen monuments use their individual images and reject numbers outs
   for (const displayId of [0, 19]) assert.throws(() => renderMetadata('monument', displayId, templates), /Invalid item number/);
 });
 
+test('all eighteen monument receipts use the shared receipt background and matching display numbers', async () => {
+  const { templates } = await loadMetadataTemplates();
+  for (let displayId = 1; displayId <= 18; displayId++) {
+    assert.deepEqual(renderMetadata('monument_receipt', displayId, templates), {
+      name: `Monument Receipt #${displayId}`, description: '', image: 'https://wip.lil.org/111k/receipt_background.webp',
+      attributes: [{ trait_type: 'type', value: 'monument receipt' }],
+    });
+  }
+  for (const displayId of [0, 19]) assert.throws(() => renderMetadata('monument_receipt', displayId, templates), /Invalid item number/);
+});
+
 test('collection coverage preserves every token filename and both artwork receipt ranges', () => {
   const counts = Object.fromEntries(ETHEREUM_ITEM_KINDS.map(kind => [kind, 0]));
   const seen = new Set<string>();
@@ -65,15 +77,15 @@ test('collection coverage preserves every token filename and both artwork receip
     boundaries[identity.kind] ??= [identity.tokenId, identity.tokenId];
     boundaries[identity.kind][1] = identity.tokenId;
   }
-  assert.equal(seen.size, 344966);
-  assert.deepEqual(counts, { artwork: 111111, crate: 5555, warehouse: 505, artwork_receipt: 222222, crate_receipt: 5555, monument: 18 });
+  assert.equal(seen.size, 344984);
+  assert.deepEqual(counts, { artwork: 111111, crate: 5555, warehouse: 505, artwork_receipt: 222222, crate_receipt: 5555, monument: 18, monument_receipt: 18 });
   assert.deepEqual(metadataCounts(), counts);
   assert.deepEqual(boundaries, {
     artwork: ['1', '111111'], crate: ['111112', '116666'], warehouse: ['116667', '117171'],
     artwork_receipt: ['1000001', '1222222'], crate_receipt: ['2000001', '2005555'],
-    monument: ['117172', '117189'],
+    monument: ['117172', '117189'], monument_receipt: ['3000001', '3000018'],
   });
-  for (const id of ['0', '117190', '1000000', '1222223', '2000000', '2005556']) assert.equal(seen.has(id), false);
+  for (const id of ['0', '117190', '1000000', '1222223', '2000000', '2005556', '3000000', '3000019']) assert.equal(seen.has(id), false);
 });
 
 test('templates can evolve without embedding descriptions, images, or attributes in generator code', async () => {
@@ -129,7 +141,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const object: MetadataObject = { ...identity, bytes: Buffer.byteLength(body), sha256: sha256(body), md5: md5(body) };
   await writeFile(join(directory, 'objects.jsonl'), `${JSON.stringify(object)}\n`);
   const manifest: MetadataManifest = {
-    version: 1, objectCount: 344966, totalBytes: object.bytes, counts: metadataCounts(),
+    version: 1, objectCount: 344984, totalBytes: object.bytes, counts: metadataCounts(),
     objectsFile: 'objects.jsonl', objectsSha256: await fileSha256(join(directory, 'objects.jsonl')),
     templateSha256: hashes, sourceSha256: { fixture: sha256('fixture') },
   };
@@ -147,6 +159,16 @@ test('artifact manifests bind the stored template snapshot and object ledger', a
   await writeFile(snapshot, template);
   await writeFile(join(directory, 'objects.jsonl'), '{}\n');
   await assert.rejects(readMetadataManifest(directory), /object manifest checksum mismatch/);
+});
+
+test('six-kind metadata publications cannot qualify as the monument receipt collection', async t => {
+  const { directory, manifest } = await fixture(t);
+  const { monument_receipt: _count, ...counts } = manifest.counts;
+  const { monument_receipt: _hash, ...templateSha256 } = manifest.templateSha256;
+  await writeFile(join(directory, 'manifest.json'), JSON.stringify({
+    ...manifest, counts, templateSha256, objectCount: 344966,
+  }));
+  await assert.rejects(readMetadataManifest(directory), /complete collection/);
 });
 
 test('generation preserves completed revision artifacts and their validation evidence', async t => {

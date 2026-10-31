@@ -453,6 +453,18 @@ contract NFT111KGasTest is TestSupport {
         _deliverCrates(alice, 1, "deliverCrate1");
     }
 
+    function testGasDeliverMonument1() public {
+        vm.prank(alice);
+        token.mintMonuments{value: 0.0088 ether}(1);
+        _deliver(alice, _range(117172, 1), "deliverMonument1");
+    }
+
+    function testGasDeliverMonument1Receiver() public {
+        vm.prank(receiver);
+        token.mintMonuments{value: 0.0088 ether}(1);
+        _deliver(receiver, _range(117172, 1), "deliverMonument1Receiver");
+    }
+
     function testGasDeliverCrates50() public {
         _deliverCrates(alice, 50, "deliverCrates50");
     }
@@ -870,8 +882,10 @@ contract NFT111KGasTest is TestSupport {
         uint8[] memory kinds = new uint8[](count);
         uint256[] memory ids = new uint256[](count);
         for (uint256 i; i < count; ++i) {
-            kinds[i] = kind == 0 ? uint8(i % 6 + 1) : kind;
-            ids[i] = kinds[i] == 6 ? 18 : kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : 111111;
+            kinds[i] = kind == 0 ? uint8(i % 7 + 1) : kind;
+            ids[i] = kinds[i] == 6 || kinds[i] == 7
+                ? 18
+                : kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : 111111;
         }
         string[] memory uris = token.previewTokenURIs(kinds, ids);
         vm.snapshotGasLastCall(name);
@@ -1028,7 +1042,7 @@ contract NFT111KGasTest is TestSupport {
         uint256[] memory receipts = new uint256[](ids.length);
         for (uint256 i; i < ids.length; ++i) {
             (uint8 kind, uint256 displayId,) = token.getTokenInfo(ids[i]);
-            receipts[i] = (kind == 1 ? 1_000_000 : 2_000_000) + displayId;
+            receipts[i] = (kind == 1 ? 1_000_000 : kind == 2 ? 2_000_000 : 3_000_000) + displayId;
         }
         return NFT111K.DeliveryQuote(1, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
     }

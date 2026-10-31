@@ -53,8 +53,8 @@ contract ContractBuyer {
         require(holder == address(this));
         lastDisplayId = displayId;
         require(bytes(token.tokenURI(id)).length > 40);
-        if (rejectReceipt && (kind == 4 || kind == 5)) revert();
-        if (transferOnReceipt != 0 && (kind == 4 || kind == 5)) {
+        if (rejectReceipt && (kind == 4 || kind == 5 || kind == 7)) revert();
+        if (transferOnReceipt != 0 && (kind == 4 || kind == 5 || kind == 7)) {
             uint256 transferId = transferOnReceipt;
             transferOnReceipt = 0;
             token.transferFrom(address(this), transferRecipient, transferId);
@@ -365,17 +365,126 @@ contract NFT111KTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(receipt, quote, signature);
     }
 
-    function testMonumentCannotBeDelivered() public {
+    function testMonumentDeliveryMintsTerminalReceiptAndRetainsAllocations() public {
         vm.prank(alice);
         token.mintMonuments{value: 0.0088 ether}(1);
         uint256[] memory ids = _one(117172);
         NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
         bytes memory signature = _deliverySignature(ids, quote);
+        vm.recordLogs();
         vm.prank(alice);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        Vm.Log memory delivery = logs[logs.length - 1];
+        assertEq(delivery.topics[0], keccak256("DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[])"));
+        (uint256 fee, uint256[] memory sources, uint256[] memory receipts) =
+            abi.decode(delivery.data, (uint256, uint256[], uint256[]));
+        assertEq(fee, quote.fee);
+        assertEq(sources.length, 1);
+        assertEq(sources[0], 117172);
+        assertEq(receipts.length, 1);
+        assertEq(receipts[0], 3000001);
+        _info(117172, 0, 0, address(0));
+        _info(3000001, 7, 1, alice);
+        assertTrue(token.usedDeliveryOrders(1));
+        assertEq(token.allocatedCrates(), 111);
+        assertEq(token.remainingCrates(), 5444);
+        assertEq(token.monumentsMinted(), 1);
+        assertEq(token.totalSupply(), 1);
+        assertEq(token.totalDeliveryReceived(), quote.fee);
+        for (uint256 id = 111112; id < 111223; ++id) {
+            _info(id, 0, 0, address(0));
+        }
+        _info(1, 0, 0, address(0));
+        _info(1000001, 0, 0, address(0));
+        _info(2000001, 0, 0, address(0));
+        vm.prank(alice);
+        vm.expectRevert(NFT111K.AuthorizationAlreadyUsed.selector);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        vm.prank(alice);
+        vm.expectRevert(NFT111K.WrongOwner.selector);
+        token.unboxMonument(117172);
+        vm.prank(alice);
+        token.transferFrom(alice, bob, 3000001);
+        _info(3000001, 7, 1, bob);
+        vm.prank(bob);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
+        token.claimCrateReceipt(3000001, keccak256("terminal"), block.timestamp + 300, bytes(""));
+        vm.prank(bob);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
+        token.unboxMonument(3000001);
+        ids = _one(3000001);
+        quote = _quote(bob, 2, ids);
+        signature = _deliverySignature(ids, quote);
+        vm.prank(bob);
         vm.expectRevert(NFT111K.WrongItemKind.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
-        _info(117172, 6, 1, alice);
+        assertFalse(token.usedDeliveryOrders(2));
+        _buyCrates(alice, 1);
+        _info(111223, 2, 112, alice);
+        assertEq(token.allocatedCrates(), 112);
+    }
+
+    function testMonumentDeliveryValidatesReceiptIdentityAndPauseBeforeRetry() public {
+        vm.prank(alice);
+        token.mintMonuments{value: 0.0088 ether}(1);
+        uint256[] memory ids = _one(117172);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
+        quote.receiptIdsHash = keccak256(abi.encode(_one(3000002)));
+        bytes memory signature = _deliverySignature(ids, quote);
+        vm.prank(alice);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         assertFalse(token.usedDeliveryOrders(1));
+        _info(117172, 6, 1, alice);
+        quote = _quote(alice, 1, ids);
+        signature = _deliverySignature(ids, quote);
+        token.setRedemptionsPaused(true);
+        vm.prank(alice);
+        vm.expectRevert(NFT111K.RedemptionsPaused.selector);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        token.setRedemptionsPaused(false);
+        vm.prank(alice);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        _info(3000001, 7, 1, alice);
+    }
+
+    function testMonumentReceiptReceiverRejectionRollsBackAndCanTransferOnRetry() public {
+        ContractBuyer buyer = new ContractBuyer(token);
+        vm.deal(address(buyer), 1 ether);
+        vm.prank(address(buyer));
+        token.mintMonuments{value: 0.0088 ether}(1);
+        uint256[] memory ids = _one(117172);
+        NFT111K.DeliveryQuote memory quote = _quote(address(buyer), 1, ids);
+        bytes memory signature = _deliverySignature(ids, quote);
+        buyer.setRejectReceipt(true);
+        vm.expectRevert();
+        buyer.redeem{value: quote.fee}(ids, quote, signature);
+        _info(117172, 6, 1, address(buyer));
+        _info(3000001, 0, 0, address(0));
+        assertFalse(token.usedDeliveryOrders(1));
+        assertEq(token.totalDeliveryReceived(), 0);
+        assertEq(token.allocatedCrates(), 111);
+        buyer.setRejectReceipt(false);
+        buyer.setTransferOnReceipt(3000001, bob);
+        buyer.redeem{value: quote.fee}(ids, quote, signature);
+        _info(3000001, 7, 1, bob);
+        assertTrue(token.usedDeliveryOrders(1));
+    }
+
+    function testFinalMonumentCanBeRedeemedWithoutReleasingItsLifetimeSlot() public {
+        vm.startPrank(alice);
+        token.mintMonuments{value: 0.132 ether}(15);
+        token.mintMonuments{value: 0.0264 ether}(3);
+        vm.stopPrank();
+        _redeem(alice, _one(117189), 1);
+        _info(3000018, 7, 18, alice);
+        assertEq(token.monumentsMinted(), 18);
+        assertEq(token.allocatedCrates(), 1998);
+        assertEq(token.remainingCrates(), 3557);
+        vm.prank(alice);
+        vm.expectRevert(NFT111K.SoldOut.selector);
+        token.mintMonuments{value: 0.0088 ether}(1);
     }
 
     function testSignaturesBindWalletItemsFeeOrderAndDomain() public {
@@ -886,6 +995,7 @@ contract NFT111KTest is TestSupport {
             (uint8 kind, uint256 displayId,) = token.getTokenInfo(ids[i]);
             if (kind == 1) receipts[i] = 1_000_000 + displayId;
             else if (kind == 2) receipts[i] = 2_000_000 + displayId;
+            else if (kind == 6) receipts[i] = 3_000_000 + displayId;
         }
         return
             NFT111K.DeliveryQuote(orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));

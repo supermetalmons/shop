@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useQueryClient } from '@tanstack/react-query';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
 import { ETHEREUM_CHECKOUT_ID, checkoutEntryUrl, type EthereumCheckoutStatusResponse } from '../../shared/ethereum/checkout';
-import { ETHEREUM_MAX_EXPECTED_IDS, ethereumItemDisplayIdMaximum, ethereumReceiptTokenId, formatEtherAmount, type EthereumMintKind } from '../../shared/ethereum/protocol';
+import { ETHEREUM_MAX_EXPECTED_IDS, ethereumItemDisplayIdMaximum, ethereumReceiptTokenId, formatEtherAmount, isEthereumDeliveryKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
 import { InventoryGrid } from '../components/InventoryGrid';
 import { Modal } from '../components/Modal';
@@ -53,7 +53,7 @@ export default function Ethereum111kPage({
   const onCheckoutConfirmed = useCallback((checkout: EthereumCheckoutStatusResponse) => {
     const scope = ethereumInventoryScope(checkout.config, checkout.wallet);
     if (!scope || checkout.status !== 'success' || !checkout.transactionHash) return;
-    const mintedIds = checkout.items.flatMap(item => item.kind === 'crate' || item.kind === 'artwork'
+    const mintedIds = checkout.items.flatMap(item => isEthereumDeliveryKind(item.kind)
       ? [ethereumReceiptTokenId(item.kind, item.displayId)] : []);
     writeEthereumExpected(scope, [...new Set([...readEthereumExpected(scope), ...checkout.tokenIds, ...mintedIds])]
       .slice(-ETHEREUM_MAX_EXPECTED_IDS));
@@ -127,7 +127,7 @@ export default function Ethereum111kPage({
   const selectedContainer = selectedItems.length === 1 && ['crate', 'warehouse', 'monument'].includes(selectedItems[0].kind) ? selectedItems[0] : null;
   const selectedCrates = selectedItems.length > 0 && selectedItems.every(item => item.kind === 'crate');
   const unboxLimitExceeded = selectedCrates && selectedItems.length > model.config.maxUnboxQuantity;
-  const canDeliver = selectedItems.length > 0 && selectedItems.length <= model.config.maxDeliveryItems && selectedItems.every(item => ['crate', 'artwork'].includes(item.kind));
+  const canDeliver = selectedItems.length > 0 && selectedItems.length <= model.config.maxDeliveryItems && selectedItems.every(item => isEthereumDeliveryKind(item.kind));
   const checkoutUnboxBlocked = selectedItems.length > 0 && checkoutBlocksUnbox(selectedItems, checkoutReturnStatus);
   const txLink = model.pending ? ethereumExplorerTransaction(model.config, model.pending.hash) : null;
   const claimLinkKey = claimReceiptId && linkedClaimCode ? `${claimReceiptId}:${linkedClaimCode}` : null;

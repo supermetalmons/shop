@@ -230,10 +230,11 @@ contract SecurityReceiver {
             );
             (kind, displayId, holder) = token.getTokenInfo(deliveryReceipts[i]);
             if (i < callbacks) {
-                uint256 offset = deliveryReceipts[i] < 2000000 ? 1000000 : 2000000;
+                uint256 offset =
+                    deliveryReceipts[i] < 2000000 ? 1000000 : deliveryReceipts[i] < 3000000 ? 2000000 : 3000000;
                 require(
-                    kind == (offset == 1000000 ? 4 : 5) && displayId == deliveryReceipts[i] - offset
-                        && holder == address(this),
+                    kind == (offset == 1000000 ? 4 : offset == 2000000 ? 5 : 7)
+                        && displayId == deliveryReceipts[i] - offset && holder == address(this),
                     "minted receipt prefix mismatch"
                 );
             } else {
@@ -747,6 +748,52 @@ contract NFT111KSecurityTest is TestSupport {
         _deliveryOutputs(ids, receipts, BOB);
         _info(2, 1, 2, BOB);
         _info(3, 1, 3, address(buyer));
+    }
+
+    function testMonumentMixedDeliveryCallbacksSeeAllBurnsAndRejectWholeBatchAtomically() public {
+        SecurityReceiver buyer = _artworkReceiver();
+        buyer.execute(abi.encodeCall(token.mintMonuments, (1)), 0.0088 ether);
+        uint256[] memory ids = new uint256[](3);
+        ids[0] = 117172;
+        ids[1] = 111114;
+        ids[2] = 1;
+        uint256[] memory receipts = new uint256[](3);
+        receipts[0] = 3000001;
+        receipts[1] = 2000003;
+        receipts[2] = 1000001;
+        SecurityCall memory call_ = _deliveryCall(buyer, ids);
+        uint256 allocations = token.allocatedCrates();
+        uint256 balance = token.balanceOf(address(buyer));
+        for (uint256 rejectAt = 1; rejectAt <= ids.length; ++rejectAt) {
+            buyer.configure(rejectAt, false, address(0));
+            buyer.expectDeliveryState(ids, receipts, 2, true);
+            SecurityVm(address(vm))
+                .expectRevert(abi.encodeWithSelector(SecurityReceiver.ReceiverRejected.selector, rejectAt));
+            buyer.execute(call_.data, call_.value);
+            _info(117172, 6, 1, address(buyer));
+            _info(111114, 2, 3, address(buyer));
+            _info(1, 1, 1, address(buyer));
+            for (uint256 i; i < receipts.length; ++i) {
+                _info(receipts[i], 0, 0, address(0));
+            }
+            assertFalse(token.usedDeliveryOrders(2));
+            assertEq(token.allocatedCrates(), allocations);
+            assertEq(token.balanceOf(address(buyer)), balance);
+        }
+        buyer.configure(0, false, address(0));
+        buyer.expectDeliveryState(ids, receipts, 2, true);
+        buyer.execute(call_.data, call_.value);
+        assertEq(buyer.callbacks(), 3);
+        assertEq(buyer.sourceTransferFailures(), 9);
+        assertEq(token.allocatedCrates(), allocations);
+        assertEq(token.balanceOf(address(buyer)), balance);
+        for (uint256 i; i < ids.length; ++i) {
+            _info(ids[i], 0, 0, address(0));
+        }
+        _info(3000001, 7, 1, address(buyer));
+        _info(2000003, 5, 3, address(buyer));
+        _info(1000001, 4, 1, address(buyer));
+        assertTrue(token.usedDeliveryOrders(2));
     }
 
     function testTwoOpeningsInOneWrapperCallHaveSequentialArtworkIds() public {
@@ -1274,7 +1321,7 @@ contract NFT111KSecurityTest is TestSupport {
         uint256[] memory receipts = new uint256[](ids.length);
         for (uint256 i; i < ids.length; ++i) {
             (uint8 kind, uint256 displayId,) = token.getTokenInfo(ids[i]);
-            receipts[i] = (kind == 1 ? 1000000 : 2000000) + displayId;
+            receipts[i] = (kind == 1 ? 1000000 : kind == 2 ? 2000000 : 3000000) + displayId;
         }
         return
             NFT111K.DeliveryQuote(orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));

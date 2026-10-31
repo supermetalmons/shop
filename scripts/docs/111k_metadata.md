@@ -1,6 +1,6 @@
 # 111K offchain metadata
 
-The [v8 monument collection](../../releases/111k-sepolia-v8/README.md) uses the Sepolia deployment ID `v8` and metadata prefix `https://cdn.mons.shop/111k-sepolia/v8/`. Its complete baseline contains 344966 objects, including monument tokens `117172.json`–`117189.json`. The preceding [v7 release](../../releases/111k-sepolia-v7/README.md) remains historical evidence; its registered prefix belongs to that original contract.
+The [v9 monument receipt collection](../../releases/111k-sepolia-v9/README.md) uses the Sepolia deployment ID `v9` and metadata prefix `https://cdn.mons.shop/111k-sepolia/v9/`. Its complete baseline contains 344984 objects, including monument tokens `117172.json`–`117189.json` and monument receipts `3000001.json`–`3000018.json`. The preceding [v8 release](../../releases/111k-sepolia-v8/README.md) remains historical evidence; its registered prefix belongs to that original contract.
 
 Deployment IDs are globally unique across networks. Later replacements must choose an unused ID. A future mainnet deployment can use a distinct ID such as `mainnet-monuments-v1`, with the same ID in its prefix suffix. Publish and verify the complete collection at each new prefix before deployment and registration. Existing reveal-managed prefixes remain associated with their original deployments.
 
@@ -17,10 +17,11 @@ Deployment IDs are globally unique across networks. Later replacements must choo
 | Digital artwork receipt | 1000001–1111111 | Token ID minus 1000000 |
 | Physical-only artwork receipt | 1111112–1222222 | Token ID minus 1000000 |
 | Crate receipt | 2000001–2005555 | Token ID minus 2000000 |
+| Monument receipt | 3000001–3000018 | Token ID minus 3000000 |
 
 Digital opening keeps sequential ERC721A batch minting. Artwork `T` and receipt `1000000 + T` refer to the same artwork number. Physical-only artwork numbers start at 111112: crate `n` uses `111111 + 20 × (n − 1) + 1` onward. The final crate has 31 items and ends at artwork number 222222. The physical and digital receipt ranges cannot collide. A crate can only be digitally opened or physically redeemed, so at most 111111 artwork identities are issued across both paths.
 
-Each monument reserves 111 crates from the same 5555-crate allocation pool as individual crates and warehouses. At most 18 monuments can ever be minted, and opening one burns it and mints its 111 reserved crates. Monument metadata exists for all 18 possible display IDs even when the remaining crate supply permits fewer monument mints.
+Each monument reserves 111 crates from the same 5555-crate allocation pool as individual crates and warehouses. At most 18 monuments can ever be minted, and opening one burns it and mints its 111 reserved crates. Redeeming an unopened monument burns it and mints the same-numbered monument receipt. Its 111 allocations remain consumed permanently. Monument receipts can transfer but have no unpacking, delivery, or contents-claim path. Monument and receipt metadata exist for all 18 possible display IDs even when the remaining crate supply permits fewer monument mints.
 
 `NFT111K` builds each CDN URL directly. `tokenURI` checks existence and uses the token ID as the filename; previews validate and map each kind/item number to its exact token filename before minting. There is no separate renderer in new deployments. Historical contracts retain their original renderers and numbering.
 
@@ -30,7 +31,7 @@ The owner can call `setBaseURI(string)` to update the prefix. Both construction 
 
 The JSON objects on `cdn.mons.shop` are the authoritative runtime metadata. Local development and the deployed shop read those same objects. The editable JSON files in [`scripts/ethereum-metadata/templates`](../ethereum-metadata/templates/) define the next generated publication. They are authoring inputs, not a runtime fallback or local metadata server.
 
-The monument-ready generator produces 344966 JSON objects per deployment, including 18 monuments. Both networks use the same generated JSON contents; the network determines only the destination prefix. Historical publications retain their original identities and artwork assignments. The `cdn-mons-shop` bucket remains in Eastern North America (`enam`). Historical release manifests describe their own publications and remain unchanged.
+The monument-ready generator produces 344984 JSON objects per deployment, including 18 monuments and 18 monument receipts. Both networks use the same generated JSON contents; the network determines only the destination prefix. Historical publications retain their original identities and artwork assignments. The `cdn-mons-shop` bucket remains in Eastern North America (`enam`). Historical release manifests describe their own publications and remain unchanged.
 
 The [111k_devnet reveal asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) preserves counts, CDN path templates, and exact aspect ratios for upcoming reveals. The [unpack reveal service](111k_reveal.md) uses this catalog for private reservations and permanent, confirmation-gated artwork publication.
 
@@ -46,6 +47,7 @@ Each template contains `name`, `description`, `image`, and `attributes`. The ini
 | `crate.json` | `Crate #{{displayId}}` | `crate.jpg` | `crate` |
 | `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `crate_receipt.webp` | `crate receipt` |
 | `artwork_receipt.json` | `Receipt #{{displayId}}` | `artwork_placeholder_receipt.webp` | `receipt` |
+| `monument_receipt.json` | `Monument Receipt #{{displayId}}` | `receipt_background.webp` | `monument receipt` |
 
 The image filenames above are rooted at `https://wip.lil.org/111k/`. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
 
@@ -66,29 +68,29 @@ Generation and publishing share an owner-tracked lock that recovers interrupted 
 After editing the templates, generate and validate a new revision:
 
 ```sh
-metadata_dir=.cache/111k-metadata/monuments-v8
+metadata_dir=.cache/111k-metadata/monuments-v9
 npm run ethereum:metadata -- generate --directory "$metadata_dir"
 npm run ethereum:metadata -- validate --directory "$metadata_dir"
 ```
 
-Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344966 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Monument display IDs 1–18 generate files `117172.json`–`117189.json` with images `monuments/1.webp`–`monuments/18.webp`.
+Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344984 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Monument display IDs 1–18 generate files `117172.json`–`117189.json` with images `monuments/1.webp`–`monuments/18.webp`.
 
-A completed `.cache/111k-metadata/monuments-v8` revision can be reused for both networks after validation. Do not rerun generation into a completed directory. A shared generated revision does not imply a shared deployment ID.
+A completed `.cache/111k-metadata/monuments-v9` revision can be reused for both networks after validation. Do not rerun generation into a completed directory. A shared generated revision does not imply a shared deployment ID.
 
 Authenticate with `R2_ENDPOINT` or `CLOUDFLARE_ACCOUNT_ID`, and either `R2_ACCESS_KEY_ID` plus `R2_SECRET_ACCESS_KEY`, or `R2_ACCESS_KEY_ID`/`CLOUDFLARE_API_TOKEN_ID` plus `CLOUDFLARE_API_TOKEN`. The latter derives the S3 secret in memory using Cloudflare's documented SHA-256 conversion. Optional `R2_SESSION_TOKEN` supports temporary S3 credentials. The destination bucket is restricted to `cdn-mons-shop`; other `R2_BUCKET` values are rejected. Supply secrets through the environment, never command arguments, tracked files, or reports. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
 
 Choose a globally unique deployment ID for each network. The examples below use deployment-specific prefixes:
 
 ```sh
-sepolia_prefix=111k-sepolia/v8/
+sepolia_prefix=111k-sepolia/v9/
 mainnet_prefix=111k/mainnet-monuments-v1/
 ```
 
-An optional representative sample includes all six kinds and both monument boundaries:
+An optional representative sample includes all seven kinds and both monument boundaries:
 
 ```sh
-npm run ethereum:metadata -- upload --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix" --token-ids 1,111112,116667,117172,117189,1000001,1111112,2000001
-npm run ethereum:metadata -- verify --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix" --token-ids 1,111112,116667,117172,117189,1000001,1111112,2000001
+npm run ethereum:metadata -- upload --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix" --token-ids 1,111112,116667,117172,117189,3000001,3000018,1000001,1111112,2000001
+npm run ethereum:metadata -- verify --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix" --token-ids 1,111112,116667,117172,117189,3000001,3000018,1000001,1111112,2000001
 ```
 
 Sample reports have `complete: false`. Even a verified sample containing all 18 monuments cannot qualify for registration. Wait 65 seconds after a sample upload before the next upload to that prefix, then complete and verify each network without `--token-ids`:
@@ -104,11 +106,11 @@ Fresh-prefix initialization creates missing objects with conditional writes, ski
 
 Journal headers are committed atomically. Resume truncates an incomplete final record without rewriting the validated header. Existing malformed or mismatched headers remain rejected for inspection.
 
-Full verification checks every direct token JSON against its expected key, byte size, and checksum, including all 18 monuments, then reads public boundary samples through `cdn.mons.shop`. Missing objects, including a single monument, fail verification. Require `complete: true` and `objectCount: 344966` in each network's report. Save those reports with the manifest hashes, unique deployment IDs and exact prefixes in the release directory. Keep the generated revision available for registration and resumption.
+Full verification checks every direct token JSON against its expected key, byte size, and checksum, including all 18 monuments, then reads public boundary samples through `cdn.mons.shop`. Missing objects, including a single monument, fail verification. Require `complete: true` and `objectCount: 344984` in each network's report. Save those reports with the manifest hashes, unique deployment IDs and exact prefixes in the release directory. Keep the generated revision available for registration and resumption.
 
 Registration repeats full verification from `publicationDirectory` rather than trusting a sample or a saved success report. It also verifies the onchain deployment and exact metadata URI. Wait 65 seconds after the last upload before registration. After registration, the reveal publisher permanently owns the prefix and generic upload or restore is blocked. Preparing or registering a collection does not activate the shop; storefront activation remains a separate launch step.
 
-Snapshot restoration, when used for an unregistered destination, requires a complete 344966-object snapshot matching that destination and network. Historical five-kind backups are not supported by this baseline. Restoration rewrites the snapshot bytes and headers and verifies the complete inventory; it cannot reset a registered reveal prefix. New deployment recovery normally consists of resuming the validated fresh-prefix publication before registration.
+Snapshot restoration, when used for an unregistered destination, requires a complete 344984-object snapshot matching that destination and network. Historical five-kind and six-kind backups are not supported by this baseline. Restoration rewrites the snapshot bytes and headers and verifies the complete inventory; it cannot reset a registered reveal prefix. New deployment recovery normally consists of resuming the validated fresh-prefix publication before registration.
 
 ## Serving and freshness
 
@@ -135,7 +137,7 @@ Freshness applies when a client requests metadata. An already rendered page or a
 
 ## Local development and checks
 
-Local deployment manifest version 10 records `metadataBaseURI`. Local deployment and the end-to-end test default to the complete `https://cdn.mons.shop/111k-sepolia/v8/` publication. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` overrides the local deployment namespace. The variable accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 10 requires a fresh deployment with monument support, including manifests with matching CDN URLs. Local baseline metadata reads still require network access, and monument metadata requires a namespace containing the new full collection.
+Local deployment manifest version 11 records `metadataBaseURI`. Local deployment and the end-to-end test default to the complete `https://cdn.mons.shop/111k-sepolia/v9/` publication. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` overrides the local deployment namespace. The variable accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 11 requires a fresh deployment with monument receipt support, including manifests with matching CDN URLs. Local baseline metadata reads still require network access, and monument metadata requires a namespace containing the new full collection.
 
 Publish the baseline metadata for a custom namespace before using it locally. Local artwork media is verified against the local reveal ledger even if shared CDN metadata was already revealed by a different collection.
 
@@ -152,7 +154,7 @@ Unit and native-runtime tests remain offline using small, explicitly synthetic H
 Before remote publication, exercise the monument collection in the Anvil test using the generated metadata directory:
 
 ```sh
-ETHEREUM_111K_E2E_METADATA_DIRECTORY=.cache/111k-metadata/monuments-v8 npm run test:ethereum:e2e
+ETHEREUM_111K_E2E_METADATA_DIRECTORY=.cache/111k-metadata/monuments-v9 npm run test:ethereum:e2e
 ```
 
 That test adapter serves the selected generated metadata to the isolated test. Normal local development continues to read the configured CDN. After publication, `ETHEREUM_111K_E2E_METADATA_BASE_URI` selects the new live namespace for the end-to-end test.

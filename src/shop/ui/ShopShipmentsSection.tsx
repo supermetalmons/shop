@@ -82,8 +82,11 @@ export function ShopShipmentsSection({
       return (
         <div className="figure-grid shipment-item-grid">
           {order.items.map((item, index) => {
-            const label = dropAssetReference(dropConfig, item.kind === 'box' ? 'box' : 'figure', item.refId);
             const previewId = `shipment:${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`;
+            if (item.kind === 'monument') return <div key={previewId} className="figure-tile shipment-item-tile">
+              <span className="muted small">Monument #{item.refId}</span>
+            </div>;
+            const label = dropAssetReference(dropConfig, item.kind === 'box' ? 'box' : 'figure', item.refId);
             if (item.kind === 'box') {
               const boxImage = normalizeBoxDisplayImage({ dropId: order.dropId, boxId: item.refId });
               const openPreview = (element: HTMLDivElement) => {

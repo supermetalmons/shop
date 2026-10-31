@@ -33,7 +33,7 @@ export function resolveEthereum111kConfig(input: {
   const deploymentBlock = Number(input.deploymentBlock || 0);
   if (!Number.isSafeInteger(deploymentBlock) || deploymentBlock < 0) throw new Error('Invalid Ethereum deployment block');
   const contractAddress = normalizeEthereumAddress(input.contractAddress);
-  const metadataBaseUri = ethereumMetadataBaseUri(input.metadataBaseUri || 'https://cdn.mons.shop/111k-sepolia/v8/', chainId);
+  const metadataBaseUri = ethereumMetadataBaseUri(input.metadataBaseUri || 'https://cdn.mons.shop/111k-sepolia/v9/', chainId);
   return {
     dropId: ETHEREUM_111K_DROP_ID, chainId,
     chainName: chainId === 31337 ? 'Local Ethereum' : 'Sepolia',

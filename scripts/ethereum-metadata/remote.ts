@@ -27,7 +27,7 @@ type SnapshotManifest = {
 } & ({ version: 1 } | { version: 2; publicationManifestSha256: string });
 const COLLECTION_SIZE = Object.values(metadataCounts()).reduce((sum, count) => sum + count, 0);
 const SAMPLE_IDS = ['1', '55556', '111111', '111112', '116666', '116667', '117171', '117172', '117189',
-  '1000001', '1111111', '1111112', '1222222', '2000001', '2005555'];
+  '1000001', '1111111', '1111112', '1222222', '2000001', '2005555', '3000001', '3000018'];
 
 async function writeReport(path: string, report: unknown): Promise<void> {
   await mkdir(resolve(path, '..'), { recursive: true });

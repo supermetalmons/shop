@@ -543,9 +543,10 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
   const body = Buffer.from('x');
   const digest = { bytes: body.length, md5: metadataMd5(body), sha256: sha256(body), body: body.toString('base64') };
   const allFiles = Array.from(metadataIdentities(), identity => identity.file);
-  assert.equal(allFiles.length, 344966);
+  assert.equal(allFiles.length, 344984);
   const monumentFiles = Array.from({ length: 18 }, (_, index) => `${117172 + index}.json`);
   assert.ok(monumentFiles.every(file => allFiles.includes(file)));
+  assert.ok(Array.from({ length: 18 }, (_, index) => `${3000001 + index}.json`).every(file => allFiles.includes(file)));
   const archive = gzipSync(allFiles.map(file => `${JSON.stringify({ file, ...digest })}\n`).join(''));
   const keys = allFiles.map(file => prefix + file).sort();
   const indices = new Map(keys.map((key, index) => [key, index]));

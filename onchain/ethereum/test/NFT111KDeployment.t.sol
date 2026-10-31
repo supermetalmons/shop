@@ -69,10 +69,10 @@ contract NFT111KDeploymentTest is TestSupport {
         }
     }
 
-    function testFreshPublicNetworkDeploymentsStartClosedAndSupportMonuments() public {
+    function testFreshPublicNetworkDeploymentsStartClosedAndSupportMonumentsAndReceipts() public {
         uint256[2] memory chains = [uint256(1), 11155111];
         string[2] memory prefixes =
-            ["https://cdn.mons.shop/111k/mainnet-monuments-v1/", "https://cdn.mons.shop/111k-sepolia/v8/"];
+            ["https://cdn.mons.shop/111k/mainnet-monuments-v1/", "https://cdn.mons.shop/111k-sepolia/v9/"];
         DeploymentVm env = DeploymentVm(address(vm));
         env.setEnv("ETHEREUM_111K_DEPLOYER_KEY", Strings.toString(DEPLOYER_KEY));
         env.setEnv("ETHEREUM_111K_OWNER", Strings.toHexString(address(this)));
@@ -102,6 +102,7 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(token.CRATE_TOKEN_START(), 111112);
         assertEq(token.WAREHOUSE_TOKEN_START(), 116667);
         assertEq(token.MONUMENT_TOKEN_START(), 117172);
+        assertEq(token.MONUMENT_RECEIPT_OFFSET(), 3000000);
         assertEq(token.MAX_MONUMENTS(), 18);
         assertEq(token.CRATES_PER_MONUMENT(), 111);
         assertEq(token.cratePrice(), 0.0001 ether);
@@ -164,15 +165,17 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(address(token).balance, 0);
     }
 
-    function _assertMetadataBoundaries(NFT111K token, string memory prefix) private view {
-        uint256[6] memory firstTokens = [uint256(1), 111112, 116667, 1000001, 2000001, 117172];
-        uint256[6] memory maximumIds = [uint256(111111), 5555, 505, 222222, 5555, 18];
+    function _assertMetadataBoundaries(NFT111K token, string memory prefix) private {
+        uint256[7] memory firstTokens = [uint256(1), 111112, 116667, 1000001, 2000001, 117172, 3000001];
+        uint256[7] memory maximumIds = [uint256(111111), 5555, 505, 222222, 5555, 18, 18];
         for (uint256 i; i < firstTokens.length; ++i) {
             assertEq(token.previewTokenURI(uint8(i + 1), 1), _uri(prefix, firstTokens[i]));
             assertEq(
                 token.previewTokenURI(uint8(i + 1), maximumIds[i]), _uri(prefix, firstTokens[i] + maximumIds[i] - 1)
             );
         }
+        vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
+        token.previewTokenURI(7, 19);
     }
 
     function _exerciseMonumentSale(NFT111K token, string memory prefix) private {

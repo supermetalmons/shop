@@ -52,7 +52,7 @@ export function toggleEthereumSelection(selected: ReadonlySet<string>, item: Eth
   if (item.kind.endsWith('_receipt')) return new Set(selected);
   const next = new Set(selected);
   if (next.has(item.id)) { next.delete(item.id); return next; }
-  if (['warehouse', 'monument'].includes(item.kind) || [...next].some(id => ['warehouse', 'monument'].includes(items.get(id)?.kind ?? ''))) return new Set([item.id]);
+  if (item.kind === 'warehouse' || [...next].some(id => items.get(id)?.kind === 'warehouse')) return new Set([item.id]);
   if (next.size < maximum) next.add(item.id);
   return next;
 }

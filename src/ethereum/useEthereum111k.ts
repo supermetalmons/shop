@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
-import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, ethereumHexQuantity, type EthereumMintKind } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, ethereumHexQuantity, isEthereumDeliveryKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumRevealedArtwork } from '../../shared/ethereum/reveal';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { encryptAddressPayload } from '../lib/solana';
@@ -426,7 +426,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     await submit(operation, capturedScope, 'unbox', transaction(data), {}, assertAvailable);
   });
   const deliver = (selected: EthereumInventoryItem[], address: EthereumDeliveryAddress) => run('Confirm delivery in your wallet…', async (operation, capturedScope) => {
-    if (!selected.length || selected.length > config.maxDeliveryItems || selected.some(item => item.owner !== operation.address || !['artwork', 'crate'].includes(item.kind))) throw new Error('Choose up to 50 artworks or crates for delivery.');
+    if (!selected.length || selected.length > config.maxDeliveryItems || selected.some(item => item.owner !== operation.address || !isEthereumDeliveryKind(item.kind))) throw new Error('Choose up to 50 artworks, crates or monuments for delivery.');
     const orderedItems = [...selected].sort((left, right) => {
       const leftId = BigInt(left.tokenId), rightId = BigInt(right.tokenId);
       return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;

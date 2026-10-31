@@ -61,6 +61,7 @@ function cardOrder(overrides?: Partial<FulfillmentOrder>): FulfillmentOrder {
       },
     ],
     looseDudes: [42],
+    monuments: [],
     cardClaims: [],
     ...overrides,
   };
@@ -119,6 +120,16 @@ test('Ethereum fulfillment exports preserve fixed artwork numbers and link codes
     assert.deepEqual(buildFulfillmentSecretCodeExportEntries([order], { dropById }), []);
     assert.equal(countFulfillmentSecretCodeExportEntries([order]), 0);
   }
+});
+
+test('Ethereum monument exports retain monument numbers without generating contents or secret codes', () => {
+  const order = cardOrder({ dropId: '111k_devnet', source: 'ethereum', boxes: [], looseDudes: [], monuments: [1, 18] });
+  assert.deepEqual(buildFulfillmentOrdersExport([order], { dropById }), [{
+    orderId: '111k_devnet:7', country: 'United States', monuments: [1, 18],
+  }]);
+  assert.deepEqual(buildFulfillmentSecretCodeExportEntries([order], { dropById }), []);
+  assert.equal(countFulfillmentSecretCodeExportEntries([order]), 0);
+  assert.equal(buildFulfillmentSecretCodeExportEntry({ order, boxIndex: 0, options: { dropById } }), null);
 });
 
 test('fulfillment exports contain only orders from the selected visibility list', () => {

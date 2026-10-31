@@ -61,7 +61,7 @@ export type EthereumCheckoutSubmissionResponse = { checkout: EthereumCheckoutSta
 
 export function normalizeCheckoutTokenIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > ETHEREUM_MAX_DELIVERY_ITEMS) {
-    throw new Error(`Choose between 1 and ${ETHEREUM_MAX_DELIVERY_ITEMS} artworks or crates.`);
+    throw new Error(`Choose between 1 and ${ETHEREUM_MAX_DELIVERY_ITEMS} artworks, crates or monuments.`);
   }
   const ids = value.map(id => typeof id === 'string' && /^[1-9][0-9]*$/.test(id) ? normalizeEthereumTokenId(id) : null);
   if (ids.some(id => id === null) || new Set(ids).size !== ids.length) {

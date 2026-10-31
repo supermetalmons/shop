@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import type { DeliveryOrderSummary } from '../../../../shared/contracts.ts';
 import { encodeAbi, decodeReturn, ETHEREUM_EVENT_TOPICS, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
   type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
@@ -3376,7 +3377,7 @@ test('offchain metadata HTTP reads stop when the request deadline expires', { ti
   } finally { f.close(); }
 });
 
-for (const token of [[0, 1, WALLET], [7, 1, WALLET], [6, 19, WALLET], [1, 0, WALLET], [2, 5556, WALLET], [1, 1, ZERO]]) {
+for (const token of [[0, 1, WALLET], [8, 1, WALLET], [6, 19, WALLET], [7, 19, WALLET], [1, 0, WALLET], [2, 5556, WALLET], [1, 1, ZERO]]) {
   test(`token information rejects an inconsistent tuple ${token.join(':')}`, async () => {
     const f = fixture();
     try {
@@ -4091,6 +4092,90 @@ test('monument token information and numbered metadata are available throughout 
     }
     for (const displayId of [0, 19]) {
       assert.equal((await f.request(`${paths.metadata}?kind=monument&displayId=${displayId}`)).response.status, 400);
+    }
+  } finally { f.close(); }
+});
+
+for (const mixed of [false, true]) {
+  test(`${mixed ? 'mixed' : 'monument-only'} checkout delivery preserves monument identity and creates claims only for crates`, async () => {
+    const f = fixture();
+    try {
+      f.state.tokens.set('117189', { kind: 6, displayId: 18, owner: WALLET });
+      const ids = mixed ? ['7', '111112', '117189'] : ['117189'];
+      const receipts = mixed ? ['1000007', '2000001', '3000018'] : ['3000018'];
+      const ready = await startedCheckout(f, [...ids].reverse());
+      assert.deepEqual(ready.checkout.tokenIds, ids);
+      assert.ok(ready.checkout.items.some(item => item.kind === 'monument' && item.displayId === 18));
+      assert.equal(ready.prepared.quote.receiptIdsHash, ethereumReceiptIdsHash(receipts));
+      f.state.transactions.set(HASH, { hash: HASH, from: WALLET, to: CONTRACT,
+        input: ready.prepared.transaction.data, value: ready.prepared.transaction.value, nonce: '0x0', chainId: '0x7a69' });
+      const submitted = await f.request(checkoutPaths.submission, {
+        checkoutId: ready.checkout.checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH,
+      }, ready.authentication.token);
+      assert.equal(submitted.response.status, 200, JSON.stringify(submitted.body));
+      const log = f.deliveryLog(ready.prepared, ids, receipts);
+      f.setReceipt(HASH, [log]);
+      f.state.logs = [log];
+      for (const id of ids) f.state.tokens.delete(id);
+      f.state.tokens.set('3000018', { kind: 7, displayId: 18, owner: WALLET });
+      await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+      const order = f.order(ready.prepared.orderId)!;
+      assert.equal(order.status, 'ready_to_ship');
+      assert.deepEqual(order.receiptTokenIds, receipts);
+      assert.deepEqual((order.items as Array<Record<string, unknown>>).at(-1), {
+        assetId: `eip155:31337:${CONTRACT}:117189`, tokenId: '117189', kind: 'monument', refId: 18,
+      });
+      assert.equal((order.irlClaims as unknown[]).length, mixed ? 1 : 0);
+      assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_crate_claims').get()!.n, mixed ? 1 : 0);
+      const shipments = await f.request<{ orders: DeliveryOrderSummary[] }>(paths.shipments, undefined, ready.authentication.token);
+      assert.deepEqual(shipments.body.orders[0].items.at(-1), { kind: 'monument', refId: 18 });
+      const claim = await f.request(paths.claimPrepare, { receiptId: '3000018', code: 'ABCDEF123456' }, ready.authentication.token);
+      assert.equal(claim.response.status, 400);
+      const status = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`);
+      assert.equal(status.body.status, 'success');
+    } finally { f.close(); }
+  });
+}
+
+test('delivery authorization rejects unpacked or unowned monuments and all monument receipts', async () => {
+  const f = fixture();
+  try {
+    const authentication = await f.session();
+    await f.saveAddress(authentication.token);
+    for (const [tokenId, token] of [
+      ['117172', { kind: 6, displayId: 1, owner: OTHER_WALLET }],
+      ['117189', null],
+      ['3000001', { kind: 7, displayId: 1, owner: WALLET }],
+      ['3000018', { kind: 7, displayId: 18, owner: WALLET }],
+    ] as const) {
+      if (token) f.state.tokens.set(tokenId, token);
+      const result = await f.request(paths.deliveryPrepare, {
+        tokenIds: [tokenId], addressId: ADDRESS_ID, requestId: crypto.randomUUID(),
+      }, authentication.token);
+      assert.equal(result.response.status, 403, JSON.stringify(result.body));
+    }
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 0);
+  } finally { f.close(); }
+});
+
+test('monument receipt inventory and metadata retain the matching number and shared placeholder', async () => {
+  const f = fixture();
+  try {
+    for (const displayId of [1, 18]) {
+      const tokenId = String(3_000_000 + displayId);
+      const metadata = { name: `Monument Receipt #${displayId}`, description: '',
+        image: 'https://wip.lil.org/111k/receipt_background.webp', attributes: [{ trait_type: 'type', value: 'monument receipt' }] };
+      f.state.tokens.set(tokenId, { kind: 7, displayId, owner: WALLET });
+      f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
+      const infos = await ethereumTokenInfos(readContext(f), [tokenId]);
+      assert.deepEqual(infos, [{ tokenId, kind: 'monument_receipt', displayId, owner: WALLET }]);
+      const [item] = await ethereumInventoryItems(readContext(f), infos);
+      assert.equal(item.image, metadata.image);
+      assert.equal(item.name, metadata.name);
+      assert.equal((await f.request(`${paths.metadata}?kind=monument_receipt&displayId=${displayId}`)).response.status, 200);
+    }
+    for (const displayId of [0, 19]) {
+      assert.equal((await f.request(`${paths.metadata}?kind=monument_receipt&displayId=${displayId}`)).response.status, 400);
     }
   } finally { f.close(); }
 });

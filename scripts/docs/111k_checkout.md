@@ -1,6 +1,6 @@
 # 111K hosted checkout
 
-The hosted checkout accepts crates and artworks from `111k_devnet`. It creates test delivery orders; no physical shipment is made. Other drops retain their existing redemption flow. Mainnet, additional wallet connectors, and partner webhooks are not enabled by this change.
+The hosted checkout accepts crates, artworks and unopened monuments from `111k_devnet`. Mixed orders support up to 50 items. Monument redemption mints a terminal monument receipt, with no contents claim. It creates test delivery orders; no physical shipment is made. Other drops retain their existing redemption flow. Mainnet, additional wallet connectors, and partner webhooks are not enabled by this change.
 
 ## Open checkout
 

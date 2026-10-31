@@ -1,0 +1,8 @@
+{
+  "name": "Monument Receipt #{{displayId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/receipt_background.webp",
+  "attributes": [
+    { "trait_type": "type", "value": "monument receipt" }
+  ]
+}

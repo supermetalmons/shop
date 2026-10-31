@@ -209,8 +209,8 @@ contract NFT111KBatchTest is TestSupport {
         uint8[] memory kinds = new uint8[](30);
         uint256[] memory ids = new uint256[](30);
         for (uint256 i; i < ids.length; ++i) {
-            kinds[i] = uint8(i % 6 + 1);
-            ids[i] = kinds[i] == 6
+            kinds[i] = uint8(i % 7 + 1);
+            ids[i] = kinds[i] == 6 || kinds[i] == 7
                 ? 18
                 : kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : kinds[i] == 4 ? 222222 : 111111;
         }
@@ -233,8 +233,8 @@ contract NFT111KBatchTest is TestSupport {
         uint256[] memory ids = new uint256[](2);
         kinds[0] = 1;
         ids[0] = 42;
-        uint8[9] memory invalidKinds = [uint8(0), 7, 1, 2, 3, 4, 5, 6, 6];
-        uint256[9] memory invalidIds = [uint256(1), 1, 0, 5556, 506, 222223, 5556, 0, 19];
+        uint8[11] memory invalidKinds = [uint8(0), 8, 1, 2, 3, 4, 5, 6, 6, 7, 7];
+        uint256[11] memory invalidIds = [uint256(1), 1, 0, 5556, 506, 222223, 5556, 0, 19, 0, 19];
         for (uint256 i; i < invalidKinds.length; ++i) {
             kinds[1] = invalidKinds[i];
             ids[1] = invalidIds[i];

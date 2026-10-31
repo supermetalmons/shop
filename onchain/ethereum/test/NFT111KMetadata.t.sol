@@ -31,6 +31,8 @@ contract NFT111KMetadataTest is TestSupport {
         _uri(5, 5555, 2005555);
         _uri(6, 1, 117172);
         _uri(6, 18, 117189);
+        _uri(7, 1, 3000001);
+        _uri(7, 18, 3000018);
     }
 
     function testFuzzArtworkAndReceiptNamesShareArtworkId(uint256 seed) public view {
@@ -40,8 +42,8 @@ contract NFT111KMetadataTest is TestSupport {
     }
 
     function testInvalidKindsAndDisplayNumbersRevert() public {
-        uint8[11] memory kinds = [uint8(0), 7, 1, 1, 2, 3, 4, 4, 5, 6, 6];
-        uint256[11] memory ids = [uint256(1), 1, 0, 111112, 5556, 506, 0, 222223, 5556, 0, 19];
+        uint8[13] memory kinds = [uint8(0), 8, 1, 1, 2, 3, 4, 4, 5, 6, 6, 7, 7];
+        uint256[13] memory ids = [uint256(1), 1, 0, 111112, 5556, 506, 0, 222223, 5556, 0, 19, 0, 19];
         for (uint256 i; i < kinds.length; ++i) {
             vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
             token.previewTokenURI(kinds[i], ids[i]);
@@ -115,9 +117,9 @@ contract NFT111KMetadataTest is TestSupport {
         assertEq(token.ownerOf(111112), alice);
         assertEq(token.totalSupply(), 1);
         assertEq(token.tokenURI(111112), "https://cdn.mons.shop/111k/111112.json");
-        uint8[] memory kinds = new uint8[](6);
-        uint256[] memory displayIds = new uint256[](6);
-        uint256[6] memory tokenIds = [uint256(1), 111112, 116667, 1000001, 2000001, 117172];
+        uint8[] memory kinds = new uint8[](7);
+        uint256[] memory displayIds = new uint256[](7);
+        uint256[7] memory tokenIds = [uint256(1), 111112, 116667, 1000001, 2000001, 117172, 3000001];
         for (uint256 i; i < kinds.length; ++i) {
             kinds[i] = uint8(i + 1);
             displayIds[i] = 1;
@@ -148,7 +150,7 @@ contract NFT111KMetadataTest is TestSupport {
         assertEq(logs[1].topics[0], keccak256("BatchMetadataUpdate(uint256,uint256)"));
         (uint256 first, uint256 last) = abi.decode(logs[1].data, (uint256, uint256));
         assertEq(first, 1);
-        assertEq(last, 2005555);
+        assertEq(last, 3000018);
     }
 
     function _deploy(string memory baseURI) private returns (NFT111K) {

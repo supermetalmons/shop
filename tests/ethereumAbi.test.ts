@@ -4,7 +4,7 @@ import test from 'node:test';
 import { encodeAbi, decodeReturn, encodeCall, decodeEventLogs, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
 import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../shared/ethereum/crypto.ts';
 import { physicalCrateArtworkIds, ethereumAssetId, ethereumReceiptTokenId, ethereumMetadataTokenId,
-  ethereumItemDisplayIdMaximum, formatEtherAmount } from '../shared/ethereum/protocol.ts';
+  ethereumItemDisplayIdMaximum, ethereumItemKind, formatEtherAmount, isEthereumDeliveryKind, ETHEREUM_ITEM_KINDS } from '../shared/ethereum/protocol.ts';
 import { ethereumMetadataBaseUri, resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { nft111KAbi } from '../shared/ethereum/abi.generated.ts';
 import { ETHEREUM_FUNCTIONS } from '../shared/ethereum/protocol.ts';
@@ -158,6 +158,9 @@ test('events decode only the configured contract and retain exact uint256 token 
 test('digital and physical-only receipt identities occupy separate complete ranges', () => {
   assert.equal(ethereumReceiptTokenId('crate', 5555), '2005555');
   assert.equal(ethereumReceiptTokenId('artwork', 111111), '1111111');
+  assert.equal(ethereumReceiptTokenId('monument', 1), '3000001');
+  assert.equal(ethereumReceiptTokenId('monument', 18), '3000018');
+  for (const id of [0, 19]) assert.throws(() => ethereumReceiptTokenId('monument', id));
   assert.throws(() => ethereumReceiptTokenId('artwork', 111112));
   assert.deepEqual(physicalCrateArtworkIds(1), Array.from({ length: 20 }, (_, i) => 111112 + i));
   assert.deepEqual(physicalCrateArtworkIds(5555), Array.from({ length: 31 }, (_, i) => 222192 + i));
@@ -166,6 +169,12 @@ test('digital and physical-only receipt identities occupy separate complete rang
   assert.equal(ethereumMetadataTokenId('warehouse', 505), '117171');
   assert.equal(ethereumItemDisplayIdMaximum('artwork'), 111111);
   assert.equal(ethereumItemDisplayIdMaximum('artwork_receipt'), 222222);
+  assert.equal(ethereumItemDisplayIdMaximum('monument_receipt'), 18);
+  assert.equal(ethereumMetadataTokenId('monument_receipt', 18), '3000018');
+  assert.equal(ethereumItemKind(7), 'monument_receipt');
+  assert.equal(ethereumItemKind(8), null);
+  assert.deepEqual(ETHEREUM_ITEM_KINDS.filter(isEthereumDeliveryKind), ['artwork', 'crate', 'monument']);
+  assert.throws(() => ethereumMetadataTokenId('monument_receipt', 19));
   assert.throws(() => ethereumMetadataTokenId('artwork_receipt', 222223));
   assert.throws(() => ethereumMetadataTokenId('artwork', 111112));
   assert.throws(() => physicalCrateArtworkIds(5556));
@@ -176,7 +185,7 @@ test('digital and physical-only receipt identities occupy separate complete rang
 });
 
 test('metadata base URIs accept only the published CDN namespaces', () => {
-  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/v8/');
+  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/v9/');
   assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'https://cdn.mons.shop/111k/' }).metadataBaseUri,
     'https://cdn.mons.shop/111k/');
   assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri: 'https://cdn.mons.shop/111k/' }));

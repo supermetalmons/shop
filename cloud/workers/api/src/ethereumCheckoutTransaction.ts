@@ -1,6 +1,6 @@
 import { decodeEventLogs, decodeReturn, encodeCall } from '../../../../shared/ethereum/abi.js';
 import { ethereumReceiptIdsHash } from '../../../../shared/ethereum/crypto.js';
-import { ethereumReceiptTokenId } from '../../../../shared/ethereum/protocol.js';
+import { ethereumReceiptTokenId, isEthereumDeliveryKind } from '../../../../shared/ethereum/protocol.js';
 import { EthereumApiError } from './ethereumError.js';
 import { ethereumAddress, ethereumRpc, rpcInteger, type EthereumContext } from './ethereumRuntime.js';
 import { ethereumReceipt, type EthereumTokenInfo } from './ethereumRead.js';
@@ -35,7 +35,10 @@ function matchesDeliveryIntent(transaction: CheckoutTransaction, quote: Ethereum
     const items = JSON.parse(quote.items_json) as EthereumTokenInfo[];
     return orderId === BigInt(quote.order_id) && wallet === quote.wallet && fee === BigInt(quote.fee_wei) &&
       expires === BigInt(deadline) && JSON.stringify(ids.map(String)) === quote.token_ids_json &&
-      receiptIdsHash === ethereumReceiptIdsHash(items.map(item => ethereumReceiptTokenId(item.kind as 'artwork' | 'crate', item.displayId)));
+      receiptIdsHash === ethereumReceiptIdsHash(items.map(item => {
+        if (!isEthereumDeliveryKind(item.kind)) throw new Error('Invalid delivery item.');
+        return ethereumReceiptTokenId(item.kind, item.displayId);
+      }));
   } catch { return false; }
 }
 

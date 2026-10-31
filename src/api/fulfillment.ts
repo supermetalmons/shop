@@ -508,6 +508,8 @@ export function createFulfillmentApiClient(
       isRecord(order.address) &&
       Array.isArray(order.boxes) &&
       Array.isArray(order.looseDudes) &&
+      (order.monuments === undefined || Array.isArray(order.monuments) &&
+        order.monuments.every((id) => Number.isSafeInteger(id) && Number(id) > 0)) &&
       Array.isArray(order.cardClaims) &&
       order.cardClaims.every((claim) =>
         isRecord(claim) &&
@@ -527,6 +529,7 @@ export function createFulfillmentApiClient(
       orders: orders.map((order) => ({
         ...order,
         dropId: order.dropId || args.dropId,
+        monuments: order.monuments ?? [],
       })),
       nextCursor: cursor as FulfillmentOrdersCursor | null | undefined,
     };

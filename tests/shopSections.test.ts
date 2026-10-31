@@ -202,6 +202,13 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
   assert.equal(opened[0][2]?.unavailableMessage, 'Shipment image unavailable');
   for (const args of opened) assert.equal(args[2]?.sourceElement, tile);
 
+  view.rerender(createElement(ShopShipmentsSection, { ...props,
+    deliveryOrders: [{ dropId: '111k_devnet', deliveryId: 8, status: 'processing', items: [{ kind: 'monument', refId: 18 }] }],
+  }));
+  assert.ok(view.getByText('Monument #18'));
+  assert.equal(view.queryByRole('button', { name: /^View / }), null);
+  assert.equal(view.queryByRole('img'), null);
+
   view.rerender(createElement(ShopShipmentsSection, { ...props, shipmentsSectionReady: false, shipmentsEmptyContent: 'Loading shipments…' }));
   assert.equal(view.queryByRole('button', { name: /^View / }), null);
   const hiddenPlaceholder = view.container.querySelector('.empty-state--hidden');

@@ -19,7 +19,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         Warehouse,
         ArtworkReceipt,
         CrateReceipt,
-        Monument
+        Monument,
+        MonumentReceipt
     }
 
     struct DeliveryQuote {
@@ -58,6 +59,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public constant MONUMENT_TOKEN_START = 117_172;
     uint256 public constant ARTWORK_RECEIPT_OFFSET = 1_000_000;
     uint256 public constant CRATE_RECEIPT_OFFSET = 2_000_000;
+    uint256 public constant MONUMENT_RECEIPT_OFFSET = 3_000_000;
 
     bytes32 private constant DELIVERY_TYPEHASH = keccak256(
         "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
@@ -121,9 +123,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event CratesPurchased(address indexed wallet, uint256 firstCrateToken, uint256 quantity, uint256 paid);
     event WarehousesPurchased(address indexed wallet, uint256 firstWarehouseToken, uint256 quantity, uint256 paid);
     event MonumentsPurchased(address indexed wallet, uint256 firstMonumentToken, uint256 quantity, uint256 paid);
-    event MonumentUnboxed(
-        uint256 indexed monumentToken, address indexed owner, uint256 firstCrateToken, uint256 count
-    );
+    event MonumentUnboxed(uint256 indexed monumentToken, address indexed owner, uint256 firstCrateToken, uint256 count);
     event WarehouseUnboxed(
         uint256 indexed warehouseToken, address indexed owner, uint256 firstCrateToken, uint256 count
     );
@@ -299,6 +299,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             if (holder != msg.sender) revert WrongOwner();
             if (kind == uint8(ItemKind.Artwork)) receiptIds[i] = ARTWORK_RECEIPT_OFFSET + displayId;
             else if (kind == uint8(ItemKind.Crate)) receiptIds[i] = CRATE_RECEIPT_OFFSET + displayId;
+            else if (kind == uint8(ItemKind.Monument)) receiptIds[i] = MONUMENT_RECEIPT_OFFSET + displayId;
             else revert WrongItemKind();
         }
         if (keccak256(abi.encode(receiptIds)) != quote.receiptIdsHash) revert InvalidAuthorization();
@@ -381,6 +382,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
         if (tokenId > CRATE_RECEIPT_OFFSET && tokenId <= CRATE_RECEIPT_OFFSET + MAX_CRATES) {
             return (uint8(ItemKind.CrateReceipt), tokenId - CRATE_RECEIPT_OFFSET, holder);
+        }
+        if (tokenId > MONUMENT_RECEIPT_OFFSET && tokenId <= MONUMENT_RECEIPT_OFFSET + MAX_MONUMENTS) {
+            return (uint8(ItemKind.MonumentReceipt), tokenId - MONUMENT_RECEIPT_OFFSET, holder);
         }
         return (0, 0, address(0));
     }
@@ -506,7 +510,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         _validateBaseURI(baseURI_);
         baseURI = baseURI_;
         emit BaseURIUpdated(baseURI_);
-        emit BatchMetadataUpdate(1, CRATE_RECEIPT_OFFSET + MAX_CRATES);
+        emit BatchMetadataUpdate(1, MONUMENT_RECEIPT_OFFSET + MAX_MONUMENTS);
     }
 
     function mintRecipientCount() external view returns (uint256) {
@@ -650,6 +654,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
         if (kind == uint8(ItemKind.CrateReceipt) && displayId <= MAX_CRATES) {
             return CRATE_RECEIPT_OFFSET + displayId;
+        }
+        if (kind == uint8(ItemKind.MonumentReceipt) && displayId <= MAX_MONUMENTS) {
+            return MONUMENT_RECEIPT_OFFSET + displayId;
         }
         revert InvalidMetadataItem();
     }

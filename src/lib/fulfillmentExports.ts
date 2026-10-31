@@ -35,6 +35,7 @@ export type FulfillmentOrderExport = {
   country?: string;
   boxes?: FulfillmentExportBox[];
   looseFigures?: number[];
+  monuments?: number[];
 };
 
 export type FulfillmentAddressExportEntry = {
@@ -219,6 +220,7 @@ export function buildFulfillmentOrdersExport(
         ...(exportableBoxSecretCode(box) ? { secretCode: exportableBoxSecretCode(box) } : {}), figures: box.dudeIds,
       })) } : {}),
       ...(order.looseDudes.length ? { looseFigures: order.looseDudes } : {}),
+      ...(order.monuments.length ? { monuments: order.monuments } : {}),
     };
     const drop = options.dropById.get(order.dropId) || null;
     const previewMode = resolveDropContent(drop || order.dropId).figures.fulfillmentPreviewMode;

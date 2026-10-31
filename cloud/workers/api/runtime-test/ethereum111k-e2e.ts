@@ -30,7 +30,7 @@ const project = resolve(root, 'onchain/ethereum');
 const output = resolve(root, '.cache/111k-e2e');
 const build = spawnSync('forge', ['build', '--offline'], { cwd: project, stdio: 'inherit' });
 if (build.status !== 0) throw new Error('Contract compilation failed');
-const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v8/', 31337);
+const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v9/', 31337);
 const metadataDirectory = process.env.ETHEREUM_111K_E2E_METADATA_DIRECTORY;
 const metadataManifest = metadataDirectory ? await readMetadataManifest(metadataDirectory) : null;
 const metadataFetch: typeof fetch = async (input, init) => {
@@ -776,8 +776,85 @@ try {
     assert.deepEqual(await call(monumentContract, 'totalMintReceived()', [], [], ['uint256']), [17600000000000000n]);
   } finally { monumentDatabase.close(); }
 
+  const beforeMonumentRedemption = await rpc<string>('evm_snapshot');
+  const monumentCommerce = createCommerceD1Harness();
+  const monumentOps = new DatabaseSync(':memory:');
+  try {
+    monumentCommerce.database.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
+      paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = ? WHERE singleton = 1`)
+      .run(monumentContract.toLowerCase(), Date.now());
+    monumentOps.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql'), 'utf8'));
+    const api = apiClient(testEnvironment(monumentContract, key, d1Database(monumentOps), monumentCommerce.db));
+    const challenge = await api<EthereumAuthChallenge>(ETHEREUM_API_PATHS.authChallenge,
+      { dropId: '111k_devnet', address: buyer, chainId: 31337 });
+    const signature = await rpc<string>('personal_sign', [`0x${Buffer.from(challenge.message).toString('hex')}`, buyer]);
+    const session = await api<EthereumSession>(ETHEREUM_API_PATHS.authVerify, { challengeId: challenge.challengeId, signature });
+    const encrypted = serializeAddressCipherPayload(encryptAddressCipherText('Monument Test\n111 Example Street\nTest City\nUnited States',
+      Buffer.from('OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=', 'base64')), bytes => Buffer.from(bytes).toString('base64'));
+    const saved = await api<EthereumSaveAddressResponse>(ETHEREUM_API_PATHS.addresses,
+      { encrypted, country: 'United States', countryCode: 'US', hint: 'Monument test' }, session);
+    const prepare = (tokenIds: string[]) => api<EthereumDeliveryPrepareResponse>(ETHEREUM_API_PATHS.deliveryPrepare,
+      { tokenIds, addressId: saved.address.id, requestId: crypto.randomUUID() }, session);
+    const redeemMonuments = async (tokenIds: string[], receiptIds: string[]) => {
+      const prepared = await prepare(tokenIds);
+      assert.equal(prepared.quote.receiptIdsHash, ethereumReceiptIdsHash(receiptIds));
+      const receipt = await send(buyer, prepared.transaction.data, prepared.transaction.to, BigInt(prepared.transaction.value));
+      const event = decodeEventLogs(receipt.logs, monumentContract).find(value => value.name === 'DeliveryRedeemed');
+      assert.ok(event?.name === 'DeliveryRedeemed');
+      assert.deepEqual(event.tokenIds, tokenIds);
+      assert.deepEqual(event.receiptIds, receiptIds);
+      const included = await api<EthereumTransactionConfirmResponse>(ETHEREUM_API_PATHS.transactionsConfirm,
+        { transactionHash: receipt.transactionHash });
+      assert.deepEqual(included.burnedTokenIds, tokenIds);
+      assert.deepEqual(included.items.map(item => item.tokenId), receiptIds);
+      for (const item of included.items.filter(item => item.kind === 'monument_receipt')) {
+        assert.equal(item.name, `Monument Receipt #${item.displayId}`);
+        assert.equal(item.image, 'https://wip.lil.org/111k/receipt_background.webp');
+      }
+      await rpc('anvil_mine', [2]);
+      const confirmed = await api<EthereumDeliveryConfirmResponse>(ETHEREUM_API_PATHS.deliveryConfirm,
+        { orderId: prepared.orderId, transactionHash: receipt.transactionHash }, session);
+      assert.equal(confirmed.status, 'confirmed');
+      const shipments = await api<EthereumShipmentsResponse>(ETHEREUM_API_PATHS.shipments, undefined, session);
+      return { receipt, order: shipments.orders.find(order => order.deliveryId === prepared.orderId) };
+    };
+    const single = await redeemMonuments(['117173'], ['3000002']);
+    gas.redeemMonument = BigInt(single.receipt.gasUsed).toString();
+    assert.deepEqual(single.order?.items, [{ kind: 'monument', refId: 2 }]);
+    assert.equal((monumentCommerce.database.prepare('SELECT COUNT(*) AS count FROM ethereum_crate_claims').get() as { count: number }).count, 0);
+    assert.deepEqual(await call(monumentContract, 'allocatedCrates()', [], [], ['uint256']), [222n]);
+    await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.unboxMonument, ['uint256'], [117173]), monumentContract));
+    await assert.rejects(prepare(['117173']));
+    await assert.rejects(prepare(['3000002']));
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.transfer, ['address', 'address', 'uint256'],
+      [buyer, secondBuyer, 3000002]), monumentContract);
+    assert.deepEqual(await call(monumentContract, ETHEREUM_FUNCTIONS.tokenInfo, ['uint256'], [3000002], ['uint8', 'uint256', 'address']),
+      [7n, 2n, secondBuyer.toLowerCase()]);
+    await assert.rejects(send(secondBuyer, encodeCall(ETHEREUM_FUNCTIONS.unboxMonument, ['uint256'], [3000002]), monumentContract));
+    const claimId = `0x${bytesToHex(crypto.getRandomValues(new Uint8Array(32)))}`;
+    const claimDeadline = await deadline();
+    const claimSignature = signDigest(key, crateClaimDigest({ chainId: 31337, contractAddress: monumentContract,
+      wallet: secondBuyer, receiptId: 3000002, claimId, deadline: claimDeadline }));
+    await assert.rejects(send(secondBuyer, encodeCall(ETHEREUM_FUNCTIONS.claimCrateReceipt,
+      ['uint256', 'bytes32', 'uint256', 'bytes'], [3000002, claimId, claimDeadline, claimSignature]), monumentContract));
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintMonuments, ['uint256'], [1]), monumentContract, 8800000000000000n);
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [2]), monumentContract, 200000000000000n);
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [111445]), monumentContract);
+    const mixed = await redeemMonuments(['117174', '111446', '1'], ['3000003', '2000335', '1000001']);
+    gas.redeemMixedMonument = BigInt(mixed.receipt.gasUsed).toString();
+    assert.deepEqual(mixed.order?.items, [{ kind: 'monument', refId: 3 }, { kind: 'box', refId: 335 }, { kind: 'dude', refId: 1 }]);
+    const claims = monumentCommerce.database.prepare('SELECT receipt_id FROM ethereum_crate_claims').all();
+    assert.deepEqual(claims.map(row => row.receipt_id), ['2000335']);
+    assert.deepEqual(await call(monumentContract, 'allocatedCrates()', [], [], ['uint256']), [335n]);
+    assert.deepEqual(await call(monumentContract, 'monumentsMinted()', [], [], ['uint256']), [3n]);
+  } finally {
+    monumentCommerce.database.close();
+    monumentOps.close();
+    assert.equal(await rpc<boolean>('evm_revert', [beforeMonumentRedemption]), true);
+  }
+
   await mkdir(output, { recursive: true });
-  const previews = [{ kind: 1, id: 111111 }, { kind: 2, id: 5555 }, { kind: 3, id: 505 }, { kind: 4, id: 111111 }, { kind: 5, id: 5555 }, { kind: 6, id: 1 }, { kind: 6, id: 18 }];
+  const previews = [{ kind: 1, id: 111111 }, { kind: 2, id: 5555 }, { kind: 3, id: 505 }, { kind: 4, id: 111111 }, { kind: 5, id: 5555 }, { kind: 6, id: 1 }, { kind: 6, id: 18 }, { kind: 7, id: 1 }, { kind: 7, id: 18 }];
   const metadataChecks: Array<{ uri: string; kind: string; displayId: number; apiMatchesSource: boolean }> = [];
   const previewDatabase = new DatabaseSync(':memory:');
   try {
@@ -803,7 +880,9 @@ try {
   Object.assign(report, { reveal, monumentContract, metadataSource: metadataDirectory ? 'generated-files' : 'live-cdn',
     metadataObjectCount: metadataManifest?.objectCount });
   report.passed.push('monument mint, distinct imagery, transfer, 111-crate unpack and complete inventory recovery across two requests',
-    'monument lifetime count and crate reservations survive unpacking', 'all six metadata types match the selected metadata source');
+    'monument lifetime count and crate reservations survive unpacking', 'all seven metadata types match the selected metadata source');
+  report.passed.push('monument-only and mixed real-chain delivery with matching terminal receipts, fulfillment identity, and no monument claim codes',
+    'monument receipts transfer but reject unpacking, redelivery, and signed crate claims while preserving consumed allocations');
   report.passed.push('first-confirmation reveal, private pending allocations, local R2 publication, immutable reorg handling, and hash-free token recovery');
   await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));

@@ -187,6 +187,11 @@ export function fulfillmentOrderFromRecord(
     const figureId = item?.kind === 'dude' ? positiveInteger(item.refId) : null;
     return figureId === null ? [] : [{ figureId, assetId: optionalString(item?.assetId) }];
   });
+  const monuments = items.flatMap((value) => {
+    const item = record(value);
+    const monumentId = item?.kind === 'monument' ? positiveInteger(item.refId) : null;
+    return monumentId === null ? [] : [monumentId];
+  }).sort((left, right) => left - right);
   const claimsByBox = new Map<number, { code?: string; dudeIds: number[]; boxAssetId?: string; status?: string }>();
   if (Array.isArray(order.irlClaims)) {
     for (const value of order.irlClaims) {
@@ -270,6 +275,7 @@ export function fulfillmentOrderFromRecord(
     address,
     boxes,
     looseDudes: looseItems.map((item) => item.figureId).sort((left, right) => left - right),
+    monuments,
     cardClaims,
   };
 }

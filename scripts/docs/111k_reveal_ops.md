@@ -4,24 +4,24 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`. The monument replacement uses `v8` and `111k-sepolia/v8/`; retired collections retain their original prefixes. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
+Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`. The monument replacement uses `v9` and `111k-sepolia/v9/`; retired collections retain their original prefixes. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
-The monument collection contains 344966 metadata objects, including tokens 117172–117189. Publish the complete collection to each replacement prefix before deployment and registration; a selected-object preview cannot qualify. Monument images are fixed at `https://wip.lil.org/111k/monuments/1.webp` through `18.webp`. Opening a monument creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
+The monument collection contains 344984 metadata objects, including monument tokens 117172–117189 and terminal monument receipts 3000001–3000018. Every monument receipt uses `https://wip.lil.org/111k/receipt_background.webp`. Publish the complete collection to each replacement prefix before deployment and registration; a selected-object preview cannot qualify. Monument images are fixed at `https://wip.lil.org/111k/monuments/1.webp` through `18.webp`. Opening a monument creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
 
 For a fresh prefix, publish and verify the complete generated, validated placeholder collection. Do not rerun the v8 upload after its registration:
 
 ```sh
-npm run ethereum:metadata -- upload --network sepolia --prefix 111k-sepolia/v8/ --directory <generated-directory>
-npm run ethereum:metadata -- verify --network sepolia --prefix 111k-sepolia/v8/ --directory <generated-directory>
+npm run ethereum:metadata -- upload --network sepolia --prefix 111k-sepolia/v9/ --directory <generated-directory>
+npm run ethereum:metadata -- verify --network sepolia --prefix 111k-sepolia/v9/ --directory <generated-directory>
 npm run ethereum:metadata -- upload --network mainnet --prefix 111k/mainnet-monuments-v1/ --directory <generated-directory>
 npm run ethereum:metadata -- verify --network mainnet --prefix 111k/mainnet-monuments-v1/ --directory <generated-directory>
 ```
 
-Initialization creates missing objects with conditional writes and rejects differing contents. Resume with the same revision directory and exact prefix. Require each verification report to have `complete: true` and `objectCount: 344966`; selected-object verification never qualifies a prefix for registration. After any upload or restore that attempted writes, wait 65 seconds before another mutation or registration for that prefix, including after a failed command.
+Initialization creates missing objects with conditional writes and rejects differing contents. Resume with the same revision directory and exact prefix. Require each verification report to have `complete: true` and `objectCount: 344984`; selected-object verification never qualifies a prefix for registration. After any upload or restore that attempted writes, wait 65 seconds before another mutation or registration for that prefix, including after a failed command.
 
 Deploy the contract with the exact deployment-specific `ETHEREUM_111K_METADATA_BASE_URI`, then record its address and deployment block from the receipt. Registration checks the chain, creation block, deployed code, and exact onchain `baseURI()` before permanent ownership is recorded. Provisioning repeats those checks before marking the deployment ready.
 
-Fresh contracts deploy with `saleActive()` false. Keep the sale closed through publication, registration, provisioning, and application verification. The owner explicitly calls `setSaleActive(true)` at the approved opening step; reveal activation and storefront configuration do not change this onchain switch. For Sepolia v8, use deployment ID `v8` and metadata URI `https://cdn.mons.shop/111k-sepolia/v8/` throughout the cutover.
+Fresh contracts deploy with `saleActive()` false. Keep the sale closed through publication, registration, provisioning, and application verification. The owner explicitly calls `setSaleActive(true)` at the approved opening step; reveal activation and storefront configuration do not change this onchain switch. For Sepolia v9, use deployment ID `v9` and metadata URI `https://cdn.mons.shop/111k-sepolia/v9/` throughout the cutover.
 
 Reveal registrations are independent of the API's global `ETHEREUM_111K_*` storefront configuration. Keep those variables on the current Sepolia or local collection when registering an additional deployment, including mainnet. Change the global contract, chain, metadata URL, and deployment block together only when replacing the supported storefront collection. Mainnet reveal registration does not enable a mainnet storefront configuration.
 
@@ -37,18 +37,18 @@ Create a private local manifest:
 
 ```json
 {
-  "deploymentId": "v8",
+  "deploymentId": "v9",
   "dropId": "111k_devnet",
   "chainId": 11155111,
   "contractAddress": "<deployed contract address>",
-  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v8/",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v9/",
   "deploymentBlock": 12005467,
   "catalogVersion": "111k-v1",
   "publicationDirectory": "./published-metadata"
 }
 ```
 
-Replace the address and deployment block with the actual receipt values. `publicationDirectory` is required for new registrations and is relative to the manifest. It must contain the complete generated and validated publication, including all six templates and `templates/artwork.json`. Registration verifies all 344966 remote objects and public samples against that snapshot; an 18-monument-only publication is rejected before registration. An optional `templateFile` must match the snapshot exactly. Mainnet uses chain ID `1`, its own contract, deployment ID `mainnet-monuments-v1`, and prefix `111k/mainnet-monuments-v1/`. Both manifests may reference the same generated revision.
+Replace the address and deployment block with the actual receipt values. `publicationDirectory` is required for new registrations and is relative to the manifest. It must contain the complete generated and validated publication, including all seven templates and `templates/artwork.json`. Registration verifies all 344984 remote objects and public samples against that snapshot; an 18-monument-only publication is rejected before registration. An optional `templateFile` must match the snapshot exactly. Mainnet uses chain ID `1`, its own contract, deployment ID `mainnet-monuments-v1`, and prefix `111k/mainnet-monuments-v1/`. Both manifests may reference the same generated revision.
 
 ```sh
 npm run ethereum-reveal-control -- register --manifest <manifest.json>
@@ -106,4 +106,4 @@ npm run ethereum-reveal-control -- activate --deployment-id <id> --expected-revi
 
 Pausing stops new admission while previously admitted recovery/publication continues. Frozen results remain readable. Preserve retired deployment records, private reservations, frozen assignments, and metadata objects. Commerce reset does not delete reveal state. Never reset a production reveal object or restore an older ledger without reconciling every published immutable assignment. Use a fresh contract and prefix for a replacement collection.
 
-`npm run dev:ethereum:api` provisions local Anvil reveal inventory automatically. Local bindings use isolated SQLite and R2; public CDN baseline metadata reads remain read-only. Restarting the local API discards its local reveal state, so restart Anvil and redeploy the contract together. Set `ETHEREUM_111K_LOCAL_METADATA_BASE_URI=https://cdn.mons.shop/111k-sepolia/v8/` for the complete v8 baseline. Custom local prefixes must be canonical and have published baseline metadata. Local artwork is checked against its local ledger even if another collection has already revealed the shared CDN metadata. Local contracts also start closed; use the Anvil owner to call `setSaleActive(true)` explicitly before test purchases.
+`npm run dev:ethereum:api` provisions local Anvil reveal inventory automatically. Local bindings use isolated SQLite and R2; public CDN baseline metadata reads remain read-only. Restarting the local API discards its local reveal state, so restart Anvil and redeploy the contract together. Set `ETHEREUM_111K_LOCAL_METADATA_BASE_URI=https://cdn.mons.shop/111k-sepolia/v9/` for the complete v9 baseline. Custom local prefixes must be canonical and have published baseline metadata. Local artwork is checked against its local ledger even if another collection has already revealed the shared CDN metadata. Local contracts also start closed; use the Anvil owner to call `setSaleActive(true)` explicitly before test purchases.

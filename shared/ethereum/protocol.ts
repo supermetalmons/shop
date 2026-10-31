@@ -9,6 +9,7 @@ export const ETHEREUM_CRATES_PER_MONUMENT = 111;
 const ARTWORK_RECEIPT_COUNT = 2 * ARTWORK_COUNT;
 const ARTWORK_RECEIPT_OFFSET = 1_000_000n;
 const CRATE_RECEIPT_OFFSET = 2_000_000n;
+const MONUMENT_RECEIPT_OFFSET = 3_000_000n;
 export const ETHEREUM_MAX_MINT_QUANTITY = 15;
 export const ETHEREUM_MAX_UNBOX_QUANTITY = 15;
 export const ETHEREUM_MAX_DELIVERY_ITEMS = 50;
@@ -21,10 +22,15 @@ export const ETHEREUM_AUTHORIZATION_TTL_SECONDS = 600;
 export type Hex = `0x${string}`;
 export const ETHEREUM_MINT_KINDS = ['crate', 'warehouse', 'monument'] as const;
 export type EthereumMintKind = typeof ETHEREUM_MINT_KINDS[number];
-export type EthereumItemKind = 'artwork' | EthereumMintKind | 'artwork_receipt' | 'crate_receipt';
+export type EthereumItemKind = 'artwork' | EthereumMintKind | 'artwork_receipt' | 'crate_receipt' | 'monument_receipt';
+export type EthereumDeliveryKind = 'artwork' | 'crate' | 'monument';
 export const ETHEREUM_ITEM_KINDS: readonly EthereumItemKind[] = [
-  'artwork', 'crate', 'warehouse', 'artwork_receipt', 'crate_receipt', 'monument',
+  'artwork', 'crate', 'warehouse', 'artwork_receipt', 'crate_receipt', 'monument', 'monument_receipt',
 ];
+
+export function isEthereumDeliveryKind(kind: EthereumItemKind): kind is EthereumDeliveryKind {
+  return kind === 'artwork' || kind === 'crate' || kind === 'monument';
+}
 
 export function ethereumItemKind(value: number): EthereumItemKind | null {
   return ETHEREUM_ITEM_KINDS[value - 1] ?? null;
@@ -32,7 +38,7 @@ export function ethereumItemKind(value: number): EthereumItemKind | null {
 
 export function ethereumItemDisplayIdMaximum(kind: EthereumItemKind): number {
   if (kind === 'warehouse') return WAREHOUSE_COUNT;
-  if (kind === 'monument') return ETHEREUM_MAX_MONUMENTS;
+  if (kind === 'monument' || kind === 'monument_receipt') return ETHEREUM_MAX_MONUMENTS;
   if (kind === 'crate' || kind === 'crate_receipt') return CRATE_COUNT;
   return kind === 'artwork_receipt' ? ARTWORK_RECEIPT_COUNT : ARTWORK_COUNT;
 }
@@ -44,6 +50,7 @@ export function ethereumMetadataTokenId(kind: EthereumItemKind, displayId: numbe
   if (kind === 'crate') return String(ARTWORK_COUNT + displayId);
   if (kind === 'warehouse') return String(ARTWORK_COUNT + CRATE_COUNT + displayId);
   if (kind === 'monument') return String(ARTWORK_COUNT + CRATE_COUNT + WAREHOUSE_COUNT + displayId);
+  if (kind === 'monument_receipt') return (MONUMENT_RECEIPT_OFFSET + BigInt(displayId)).toString();
   return ((kind === 'artwork_receipt' ? ARTWORK_RECEIPT_OFFSET : CRATE_RECEIPT_OFFSET) + BigInt(displayId)).toString();
 }
 
@@ -82,10 +89,11 @@ export function physicalCrateArtworkIds(crateId: number): number[] {
   return crateArtworkIds(crateId).map(id => ARTWORK_COUNT + id);
 }
 
-export function ethereumReceiptTokenId(kind: 'artwork' | 'crate', displayId: number): string {
-  const maximum = kind === 'artwork' ? ARTWORK_COUNT : CRATE_COUNT;
+export function ethereumReceiptTokenId(kind: EthereumDeliveryKind, displayId: number): string {
+  const maximum = ethereumItemDisplayIdMaximum(kind);
   if (!Number.isInteger(displayId) || displayId < 1 || displayId > maximum) throw new Error('Invalid item number');
-  return ((kind === 'artwork' ? ARTWORK_RECEIPT_OFFSET : CRATE_RECEIPT_OFFSET) + BigInt(displayId)).toString();
+  const offset = kind === 'artwork' ? ARTWORK_RECEIPT_OFFSET : kind === 'crate' ? CRATE_RECEIPT_OFFSET : MONUMENT_RECEIPT_OFFSET;
+  return (offset + BigInt(displayId)).toString();
 }
 
 export function formatEtherAmount(wei: string | bigint, fractionDigits = 6): string {

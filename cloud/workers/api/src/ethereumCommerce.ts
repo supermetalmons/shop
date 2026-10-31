@@ -3,7 +3,7 @@ import { decodeEventLogs, decodeReturn, encodeCall, type EthereumDecodedEvent } 
 import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.js';
 import {
   ETHEREUM_AUTHORIZATION_TTL_SECONDS, physicalCrateArtworkIds, ethereumAssetId, ethereumMetadataTokenId,
-  ethereumHexQuantity, ethereumReceiptTokenId, normalizeEthereumTokenId,
+  ethereumHexQuantity, ethereumReceiptTokenId, isEthereumDeliveryKind, normalizeEthereumTokenId, type EthereumDeliveryKind,
 } from '../../../../shared/ethereum/protocol.js';
 import type { EthereumDeliveryPrepareResponse, EthereumClaimPrepareResponse } from '../../../../shared/ethereum/api.js';
 import { EthereumApiError, readEthereumBody } from './ethereumError.js';
@@ -108,18 +108,20 @@ async function signerSecret(context: EthereumContext): Promise<string> {
   return secret;
 }
 
-function deliveryItems(row: EthereumDeliveryRow): EthereumTokenInfo[] {
+type EthereumDeliveryItem = EthereumTokenInfo & { kind: EthereumDeliveryKind };
+
+function deliveryItems(row: EthereumDeliveryRow): EthereumDeliveryItem[] {
   const value: unknown = JSON.parse(row.items_json);
   if (!Array.isArray(value) || !value.length || value.length > 50 || value.some((item) =>
-    !item || typeof item.tokenId !== 'string' || !['artwork', 'crate'].includes(item.kind) ||
+    !item || typeof item.tokenId !== 'string' || !isEthereumDeliveryKind(item.kind) ||
     !Number.isSafeInteger(item.displayId) || item.displayId < 1 || item.owner !== row.wallet)) {
     throw new EthereumApiError('unavailable', 'Stored delivery data is invalid.');
   }
-  return value as EthereumTokenInfo[];
+  return value as EthereumDeliveryItem[];
 }
 
-function deliveryReceiptIds(items: EthereumTokenInfo[]): string[] {
-  return items.map((item) => ethereumReceiptTokenId(item.kind as 'artwork' | 'crate', item.displayId));
+function deliveryReceiptIds(items: EthereumDeliveryItem[]): string[] {
+  return items.map((item) => ethereumReceiptTokenId(item.kind, item.displayId));
 }
 
 async function prepareEthereumDelivery(request: Request, context: EthereumContext): Promise<EthereumDeliveryPrepareResponse> {
@@ -135,7 +137,7 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   body: { tokenIds: string[]; addressId: string; requestId: string },
   checkout?: { checkoutId: string; items: readonly Pick<EthereumTokenInfo, 'tokenId' | 'kind' | 'displayId'>[] }): Promise<EthereumDeliveryPrepareResponse> {
   const ids = body.tokenIds.map(normalizeEthereumTokenId);
-  if (ids.some((id) => id === null) || new Set(ids).size !== ids.length) throw new EthereumApiError('invalid-argument', 'Choose distinct owned artworks or crates.');
+  if (ids.some((id) => id === null) || new Set(ids).size !== ids.length) throw new EthereumApiError('invalid-argument', 'Choose distinct owned artworks, crates or monuments.');
   const tokenIds = ids as string[];
   const contractAddress = requireEthereumContract(context);
   const secret = await signerSecret(context);
@@ -173,8 +175,8 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   const [used] = row ? decodeReturn(['bool'], await ethereumCall(context, encodeCall('usedDeliveryOrders(uint256)', ['uint256'], [row.order_id]))) : [false];
   if (used) throw new EthereumApiError('failed-precondition', 'This delivery is already onchain. Wait for its confirmation.');
   const items = await ethereumTokenInfos(context, tokenIds);
-  if (items.length !== tokenIds.length || items.some((item) => item.owner !== wallet || !['artwork', 'crate'].includes(item.kind))) {
-    throw new EthereumApiError('permission-denied', 'Only owned artworks and crates can be delivered.');
+  if (items.length !== tokenIds.length || items.some((item) => item.owner !== wallet || !isEthereumDeliveryKind(item.kind))) {
+    throw new EthereumApiError('permission-denied', 'Only owned artworks, crates and monuments can be delivered.');
   }
   if (checkout && (checkout.items.length !== items.length || checkout.items.some((item, index) =>
     item.tokenId !== items[index].tokenId || item.kind !== items[index].kind || item.displayId !== items[index].displayId))) {
@@ -336,7 +338,7 @@ async function publishEthereumOrder(context: EthereumContext, row: EthereumDeliv
       status: 'ready_to_ship', addressId: row.address_id, addressSnapshot: JSON.parse(row.address_json),
       itemIds: items.map((item) => ethereumAssetId(row.chain_id, row.contract_address, item.tokenId)),
       items: items.map((item) => ({ assetId: ethereumAssetId(row.chain_id, row.contract_address, item.tokenId),
-        tokenId: item.tokenId, kind: item.kind === 'crate' ? 'box' : 'dude', refId: item.displayId })),
+        tokenId: item.tokenId, kind: item.kind === 'crate' ? 'box' : item.kind === 'monument' ? 'monument' : 'dude', refId: item.displayId })),
       deliveryFeeWei: row.fee_wei, deliverySignature: row.transaction_hash,
       receiptsMinted: receiptIds.length, receiptTxs: row.transaction_hash ? [row.transaction_hash] : [], receiptTokenIds: receiptIds,
       irlClaims,
