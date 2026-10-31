@@ -11,7 +11,7 @@ const scopes = [
 
 for (const [kind, first, last] of [
   ['artwork', '1', '111111'], ['crate', '111112', '116666'], ['warehouse', '116667', '117171'],
-  ['reliquary', '117172', '117201'],
+  ['monument', '117172', '117189'],
   ['artwork_receipt', '1000001', '1222222'], ['crate_receipt', '2000001', '2005555'],
 ]) test(`${kind} metadata boundaries preserve every configured deployment prefix`, () => {
   for (const scope of scopes) for (const id of [first, last]) {
@@ -20,7 +20,7 @@ for (const [kind, first, last] of [
 });
 
 test('metadata URLs reject noncanonical and unassigned token IDs', () => {
-  for (const id of ['0', '-1', '01', '0x1', '1.0', '1/../2', '1?version=2', '117202', '1000000', '1222223', '2000000', '2005556', '9'.repeat(100)]) {
+  for (const id of ['0', '-1', '01', '0x1', '1.0', '1/../2', '1?version=2', '117190', '1000000', '1222223', '2000000', '2005556', '9'.repeat(100)]) {
     assert.throws(() => ethereumTokenMetadataUri(scopes[0], id), /Invalid Ethereum metadata token ID/);
   }
 });

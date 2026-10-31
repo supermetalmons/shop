@@ -122,9 +122,9 @@ export default {
   assert.equal(stats.status, 200, await stats.clone().text());
   const current = await stats.json() as EthereumStats;
   assert.equal(current.remainingCrates, 5555);
-  assert.equal(current.reliquariesMinted, 0);
-  assert.equal(current.remainingReliquaries, 30);
-  assert.equal(current.reliquaryPriceWei, '8800000000000000');
+  assert.equal(current.monumentsMinted, 0);
+  assert.equal(current.remainingMonuments, 18);
+  assert.equal(current.monumentPriceWei, '8800000000000000');
   assert.deepEqual(methods, ['eth_chainId', 'eth_blockNumber', 'eth_getLogs', 'eth_chainId', 'eth_call']);
 });
 

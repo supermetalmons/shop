@@ -171,7 +171,7 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
     const baseline = new Map<string, string>();
     const samples = [...Array.from({ length: 40 }, (_, index) => ['artwork', index + 1] as const),
       ['artwork_receipt', 1], ['artwork_receipt', 111112], ['artwork_receipt', 222222],
-      ['crate_receipt', 1], ['crate', 1], ['warehouse', 1], ['reliquary', 1]] as const;
+      ['crate_receipt', 1], ['crate', 1], ['warehouse', 1], ['monument', 1]] as const;
     for (const scope of SCOPES) {
       for (const [kind, displayId] of samples) baseline.set(metadataKey(scope, ethereumMetadataTokenId(kind, displayId)),
         `${JSON.stringify(renderMetadata(kind, displayId, templates.get(scope.deploymentId)!), null, 2)}\n`);

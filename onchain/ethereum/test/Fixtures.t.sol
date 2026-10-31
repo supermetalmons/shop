@@ -97,8 +97,8 @@ contract FixturesTest is TestSupport {
         );
         output = string.concat(output, ',"calls":{"mintCrates3":"', _hex(abi.encodeCall(NFT111K.mintCrates, (3))));
         output = string.concat(output, '","mintWarehouses2":"', _hex(abi.encodeCall(NFT111K.mintWarehouses, (2))));
-        output = string.concat(output, '","mintReliquaries2":"', _hex(abi.encodeCall(NFT111K.mintReliquaries, (2))));
-        output = string.concat(output, '","unboxReliquary30":"', _hex(abi.encodeCall(NFT111K.unboxReliquary, (117201))));
+        output = string.concat(output, '","mintMonuments2":"', _hex(abi.encodeCall(NFT111K.mintMonuments, (2))));
+        output = string.concat(output, '","unboxMonument18":"', _hex(abi.encodeCall(NFT111K.unboxMonument, (117189))));
         output = string.concat(output, '","unboxCrate42":"', _hex(abi.encodeCall(NFT111K.unboxCrate, (111153))));
         output = string.concat(output, '","unboxWarehouse42":"', _hex(abi.encodeCall(NFT111K.unboxWarehouse, (116708))));
         output =

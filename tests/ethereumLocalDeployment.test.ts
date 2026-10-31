@@ -52,20 +52,20 @@ test('the local API rejects old deployment manifests before connecting to Anvil'
     });
   };
   try {
-    for (const protocolVersion of [undefined, 1, 2, 3, 4, 5, 6, 7, 8]) {
+    for (const protocolVersion of [undefined, 1, 2, 3, 4, 5, 6, 7, 8, 9]) {
       const result = start({ protocolVersion });
       assert.ifError(result.error);
       assert.equal(result.status, 1);
-      assert.match(result.stderr, /The local deployment does not support reliquaries in the collection contract\./);
+      assert.match(result.stderr, /The local deployment does not support monuments in the collection contract\./);
       assert.match(result.stderr, /Restart Anvil and run npm --prefix onchain\/ethereum run deploy:local again\./);
     }
-    const current = start({ protocolVersion: 9, chainId: 1, rpcUrl: 'http://127.0.0.1:8545' });
+    const current = start({ protocolVersion: 10, chainId: 1, rpcUrl: 'http://127.0.0.1:8545' });
     assert.ifError(current.error);
     assert.equal(current.status, 1);
     assert.match(current.stderr, /The local API accepts only an Anvil deployment on an HTTP loopback URL, chain ID 31337\./);
     for (const metadataBaseURI of ['http://127.0.0.1:8789/111k-sepolia/', 'http://localhost:8789/111k/',
       'http://[::1]:8789/111k-sepolia/', 'https://example.com/111k-sepolia/']) {
-      const local = start({ protocolVersion: 9, chainId: 31337, rpcUrl: 'http://127.0.0.1:8545', metadataBaseURI });
+      const local = start({ protocolVersion: 10, chainId: 31337, rpcUrl: 'http://127.0.0.1:8545', metadataBaseURI });
       assert.ifError(local.error);
       assert.equal(local.status, 1);
       assert.match(local.stderr, /Local metadata must use the collection CDN\./);
@@ -76,13 +76,13 @@ test('the local API rejects old deployment manifests before connecting to Anvil'
   }
 });
 
-test('the local API probes reliquary constants and the extended stats before initializing its runtime', () => {
-  const directory = mkdtempSync(join(tmpdir(), '111k-reliquary-probe-'));
+test('the local API probes monument constants and the extended stats before initializing its runtime', () => {
+  const directory = mkdtempSync(join(tmpdir(), '111k-monument-probe-'));
   const deploymentFile = join(directory, 'deployment.json');
   const fixture = JSON.parse(readFileSync('onchain/ethereum/fixtures/eip712.json', 'utf8'));
   const proceeds = JSON.parse(readFileSync('onchain/ethereum/config/proceeds.json', 'utf8'));
   const metadataBaseURI = 'https://cdn.mons.shop/111k-sepolia/probe/';
-  writeFileSync(deploymentFile, JSON.stringify({ ...proceeds, protocolVersion: 9, chainId: 31337,
+  writeFileSync(deploymentFile, JSON.stringify({ ...proceeds, protocolVersion: 10, chainId: 31337,
     rpcUrl: 'http://127.0.0.1:8545', contractAddress: `0x${'7'.repeat(40)}`, deploymentBlock: 0,
     quoteSigner: fixture.signer, metadataBaseURI }));
   const types = ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
@@ -90,12 +90,12 @@ test('the local API probes reliquary constants and the extended stats before ini
   const stats = [111n, 0n, 0n, 100n, 1100n, true, `0x${'0'.repeat(64)}`, 50n, 1n, 0n, 1n, 17n];
   try {
     for (const scenario of [
-      { name: 'legacy stats', values: stats.slice(0, 10), limit: 30, crates: 111, valid: false },
-      { name: 'wrong cap', values: stats, limit: 31, crates: 111, valid: false },
-      { name: 'old reservation', values: stats, limit: 30, crates: 88, valid: false },
-      { name: 'cap exceeded', values: [...stats.slice(0, 10), 31n, 17n], limit: 30, crates: 111, valid: false },
-      { name: 'unreserved reliquary', values: [110n, ...stats.slice(1)], limit: 30, crates: 111, valid: false },
-      { name: 'current interface', values: stats, limit: 30, crates: 111, valid: true },
+      { name: 'legacy stats', values: stats.slice(0, 10), limit: 18, crates: 111, valid: false },
+      { name: 'wrong cap', values: stats, limit: 30, crates: 111, valid: false },
+      { name: 'old reservation', values: stats, limit: 18, crates: 88, valid: false },
+      { name: 'cap exceeded', values: [...stats.slice(0, 10), 19n, 17n], limit: 18, crates: 111, valid: false },
+      { name: 'unreserved monument', values: [110n, ...stats.slice(1)], limit: 18, crates: 111, valid: false },
+      { name: 'current interface', values: stats, limit: 18, crates: 111, valid: true },
     ]) {
       const responses = {
         [encodeCall('quoteSigner()', [], [])]: encodeAbi(['address'], [fixture.signer]),
@@ -104,8 +104,8 @@ test('the local API probes reliquary constants and the extended stats before ini
         [encodeCall('previewTokenURIs(uint8[],uint256[])', ['uint8[]', 'uint256[]'], [[], []])]: encodeAbi(['string[]'], [[]]),
         [encodeCall('stats(address)', ['address'], [`0x${'0'.repeat(40)}`])]: encodeAbi(types.slice(0, scenario.values.length), scenario.values),
         [encodeCall('baseURI()', [], [])]: encodeAbi(['string'], [metadataBaseURI]),
-        [encodeCall('MAX_RELIQUARIES()', [], [])]: encodeAbi(['uint256'], [scenario.limit]),
-        [encodeCall('CRATES_PER_RELIQUARY()', [], [])]: encodeAbi(['uint256'], [scenario.crates]),
+        [encodeCall('MAX_MONUMENTS()', [], [])]: encodeAbi(['uint256'], [scenario.limit]),
+        [encodeCall('CRATES_PER_MONUMENT()', [], [])]: encodeAbi(['uint256'], [scenario.crates]),
       };
       const preload = `data:text/javascript,${encodeURIComponent(`
         const responses = ${JSON.stringify(responses)};
@@ -113,7 +113,7 @@ test('the local API probes reliquary constants and the extended stats before ini
           const { method, params } = JSON.parse(options.body);
           const result = method === 'eth_chainId' ? '0x7a69' : method === 'web3_clientVersion' ? 'anvil/test'
             : method === 'eth_getCode' ? '0x1234' : responses[params[0].data];
-          if (result === undefined) throw new Error('RELIQUARY_PROBE_ACCEPTED');
+          if (result === undefined) throw new Error('MONUMENT_PROBE_ACCEPTED');
           return new Response(JSON.stringify({ result }));
         };
       `)}`;
@@ -123,7 +123,7 @@ test('the local API probes reliquary constants and the extended stats before ini
       });
       assert.ifError(result.error);
       assert.equal(result.status, 1, scenario.name);
-      assert.match(result.stderr, scenario.valid ? /RELIQUARY_PROBE_ACCEPTED/ : /current discount and reliquary interface/, scenario.name);
+      assert.match(result.stderr, scenario.valid ? /MONUMENT_PROBE_ACCEPTED/ : /current discount and monument interface/, scenario.name);
     }
   } finally {
     rmSync(directory, { force: true, recursive: true });

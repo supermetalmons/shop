@@ -41,8 +41,8 @@ contract SecurityReceiver {
     uint256 public sourceTransferFailures;
     bool private checkPurchaseTotals;
     uint256[3] private expectedPurchaseTotals;
-    uint256 private expectedReliquaries;
-    bool private checkReliquaries;
+    uint256 private expectedMonuments;
+    bool private checkMonuments;
     bool private checkProceeds;
     uint256[2] private expectedProceeds;
     uint256[] private deliverySources;
@@ -69,7 +69,7 @@ contract SecurityReceiver {
         transferOtherId = 0;
         sourceTransferFailures = 0;
         checkPurchaseTotals = false;
-        checkReliquaries = false;
+        checkMonuments = false;
         checkProceeds = false;
         delete deliverySources;
         delete deliveryReceipts;
@@ -82,9 +82,9 @@ contract SecurityReceiver {
         expectedPurchaseTotals = [allocated, warehouses, artworks];
     }
 
-    function expectReliquaryCount(uint256 count) external {
-        checkReliquaries = true;
-        expectedReliquaries = count;
+    function expectMonumentCount(uint256 count) external {
+        checkMonuments = true;
+        expectedMonuments = count;
     }
 
     function expectProceeds(uint256 mintReceived, uint256 deliveryReceived) external {
@@ -169,11 +169,11 @@ contract SecurityReceiver {
             require(token.totalMintReceived() == expectedProceeds[0], "callback mint proceeds mismatch");
             require(token.totalDeliveryReceived() == expectedProceeds[1], "callback delivery proceeds mismatch");
         }
-        if (checkReliquaries) {
-            (,,,,,,,,,, uint256 reliquaries,) = token.stats(address(0));
+        if (checkMonuments) {
+            (,,,,,,,,,, uint256 monuments,) = token.stats(address(0));
             require(
-                reliquaries == expectedReliquaries && token.reliquariesMinted() == expectedReliquaries,
-                "callback reliquary count mismatch"
+                monuments == expectedMonuments && token.monumentsMinted() == expectedMonuments,
+                "callback monument count mismatch"
             );
         }
         if (checkPurchaseTotals) {
@@ -1038,8 +1038,8 @@ contract NFT111KSecurityTest is TestSupport {
         attacks[8] = SecurityCall(abi.encodeCall(token.releaseDelivery, ()), 0);
         attacks[9] =
             SecurityCall(abi.encodeCall(token.mintCratesDiscounted, (1, new bytes32[](0))), token.discountCratePrice());
-        attacks[10] = SecurityCall(abi.encodeCall(token.mintReliquaries, (1)), 0.0088 ether);
-        attacks[11] = SecurityCall(abi.encodeCall(token.unboxReliquary, (117172)), 0);
+        attacks[10] = SecurityCall(abi.encodeCall(token.mintMonuments, (1)), 0.0088 ether);
+        attacks[11] = SecurityCall(abi.encodeCall(token.unboxMonument, (117172)), 0);
         attacks[12] = SecurityCall(abi.encodeCall(token.releaseAllMint, ()), 0);
         buyer.configureAttacks(attacks);
         _expectRoutePurchaseTotals(buyer, route);

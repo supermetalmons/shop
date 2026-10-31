@@ -13,7 +13,7 @@ export type Ethereum111kConfig = {
   testnet: true;
   cratePriceWei: string;
   warehousePriceWei: string;
-  reliquaryPriceWei: string;
+  monumentPriceWei: string;
   deliveryFeeWei: string;
   confirmationBlocks: number;
   maxMintQuantity: number;
@@ -33,7 +33,7 @@ export function resolveEthereum111kConfig(input: {
   const deploymentBlock = Number(input.deploymentBlock || 0);
   if (!Number.isSafeInteger(deploymentBlock) || deploymentBlock < 0) throw new Error('Invalid Ethereum deployment block');
   const contractAddress = normalizeEthereumAddress(input.contractAddress);
-  const metadataBaseUri = ethereumMetadataBaseUri(input.metadataBaseUri || 'https://cdn.mons.shop/111k-sepolia/v7/', chainId);
+  const metadataBaseUri = ethereumMetadataBaseUri(input.metadataBaseUri || 'https://cdn.mons.shop/111k-sepolia/v8/', chainId);
   return {
     dropId: ETHEREUM_111K_DROP_ID, chainId,
     chainName: chainId === 31337 ? 'Local Ethereum' : 'Sepolia',
@@ -41,7 +41,7 @@ export function resolveEthereum111kConfig(input: {
     explorerUrl: chainId === 31337 ? '' : 'https://sepolia.etherscan.io',
     walletRpcUrl: input.walletRpcUrl || (chainId === 31337 ? 'http://127.0.0.1:8545' : 'https://ethereum-sepolia-rpc.publicnode.com'),
     enabled: contractAddress !== null, testnet: true,
-    cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', reliquaryPriceWei: '8800000000000000',
+    cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', monumentPriceWei: '8800000000000000',
     deliveryFeeWei: '100000000000000', confirmationBlocks: 3,
     maxMintQuantity: ETHEREUM_MAX_MINT_QUANTITY, maxUnboxQuantity: ETHEREUM_MAX_UNBOX_QUANTITY,
     maxDeliveryItems: ETHEREUM_MAX_DELIVERY_ITEMS,

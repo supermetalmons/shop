@@ -22,6 +22,7 @@
     "dev": "vite",
     "dev:ethereum:api": "node --import tsx scripts/ethereum111k-dev-api.ts",
     "ethereum:metadata": "node --import tsx scripts/ethereum-metadata/cli.ts",
+    "ethereum:metadata:rename-monuments": "node --import tsx scripts/ethereum-metadata/renameMonuments.ts",
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",
     "render:clear-cards": "node scripts/render-clear-cards.mjs",
     "render:mi-note-videos": "node scripts/mi-note-video/cli.mjs",

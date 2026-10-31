@@ -277,24 +277,24 @@ contract NFT111KGasTest is TestSupport {
         _mintCrates(alice, 15, "mintCrates15AfterWarehouse");
     }
 
-    function testGasMintReliquaries1() public {
-        _mintReliquaries(alice, 1, "mintReliquaries1");
+    function testGasMintMonuments1() public {
+        _mintMonuments(alice, 1, "mintMonuments1");
     }
 
-    function testGasMintReliquaries15() public {
-        _mintReliquaries(alice, 15, "mintReliquaries15");
+    function testGasMintMonuments15() public {
+        _mintMonuments(alice, 15, "mintMonuments15");
     }
 
-    function testGasMintReliquaries15Receiver() public {
-        _mintReliquaries(receiver, 15, "mintReliquaries15Receiver");
+    function testGasMintMonuments15Receiver() public {
+        _mintMonuments(receiver, 15, "mintMonuments15Receiver");
     }
 
-    function testGasUnboxReliquary() public {
-        _unboxReliquary(alice, "unboxReliquary");
+    function testGasUnboxMonument() public {
+        _unboxMonument(alice, "unboxMonument");
     }
 
-    function testGasUnboxReliquaryReceiver() public {
-        _unboxReliquary(receiver, "unboxReliquaryReceiver");
+    function testGasUnboxMonumentReceiver() public {
+        _unboxMonument(receiver, "unboxMonumentReceiver");
     }
 
     function testGasMintWarehouses1() public {
@@ -794,19 +794,19 @@ contract NFT111KGasTest is TestSupport {
         vm.snapshotGasLastCall(name);
     }
 
-    function _mintReliquaries(address wallet, uint256 quantity, string memory name) internal {
+    function _mintMonuments(address wallet, uint256 quantity, string memory name) internal {
         vm.prank(wallet);
-        token.mintReliquaries{value: quantity * 0.0088 ether}(quantity);
+        token.mintMonuments{value: quantity * 0.0088 ether}(quantity);
         vm.snapshotGasLastCall(name);
-        assertEq(token.reliquariesMinted(), quantity);
+        assertEq(token.monumentsMinted(), quantity);
         assertEq(token.allocatedCrates(), quantity * 111);
     }
 
-    function _unboxReliquary(address wallet, string memory name) internal {
+    function _unboxMonument(address wallet, string memory name) internal {
         vm.prank(wallet);
-        token.mintReliquaries{value: 0.0088 ether}(1);
+        token.mintMonuments{value: 0.0088 ether}(1);
         vm.prank(wallet);
-        token.unboxReliquary(117172);
+        token.unboxMonument(117172);
         vm.snapshotGasLastCall(name);
         assertEq(token.balanceOf(wallet), 111);
         assertEq(token.ownerOf(111222), wallet);
@@ -871,7 +871,7 @@ contract NFT111KGasTest is TestSupport {
         uint256[] memory ids = new uint256[](count);
         for (uint256 i; i < count; ++i) {
             kinds[i] = kind == 0 ? uint8(i % 6 + 1) : kind;
-            ids[i] = kinds[i] == 6 ? 30 : kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : 111111;
+            ids[i] = kinds[i] == 6 ? 18 : kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : 111111;
         }
         string[] memory uris = token.previewTokenURIs(kinds, ids);
         vm.snapshotGasLastCall(name);

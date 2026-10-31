@@ -69,10 +69,10 @@ contract NFT111KDeploymentTest is TestSupport {
         }
     }
 
-    function testFreshPublicNetworkDeploymentsStartClosedAndSupportReliquaries() public {
+    function testFreshPublicNetworkDeploymentsStartClosedAndSupportMonuments() public {
         uint256[2] memory chains = [uint256(1), 11155111];
         string[2] memory prefixes =
-            ["https://cdn.mons.shop/111k/mainnet-reliquaries-v1/", "https://cdn.mons.shop/111k-sepolia/v7/"];
+            ["https://cdn.mons.shop/111k/mainnet-monuments-v1/", "https://cdn.mons.shop/111k-sepolia/v8/"];
         DeploymentVm env = DeploymentVm(address(vm));
         env.setEnv("ETHEREUM_111K_DEPLOYER_KEY", Strings.toString(DEPLOYER_KEY));
         env.setEnv("ETHEREUM_111K_OWNER", Strings.toHexString(address(this)));
@@ -88,7 +88,7 @@ contract NFT111KDeploymentTest is TestSupport {
             _assertDeployment(token, chains[i], prefixes[i]);
             _assertMetadataBoundaries(token, prefixes[i]);
             _assertClosedUntilOwnerOpens(token);
-            _exerciseReliquarySale(token, prefixes[i]);
+            _exerciseMonumentSale(token, prefixes[i]);
         }
     }
 
@@ -101,13 +101,13 @@ contract NFT111KDeploymentTest is TestSupport {
         assertTrue(token.isApprovedForAll(BUYER, token.SEAPORT()));
         assertEq(token.CRATE_TOKEN_START(), 111112);
         assertEq(token.WAREHOUSE_TOKEN_START(), 116667);
-        assertEq(token.RELIQUARY_TOKEN_START(), 117172);
-        assertEq(token.MAX_RELIQUARIES(), 30);
-        assertEq(token.CRATES_PER_RELIQUARY(), 111);
+        assertEq(token.MONUMENT_TOKEN_START(), 117172);
+        assertEq(token.MAX_MONUMENTS(), 18);
+        assertEq(token.CRATES_PER_MONUMENT(), 111);
         assertEq(token.cratePrice(), 0.0001 ether);
         assertEq(token.warehousePrice(), 0.0011 ether);
         assertEq(token.discountCratePrice(), 0.00005 ether);
-        assertEq(token.reliquaryPrice(), 0.0088 ether);
+        assertEq(token.monumentPrice(), 0.0088 ether);
         (, string memory name, string memory version, uint256 domainChainId, address collection,,) =
             token.eip712Domain();
         assertEq(name, "111K");
@@ -137,7 +137,7 @@ contract NFT111KDeploymentTest is TestSupport {
         vm.expectRevert(NFT111K.SaleInactive.selector);
         token.mintWarehouses{value: 0.0011 ether}(1);
         vm.expectRevert(NFT111K.SaleInactive.selector);
-        token.mintReliquaries{value: 0.0088 ether}(1);
+        token.mintMonuments{value: 0.0088 ether}(1);
         DeploymentVm(address(vm)).expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", BUYER));
         token.setSaleActive(true);
         vm.stopPrank();
@@ -152,7 +152,7 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(token.totalSupply(), 0);
         assertEq(token.allocatedCrates(), 0);
         assertEq(token.warehousesMinted(), 0);
-        assertEq(token.reliquariesMinted(), 0);
+        assertEq(token.monumentsMinted(), 0);
         assertEq(token.remainingCrates(), 5555);
         (,, uint256 artworks,,,,,,,,,) = token.stats(BUYER);
         assertEq(artworks, 0);
@@ -166,7 +166,7 @@ contract NFT111KDeploymentTest is TestSupport {
 
     function _assertMetadataBoundaries(NFT111K token, string memory prefix) private view {
         uint256[6] memory firstTokens = [uint256(1), 111112, 116667, 1000001, 2000001, 117172];
-        uint256[6] memory maximumIds = [uint256(111111), 5555, 505, 222222, 5555, 30];
+        uint256[6] memory maximumIds = [uint256(111111), 5555, 505, 222222, 5555, 18];
         for (uint256 i; i < firstTokens.length; ++i) {
             assertEq(token.previewTokenURI(uint8(i + 1), 1), _uri(prefix, firstTokens[i]));
             assertEq(
@@ -175,38 +175,38 @@ contract NFT111KDeploymentTest is TestSupport {
         }
     }
 
-    function _exerciseReliquarySale(NFT111K token, string memory prefix) private {
+    function _exerciseMonumentSale(NFT111K token, string memory prefix) private {
         vm.deal(BUYER, 1 ether);
         vm.prank(BUYER);
-        token.mintReliquaries{value: 15 * 0.0088 ether}(15);
+        token.mintMonuments{value: 15 * 0.0088 ether}(15);
         token.setPrices(0.0002 ether, 0.0033 ether, 0.00007 ether, 0.0077 ether);
         vm.prank(BUYER);
-        token.mintReliquaries{value: 15 * 0.0077 ether}(15);
-        assertEq(token.allocatedCrates(), 3330);
-        assertEq(token.remainingCrates(), 2225);
-        assertEq(token.reliquaryFirstCrate(30), 3220);
+        token.mintMonuments{value: 3 * 0.0077 ether}(3);
+        assertEq(token.allocatedCrates(), 1998);
+        assertEq(token.remainingCrates(), 3557);
+        assertEq(token.monumentFirstCrate(18), 1888);
         (,,,,,,,,,, uint256 minted, uint256 price) = token.stats(BUYER);
-        assertEq(minted, 30);
+        assertEq(minted, 18);
         assertEq(price, 0.0077 ether);
-        _assertToken(token, 117201, 6, 30, BUYER);
-        assertEq(token.tokenURI(117201), _uri(prefix, 117201));
+        _assertToken(token, 117189, 6, 18, BUYER);
+        assertEq(token.tokenURI(117189), _uri(prefix, 117189));
         vm.prank(token.SEAPORT());
-        token.transferFrom(BUYER, NEXT_OWNER, 117201);
+        token.transferFrom(BUYER, NEXT_OWNER, 117189);
         vm.prank(NEXT_OWNER);
-        token.unboxReliquary(117201);
-        _assertToken(token, 117201, 0, 0, address(0));
+        token.unboxMonument(117189);
+        _assertToken(token, 117189, 0, 0, address(0));
         assertEq(token.balanceOf(NEXT_OWNER), 111);
         for (uint256 i; i < 111; ++i) {
-            _assertToken(token, 114331 + i, 2, 3220 + i, NEXT_OWNER);
+            _assertToken(token, 112999 + i, 2, 1888 + i, NEXT_OWNER);
         }
-        assertEq(token.tokenURI(114331), _uri(prefix, 114331));
-        assertEq(token.tokenURI(114441), _uri(prefix, 114441));
-        assertEq(token.allocatedCrates(), 3330);
-        assertEq(token.reliquariesMinted(), 30);
+        assertEq(token.tokenURI(112999), _uri(prefix, 112999));
+        assertEq(token.tokenURI(113109), _uri(prefix, 113109));
+        assertEq(token.allocatedCrates(), 1998);
+        assertEq(token.monumentsMinted(), 18);
         vm.prank(BUYER);
         vm.expectRevert(NFT111K.SoldOut.selector);
-        token.mintReliquaries{value: 0.0077 ether}(1);
-        _assertMintProceeds(token, 15 * (0.0088 ether + 0.0077 ether));
+        token.mintMonuments{value: 0.0077 ether}(1);
+        _assertMintProceeds(token, 15 * 0.0088 ether + 3 * 0.0077 ether);
     }
 
     function _assertMintProceeds(NFT111K token, uint256 received) private {

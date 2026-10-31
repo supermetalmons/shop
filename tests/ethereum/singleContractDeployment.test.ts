@@ -63,7 +63,7 @@ test('local deployment rejects current-address payees and deploys one collection
     const proceeds = JSON.parse(readFileSync(proceedsPath, 'utf8'));
     const fixture = JSON.parse(readFileSync(join(project, 'fixtures/eip712.json'), 'utf8'));
     const discounts = JSON.parse(readFileSync(join(directory, 'src/ethereum/discounts/111k.json'), 'utf8'));
-    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v7/';
+    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v8/';
     const run = () => spawnSync(process.execPath, ['scripts/deploy-local.mjs'], {
       cwd: project, encoding: 'utf8', timeout: 60_000,
       env: {
@@ -89,7 +89,7 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(result.stdout);
     assert.deepEqual(manifest, JSON.parse(readFileSync(join(project, '.local/deployment.json'), 'utf8')));
-    assert.equal(manifest.protocolVersion, 9);
+    assert.equal(manifest.protocolVersion, 10);
     assert.equal(manifest.contractAddress.toLowerCase(), predicted.toLowerCase());
     assert.equal(manifest.metadataBaseURI, baseURI);
     assert.deepEqual(Object.keys(manifest).filter(key => /renderer/i.test(key)), []);

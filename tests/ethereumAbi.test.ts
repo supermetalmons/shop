@@ -127,12 +127,12 @@ test('delivery and claim digests and calldata match Solidity-generated fixtures'
 
 test('batch calldata and ordered crate hashes match Solidity-generated fixtures', () => {
   const fixture = JSON.parse(readFileSync(new URL('../onchain/ethereum/fixtures/eip712.json', import.meta.url), 'utf8')) as {
-    calls: { unboxCratesUnsorted: string; mintReliquaries2: string; unboxReliquary30: string; getTokenInfos: string; previewTokenURIs: string };
+    calls: { unboxCratesUnsorted: string; mintMonuments2: string; unboxMonument18: string; getTokenInfos: string; previewTokenURIs: string };
     batchUnbox: { tokenIds: number[]; artworkCount: number; tokenIdsHash: string };
   };
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [fixture.batchUnbox.tokenIds]), fixture.calls.unboxCratesUnsorted);
-  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.mintReliquaries, ['uint256'], [2]), fixture.calls.mintReliquaries2);
-  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxReliquary, ['uint256'], [117201]), fixture.calls.unboxReliquary30);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.mintMonuments, ['uint256'], [2]), fixture.calls.mintMonuments2);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxMonument, ['uint256'], [117189]), fixture.calls.unboxMonument18);
   assert.equal(ethereumTokenIdsHash(fixture.batchUnbox.tokenIds), fixture.batchUnbox.tokenIdsHash);
   assert.equal(fixture.batchUnbox.tokenIds.flatMap(id => physicalCrateArtworkIds(id - 111111)).length, fixture.batchUnbox.artworkCount);
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[1, 0, 111112]]), fixture.calls.getTokenInfos);
@@ -176,7 +176,7 @@ test('digital and physical-only receipt identities occupy separate complete rang
 });
 
 test('metadata base URIs accept only the published CDN namespaces', () => {
-  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/v7/');
+  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/v8/');
   assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'https://cdn.mons.shop/111k/' }).metadataBaseUri,
     'https://cdn.mons.shop/111k/');
   assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri: 'https://cdn.mons.shop/111k/' }));

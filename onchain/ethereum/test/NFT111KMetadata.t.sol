@@ -30,7 +30,7 @@ contract NFT111KMetadataTest is TestSupport {
         _uri(5, 1, 2000001);
         _uri(5, 5555, 2005555);
         _uri(6, 1, 117172);
-        _uri(6, 30, 117201);
+        _uri(6, 18, 117189);
     }
 
     function testFuzzArtworkAndReceiptNamesShareArtworkId(uint256 seed) public view {
@@ -41,7 +41,7 @@ contract NFT111KMetadataTest is TestSupport {
 
     function testInvalidKindsAndDisplayNumbersRevert() public {
         uint8[11] memory kinds = [uint8(0), 7, 1, 1, 2, 3, 4, 4, 5, 6, 6];
-        uint256[11] memory ids = [uint256(1), 1, 0, 111112, 5556, 506, 0, 222223, 5556, 0, 31];
+        uint256[11] memory ids = [uint256(1), 1, 0, 111112, 5556, 506, 0, 222223, 5556, 0, 19];
         for (uint256 i; i < kinds.length; ++i) {
             vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
             token.previewTokenURI(kinds[i], ids[i]);

@@ -16,6 +16,10 @@ export interface MetadataStorage {
   close(): void;
 }
 
+export interface MetadataNamespaceStorage extends MetadataStorage {
+  prefixes(root: string): AsyncIterable<string>;
+}
+
 export function metadataPrefix(network: MetadataNetwork, prefix?: string): string {
   const root = network === 'sepolia' ? '111k-sepolia/' : network === 'mainnet' ? '111k/' : '';
   if (!root) throw new Error('Network must be sepolia or mainnet');
@@ -57,8 +61,29 @@ export function metadataMd5(body: Uint8Array): string {
   return createHash('md5').update(body).digest('hex');
 }
 
-export class S3MetadataStorage implements MetadataStorage {
+export class S3MetadataStorage implements MetadataNamespaceStorage {
   constructor(readonly destination: UploadDestination, private readonly client: S3Client) {}
+
+  async *prefixes(root: string): AsyncGenerator<string> {
+    if (!['111k/', '111k-sepolia/'].includes(root)) throw new Error('Invalid metadata namespace root');
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.destination.bucket,
+        Prefix: root, Delimiter: '/', MaxKeys: 1000, ...(cursor ? { ContinuationToken: cursor } : {}),
+      }), { abortSignal: AbortSignal.timeout(30_000) });
+      for (const namespace of page.CommonPrefixes ?? []) {
+        const prefix = namespace.Prefix;
+        if (!prefix?.startsWith(root) || !/^[a-z0-9][a-z0-9-]{0,63}\/$/.test(prefix.slice(root.length))) {
+          throw new Error(`Invalid nested metadata namespace: ${prefix ?? '(missing prefix)'}`);
+        }
+        if (!seen.has(prefix)) { seen.add(prefix); yield prefix; }
+      }
+      if (!page.IsTruncated) break;
+      if (!page.NextContinuationToken || page.NextContinuationToken === cursor) throw new Error('Invalid R2 listing continuation');
+      cursor = page.NextContinuationToken;
+    } while (true);
+  }
 
   async *list(prefix: string, range: MetadataListRange = {}): AsyncGenerator<RemoteObject> {
     if ((range.startAfter !== undefined && !range.startAfter.startsWith(prefix)) ||
@@ -125,7 +150,7 @@ export class S3MetadataStorage implements MetadataStorage {
   close(): void { this.client.destroy(); }
 }
 
-export function environmentStorage(concurrency: number): MetadataStorage {
+export function environmentStorage(concurrency: number): MetadataNamespaceStorage {
   metadataUploadConcurrency(concurrency);
   const endpoint = process.env.R2_ENDPOINT || (process.env.CLOUDFLARE_ACCOUNT_ID
     ? `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com` : '');

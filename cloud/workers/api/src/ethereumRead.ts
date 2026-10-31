@@ -3,7 +3,7 @@ import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.js';
 import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUri.js';
 import {
-  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELIQUARIES, ETHEREUM_CRATES_PER_RELIQUARY,
+  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_MONUMENTS, ETHEREUM_CRATES_PER_MONUMENT,
   ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
   ethereumItemDisplayIdMaximum, ethereumMetadataTokenId, normalizeEthereumTokenId,
 } from '../../../../shared/ethereum/protocol.js';
@@ -226,8 +226,8 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
       remainingCrates: 5555 - allocatedCrates, remainingWarehouses: Math.floor((5555 - allocatedCrates) / 11),
       discountMerkleRoot: values[6], discountCratePriceWei: String(values[7]),
       discountAllowance: Number(values[8]), discountUsed: Number(values[9]),
-      reliquariesMinted: Number(values[10]), reliquaryPriceWei: String(values[11]),
-      remainingReliquaries: Math.min(ETHEREUM_MAX_RELIQUARIES - Number(values[10]), Math.floor((5555 - allocatedCrates) / ETHEREUM_CRATES_PER_RELIQUARY)) };
+      monumentsMinted: Number(values[10]), monumentPriceWei: String(values[11]),
+      remainingMonuments: Math.min(ETHEREUM_MAX_MONUMENTS - Number(values[10]), Math.floor((5555 - allocatedCrates) / ETHEREUM_CRATES_PER_MONUMENT)) };
   }
   if (path.endsWith('/metadata')) {
     const kind = url.searchParams.get('kind') as EthereumItemKind;

@@ -124,7 +124,7 @@ export default function Ethereum111kPage({
   const receipts = useMemo(() => model.items.filter(item => item.kind.endsWith('_receipt')).map(ethereumInventoryView), [model.items]);
   const inventoryItems = useMemo(() => [...ethereumItems, ...solanaInventoryItems], [ethereumItems, solanaInventoryItems]);
   const combinedSelection = useMemo(() => selected.size ? selected : solanaSelected, [selected, solanaSelected]);
-  const selectedContainer = selectedItems.length === 1 && ['crate', 'warehouse', 'reliquary'].includes(selectedItems[0].kind) ? selectedItems[0] : null;
+  const selectedContainer = selectedItems.length === 1 && ['crate', 'warehouse', 'monument'].includes(selectedItems[0].kind) ? selectedItems[0] : null;
   const selectedCrates = selectedItems.length > 0 && selectedItems.every(item => item.kind === 'crate');
   const unboxLimitExceeded = selectedCrates && selectedItems.length > model.config.maxUnboxQuantity;
   const canDeliver = selectedItems.length > 0 && selectedItems.length <= model.config.maxDeliveryItems && selectedItems.every(item => ['crate', 'artwork'].includes(item.kind));
@@ -302,7 +302,7 @@ export default function Ethereum111kPage({
           onReveal={onSolanaReveal} canRevealItem={item => !isEthereumInventoryView(item) && canOpenSolanaBoxes(item.dropId)}
           onViewItem={view} revealLoadingId={solanaRevealLoading} revealDisabled={disabled} figureMediaMode="image"
           emptyStateVisibility={solanaInventoryReady && (!model.owner || !model.config.enabled || model.inventory.isFetched) ? 'visible' : 'hidden'}
-          emptyStateContent={model.owner ? 'Your crates, warehouses, reliquaries and artworks appear here.' : 'Connect Ethereum to see your 111K collection.'} />
+          emptyStateContent={model.owner ? 'Your crates, warehouses, monuments and artworks appear here.' : 'Connect Ethereum to see your 111K collection.'} />
         {model.inventory.error ? <p className="error" role="alert">Couldn’t refresh Ethereum inventory. <button type="button" className="ghost" onClick={model.refresh}>Retry</button></p> : null}
         {model.inventory.hasNextPage ? <button type="button" className="ghost" onClick={() => void model.inventory.fetchNextPage()} disabled={model.inventory.isFetchingNextPage}>{model.inventory.isFetchingNextPage ? 'Loading…' : 'Load more Ethereum items'}</button> : null}
       </section>

@@ -365,9 +365,9 @@ contract NFT111KTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(receipt, quote, signature);
     }
 
-    function testReliquaryCannotBeDelivered() public {
+    function testMonumentCannotBeDelivered() public {
         vm.prank(alice);
-        token.mintReliquaries{value: 0.0088 ether}(1);
+        token.mintMonuments{value: 0.0088 ether}(1);
         uint256[] memory ids = _one(117172);
         NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
         bytes memory signature = _deliverySignature(ids, quote);

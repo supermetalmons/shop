@@ -19,7 +19,7 @@ import { withMetadataLock } from '../scripts/ethereum-metadata/lock.ts';
 const examples: Array<{ kind: EthereumItemKind; name: string; image: string; type: string }> = [
   { kind: 'artwork', name: '1', image: 'artwork_placeholder.png', type: 'painting' },
   { kind: 'warehouse', name: 'Warehouse #1', image: 'warehouse.webp', type: 'warehouse' },
-  { kind: 'reliquary', name: 'Reliquary #1', image: 'monuments/1.webp', type: 'reliquary' },
+  { kind: 'monument', name: 'Monument #1', image: 'monuments/1.webp', type: 'monument' },
   { kind: 'crate', name: 'Crate #1', image: 'crate.jpg', type: 'crate' },
   { kind: 'crate_receipt', name: 'Crate Receipt #1', image: 'crate_receipt.webp', type: 'crate receipt' },
   { kind: 'artwork_receipt', name: 'Receipt #1', image: 'artwork_placeholder_receipt.webp', type: 'receipt' },
@@ -42,15 +42,15 @@ test('the editable templates produce the approved metadata format', async () => 
   assert.equal(metadataBody(first, templates), `${JSON.stringify(renderMetadata('artwork', 1, templates), null, 2)}\n`);
 });
 
-test('all thirty reliquaries use their individual images and reject numbers outside their supply', async () => {
+test('all eighteen monuments use their individual images and reject numbers outside their supply', async () => {
   const { templates } = await loadMetadataTemplates();
-  for (let displayId = 1; displayId <= 30; displayId++) {
-    assert.deepEqual(renderMetadata('reliquary', displayId, templates), {
-      name: `Reliquary #${displayId}`, description: '', image: `https://wip.lil.org/111k/monuments/${displayId}.webp`,
-      attributes: [{ trait_type: 'type', value: 'reliquary' }],
+  for (let displayId = 1; displayId <= 18; displayId++) {
+    assert.deepEqual(renderMetadata('monument', displayId, templates), {
+      name: `Monument #${displayId}`, description: '', image: `https://wip.lil.org/111k/monuments/${displayId}.webp`,
+      attributes: [{ trait_type: 'type', value: 'monument' }],
     });
   }
-  for (const displayId of [0, 31]) assert.throws(() => renderMetadata('reliquary', displayId, templates), /Invalid item number/);
+  for (const displayId of [0, 19]) assert.throws(() => renderMetadata('monument', displayId, templates), /Invalid item number/);
 });
 
 test('collection coverage preserves every token filename and both artwork receipt ranges', () => {
@@ -65,15 +65,15 @@ test('collection coverage preserves every token filename and both artwork receip
     boundaries[identity.kind] ??= [identity.tokenId, identity.tokenId];
     boundaries[identity.kind][1] = identity.tokenId;
   }
-  assert.equal(seen.size, 344978);
-  assert.deepEqual(counts, { artwork: 111111, crate: 5555, warehouse: 505, artwork_receipt: 222222, crate_receipt: 5555, reliquary: 30 });
+  assert.equal(seen.size, 344966);
+  assert.deepEqual(counts, { artwork: 111111, crate: 5555, warehouse: 505, artwork_receipt: 222222, crate_receipt: 5555, monument: 18 });
   assert.deepEqual(metadataCounts(), counts);
   assert.deepEqual(boundaries, {
     artwork: ['1', '111111'], crate: ['111112', '116666'], warehouse: ['116667', '117171'],
     artwork_receipt: ['1000001', '1222222'], crate_receipt: ['2000001', '2005555'],
-    reliquary: ['117172', '117201'],
+    monument: ['117172', '117189'],
   });
-  for (const id of ['0', '117202', '1000000', '1222223', '2000000', '2005556']) assert.equal(seen.has(id), false);
+  for (const id of ['0', '117190', '1000000', '1222223', '2000000', '2005556']) assert.equal(seen.has(id), false);
 });
 
 test('templates can evolve without embedding descriptions, images, or attributes in generator code', async () => {
@@ -129,7 +129,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const object: MetadataObject = { ...identity, bytes: Buffer.byteLength(body), sha256: sha256(body), md5: md5(body) };
   await writeFile(join(directory, 'objects.jsonl'), `${JSON.stringify(object)}\n`);
   const manifest: MetadataManifest = {
-    version: 1, objectCount: 344978, totalBytes: object.bytes, counts: metadataCounts(),
+    version: 1, objectCount: 344966, totalBytes: object.bytes, counts: metadataCounts(),
     objectsFile: 'objects.jsonl', objectsSha256: await fileSha256(join(directory, 'objects.jsonl')),
     templateSha256: hashes, sourceSha256: { fixture: sha256('fixture') },
   };

@@ -6,7 +6,7 @@ import nacl from 'tweetnacl';
 import { decodeReturn, encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
 import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
-import { ETHEREUM_CRATES_PER_RELIQUARY, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_RELIQUARIES,
+import { ETHEREUM_CRATES_PER_MONUMENT, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_MONUMENTS,
   ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
 import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from './shared/ethereum111kLocalReveal.ts';
@@ -16,7 +16,7 @@ const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT 
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
 };
-if (deployment.protocolVersion !== 9) throw new Error('The local deployment does not support reliquaries in the collection contract. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 10) throw new Error('The local deployment does not support monuments in the collection contract. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -56,14 +56,14 @@ if (typeof collectionCode !== 'string' || collectionCode.length < 4) {
 if (requireEthereumAddress(deployment.quoteSigner) !== signer || typeof signerResult !== 'string' ||
   decodeReturn(['address'], signerResult)[0] !== signer) throw new Error('Local API requires the public A11CE test signer used by deploy:local.');
 
-const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, reliquaryLimit, reliquaryCrates] = await Promise.all([
+const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, monumentLimit, monumentCrates] = await Promise.all([
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_UNBOX_QUANTITY()', [], []) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[]]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[], []]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [`0x${'0'.repeat(40)}`]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('baseURI()', [], []) }, 'latest']),
-  rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_RELIQUARIES()', [], []) }, 'latest']),
-  rpc('eth_call', [{ to: contractAddress, data: encodeCall('CRATES_PER_RELIQUARY()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_MONUMENTS()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('CRATES_PER_MONUMENT()', [], []) }, 'latest']),
 ]);
 if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBaseURI)[0] !== deployment.metadataBaseURI) {
   throw new Error('The local collection metadata base URI does not match its deployment manifest.');
@@ -74,12 +74,12 @@ const statsValues = typeof collectionStats === 'string' && collectionStats.lengt
 if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
   typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
   typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0 ||
-  typeof reliquaryLimit !== 'string' || decodeReturn(['uint256'], reliquaryLimit)[0] !== BigInt(ETHEREUM_MAX_RELIQUARIES) ||
-  typeof reliquaryCrates !== 'string' || decodeReturn(['uint256'], reliquaryCrates)[0] !== BigInt(ETHEREUM_CRATES_PER_RELIQUARY) ||
-  statsValues[9] !== 0n || typeof statsValues[10] !== 'bigint' || statsValues[10] > BigInt(ETHEREUM_MAX_RELIQUARIES) ||
-  typeof statsValues[0] !== 'bigint' || statsValues[0] < statsValues[10] * BigInt(ETHEREUM_CRATES_PER_RELIQUARY) ||
+  typeof monumentLimit !== 'string' || decodeReturn(['uint256'], monumentLimit)[0] !== BigInt(ETHEREUM_MAX_MONUMENTS) ||
+  typeof monumentCrates !== 'string' || decodeReturn(['uint256'], monumentCrates)[0] !== BigInt(ETHEREUM_CRATES_PER_MONUMENT) ||
+  statsValues[9] !== 0n || typeof statsValues[10] !== 'bigint' || statsValues[10] > BigInt(ETHEREUM_MAX_MONUMENTS) ||
+  typeof statsValues[0] !== 'bigint' || statsValues[0] < statsValues[10] * BigInt(ETHEREUM_CRATES_PER_MONUMENT) ||
   typeof statsValues[11] !== 'bigint') {
-  throw new Error('The local collection does not implement the current discount and reliquary interface. Run npm --prefix onchain/ethereum run deploy:local again.');
+  throw new Error('The local collection does not implement the current discount and monument interface. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
 
 async function proceedsRead(signature: string, types: string[], values: unknown[], resultType: string) {

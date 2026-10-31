@@ -94,9 +94,9 @@ async function ethereumReplacement(args: {
 const recoveryEventTopics = Object.fromEntries([
   'CratesPurchased(address,uint256,uint256,uint256)',
   'WarehousesPurchased(address,uint256,uint256,uint256)',
-  'ReliquariesPurchased(address,uint256,uint256,uint256)',
+  'MonumentsPurchased(address,uint256,uint256,uint256)',
   'WarehouseUnboxed(uint256,address,uint256,uint256)',
-  'ReliquaryUnboxed(uint256,address,uint256,uint256)',
+  'MonumentUnboxed(uint256,address,uint256,uint256)',
   'CrateUnboxed(uint256,address,uint256,uint256)',
   'CratesUnboxed(address,bytes32,uint256,uint256)',
 ].map(signature => [signature.slice(0, signature.indexOf('(')), `0x${bytesToHex(keccak_256(utf8ToBytes(signature)))}`]));
@@ -116,7 +116,7 @@ export function matchesEthereumOperationEvent(pending: EthereumSubmission, owner
       [ETHEREUM_FUNCTIONS.mintCrates, 'CratesPurchased', ['uint256']],
       [ETHEREUM_FUNCTIONS.mintCratesDiscounted, 'CratesPurchased', ['uint256', 'bytes32[]']],
       [ETHEREUM_FUNCTIONS.mintWarehouses, 'WarehousesPurchased', ['uint256']],
-      [ETHEREUM_FUNCTIONS.mintReliquaries, 'ReliquariesPurchased', ['uint256']],
+      [ETHEREUM_FUNCTIONS.mintMonuments, 'MonumentsPurchased', ['uint256']],
     ] as const) {
       const args = intentArguments(intent, signature, [...types]);
       if (!args || topic !== recoveryEventTopics[event] || log.topics.length !== 2) continue;
@@ -136,7 +136,7 @@ export function matchesEthereumOperationEvent(pending: EthereumSubmission, owner
       return decodeReturn(['address'], log.topics[1])[0] === owner && log.topics[2].toLowerCase() === ethereumTokenIdsHash(ids) &&
         artworkCount === expectedCount && firstArtToken > 0n && firstArtToken + artworkCount - 1n <= 111111n;
     }
-    for (const [signature, event] of [[ETHEREUM_FUNCTIONS.unboxCrate, 'CrateUnboxed'], [ETHEREUM_FUNCTIONS.unboxWarehouse, 'WarehouseUnboxed'], [ETHEREUM_FUNCTIONS.unboxReliquary, 'ReliquaryUnboxed']]) {
+    for (const [signature, event] of [[ETHEREUM_FUNCTIONS.unboxCrate, 'CrateUnboxed'], [ETHEREUM_FUNCTIONS.unboxWarehouse, 'WarehouseUnboxed'], [ETHEREUM_FUNCTIONS.unboxMonument, 'MonumentUnboxed']]) {
       const args = intentArguments(intent, signature, ['uint256']);
       if (!args || topic !== recoveryEventTopics[event] || log.topics.length !== 3) continue;
       decodeReturn(['uint256', 'uint256'], log.data);

@@ -405,7 +405,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       }
       const data = latest.discounted
         ? encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [quantity, proof!])
-        : encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses, reliquary: ETHEREUM_FUNCTIONS.mintReliquaries }[kind], ['uint256'], [quantity]);
+        : encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses, monument: ETHEREUM_FUNCTIONS.mintMonuments }[kind], ['uint256'], [quantity]);
       await submit(operation, capturedScope, 'mint', transaction(data, ethereumHexQuantity(BigInt(expected.unitPriceWei) * BigInt(quantity))));
     });
   };
@@ -413,15 +413,15 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     const items: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
     if (!items.length || items.length > config.maxUnboxQuantity || new Set(items.map(item => item.tokenId)).size !== items.length ||
       items.some(item => item.owner !== operation.address || item.chainId !== config.chainId || item.contractAddress !== config.contractAddress ||
-        (item.kind !== 'crate' && !(items.length === 1 && (item.kind === 'warehouse' || item.kind === 'reliquary'))))) {
-      throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse or reliquary.`);
+        (item.kind !== 'crate' && !(items.length === 1 && (item.kind === 'warehouse' || item.kind === 'monument'))))) {
+      throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse or monument.`);
     }
     const assertAvailable = () => {
       if (checkoutReservesItems(items) || canOpen?.() === false) throw new Error('Check the redemption status of your selected items before opening them.');
     };
     assertAvailable();
     const data = items.length === 1
-      ? encodeCall(items[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : items[0].kind === 'reliquary' ? ETHEREUM_FUNCTIONS.unboxReliquary : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [items[0].tokenId])
+      ? encodeCall(items[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : items[0].kind === 'monument' ? ETHEREUM_FUNCTIONS.unboxMonument : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [items[0].tokenId])
       : encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [items.map(item => item.tokenId)]);
     await submit(operation, capturedScope, 'unbox', transaction(data), {}, assertAvailable);
   });

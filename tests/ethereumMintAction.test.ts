@@ -331,7 +331,7 @@ for (const failure of [
   });
 }
 
-for (const [kind, plural] of [['warehouse', 'Warehouses'], ['reliquary', 'Reliquaries']] as const) test(`${kind} readiness failures use the selected container label`, () => {
+for (const [kind, plural] of [['warehouse', 'Warehouses'], ['monument', 'Monuments']] as const) test(`${kind} readiness failures use the selected container label`, () => {
   const view = harness({ kind, remaining: undefined });
   act(() => view.result.current.mint());
   view.update({ remaining: 1 });
