@@ -1,13 +1,13 @@
 {
   "commerce": {
     "paused": false,
-    "revision": 19,
+    "revision": 22,
     "pausedAtMs": null,
     "chainId": 11155111,
-    "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+    "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
     "resetGuardId": null,
-    "lastResetId": "19b037e7-33cc-4806-80fb-2fe8ac435577",
-    "updatedAtMs": 1793393976000
+    "lastResetId": "e6eba7df-19a6-4760-9991-2302440fbdaa",
+    "updatedAtMs": 1793436255000
   },
   "reveal": {
     "deployments": [
@@ -24,7 +24,7 @@
         "state": "paused",
         "revision": 4,
         "createdAtMs": 1793277369000,
-        "updatedAtMs": 1793434808263,
+        "updatedAtMs": 1793436908764,
         "activatedAtMs": 1793277778000,
         "provisionedAtMs": 1793277612362,
         "lastError": null
@@ -39,12 +39,30 @@
         "catalogVersion": "111k-v1",
         "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
         "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
-        "state": "active",
-        "revision": 3,
+        "state": "paused",
+        "revision": 4,
         "createdAtMs": 1793392774000,
-        "updatedAtMs": 1793434808273,
+        "updatedAtMs": 1793436908802,
         "activatedAtMs": 1793393972000,
         "provisionedAtMs": 1793392812258,
+        "lastError": null
+      },
+      {
+        "deploymentId": "v8",
+        "dropId": "111k_devnet",
+        "chainId": 11155111,
+        "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v8/",
+        "deploymentBlock": 12032655,
+        "catalogVersion": "111k-v1",
+        "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+        "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+        "state": "active",
+        "revision": 3,
+        "createdAtMs": 1793435871000,
+        "updatedAtMs": 1793436909111,
+        "activatedAtMs": 1793436262000,
+        "provisionedAtMs": 1793436012274,
         "lastError": null
       }
     ]
