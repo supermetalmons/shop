@@ -3,7 +3,7 @@ import test from 'node:test';
 import bs58 from 'bs58';
 import { getPreorderConfig, type PreorderOrder } from '../../shared/preorders.ts';
 import { createPreorderApi } from '../../src/lib/preorderApi.ts';
-import { ProfileApiError, requestProfileApi } from '../../src/api/transport.ts';
+import { requestProfileApi } from '../../src/api/transport.ts';
 
 const config = getPreorderConfig('mi_note_cards_devnet')!;
 const buyer = config.authority;
@@ -21,13 +21,13 @@ test('confirmed order markers are validated and recovery pagination uses the opt
   const confirmed = { ...order, status: 'submitted', signature: bs58.encode(new Uint8Array(64).fill(1)), confirmedSlot: 500 };
   const payload = { order: null, recoveries: [confirmed], nextRecoveryCursor: 'next-page' };
   const runtime = client(payload);
-  assert.deepEqual(await runtime.api.recoveries!(config.preorderId, 'previous-page'), payload);
+  assert.deepEqual(await runtime.api.recoveries(config.preorderId, 'previous-page'), payload);
   assert.deepEqual(JSON.parse(String(runtime.calls[0].init?.body)), { preorderId: config.preorderId, includeRecoveries: true, recoveryCursor: 'previous-page' });
   for (const confirmedSlot of [-1, 1.5, '500']) {
     await assert.rejects(client({ order: { ...confirmed, confirmedSlot } }).api.status(config.preorderId, order.orderId), /invalid response/);
   }
   for (const recoveries of [[{ ...confirmed, confirmedSlot: null }], [confirmed, confirmed], [{ ...confirmed, status: 'succeeded' }]]) {
-    await assert.rejects(client({ ...payload, recoveries }).api.recoveries!(config.preorderId), /invalid response/);
+    await assert.rejects(client({ ...payload, recoveries }).api.recoveries(config.preorderId), /invalid response/);
   }
 });
 
@@ -39,110 +39,14 @@ function client(payload: unknown, status = 200) {
       return Response.json(payload, { status });
   };
   const api = createPreorderApi({
-    fetch: fetchResponse,
     authenticatedCall: (path, data, capture, options) => requestProfileApi(path, data, {
       fetch: fetchResponse,
       getCredential: async () => { credentialCalls += 1; return { authSubject: buyer, token: 'test' }; },
       origin: () => '/api', timeoutMs: 65_000,
     }, capture, options),
-    publicOrigin: () => 'https://api.example',
   });
   return { api, calls, get credentialCalls() { return credentialCalls; } };
 }
-
-test('availability sends Ethereum verification and accepts only distinct wallet-scoped card IDs', async () => {
-  const payload = { preorderId: config.preorderId, ethereumAddress: session.address, ownershipStatus: 'success', requiresAdminSignIn: false,
-    items: [1, 12, 1395, 1396, 1397, 1398, 1399, 1400, 1409, 1410, 1411, 1412, 1413, 1414, 1415, 1416, 1417, 1418, 1419,
-      1420, 1421, 1422, 1423, 1424, 1425, 1426, 1427, 1428, 1429, 1430].map((id) => ({ id, status: 'available' })) };
-  const runtime = client(payload);
-  assert.deepEqual(await runtime.api.availability(config.preorderId, session), payload);
-  assert.equal(runtime.credentialCalls, 0);
-  assert.equal(runtime.calls[0].input, `https://api.example/preorders/availability?preorderId=${config.preorderId}`);
-  assert.equal(runtime.calls[0].init?.credentials, 'omit');
-  assert.deepEqual(runtime.calls[0].init?.headers, { 'X-Mi-Note-Session': session.token });
-  for (const items of [[], payload.items.slice(1)]) {
-    assert.deepEqual(await client({ ...payload, items }).api.availability(config.preorderId, session), { ...payload, items });
-  }
-  for (const items of [[...payload.items, payload.items[1]],
-    ...[1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1431].map((id) => [{ id, status: 'available' }]),
-    payload.items.map((item) => ({ ...item, status: 'sold' }))]) {
-    await assert.rejects(client({ ...payload, items }).api.availability(config.preorderId, session), /invalid response/);
-  }
-  await assert.rejects(client({ ...payload, ethereumAddress: '0x0000000000000000000000000000000000000002' }).api.availability(config.preorderId, session), /invalid response/);
-  const signedIn = client(payload);
-  assert.deepEqual(await signedIn.api.availability(config.preorderId, session, true), payload);
-  assert.equal(signedIn.calls.length, 1);
-  assert.equal(signedIn.credentialCalls, 1);
-  assert.equal(signedIn.calls[0].input, '/api/preorders/availability');
-  assert.equal(signedIn.calls[0].init?.method, 'POST');
-  assert.equal(signedIn.calls[0].init?.credentials, 'same-origin');
-  assert.deepEqual(JSON.parse(String(signedIn.calls[0].init?.body)), { preorderId: config.preorderId });
-  assert.equal(new Headers(signedIn.calls[0].init?.headers).get('X-Mi-Note-Session'), session.token);
-  assert.equal(new Headers(signedIn.calls[0].init?.headers).get('Authorization'), 'Bearer test');
-});
-
-test('expired Solana authentication falls back to Ethereum-verified availability without Solana credentials', async () => {
-  const payload = { preorderId: config.preorderId, ethereumAddress: session.address, ownershipStatus: 'success', requiresAdminSignIn: true,
-    items: [{ id: 12, status: 'available' }] };
-  const getCalls: { input: string; init?: RequestInit }[] = [];
-  let postCalls = 0;
-  const api = createPreorderApi({
-    publicOrigin: () => 'https://api.example',
-    authenticatedCall: async (path, data, _capture, options) => {
-      postCalls += 1;
-      assert.equal(path, '/preorders/availability');
-      assert.deepEqual(data, { preorderId: config.preorderId });
-      assert.equal(new Headers(options?.headers).get('X-Mi-Note-Session'), session.token);
-      throw new ProfileApiError({ status: 401, code: 'unauthenticated', message: 'Solana session expired.' });
-    },
-    fetch: async (input, init) => {
-      getCalls.push({ input: String(input), init });
-      return Response.json(payload);
-    },
-  });
-  assert.deepEqual(await api.availability(config.preorderId, session, true), payload);
-  assert.equal(postCalls, 1);
-  assert.equal(getCalls.length, 1);
-  assert.equal(getCalls[0].input, `https://api.example/preorders/availability?preorderId=${config.preorderId}`);
-  assert.equal(getCalls[0].init?.method, 'GET');
-  assert.equal(getCalls[0].init?.credentials, 'omit');
-  assert.deepEqual(getCalls[0].init?.headers, { 'X-Mi-Note-Session': session.token });
-  assert.equal(session.token, 'ethereum-session');
-});
-
-for (const status of [403, 500]) {
-  test(`availability does not fall back after an authenticated ${status} response`, async () => {
-    const failure = new ProfileApiError({ status, code: 'unavailable', message: 'Availability failed.' });
-    let fetched = false;
-    const api = createPreorderApi({
-      authenticatedCall: async () => { throw failure; },
-      fetch: async () => { fetched = true; throw new Error('Unexpected fallback'); },
-    });
-    await assert.rejects(api.availability(config.preorderId, session, true), (error: unknown) => error === failure);
-    assert.equal(fetched, false);
-  });
-}
-
-test('prepare uses authenticated cookie transport and validates buyer and exact card mapping', async () => {
-  const input = { preorderId: config.preorderId, buyer, cardIds: [1], requestId: 'request-1' };
-  const runtime = client({ order, transactionBase64: 'AQ==' });
-  assert.deepEqual(await runtime.api.prepare(input, session), { order, transactionBase64: 'AQ==' });
-  assert.equal(runtime.calls[0].input, '/api/preorders/prepare');
-  assert.equal(runtime.calls[0].init?.credentials, 'same-origin');
-  assert.deepEqual(runtime.calls[0].init?.headers, { Authorization: 'Bearer test', 'X-Mons-CSRF': '1', 'Content-Type': 'application/json', 'X-Mi-Note-Session': session.token });
-  assert.deepEqual(JSON.parse(String(runtime.calls[0].init?.body)), input);
-  for (const changed of [
-    { ...order, buyer: config.collection },
-    { ...order, ethereumAddress: null },
-    { ...order, ethereumAddress: '0x0000000000000000000000000000000000000002' },
-    { ...order, cardIds: [2], assets: [{ id: 2, address: config.collection }] },
-    { ...order, assets: [{ id: 2, address: config.collection }] },
-    { ...order, assets: [] },
-    { ...order, expiresAtMs: -1 },
-    { ...order, signature: 'invalid' },
-    { ...order, status: 'maybe' },
-  ]) await assert.rejects(client({ order: changed, transactionBase64: 'AQ==' }).api.prepare(input, session), /invalid response/);
-});
 
 test('status reads an authenticated order without preparing or submitting a transaction', async () => {
   const runtime = client({ order: { ...order, status: 'succeeded', signature: bs58.encode(new Uint8Array(64).fill(1)) } });
@@ -155,21 +59,23 @@ test('status reads an authenticated order without preparing or submitting a tran
   assert.equal((await client({ order: { ...order, ethereumAddress: null } }).api.status(config.preorderId)).order?.ethereumAddress, null);
 });
 
-test('submit sends signed bytes only to authenticated API and surfaces server conflicts', async () => {
-  const input = { preorderId: config.preorderId, orderId: order.orderId, transactionBase64: 'signed' };
-  const runtime = client({ order });
-  await runtime.api.submit(input, session);
-  assert.equal(runtime.calls[0].input, '/api/preorders/submit');
-  assert.deepEqual(JSON.parse(String(runtime.calls[0].init?.body)), input);
-  assert.equal(new Headers(runtime.calls[0].init?.headers).get('X-Mi-Note-Session'), session.token);
-  await assert.rejects(client({ error: { code: 'failed-precondition', message: 'Card already reserved.' } }, 409).api.submit(input, session), /already reserved/);
-  await assert.rejects(client({ order: null }).api.submit(input, session), /invalid response/);
-  await assert.rejects(client({ order: { ...order, orderId: 'another-order' } }).api.submit(input, session), /invalid response/);
-});
-
 test('cancel keeps original order identity and rejects malformed response envelopes', async () => {
   const runtime = client({ order: { ...order, status: 'cancelled' } });
   assert.equal((await runtime.api.cancel({ preorderId: config.preorderId, orderId: order.orderId })).order?.status, 'cancelled');
   assert.deepEqual(JSON.parse(String(runtime.calls[0].init?.body)), { preorderId: config.preorderId, orderId: order.orderId });
   await assert.rejects(client({ ok: true }).api.status(config.preorderId), /invalid response/);
+});
+
+test('status rejects malformed order identities and card mappings', async () => {
+  for (const changed of [
+    { ...order, preorderId: 'mi_note_cards' },
+    { ...order, assets: [{ id: 2, address: config.collection }] },
+    { ...order, assets: [] },
+    { ...order, expiresAtMs: -1 },
+    { ...order, signature: 'invalid' },
+    { ...order, status: 'maybe' },
+    { ...order, ethereumAddress: 'invalid' },
+    { ...order, buyer: 'invalid' },
+  ]) await assert.rejects(client({ order: changed }).api.status(config.preorderId, order.orderId), /invalid response/);
+  await assert.rejects(client({ order: { ...order, orderId: 'another-order' } }).api.status(config.preorderId, order.orderId), /invalid response/);
 });

@@ -71,7 +71,7 @@ test('mainnet purchase routing uses the 627-pack mint config while operations co
     assert.equal(route.drop?.priceSol, 0.5);
     assert.equal(route.drop?.maxSupply, 627);
     assert.equal(route.upcoming, null);
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
     assert.equal(route.replacementHref, null);
     assert.equal(resolveFrontendDropByPath(pathname, { drops: [getFrontendDrop(mainnetDrop.dropId)!] })?.dropId, mainnetDrop.dropId);
   }

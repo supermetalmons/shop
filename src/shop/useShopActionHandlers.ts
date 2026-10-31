@@ -1,7 +1,5 @@
 import { useRef } from 'react';
 import type { InventoryItem } from '../types';
-import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
-import { profileApiTimeoutMs } from '../api/transport';
 import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
 import type { useShopActionContinuation } from './account/useShopActionContinuation';
 import type { useShopInventoryQueries } from './inventory/useShopInventoryQueries';
@@ -26,7 +24,6 @@ type ActionHandlersOptions = {
   inventory: ReturnType<typeof useShopInventoryView>;
   queries: ReturnType<typeof useShopInventoryQueries>;
   modals: ReturnType<typeof useCommerceModals>;
-  preorder: PreorderCheckout;
   purchase: ReturnType<typeof useShopPurchaseActions>;
   delivery: ReturnType<typeof useDeliveryActions>;
   claim: ReturnType<typeof useClaimActions>;
@@ -78,34 +75,6 @@ export function useShopActionHandlers(options: ActionHandlersOptions) {
       execute: () => mode === 'mint'
         ? latest.current.purchase.handleMint(quantity, variantKey)
         : latest.current.purchase.handleDiscountMint(quantity, variantKey),
-    }).catch(report);
-  };
-  const handlePreorder = (ids: number[]) => {
-    if (options.blockViewerModeAction()) return Promise.resolve();
-    const cardIds = [...ids];
-    const preorderId = options.preorder.config.preorderId;
-    const ethereumAddress = options.preorder.ethereumAddress;
-    return continuation.run({
-      key: 'preorder', requirement: 'sign-in', cancelled: undefined,
-      readinessTimeoutMs: 2 * profileApiTimeoutMs('/preorders/availability') + 5_000,
-      isCurrent: () => latest.current.preorder.config.preorderId === preorderId && latest.current.preorder.ethereumAddress === ethereumAddress,
-      ready: () => {
-        const current = latest.current.preorder;
-        if (current.recoveryReady && current.pending) return true;
-        if (current.availabilityError) throw new Error('Couldn’t check card availability. Please try again.');
-        return current.recoveryReady && Boolean(current.availability);
-      },
-      execute: () => {
-        if (latest.current.blockViewerModeAction()) return;
-        const current = latest.current.preorder;
-        if (current.pending && !selectionMatches(cardIds.map(String), new Set(current.pending.cardIds.map(String)))) {
-          throw new Error('Another preorder is active. Continue to resolve it.');
-        }
-        if (!current.pending && !cardIds.every((id) => current.availability?.items.some((item) => item.id === id && item.status === 'available'))) {
-          throw new Error('Some selected cards are no longer available.');
-        }
-        return current.purchase(cardIds);
-      },
     }).catch(report);
   };
   const handleClaim: ActionHandlersOptions['claim']['handleClaim'] = (payload) => {
@@ -207,7 +176,7 @@ export function useShopActionHandlers(options: ActionHandlersOptions) {
     }),
     handleMint: (quantity: number, variantKey?: string) => handleMint('mint', quantity, variantKey),
     handleDiscountMint: (quantity: number, variantKey?: string) => handleMint('discount', quantity, variantKey),
-    handlePreorder, handleClaim, handleOpenShip, handleShip, handleAdminIrlRedeem, handleReceiptTransfer,
+    handleClaim, handleOpenShip, handleShip, handleAdminIrlRedeem, handleReceiptTransfer,
     openSelectedBox: (item: InventoryItem) => openBox(item),
     openPendingReveal: (item: InventoryItem, rect: DOMRect) => openBox(item, rect),
     handleRevealOverlayClick: () => {

@@ -66,7 +66,6 @@ export type ResolvedAppRoute = {
   kind: AppRouteKind;
   path: string;
   shopPath: string;
-  preorderId: 'mi_note_cards' | 'mi_note_cards_devnet' | null;
   replacementHref: string | null;
   claimDeepLinkCode: string | null;
   nfcDeepLinkCode: string | null;
@@ -100,7 +99,6 @@ function createRoute(
     kind,
     path,
     shopPath: path,
-    preorderId: null,
     replacementHref,
     claimDeepLinkCode: null,
     nfcDeepLinkCode: null,

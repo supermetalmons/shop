@@ -6,7 +6,6 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
   a.kind === b.kind &&
   a.path === b.path &&
   a.shopPath === b.shopPath &&
-  a.preorderId === b.preorderId &&
   a.claimDeepLinkCode === b.claimDeepLinkCode &&
   a.nfcDeepLinkCode === b.nfcDeepLinkCode &&
   a.drop === b.drop &&

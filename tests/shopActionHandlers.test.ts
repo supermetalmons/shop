@@ -29,12 +29,7 @@ type RigProps = {
   fetched: boolean;
   inventory: InventoryItem[];
   receipts: InventoryItem[];
-  recoveryReady: boolean;
-  availability: { id: number; status: string }[];
-  availabilityError: string | null;
-  pendingCardIds: number[] | null;
   routeDropId: string;
-  preorderId: string;
   scopeKey: string;
   overlay: { id: string; dropId: string; hasRevealAttempted?: boolean; revealedIds?: number[] } | null;
   revealClosing: boolean;
@@ -61,9 +56,7 @@ function rig(overrides: Partial<RigProps> = {}, runtime: RigRuntime = {}) {
   const messages: string[] = [];
   const initial: RigProps = {
     connectedWallet: undefined, owner, fetched: true, inventory: [pack], receipts: [receipt],
-    recoveryReady: true, availability: [{ id: 1, status: 'available' }, { id: 2, status: 'available' }],
-    availabilityError: null, pendingCardIds: null,
-    routeDropId: 'card_nft_2', preorderId: 'mi_note_cards_devnet', scopeKey: '/shop', overlay: null, revealClosing: false,
+    routeDropId: 'card_nft_2', scopeKey: '/shop', overlay: null, revealClosing: false,
     ...overrides,
   };
   const view = renderHook((props: RigProps) => {
@@ -103,12 +96,6 @@ function rig(overrides: Partial<RigProps> = {}, runtime: RigRuntime = {}) {
       inventory: { inventoryIndex, receiptItems: props.receipts },
       queries: { inventoryFetched: props.fetched, inventory: [...props.inventory, ...props.receipts] },
       modals,
-      preorder: {
-        config: { preorderId: props.preorderId }, recoveryReady: props.recoveryReady,
-        availability: { items: props.availability }, availabilityError: props.availabilityError,
-        pending: props.pendingCardIds ? { cardIds: props.pendingCardIds } : null,
-        purchase: async (ids: number[]) => { record('preorder', [...ids]); },
-      },
       purchase: {
         handleMint: async (quantity: number, variantKey?: string) => { record('mint', { quantity, variantKey }); },
         handleDiscountMint: async (quantity: number, variantKey?: string) => { record('discount', { quantity, variantKey }); },
@@ -137,59 +124,6 @@ function rig(overrides: Partial<RigProps> = {}, runtime: RigRuntime = {}) {
   }, { initialProps: initial });
   return { ...view, initial, signIn, walletConnection, signInRequests, walletRequests, calls, messages };
 }
-
-test('disconnected preorder retains card IDs through connection and waits for recovered checkout state', async () => {
-  const context = rig();
-  const ids = [1, 2];
-  let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handlePreorder(ids); });
-  ids.splice(0, ids.length, 9);
-  assert.equal(context.signInRequests.length, 1);
-  context.rerender({ ...context.initial, connectedWallet: owner, recoveryReady: false });
-  await act(async () => { context.signIn.resolve(true); });
-  assert.deepEqual(context.calls, []);
-  context.rerender({ ...context.initial, connectedWallet: owner, recoveryReady: true });
-  await waitFor(() => assert.equal(context.calls.length, 1));
-  await completion;
-  assert.deepEqual(context.calls[0], { action: 'preorder', wallet: owner, payload: [1, 2], selection: [] });
-  assert.deepEqual(context.messages, []);
-});
-
-test('restored conflicting preorder stops the captured purchase instead of buying different cards', async () => {
-  const context = rig();
-  let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handlePreorder([1]); });
-  context.rerender({ ...context.initial, connectedWallet: owner, pendingCardIds: [2] });
-  await act(async () => { context.signIn.resolve(true); });
-  await waitFor(() => assert.equal(context.result.current.continuation.pendingAction, null));
-  await completion;
-  assert.deepEqual(context.calls, []);
-  assert.deepEqual(context.messages, ['Another preorder is active. Continue to resolve it.']);
-});
-
-test('matching recovered preorder may continue when its cards are already reserved', async () => {
-  const context = rig();
-  let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handlePreorder([1]); });
-  context.rerender({ ...context.initial, connectedWallet: owner, pendingCardIds: [1], availability: [{ id: 1, status: 'reserved' }] });
-  await act(async () => { context.signIn.resolve(true); });
-  await waitFor(() => assert.equal(context.calls.length, 1));
-  await completion;
-  assert.equal(context.calls[0].action, 'preorder');
-  assert.deepEqual(context.messages, []);
-});
-
-test('cards that become unavailable during sign-in are revalidated before purchase', async () => {
-  const context = rig();
-  let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handlePreorder([1]); });
-  context.rerender({ ...context.initial, connectedWallet: owner, availability: [{ id: 1, status: 'sold' }] });
-  await act(async () => { context.signIn.resolve(true); });
-  await waitFor(() => assert.equal(context.result.current.continuation.pendingAction, null));
-  await completion;
-  assert.deepEqual(context.calls, []);
-  assert.deepEqual(context.messages, ['Some selected cards are no longer available.']);
-});
 
 test('numeric claim keeps its original code and survives wallet-driven modal generation resets', async () => {
   const context = rig();

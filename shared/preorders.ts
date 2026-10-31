@@ -1,7 +1,6 @@
 import type { SolanaCluster } from './deploymentCore.js';
 import { PREORDER_CARD_IDS } from './preorderCardIds.generated.js';
 
-export const PREORDER_CARD_COUNT = PREORDER_CARD_IDS.length;
 const preorderCardIds: ReadonlySet<number> = new Set(PREORDER_CARD_IDS);
 export const PREORDER_RESERVATION_TTL_MS = 120_000;
 export const PREORDER_PAYMENT_RECIPIENTS = [
@@ -89,16 +88,7 @@ export type PreorderOrder = {
   signature: string | null;
   confirmedSlot?: number | null;
 };
-export type PreorderAvailabilityResponse = {
-  preorderId: string;
-  ethereumAddress: string;
-  ownershipStatus: 'success' | 'partial';
-  requiresAdminSignIn: boolean;
-  items: { id: number; status: 'available' | 'reserved' | 'preordered' }[];
-};
-export type PreorderPrepareRequest = { preorderId: string; buyer: string; cardIds: number[]; requestId: string };
 export type PreorderPrepareResponse = { order: PreorderOrder; transactionBase64: string | null };
-export type PreorderSubmitRequest = { preorderId: string; orderId: string; transactionBase64: string };
 export type PreorderCancelRequest = { preorderId: string; orderId: string };
 export type PreorderStatusResponse = { order: PreorderOrder | null };
 export type PreorderRecoveryResponse = PreorderStatusResponse & {

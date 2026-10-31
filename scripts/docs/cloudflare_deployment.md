@@ -40,9 +40,6 @@ npm run dry-run:api
 ```
 
 Before production rollout, inspect the [Commerce maintenance procedure](commerce_operations.md).
-The frozen-metadata cleanup requires preflight with the previous checker and a
-completed pause/drain before migration and API publication. Follow the
-[cleanup rollout sequence](commerce_operations.md#frozen-metadata-cleanup-rollout).
 
 The focused production primitives are:
 
@@ -109,8 +106,8 @@ remains recorded in its database. After a production defect, publish a
 corrected version through the same checks. Do not edit applied SQL or attempt
 to reverse the deployment workflow by hand.
 
-After the frozen-metadata cleanup, publish only code that uses the authoritative
-state tables. Earlier Workers that read or write removed JSON metadata are not
+Publish only code that uses the authoritative state tables. Earlier Workers
+that read or write removed JSON metadata are not
 rollback targets; use a compatible correction.
 
 ## Pack-status D1

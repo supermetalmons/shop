@@ -46,7 +46,7 @@ const config = {
         'tests/**/*.ts',
       ],
       ignoreDependencies: ['buffer', 'cloudflare'],
-      ignoreBinaries: ['anchor', 'mkfifo', 'solana', 'forge', 'anvil', 'cast'],
+      ignoreBinaries: ['mkfifo', 'solana', 'forge', 'anvil', 'cast'],
       ignoreExportsUsedInFile: { type: true },
     },
     'onchain/ethereum': {

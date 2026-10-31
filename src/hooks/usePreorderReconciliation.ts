@@ -5,14 +5,14 @@ import { listPreorderRecoveries, subscribePreorderRecoveries, upsertPreorderReco
 import { runPreorderStatus } from '../lib/preorderStatusQueue';
 import { subscribeBrowserRefreshEvents } from '../lib/browserRefreshEvents';
 
-export type PreorderCheckoutApi = Omit<ReturnType<typeof createPreorderApi>, 'recoveries'> & Partial<Pick<ReturnType<typeof createPreorderApi>, 'recoveries'>>;
+export type PreorderRecoveryApi = ReturnType<typeof createPreorderApi>;
 
 export function usePreorderReconciliation(options: {
   buyer: string | undefined;
   signedIn: boolean;
   preorderId: string;
   enabled: boolean;
-  api: PreorderCheckoutApi;
+  api: PreorderRecoveryApi;
   onTerminal: (order: PreorderOrder) => void;
 }) {
   const latest = useRef(options);
@@ -30,7 +30,7 @@ export function usePreorderReconciliation(options: {
     const failures = new Map<string, number>();
     const current = () => !stopped && latest.current.buyer === buyer && latest.current.signedIn && latest.current.preorderId === preorderId;
     const discover = async () => {
-      if (!api.recoveries || discovering || discovered || Date.now() < discoveryAt) return;
+      if (discovering || discovered || Date.now() < discoveryAt) return;
       discovering = true;
       let cursor: string | undefined;
       const seen = new Set<string>();
@@ -38,7 +38,7 @@ export function usePreorderReconciliation(options: {
         do {
           const page = await runPreorderStatus(async () => {
             if (!current()) throw new Error('Recovery scope changed');
-            return api.recoveries!(preorderId, cursor);
+            return api.recoveries(preorderId, cursor);
           }, 'background');
           if (!current()) return;
           if (page.recoveries.some(order => order.buyer !== buyer || order.preorderId !== preorderId)) throw new Error('Recovery wallet does not match');

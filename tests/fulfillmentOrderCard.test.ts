@@ -31,6 +31,7 @@ function order(overrides: Partial<FulfillmentOrder> = {}): FulfillmentOrder {
     },
     boxes: [],
     looseDudes: [],
+    cardClaims: [],
     ...overrides,
   };
 }

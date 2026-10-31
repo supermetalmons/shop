@@ -49,6 +49,7 @@ function order(overrides: Partial<FulfillmentOrder> = {}): FulfillmentOrder {
     address: { countryCode: 'US', full: 'Recipient\n1 Main Street\nPortland, OR 97201\nUnited States' },
     boxes: [{ boxId: 1, dudeIds: [1] }],
     looseDudes: [],
+    cardClaims: [],
     shipstationShipmentId: 'shipment-1',
     shipstationPackage: { length: 10, width: 8, height: 6, weight: 20 },
     shipstationPackageCount: 1,

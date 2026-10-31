@@ -252,10 +252,6 @@ async function readBoundedText(response: Response, maxBytes: number, signal: Abo
   return new TextDecoder().decode(merged);
 }
 
-export function shipStationErrorMessage(value: unknown, fallback: string): string {
-  return shipStationErrorDetails(value, fallback).message;
-}
-
 function errorForStatus(
   status: number,
   value: unknown,

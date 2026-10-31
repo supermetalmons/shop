@@ -3,10 +3,8 @@ import test, { after, afterEach, beforeEach, type TestContext } from 'node:test'
 import { createElement, type PropsWithChildren } from 'react';
 import bs58 from 'bs58';
 import { getPreorderConfig, type PreorderOrder } from '../shared/preorders.ts';
-import { MI_NOTE_SESSION_HEADER } from '../shared/miNoteAuth.ts';
 import { anonymousSessionTestHooks } from '../src/lib/anonymousSession.ts';
 import { listPreorderRecoveries, upsertPreorderRecovery } from '../src/lib/preorderRecovery.ts';
-import { resolveAppRoute } from '../src/routes.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { installBrowserLocks } from './helpers/browserLocks.ts';
@@ -14,9 +12,8 @@ import { installBrowserLocks } from './helpers/browserLocks.ts';
 const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
-const { useShopPreorders } = await import('../src/shop/purchase/useShopPreorders.ts');
-const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
-type Options = Omit<Parameters<typeof useShopPreorders>[0], 'ethereumWallet'>;
+const { useShopPreorderRecovery } = await import('../src/shop/purchase/useShopPreorderRecovery.ts');
+type Options = Parameters<typeof useShopPreorderRecovery>[0];
 const clients: InstanceType<typeof QueryClient>[] = [];
 const address = (value: number) => bs58.encode(new Uint8Array(32).fill(value));
 const buyer = address(31);
@@ -49,9 +46,6 @@ function order(id: number, preorderId = mainnet.preorderId, status: PreorderOrde
 
 function server(t: TestContext, orders: PreorderOrder[] = []) {
   const statusChecks: string[] = [];
-  const availabilityChecks: string[] = [];
-  const challengeChecks: string[] = [];
-  let challengedPreorder = mainnet.preorderId;
   t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
     const url = new URL(String(input), 'https://mons.shop');
     const body = JSON.parse(String(init?.body ?? '{}'));
@@ -64,25 +58,9 @@ function server(t: TestContext, orders: PreorderOrder[] = []) {
       if (body.orderId) statusChecks.push(body.preorderId);
       return Response.json({ order: orders.find(order => order.preorderId === body.preorderId && order.orderId === body.orderId) ?? null });
     }
-    if (url.pathname === '/api/preorders/availability') {
-      const preorderId = url.searchParams.get('preorderId') ?? body.preorderId;
-      assert.equal(new Headers(init?.headers).get(MI_NOTE_SESSION_HEADER), `session:${preorderId}`);
-      availabilityChecks.push(preorderId);
-      return Response.json({ preorderId, ethereumAddress, ownershipStatus: 'success', requiresAdminSignIn: false,
-        items: [{ id: 1, status: 'available' }] });
-    }
-    if (url.pathname.endsWith('/auth/challenge')) {
-      challengedPreorder = body.preorderId;
-      challengeChecks.push(body.preorderId);
-      return Response.json({ challengeId: 'challenge', message: 'Verify ownership', expiresAtMs: Date.now() + 60_000 });
-    }
-    if (url.pathname.endsWith('/auth/verify')) return Response.json({
-      token: `session:${challengedPreorder}`, address: ethereumAddress,
-      preorderId: challengedPreorder, expiresAtMs: Date.now() + 3_600_000,
-    });
     assert.fail(`Unexpected request: ${url.pathname}`);
   });
-  return { statusChecks, availabilityChecks, challengeChecks };
+  return { statusChecks };
 }
 
 function harness(overrides: Partial<Options> = {}, client = new QueryClient({
@@ -90,52 +68,30 @@ function harness(overrides: Partial<Options> = {}, client = new QueryClient({
 })) {
   clients.push(client);
   const toasts: string[] = [];
-  const successes: string[] = [];
   let refreshes = 0;
   const options: Options = {
-    preorderId: resolveAppRoute({ pathname: '/' }).preorderId, connectedWallet: buyer, authenticatedWallet: undefined,
-    isSignedInWallet: false, isViewerMode: false, commerceUiSuspended: false, statusUiSuspended: false,
-    signTransaction: undefined, ensureSignedIn: async () => false,
+    connectedWallet: buyer, authenticatedWallet: undefined,
+    isSignedInWallet: false, isViewerMode: false, statusUiSuspended: false,
     refreshInventoryAfterMint: async () => { refreshes++; },
-    showToast: message => { toasts.push(message); }, showSuccessHud: message => { successes.push(message); },
+    showToast: message => { toasts.push(message); },
     ...overrides,
   };
   const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
-  const view = renderHook((props: Options) => {
-    const ethereumWallet = useMiNoteEthereumWallet(props.preorderId !== null && !props.commerceUiSuspended);
-    return useShopPreorders({ ...props, ethereumWallet });
-  }, { wrapper, initialProps: options });
-  return { ...view, options, client, toasts, successes, get refreshes() { return refreshes; } };
+  const view = renderHook(useShopPreorderRecovery, { wrapper, initialProps: options });
+  return { ...view, options, client, toasts, get refreshes() { return refreshes; } };
 }
 
-test('both upcoming routes disable preorder wallet verification and checkout', async t => {
-  const calls = server(t);
+test('preorder recovery never requests an Ethereum wallet or purchase endpoint', async t => {
+  server(t);
   const providerListeners = new Set<unknown>();
   Object.defineProperty(window, 'ethereum', { configurable: true, value: {
-    request: async () => { throw new Error('Upcoming drops must not request the Ethereum wallet'); },
+    request: async () => { throw new Error('Recovery must not request the Ethereum wallet'); },
     on: (_event: string, listener: unknown) => providerListeners.add(listener),
     removeListener: (_event: string, listener: unknown) => providerListeners.delete(listener),
   } });
   window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
-  const view = harness();
-  for (const pathname of ['/mi_note_cards', '/mi_note_cards_devnet', '/mi_note_cards', '/']) {
-    const route = resolveAppRoute({ pathname });
-    assert.equal(route.preorderId, null);
-    view.rerender({ ...view.options, preorderId: route.preorderId });
-    assert.equal(view.result.current.miNoteCardsPage, false);
-    assert.equal(view.result.current.ethereumVerification.session, null);
-    assert.equal(view.result.current.preorderCheckout.availability, null);
-    assert.equal(view.result.current.preorderCheckout.config.checkoutEnabled, false);
-    await act(async () => {
-      await view.result.current.ethereumVerification.verify();
-      await view.result.current.preorderCheckout.purchase([1]);
-      window.dispatchEvent(new dom.window.Event('focus'));
-    });
-    assert.equal(view.result.current.ethereumVerification.session, null);
-    assert.equal(view.result.current.preorderCheckout.pending, null);
-  }
-  assert.deepEqual(calls.challengeChecks, []);
-  assert.deepEqual(calls.availabilityChecks, []);
+  const view = harness({ isSignedInWallet: true, authenticatedWallet: buyer });
+  await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
   view.unmount();
   assert.equal(providerListeners.size, 0);
 });
@@ -144,13 +100,10 @@ test('both collections recover off-page for an authenticated disconnected owner 
   const pending = [order(1), order(2, devnet.preorderId)];
   for (const value of pending) await upsertPreorderRecovery(value);
   const calls = server(t, pending.map(value => ({ ...value, status: 'succeeded' })));
-  const view = harness({ connectedWallet: undefined, authenticatedWallet: buyer, commerceUiSuspended: true });
+  const view = harness({ connectedWallet: undefined, authenticatedWallet: buyer });
   await waitFor(() => assert.equal(listPreorderRecoveries(buyer).filter(record => record.order.status === 'succeeded').length, 2));
   assert.deepEqual(new Set(calls.statusChecks), new Set([mainnet.preorderId, devnet.preorderId]));
   assert.equal(view.refreshes, 2);
-  assert.deepEqual(view.successes, []);
-  assert.equal(view.result.current.preorderCheckout.buyer, undefined);
-  assert.equal(view.result.current.preorderCheckout.pending, null);
   view.rerender({ ...view.options, connectedWallet: otherBuyer });
   const checks = calls.statusChecks.length;
   await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
@@ -167,7 +120,7 @@ test('failed and expired recovery removes only the owner assets from both invent
     client.setQueryData(['inventory', owner, includeDevnet], items);
   }
   const cancel = t.mock.method(client, 'cancelQueries');
-  const view = harness({ commerceUiSuspended: true, statusUiSuspended: true }, client);
+  const view = harness({ statusUiSuspended: true }, client);
   await waitFor(() => {
     for (const includeDevnet of [false, true]) {
       assert.deepEqual(client.getQueryData(['inventory', buyer, includeDevnet]), [items[2]]);
@@ -176,7 +129,7 @@ test('failed and expired recovery removes only the owner assets from both invent
   });
   assert.equal(cancel.mock.callCount(), 2);
   await act(async () => { await upsertPreorderRecovery(order(5, mainnet.preorderId, 'succeeded')); });
-  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).preorderId });
+  view.rerender({ ...view.options });
   assert.equal(cancel.mock.callCount(), 2);
   assert.deepEqual(view.toasts, []);
   assert.ok(listPreorderRecoveries(buyer).every(record => !record.failureNotified));
@@ -201,9 +154,9 @@ test('failure notices wait for an eligible visible wallet, acknowledge once, and
     assert.deepEqual(view.toasts, []);
     assert.equal(listPreorderRecoveries(buyer)[0].failureNotified, false);
   }
-  view.rerender({ ...view.options, commerceUiSuspended: true });
+  view.rerender({ ...view.options });
   await waitFor(() => assert.equal(listPreorderRecoveries(buyer)[0].failureNotified, true));
-  assert.deepEqual(view.toasts, ['A preorder transaction did not finalize. Select cards to try again.']);
+  assert.deepEqual(view.toasts, ['A preorder transaction did not finalize.']);
   await act(async () => {
     window.dispatchEvent(new dom.window.Event('focus'));
     document.dispatchEvent(new dom.window.Event('visibilitychange'));

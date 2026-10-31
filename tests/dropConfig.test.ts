@@ -32,7 +32,7 @@ test('Mi Note mainnet and devnet use their registered drops without a preorder g
       assert.equal(route.kind, 'drop');
       assert.equal(route.path, path);
       assert.equal(route.shopPath, path);
-      assert.equal(route.preorderId, null);
+      assert.equal('preorderId' in route, false);
       assert.equal(route.walletCluster, cluster);
       assert.equal(route.drop, FRONTEND_DROPS[dropId]);
       assert.equal(route.drop?.itemsPerBox, 2);
@@ -130,7 +130,7 @@ test('Clear Cards keeps its public upcoming route separate from its WIP route', 
   assert.equal(wipRoute.kind, 'wip');
   assert.equal(wipRoute.path, '/clear_cards/wip');
   assert.equal(wipRoute.shopPath, '/');
-  assert.equal(wipRoute.preorderId, null);
+  assert.equal('preorderId' in wipRoute, false);
   assert.equal(wipRoute.wipExperience, 'clear_cards');
   assert.equal(wipRoute.walletCluster, 'mainnet-beta');
   assert.equal(wipRoute.replacementHref, null);
@@ -150,7 +150,7 @@ test('pack WIP routes stay separate from their live drop routes', () => {
     assert.equal(route.kind, 'wip');
     assert.equal(route.path, pathname);
     assert.equal(route.shopPath, '/');
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
     assert.equal(route.drop, null);
     assert.equal(route.upcoming, null);
     assert.equal(route.walletCluster, 'mainnet-beta');
@@ -172,7 +172,7 @@ test('Doge Day 2026 keeps its announcement and independent WIP separate from liv
     assert.equal(announcement.upcoming?.dropFamily, 'doge_day_2026');
     assert.equal(announcement.walletCluster, 'mainnet-beta');
     assert.equal(announcement.drop, null);
-    assert.equal(announcement.preorderId, null);
+    assert.equal('preorderId' in announcement, false);
     assert.equal(announcement.wipExperience, null);
     assert.equal(announcement.replacementHref, null);
 
@@ -184,7 +184,7 @@ test('Doge Day 2026 keeps its announcement and independent WIP separate from liv
     assert.equal(wip.walletCluster, 'mainnet-beta');
     assert.equal(wip.drop, null);
     assert.equal(wip.upcoming, null);
-    assert.equal(wip.preorderId, null);
+    assert.equal('preorderId' in wip, false);
     assert.equal(wip.replacementHref, null);
     assert.equal(resolveAppRoute({ pathname: `/poncho_drifella/wip${suffix}` }).wipExperience, 'poncho_drifella');
     assert.equal(resolveFrontendDropByPath(`/doge_day_2026${suffix}`), null);
@@ -222,7 +222,7 @@ test('Mi Note Cards WIP stays separate from its public drop page', () => {
   assert.equal(route.path, '/mi_note_cards/wip');
   assert.equal(route.shopPath, '/');
   assert.equal(route.wipExperience, 'mi_note_cards');
-  assert.equal(route.preorderId, null);
+  assert.equal('preorderId' in route, false);
   assert.equal(route.drop, null);
   assert.equal(route.upcoming, null);
   assert.equal(route.walletCluster, 'mainnet-beta');
@@ -237,7 +237,7 @@ test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi
     assert.equal(route.path, '/mi_note_cards_devnet/wip');
     assert.equal(route.shopPath, '/');
     assert.equal(route.wipExperience, 'mi_note_cards_demo');
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
     assert.equal(route.drop, null);
     assert.equal(route.upcoming, null);
     assert.equal(route.walletCluster, 'mainnet-beta');
@@ -269,7 +269,7 @@ test('route aliases replace only the pathname and preserve search and hash bytes
     assert.equal(route.kind, kind);
     assert.equal(route.path, targetPath);
     assert.equal(route.shopPath, targetPath);
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
     assert.equal(route.replacementHref, `${targetPath}?code=a%2Fb&next=%2Fclaim#receipt-1`);
   }
 });
@@ -284,7 +284,7 @@ test('claim deep links render the home shop without replacing their URL', () => 
   assert.equal(route.kind, 'claim');
   assert.equal(route.path, '/');
   assert.equal(route.shopPath, '/');
-  assert.equal(route.preorderId, null);
+  assert.equal('preorderId' in route, false);
   assert.equal(route.claimDeepLinkCode, 'claim/123');
   assert.equal(route.nfcDeepLinkCode, null);
   assert.equal(route.replacementHref, null);
@@ -303,7 +303,7 @@ test('NFC deep links render a dedicated page without replacing their URL or open
     assert.equal(route.kind, 'nfc');
     assert.equal(route.path, '/nfc');
     assert.equal(route.shopPath, '/nfc');
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
     assert.equal(route.nfcDeepLinkCode, 'stub/123+abc xyz');
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, null);
@@ -339,7 +339,7 @@ test('home and special routes keep their canonical paths and neutral wallet clus
     assert.equal(route.kind, kind);
     assert.equal(route.path, pathname);
     assert.equal(route.shopPath, pathname);
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
     assert.equal(route.replacementHref, null);
     assert.equal(route.walletCluster, 'mainnet-beta');
   }
@@ -351,12 +351,12 @@ test('live deployments take precedence over upcoming routes at the same path', (
 
   assert.equal(liveRoute.kind, 'drop');
   assert.equal(liveRoute.shopPath, '/clear_cards');
-  assert.equal(liveRoute.preorderId, null);
+  assert.equal('preorderId' in liveRoute, false);
   assert.equal(liveRoute.drop, FRONTEND_DROPS.clear_cards);
   assert.equal(liveRoute.upcoming, null);
   assert.equal(upcomingRoute.kind, 'upcoming');
   assert.equal(upcomingRoute.shopPath, '/tbd');
-  assert.equal(upcomingRoute.preorderId, null);
+  assert.equal('preorderId' in upcomingRoute, false);
   assert.equal(upcomingRoute.upcoming?.path, '/tbd');
 });
 
@@ -366,7 +366,7 @@ test('unknown and case-mismatched paths fall back to home while preserving URL s
     assert.equal(route.kind, 'home');
     assert.equal(route.path, '/');
     assert.equal(route.shopPath, '/');
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, '/?from=unknown#top');
   }

@@ -71,6 +71,7 @@ function order(dropId: string, deliveryId: number, createdAt = deliveryId): Fulf
     address: { full: `Owner ${deliveryId}\n${deliveryId} Main Street` },
     boxes: [],
     looseDudes: [],
+    cardClaims: [],
   };
 }
 

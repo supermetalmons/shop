@@ -361,6 +361,48 @@ test('domain clients select authenticated routes through injected transport', as
   assert.equal(calls[12]?.replaySafe, true);
 });
 
+test('fulfillment orders require a valid card-claims array at the API boundary', async () => {
+  const order = {
+    dropId: 'card_nft_2', deliveryId: 7, owner: OWNER, status: 'ready_to_ship',
+    address: {}, boxes: [], looseDudes: [],
+  };
+  const invalidClaims: unknown[] = [
+    undefined, null, {}, 'claims', [null], [[]], [42], [{}],
+    ...[undefined, null, '42', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]
+      .map(figureId => [{ figureId }]),
+    ...['assetId', 'receiptClaimCode', 'receiptClaimStatus']
+      .flatMap(key => [null, 42, false, {}].map(value => [{ figureId: 42, [key]: value }])),
+    [{ figureId: 42, unexpected: true }],
+    [{ figureId: 42 }, { figureId: 0 }],
+  ];
+  const missing = createFulfillmentApiClient(async () => ({ orders: [order] }));
+  await assert.rejects(missing.listFulfillmentOrders({ dropId: order.dropId }), /Invalid fulfillment orders response/);
+  for (const cardClaims of invalidClaims) {
+    const client = createFulfillmentApiClient(async () => ({
+      orders: [{ ...order, cardClaims: [] }, { ...order, cardClaims }],
+    }));
+    await assert.rejects(client.listFulfillmentOrders({ dropId: order.dropId }), /Invalid fulfillment orders response/);
+  }
+});
+
+test('fulfillment orders preserve empty and populated card-claims arrays', async () => {
+  const order = {
+    dropId: 'card_nft_2', deliveryId: 7, owner: OWNER, status: 'ready_to_ship',
+    address: {}, boxes: [], looseDudes: [42],
+  };
+  for (const cardClaims of [
+    [],
+    [{ figureId: 42 }],
+    [{ figureId: 42, assetId: 'card-42', receiptClaimCode: 'CARD-SECRET', receiptClaimStatus: 'unclaimed' }],
+    [{ figureId: Number.MAX_SAFE_INTEGER, assetId: '', receiptClaimCode: '', receiptClaimStatus: '' }],
+  ]) {
+    const client = createFulfillmentApiClient(async () => ({ orders: [{ ...order, cardClaims }], nextCursor: null }));
+    assert.deepEqual(await client.listFulfillmentOrders({ dropId: order.dropId }), {
+      orders: [{ ...order, cardClaims }], nextCursor: null,
+    });
+  }
+});
+
 test('domain client factories apply successful response contracts', async () => {
   const profileState = {
     responseMode: 'profile-state' as const,

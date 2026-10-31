@@ -507,7 +507,14 @@ export function createFulfillmentApiClient(
         order.buyerOrderShippedEmailState === 'queued') &&
       isRecord(order.address) &&
       Array.isArray(order.boxes) &&
-      Array.isArray(order.looseDudes));
+      Array.isArray(order.looseDudes) &&
+      Array.isArray(order.cardClaims) &&
+      order.cardClaims.every((claim) =>
+        isRecord(claim) &&
+        hasExactRequiredAndOptionalKeys(claim, ['figureId'], ['assetId', 'receiptClaimCode', 'receiptClaimStatus']) &&
+        Number.isSafeInteger(claim.figureId) && Number(claim.figureId) > 0 &&
+        ['assetId', 'receiptClaimCode', 'receiptClaimStatus'].every((key) =>
+          claim[key] === undefined || typeof claim[key] === 'string')));
     if (orders.length !== response.orders.length) throw new Error('Invalid fulfillment orders response');
     const cursor = response.nextCursor;
     if (cursor !== undefined && cursor !== null && (

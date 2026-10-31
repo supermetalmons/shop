@@ -174,7 +174,7 @@ test('111k routes independently of Solana deployments and preserves its URL', ()
   assert.equal(route.ethereumDropId, '111k_devnet');
   assert.equal(route.path, '/111k_devnet');
   assert.equal(route.drop, null);
-  assert.equal(route.preorderId, null);
+  assert.equal('preorderId' in route, false);
   assert.equal(route.replacementHref, null);
   assert.equal(resolveAppRoute({ pathname: '/' }).ethereumDropId, undefined);
 });

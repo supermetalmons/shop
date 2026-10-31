@@ -16,7 +16,7 @@ Adding these local manifests requires no database migration or deployment.
 Preorder asset lookup, order JSON, and permanent card claims remain authoritative.
 Notification publication, Stripe lifecycle, pack-status retries, and delivery
 recovery use their dedicated state tables. Parent JSON no longer carries duplicate
-notification, checkout lifecycle, or projection metadata after the cleanup below.
+notification, checkout lifecycle, or projection metadata.
 Applied migrations and prior schema checkpoints remain unchanged.
 
 ## Inspect current state
@@ -92,60 +92,6 @@ publication leaves the previous Worker running; applied migrations stay applied.
 Keep maintenance paused, fix the cause, and publish a compatible correction.
 Never restore an old allocator or a Worker that reads or writes removed parent
 metadata.
-
-## Frozen metadata cleanup rollout
-
-`0046_frozen_commerce_metadata_cleanup.sql` removes frozen notification, Stripe
-checkout lifecycle, and pack-status projection fields from parent JSON. It
-preserves authoritative state rows, payloads, job identities, transaction journals,
-leases, generations, revisions, document versions, and timestamps. Its SQL guards
-require complete matching state and completed maintenance for an existing database.
-The migration rejects active authority, incomplete table controls, active leases,
-commit guards, or wipe guards. An untouched empty database can replay the migration
-before bootstrap; deleting records from a used database is not that exception.
-
-Run the pre-migration integrity check from the complete previous checkout. Its
-checker understands the previous schema and frozen fields; the updated checker
-expects the cleanup to have been applied. Keep source and dependencies matched:
-
-```sh
-git worktree add --detach ../shop-pre-cleanup abb1e8b84fadae8d59af363e6b4a8117343f2dba
-npm --prefix ../shop-pre-cleanup ci
-npm --prefix ../shop-pre-cleanup run check:commerce-d1
-```
-
-Resolve every preflight failure before proceeding. From the updated checkout,
-run `npm run check`, then complete the existing pause/drain coordinator:
-
-```sh
-npm run commerce-authority-control -- status
-npm run commerce-authority-control -- paused --expected-revision <CURRENT_REVISION> --write
-```
-
-Wait for both drains and a non-null `paused_at_ms`. Retain the returned paused
-revision; the completed coordinator releases its maintenance lease. Inspect and
-resolve interrupted leases or guards through their owning operation, without
-clearing them to bypass the migration.
-
-Publish through the normal guarded deployment path while maintenance remains
-paused, then verify and resume:
-
-```sh
-npm run deploy:api
-npm run check:commerce-d1 -- --for-deployment
-npm run check:pack-status-d1
-npm run check:ops-d1
-npm run commerce-authority-control -- d1 --expected-revision <PAUSED_REVISION> --write
-npm run deploy
-npm run check:queue-backlogs
-```
-
-The API deployment applies the guarded migration before checking the new schema
-and publishing compatible code. If migration or publication fails, keep Commerce
-paused and fix forward. Do not deploy an older Worker that reads or writes the
-removed parent fields. Resume only after compatible publication and integrity
-checks succeed. Local cleanup and validation do not apply production migrations
-or publish either Worker.
 
 ## Initialize an empty database
 

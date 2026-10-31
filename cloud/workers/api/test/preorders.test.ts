@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach } from 'node:test';
 import { Keypair } from '@solana/web3.js';
 import miNoteCatalog from '../../../../mi_note_cards.json';
-import { getPreorderConfig, PREORDER_CARD_COUNT, PREORDER_CONFIGS } from '../../../../shared/preorders.ts';
+import { getPreorderConfig, PREORDER_CONFIGS } from '../../../../shared/preorders.ts';
+import { PREORDER_CARD_IDS } from '../../../../shared/preorderCardIds.generated.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
 import { PreorderStore, listPreorderInventoryAssets, listRecentPreorderInventoryAssets, publicPreorder } from '../src/preorderStore.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
@@ -1391,7 +1392,7 @@ test('mainnet availability is verified, collection-scoped, and ignores expired u
   });
   assert.equal(result.status, 200);
   assert.equal(result.body.preorderId, mainnet.preorderId);
-  assert.equal(result.body.items.length, PREORDER_CARD_COUNT);
+  assert.equal(result.body.items.length, PREORDER_CARD_IDS.length);
   assert.deepEqual(result.body.items.map((item: { id: number }) => item.id), preorderCardIds);
   assert.equal(result.body.items[0].status, 'available');
   assert.equal(result.body.items[1].status, 'preordered');

@@ -61,6 +61,7 @@ function cardOrder(overrides?: Partial<FulfillmentOrder>): FulfillmentOrder {
       },
     ],
     looseDudes: [42],
+    cardClaims: [],
     ...overrides,
   };
 }

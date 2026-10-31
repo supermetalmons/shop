@@ -33,6 +33,7 @@ function fulfillmentOrder(
     },
     boxes: [],
     looseDudes: [],
+    cardClaims: [],
     ...overrides,
   };
 }

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import miNoteCatalog from '../mi_note_cards.json';
 import { MI_NOTE_3_CONTRACT_ADDRESS, MI_NOTE_CONTRACT_ADDRESSES } from '../shared/miNoteCards.ts';
-import { isPreorderCardId, PREORDER_CARD_COUNT } from '../shared/preorders.ts';
+import { isPreorderCardId } from '../shared/preorders.ts';
+import { PREORDER_CARD_IDS } from '../shared/preorderCardIds.generated.ts';
 
 const ethereumCardIds = miNoteCatalog.ethereumCollections.flatMap(({ tokens }) => tokens.map(({ clean_card_id }) => clean_card_id));
 
@@ -11,7 +12,7 @@ test('the Ethereum catalog contains exactly the cards supported for preorder', (
     miNoteCatalog.ethereumCollections.map(({ contractAddress }) => contractAddress).sort(),
     [...MI_NOTE_CONTRACT_ADDRESSES].sort(),
   );
-  assert.equal(PREORDER_CARD_COUNT, 1422);
+  assert.equal(PREORDER_CARD_IDS.length, 1422);
   assert.deepEqual([...ethereumCardIds].sort((left, right) => left - right), [
     ...Array.from({ length: 1400 }, (_, index) => index + 1),
     ...Array.from({ length: 22 }, (_, index) => index + 1409),

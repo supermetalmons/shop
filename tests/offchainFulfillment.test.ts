@@ -61,7 +61,6 @@ import {
   runStripeCheckoutFulfillmentWithRetry,
   stripeApiModeForCluster,
   stripeApiKeysForMode,
-  stripeApiKeyForMode,
   stripeCheckoutKindForDrop,
 } from '../cloud/workers/api/src/stripeCheckout/service.ts';
 import {
@@ -1993,17 +1992,17 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   );
 });
 
-test('stripeApiKeyForMode uses the first configured test key only', () => {
-  assert.equal(stripeApiKeyForMode(['rk_test_restricted', 'sk_test_secret'], 'test'), 'rk_test_restricted');
-  assert.equal(stripeApiKeyForMode(['', 'sk_live_ignored', 'sk_test_secret'], 'test'), 'sk_test_secret');
-  assert.throws(() => stripeApiKeyForMode(['', 'sk_live_wrong'], 'test'), /Stripe test key is not configured/);
+test('stripeApiKeysForMode preserves configured key priority', () => {
+  assert.deepEqual(stripeApiKeysForMode(['rk_test_restricted', 'sk_test_secret'], 'test'), ['rk_test_restricted', 'sk_test_secret']);
+  assert.deepEqual(stripeApiKeysForMode(['', 'sk_live_ignored', 'sk_test_secret'], 'test'), ['sk_test_secret']);
+  assert.throws(() => stripeApiKeysForMode(['', 'sk_live_wrong'], 'test'), /Stripe test key is not configured/);
 });
 
-test('stripeApiKeyForMode selects only keys matching the requested mode', () => {
-  assert.equal(stripeApiKeyForMode(['sk_live_ignored', 'rk_test_restricted'], 'test'), 'rk_test_restricted');
-  assert.equal(stripeApiKeyForMode(['sk_test_ignored', 'rk_live_restricted'], 'live'), 'rk_live_restricted');
-  assert.throws(() => stripeApiKeyForMode(['sk_test_wrong'], 'live'), /Stripe live key is not configured/);
-  assert.throws(() => stripeApiKeyForMode(['sk_live_wrong'], 'test'), /Stripe test key is not configured/);
+test('stripeApiKeysForMode selects only keys matching the requested mode', () => {
+  assert.deepEqual(stripeApiKeysForMode(['sk_live_ignored', 'rk_test_restricted'], 'test'), ['rk_test_restricted']);
+  assert.deepEqual(stripeApiKeysForMode(['sk_test_ignored', 'rk_live_restricted'], 'live'), ['rk_live_restricted']);
+  assert.throws(() => stripeApiKeysForMode(['sk_test_wrong'], 'live'), /Stripe live key is not configured/);
+  assert.throws(() => stripeApiKeysForMode(['sk_live_wrong'], 'test'), /Stripe test key is not configured/);
 });
 
 test('stripeApiKeysForMode preserves matching fallback keys', () => {

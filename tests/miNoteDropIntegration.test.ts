@@ -28,7 +28,7 @@ test('registered Mi Note drops use their own mainnet and devnet configurations',
   assert.equal(mainnet.drop?.maxSupply, 627);
   assert.equal(mainnet.drop?.priceSol, 0.5);
   assert.equal(mainnet.walletCluster, 'mainnet-beta');
-  assert.equal(mainnet.preorderId, null);
+  assert.equal('preorderId' in mainnet, false);
   for (const pathname of ['/mi_note_cards_devnet', '/mi_note_cards_devnet/']) {
     const route = resolveAppRoute({ pathname });
     assert.equal(route.kind, 'drop');
@@ -36,7 +36,7 @@ test('registered Mi Note drops use their own mainnet and devnet configurations',
     assert.equal(route.drop?.dropId, drop.dropId);
     assert.equal(route.drop?.itemsPerBox, 2);
     assert.equal(route.drop?.maxSupply, 704);
-    assert.equal(route.preorderId, null);
+    assert.equal('preorderId' in route, false);
   }
 });
 

@@ -314,11 +314,7 @@ export type FulfillmentOrder = {
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
-  /**
-   * Optional for compatibility with fulfillment responses created before
-   * direct card receipt claims were introduced.
-   */
-  cardClaims?: FulfillmentOrderCardClaim[];
+  cardClaims: FulfillmentOrderCardClaim[];
 };
 
 export type StripeCheckoutManualReviewAddress = {

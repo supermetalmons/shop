@@ -115,7 +115,7 @@ export function useFulfillmentExports({
         if (!box || !fulfillmentBoxSecretCode(box)) return;
         figureIds = box.dudeIds;
       } else {
-        const claim = order.cardClaims?.[target.index];
+        const claim = order.cardClaims[target.index];
         const secretCode = claim ? fulfillmentCardClaimSecretCode(claim) : '';
         if (!claim || !secretCode || isUsedReceiptClaimStatus(claim.receiptClaimStatus)) return;
         figureIds = [claim.figureId];

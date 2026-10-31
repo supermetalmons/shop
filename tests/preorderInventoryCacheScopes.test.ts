@@ -9,7 +9,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { getFrontendDrop } from '../src/config/deployment.ts';
 import { getPreorderConfig } from '../shared/preorders.ts';
 import { listPreorderRecoveries, resolvePreorderInventoryAssets, upsertPreorderRecovery } from '../src/lib/preorderRecovery.ts';
-import type { PreorderCheckoutApi } from '../src/hooks/usePreorderReconciliation.ts';
+import type { PreorderRecoveryApi } from '../src/hooks/usePreorderReconciliation.ts';
 import type { InventoryItem } from '../src/types.ts';
 
 const { dom } = setupFrontendDom();
@@ -17,7 +17,7 @@ const { act, cleanup, renderHook, waitFor } = await import('@testing-library/rea
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { WalletContext } = await import('@solana/wallet-adapter-react');
 const { useShopInventoryQueries } = await import('../src/shop/inventory/useShopInventoryQueries.ts');
-const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
+const { usePreorderRecovery } = await import('../src/hooks/usePreorderRecovery.ts');
 const { useShopInventorySelection, useShopInventorySelectionState } = await import('../src/shop/inventory/useShopInventorySelection.ts');
 const clients: InstanceType<typeof QueryClient>[] = [];
 const pendingResponses: ReturnType<typeof Promise.withResolvers<Response>>[] = [];
@@ -93,11 +93,10 @@ for (const owned of [false, true]) test(`finalized ${owned ? 'ownership' : 'abse
   let inventoryCalls = 0;
   t.mock.method(globalThis, 'fetch', () => { inventoryCalls++; return response.promise; });
   let statusCalls = 0;
-  let successCalls = 0;
   let settledCalls = 0;
-  const unexpected = async (): Promise<never> => assert.fail('Inventory handoff must not prepare, sign, submit, or cancel a preorder');
-  const api: PreorderCheckoutApi = {
-    availability: unexpected, prepare: unexpected, submit: unexpected, cancel: unexpected,
+  const unexpected = async (): Promise<never> => assert.fail('Inventory handoff must not cancel a preorder');
+  const api: PreorderRecoveryApi = {
+    cancel: unexpected,
     recoveries: async () => ({ order: null, recoveries: [], nextRecoveryCursor: null }),
     status: async (_preorderId, orderId) => {
       statusCalls++;
@@ -109,9 +108,8 @@ for (const owned of [false, true]) test(`finalized ${owned ? 'ownership' : 'abse
   const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client },
     createElement(WalletContext.Provider, { value: wallet }, children));
   const { result, rerender } = renderHook((signedIn: boolean) => {
-    usePreorderCheckout({ config, active: false, buyer: owner, signedIn,
-      authenticatedBuyer: signedIn ? owner : undefined, ethereumSession: null, signTransaction: unexpected,
-      ensureSignedIn: async () => false, onSucceeded: () => { successCalls++; }, onSettled: () => { settledCalls++; },
+    usePreorderRecovery({ config, buyer: owner, signedIn,
+      authenticatedBuyer: signedIn ? owner : undefined, onSettled: () => { settledCalls++; },
     }, api);
     return useShopInventoryQueries(owner, false, false);
   }, { initialProps: false, wrapper });
@@ -128,12 +126,10 @@ for (const owned of [false, true]) test(`finalized ${owned ? 'ownership' : 'abse
   assert.deepEqual(result.current.inventory.map(item => item.id), owned ? [assetAddress] : []);
   assert.deepEqual(client.getQueryData<InventoryItem[]>(['inventory', owner, false])?.map(item => item.id), owned ? [assetAddress] : []);
   assert.equal(statusCalls, 0);
-  assert.equal(successCalls, 0);
   rerender(true);
   await waitFor(() => assert.equal(listPreorderRecoveries(owner)[0].order.status, 'succeeded'));
   assert.equal(statusCalls, 1);
   assert.equal(settledCalls, 1);
-  assert.equal(successCalls, 0);
   assert.equal(listPreorderRecoveries(owner)[0].inventoryResolutionSlots?.[assetAddress], 250);
   assert.deepEqual(result.current.inventory.map(item => item.id), owned ? [assetAddress] : []);
 });

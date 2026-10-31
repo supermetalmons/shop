@@ -151,7 +151,7 @@ function ViewButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-export function PreorderSelectionBar({ canViewSelected, handleViewSelectedItem, ...panel }: SelectionPanelProps & Pick<ShopSelectionBarProps, 'canViewSelected' | 'handleViewSelectedItem'>) {
+function PreorderSelectionBar({ canViewSelected, handleViewSelectedItem, ...panel }: SelectionPanelProps & Pick<ShopSelectionBarProps, 'canViewSelected' | 'handleViewSelectedItem'>) {
   return (
     <SelectionPanel {...panel}>
       {canViewSelected && <ViewButton onClick={handleViewSelectedItem} />}

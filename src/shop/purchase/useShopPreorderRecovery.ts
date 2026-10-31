@@ -1,81 +1,37 @@
-import type { VersionedTransaction } from '@solana/web3.js';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { getPreorderConfig } from '../../../shared/preorders';
-import type { useMiNoteEthereumWallet } from '../../hooks/useMiNoteEthereumWallet';
-import { useMiNoteVerification } from '../../hooks/useMiNoteVerification';
-import { usePreorderCheckout } from '../../hooks/usePreorderCheckout';
+import { usePreorderRecovery } from '../../hooks/usePreorderRecovery';
 import { usePreorderRecoveryRecords } from '../../hooks/usePreorderRecoveryRecords';
 import { revokePreorderInventoryAssets } from '../../lib/inventoryQuery';
 import { acknowledgePreorderFailure, listPreorderRecoveries } from '../../lib/preorderRecovery';
 import { subscribeBrowserRefreshEvents } from '../../lib/browserRefreshEvents';
-import type { ResolvedAppRoute } from '../../routes';
 
 const MI_NOTE_DEVNET_PREORDER = getPreorderConfig('mi_note_cards_devnet')!;
 const MI_NOTE_MAINNET_PREORDER = getPreorderConfig('mi_note_cards')!;
 
-type ShopPreordersOptions = {
-  ethereumWallet: ReturnType<typeof useMiNoteEthereumWallet>;
-  preorderId: ResolvedAppRoute['preorderId'];
+type ShopPreorderRecoveryOptions = {
   connectedWallet: string | undefined;
   authenticatedWallet: string | undefined;
   isSignedInWallet: boolean;
   isViewerMode: boolean;
-  commerceUiSuspended: boolean;
   statusUiSuspended: boolean;
-  signTransaction: ((transaction: VersionedTransaction) => Promise<VersionedTransaction>) | undefined;
-  ensureSignedIn: () => Promise<boolean>;
   refreshInventoryAfterMint: () => Promise<unknown>;
   showToast: (message: string) => void;
-  showSuccessHud: (message: string) => void;
 };
 
-export function useShopPreorders({
-  ethereumWallet,
-  preorderId,
-  connectedWallet,
-  authenticatedWallet,
-  isSignedInWallet,
-  isViewerMode,
-  commerceUiSuspended,
-  statusUiSuspended,
-  signTransaction,
-  ensureSignedIn,
-  refreshInventoryAfterMint,
-  showToast,
-  showSuccessHud,
-}: ShopPreordersOptions) {
-  const miNoteCardsPage = preorderId !== null;
-  const preorderConfig = preorderId === MI_NOTE_MAINNET_PREORDER.preorderId ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER;
-  const preorderActive = miNoteCardsPage && !commerceUiSuspended;
-  const ethereumVerification = useMiNoteVerification(preorderActive, preorderConfig.preorderId, ethereumWallet);
-  const preorderOptions = {
+export function useShopPreorderRecovery({
+  connectedWallet, authenticatedWallet, isSignedInWallet, isViewerMode,
+  statusUiSuspended, refreshInventoryAfterMint, showToast,
+}: ShopPreorderRecoveryOptions) {
+  const recoveryOptions = {
     buyer: connectedWallet,
     signedIn: isSignedInWallet,
     authenticatedBuyer: authenticatedWallet,
-    ethereumSession: ethereumVerification.session,
-    onEthereumSessionInvalid: ethereumVerification.invalidate,
-    signTransaction,
-    ensureSignedIn,
-    onSucceeded: () => {
-      showSuccessHud('Preordered');
-      void refreshInventoryAfterMint();
-    },
     onSettled: () => { void refreshInventoryAfterMint(); },
   };
-  const mainnetPreorder = usePreorderCheckout({
-    ...preorderOptions,
-    config: MI_NOTE_MAINNET_PREORDER,
-    active: preorderActive && preorderConfig === MI_NOTE_MAINNET_PREORDER,
-    ethereumSession: ethereumVerification.session?.preorderId === MI_NOTE_MAINNET_PREORDER.preorderId ? ethereumVerification.session : null,
-  });
-  const devnetPreorder = usePreorderCheckout({
-    ...preorderOptions,
-    config: MI_NOTE_DEVNET_PREORDER,
-    active: preorderActive && preorderConfig === MI_NOTE_DEVNET_PREORDER,
-    ethereumSession: ethereumVerification.session?.preorderId === MI_NOTE_DEVNET_PREORDER.preorderId ? ethereumVerification.session : null,
-  });
-  const preorderCheckout = preorderConfig === MI_NOTE_MAINNET_PREORDER ? mainnetPreorder : devnetPreorder;
+  usePreorderRecovery({ ...recoveryOptions, config: MI_NOTE_MAINNET_PREORDER });
+  usePreorderRecovery({ ...recoveryOptions, config: MI_NOTE_DEVNET_PREORDER });
   const preorderRecoveries = usePreorderRecoveryRecords(connectedWallet ?? authenticatedWallet);
   const inventoryQueryClient = useQueryClient();
   const revokedPreorders = useRef(new Set<string>());
@@ -98,7 +54,7 @@ export function useShopPreorders({
       if (!failures.length) return;
       const unseen = failures.filter(({ order }) => !notifiedPreorderFailures.current.has(`${order.buyer}:${order.preorderId}:${order.orderId}`));
       if (unseen.length) {
-        showToast('A preorder transaction did not finalize. Select cards to try again.');
+        showToast('A preorder transaction did not finalize.');
         for (const { order } of unseen) notifiedPreorderFailures.current.add(`${order.buyer}:${order.preorderId}:${order.orderId}`);
       }
       for (const { order } of failures) void acknowledgePreorderFailure(order.buyer, order.preorderId, order.orderId).catch(() => {});
@@ -110,5 +66,4 @@ export function useShopPreorders({
     };
   }, [connectedWallet, isSignedInWallet, statusUiSuspended, isViewerMode, preorderRecoveries, showToast]);
 
-  return { miNoteCardsPage, ethereumWallet, ethereumVerification, preorderCheckout };
 }

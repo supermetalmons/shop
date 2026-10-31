@@ -49,12 +49,23 @@ npm run check:api
 npm run typecheck:tools
 npm run check:dead-code
 npm run check
+npm run check:all
 ```
 
-`check` is the full repository gate: generated schema and Worker types, frontend
-and API typechecks, unit/runtime/on-chain tests, dead-code checks, production
-bundles, and Worker startup validation. `dry-run:frontend` and `dry-run:api`
-validate deployment bundles without publishing.
+`check` is the routine repository gate: generated schema and Worker types,
+frontend and API typechecks, TypeScript unit/runtime tests, Rust host tests,
+dead-code checks, production bundles, and Worker startup validation.
+`dry-run:frontend` and `dry-run:api` validate deployment bundles without publishing.
+
+`check:all` adds Solidity and gas checks, nested Ethereum TypeScript tests,
+extended contract invariants, Ethereum E2E, Solana SBF, and native renderer tests.
+It requires the pinned root and Ethereum npm dependencies, Cargo, Anchor/Solana
+SBF tooling, Foundry (`forge` and `anvil`), and the
+[native renderer's pinned macOS runtime](scripts/mi-note-video/README.md#prerequisites).
+Ethereum E2E also requires CDN access or its configured local metadata directory.
+Missing prerequisites fail the command. Fixture-writing and lockfile-sensitive
+checks run in disposable copies of the current source. Public-RPC
+[fork tests](onchain/ethereum/README.md#seaport-trading) remain opt-in.
 
 After catalog or schema changes, run `npm run generate:db` and
 `npm run check:db-generated`. Keep applied SQL and recorded schema checksums
@@ -98,8 +109,6 @@ Release evidence describes the recorded verification time, not live service stat
 | Completed releases and retired operations | [Release index](releases/README.md) |
 
 API deployment runs checks, applies migrations, verifies remote integrity, and
-publishes the Worker. The frozen-metadata cleanup requires the previous checker
-preflight, completed Commerce pause/drain, guarded deployment, and then resume;
-follow the [cleanup rollout procedure](scripts/docs/commerce_operations.md#frozen-metadata-cleanup-rollout).
-Frontend publication follows the API. Production rollout is a separate operation
-from local validation.
+publishes the Worker. Use the [Commerce maintenance procedure](scripts/docs/commerce_operations.md#pause-and-resume-maintenance)
+when a change requires paused consumers. Frontend publication follows the API.
+Production rollout is a separate operation from local validation.

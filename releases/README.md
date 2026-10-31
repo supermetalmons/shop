@@ -11,7 +11,8 @@ and committed deployment registry for current behavior.
 | Mi Note devnet rehearsal | [Deployment, activation, and conversion](mi-note-cards-devnet/README.md) |
 | Mi Note metadata | [Public metadata](mi-note-cards-mainnet/README.md), [1396–1398](mi-note-cards-1396-1398/README.md), [1399–1400](mi-note-cards-1399-1400/README.md), [1409–1413](mi-note-cards-1409-1413/README.md), [1414–1419](mi-note-cards-1414-1419/README.md), [1420–1430](mi-note-cards-1420-1430/README.md) |
 | 111K Sepolia | [v8 monuments](111k-sepolia-v8/README.md), [v7](111k-sepolia-v7/README.md), [Single-contract release](111k-sepolia-single-contract/README.md), [Offchain metadata release](111k-sepolia-offchain/README.md), [Seaport release](111k-sepolia-seaport/README.md), [proceeds release](111k-sepolia-proceeds/README.md), [discount release](111k-sepolia-discounts/README.md), [initial release](111k-sepolia/README.md), [October 18 validation](111k-validation-2026-10-18/README.md) |
-| 111K metadata hosting | [Public R2 migration](111k-public-r2/README.md) |
+| 111K metadata hosting | [Public R2 migration](111k-public-r2/README.md), [minimal metadata](111k-minimal-metadata/README.md) |
+| 111K reveals and recovery | [Reveal rollout](111k-reveal-2026-10-29/README.md), [recovery](111k-recovery-2026-10-30/README.md), [unminted tokens](111k-unminted-2026-10-30/README.md), [lifecycle repair](111k-lifecycle-2026-10-30/README.md), [scheduler indexes](111k-scheduler-index-2026-10-30/README.md), [concurrency](111k-concurrency-2026-10-30/README.md) |
 | Binder packing replacements | [Completed issuance and current export path](binder-packing-replacements-2026-10-20/README.md) |
 | Receipt claim Workflows | [Original rollout](receipt-claim-workflow-2026-09-23/README.md), [October 21 recovery verification](receipt-claim-recovery-2026-10-21/verification.json) |
 | Mainnet URI migrations | [Migration records and historical tooling](mainnet-uri-migrations-2026-08-05/README.md) |

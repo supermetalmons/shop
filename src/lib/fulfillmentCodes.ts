@@ -38,14 +38,14 @@ export function fulfillmentLooseFigureIdsExcludingCardClaims(
 ): number[] {
   return subtractFigureIdOccurrences(
     order.looseDudes,
-    (order.cardClaims || []).map((claim) => claim.figureId),
+    order.cardClaims.map((claim) => claim.figureId),
   );
 }
 
 export function fulfillmentOrderLooseFigureIds(
   order: Pick<FulfillmentOrder, 'looseDudes' | 'cardClaims'>,
 ): number[] {
-  const cardClaimFigureIds = (order.cardClaims || []).map((claim) => claim.figureId);
+  const cardClaimFigureIds = order.cardClaims.map((claim) => claim.figureId);
   const missingClaimFigureIds = subtractFigureIdOccurrences(cardClaimFigureIds, order.looseDudes);
   return [...order.looseDudes, ...missingClaimFigureIds];
 }

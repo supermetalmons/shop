@@ -112,7 +112,6 @@ function headerSignInOptions(
     get inventory() { return unexpected('inventory'); },
     get queries() { return unexpected('inventory queries'); },
     get modals() { return unexpected('commerce modals'); },
-    get preorder() { return unexpected('preorder'); },
     get purchase() { return unexpected('purchase'); },
     get delivery() { return unexpected('delivery'); },
     get claim() { return unexpected('claim'); },

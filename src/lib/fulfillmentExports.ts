@@ -273,7 +273,7 @@ export function countFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder
     (total, order) =>
       total +
       order.boxes.reduce((boxTotal, box) => boxTotal + (exportableBoxSecretCode(box) ? 1 : 0), 0) +
-      (order.cardClaims || []).reduce(
+      order.cardClaims.reduce(
         (claimTotal, claim) => claimTotal + (exportableCardClaimSecretCode(claim) ? 1 : 0),
         0,
       ),
@@ -301,7 +301,7 @@ function countFulfillmentSecretCodesThroughBox(order: FulfillmentOrder, boxIndex
 
 function countFulfillmentSecretCodesThroughCardClaim(order: FulfillmentOrder, cardClaimIndex: number): number {
   let total = countFulfillmentSecretCodesThroughBox(order, order.boxes.length - 1);
-  const cardClaims = order.cardClaims || [];
+  const cardClaims = order.cardClaims;
   for (let index = 0; index <= cardClaimIndex && index < cardClaims.length; index += 1) {
     if (exportableCardClaimSecretCode(cardClaims[index])) total += 1;
   }
@@ -526,7 +526,7 @@ export function buildFulfillmentCardClaimSecretCodeExportEntry(args: {
   options?: FulfillmentSecretCodeExportOptions;
   usedFilenames?: Set<string>;
 }): FulfillmentSecretCodeExportEntry | null {
-  const claim = args.order.cardClaims?.[args.cardClaimIndex];
+  const claim = args.order.cardClaims[args.cardClaimIndex];
   if (!claim) return null;
 
   const secretCode = exportableCardClaimSecretCode(claim);
@@ -567,7 +567,7 @@ export function buildFulfillmentSecretCodeExportEntries(
         }),
       ];
     });
-    const cardEntries = (order.cardClaims || []).flatMap((claim, cardClaimIndex) => {
+    const cardEntries = order.cardClaims.flatMap((claim, cardClaimIndex) => {
       const secretCode = exportableCardClaimSecretCode(claim);
       if (!secretCode) return [];
 

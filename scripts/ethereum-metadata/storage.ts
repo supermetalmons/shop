@@ -16,10 +16,6 @@ export interface MetadataStorage {
   close(): void;
 }
 
-export interface MetadataNamespaceStorage extends MetadataStorage {
-  prefixes(root: string, range?: MetadataListRange): AsyncIterable<string>;
-}
-
 export function metadataPrefix(network: MetadataNetwork, prefix?: string): string {
   const root = network === 'sepolia' ? '111k-sepolia/' : network === 'mainnet' ? '111k/' : '';
   if (!root) throw new Error('Network must be sepolia or mainnet');
@@ -61,48 +57,8 @@ export function metadataMd5(body: Uint8Array): string {
   return createHash('md5').update(body).digest('hex');
 }
 
-export class S3MetadataStorage implements MetadataNamespaceStorage {
+export class S3MetadataStorage implements MetadataStorage {
   constructor(readonly destination: UploadDestination, private readonly client: S3Client) {}
-
-  async *prefixes(root: string, range: MetadataListRange = {}): AsyncGenerator<string> {
-    if (!['111k/', '111k-sepolia/'].includes(root)) throw new Error('Invalid metadata namespace root');
-    if ((range.startAfter !== undefined && !range.startAfter.startsWith(root)) ||
-      (range.endAt !== undefined && !range.endAt.startsWith(root)) ||
-      (range.startAfter !== undefined && range.endAt !== undefined && range.startAfter >= range.endAt)) {
-      throw new Error('Invalid R2 namespace listing range');
-    }
-    let cursor: string | undefined;
-    let previousObject = range.startAfter;
-    let previousNamespace = range.startAfter;
-    const seen = new Set<string>();
-    do {
-      const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.destination.bucket,
-        Prefix: root, Delimiter: '/', MaxKeys: 1000, ...(cursor ? { ContinuationToken: cursor } : { StartAfter: range.startAfter }),
-      }), { abortSignal: AbortSignal.timeout(30_000) });
-      for (const object of page.Contents ?? []) {
-        if (!object.Key?.startsWith(root) || previousObject !== undefined && object.Key <= previousObject) {
-          throw new Error('Invalid R2 namespace object order');
-        }
-        previousObject = object.Key;
-      }
-      for (const namespace of page.CommonPrefixes ?? []) {
-        const prefix = namespace.Prefix;
-        if (!prefix?.startsWith(root) || !/^[a-z0-9][a-z0-9-]{0,63}\/$/.test(prefix.slice(root.length))) {
-          throw new Error(`Invalid nested metadata namespace: ${prefix ?? '(missing prefix)'}`);
-        }
-        if (range.startAfter !== undefined && prefix <= range.startAfter) throw new Error('Invalid R2 namespace lower bound');
-        if (!seen.has(prefix) && previousNamespace !== undefined && prefix <= previousNamespace) throw new Error('Invalid R2 namespace order');
-        previousNamespace = prefix;
-        if (range.endAt !== undefined && prefix > range.endAt) continue;
-        if (!seen.has(prefix)) { seen.add(prefix); yield prefix; }
-      }
-      if (range.endAt !== undefined && [...(page.Contents ?? []).map(object => object.Key),
-        ...(page.CommonPrefixes ?? []).map(namespace => namespace.Prefix)].some(key => key !== undefined && key >= range.endAt!)) return;
-      if (!page.IsTruncated) break;
-      if (!page.NextContinuationToken || page.NextContinuationToken === cursor) throw new Error('Invalid R2 listing continuation');
-      cursor = page.NextContinuationToken;
-    } while (true);
-  }
 
   async *list(prefix: string, range: MetadataListRange = {}): AsyncGenerator<RemoteObject> {
     if ((range.startAfter !== undefined && !range.startAfter.startsWith(prefix)) ||
@@ -169,7 +125,7 @@ export class S3MetadataStorage implements MetadataNamespaceStorage {
   close(): void { this.client.destroy(); }
 }
 
-export function environmentStorage(concurrency: number): MetadataNamespaceStorage {
+export function environmentStorage(concurrency: number): MetadataStorage {
   metadataUploadConcurrency(concurrency);
   const endpoint = process.env.R2_ENDPOINT || (process.env.CLOUDFLARE_ACCOUNT_ID
     ? `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com` : '');

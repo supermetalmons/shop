@@ -59,6 +59,7 @@ function order(dropId = 'card_nft_2'): FulfillmentOrder {
     address: { full: 'Ada\n123 Main St\nUS', countryCode: 'US' },
     boxes: dropId === ETHEREUM_DROP ? [{ boxId: 5555, claimCode: 'ABCDEF123456', dudeIds: [111111] }] : [],
     looseDudes: [],
+    cardClaims: [],
     ...(dropId === ETHEREUM_DROP ? { source: 'ethereum' as const } : {}),
   };
 }

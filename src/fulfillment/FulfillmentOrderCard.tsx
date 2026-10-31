@@ -204,7 +204,7 @@ export function FulfillmentOrderCard({
   const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
   const orderIsMiNoteCards = isDropFamily(orderDrop, 'mi_note_cards');
   const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2') || orderIsMiNoteCards;
-  const cardClaims = order.cardClaims || [];
+  const cardClaims = order.cardClaims;
   const looseDudes = fulfillmentLooseFigureIdsExcludingCardClaims(order);
   const canEditOrderAddress = canEditFulfillmentOrderAddress(order, {
     showFullAddress,

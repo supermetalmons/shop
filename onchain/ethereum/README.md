@@ -24,6 +24,8 @@ npm run build
 npm run abi
 ```
 
+The repository-root `npm run check:all` runs these checks and the extended invariants in a disposable source copy, keeping committed fixtures unchanged. It also covers the application, Ethereum E2E, Solana SBF, and native renderer suites; see the [validation prerequisites](../../README.md#validation).
+
 The tests cover monument supply and lifetime caps, mixed monument/warehouse/direct allocation, every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, sequential digital identities and disjoint physical receipts, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also verify receipt commitments and confirm that token-based artwork identities stay stable after an opening-order reorg.
 
 Stateful invariant tests mix public and discounted purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
@@ -45,44 +47,13 @@ Compare snapshots using the same Foundry, Solidity, optimizer, and EVM settings.
 
 ## Offchain metadata
 
-`NFT111K` constructs metadata URLs directly and returns `https://cdn.mons.shop/111k-sepolia/{tokenId}.json` on Sepolia and `https://cdn.mons.shop/111k/{tokenId}.json` on mainnet. These URLs serve the authoritative JSONs directly from public R2 with permissive CORS and `no-store` caching. The [metadata guide](../../scripts/docs/111k_metadata.md) covers URL identities, access, cache behavior, and testing.
+`NFT111K` constructs metadata URLs from its deployment's registered prefix: `https://cdn.mons.shop/111k-sepolia/{deploymentId}/{tokenId}.json` on Sepolia and `https://cdn.mons.shop/111k/{deploymentId}/{tokenId}.json` on mainnet. These URLs serve authoritative JSONs directly from public R2. The [metadata guide](../../scripts/docs/111k_metadata.md) is the canonical reference for identities, template generation, publication, access, caching, and testing.
 
-The repository retains URL construction and token-ID mapping, but no collection JSON/SVG renderer or metadata generator. Historical release records document the original artwork publication. Unit tests use generic synthetic responses, while local development and the Anvil end-to-end flow fetch the current CDN JSONs.
+The repository's metadata CLI generates collection JSONs from committed templates for publication. Runtime metadata comes from the CDN; normal local development does not run a metadata generator or server. Unit tests use synthetic responses, while the Anvil end-to-end flow reads the current CDN JSONs or an explicitly configured local metadata directory.
 
 ## Local chain
 
-Start Anvil in one terminal:
-
-```sh
-npm run chain:local
-```
-
-In another terminal:
-
-```sh
-npm run deploy:local
-```
-
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the collection using Anvil's first unlocked account. It writes the collection address, the deployment block, the discount root, the proceeds configuration, `metadataBaseURI`, and `protocolVersion: 10` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Metadata defaults to the complete `https://cdn.mons.shop/111k-sepolia/v8/` publication, matching the deployed shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts published HTTPS CDN collection prefixes under `/111k-sepolia/` or `/111k/`, including one deployment namespace such as `/111k-sepolia/test-2/`. Deployment IDs contain 1–64 lowercase letters, digits, or hyphens and start with a letter or digit. Baseline metadata is read from the CDN; local reveal writes use an isolated local R2 bucket. Other optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
-
-The new collection has zero supply and sales closed. Before local minting, explicitly open sales from its owner. Replace `OWNER_ADDRESS` and `COLLECTION_ADDRESS` below with `owner` and `contractAddress` from `.local/deployment.json`, and use its `rpcUrl` if overridden. The default owner is Anvil's first unlocked account; a custom owner must submit the same call from its own account.
-
-```sh
-cast send --rpc-url http://127.0.0.1:8545 --unlocked --from OWNER_ADDRESS \
-  COLLECTION_ADDRESS 'setSaleActive(bool)' true
-```
-
-Local deployment manifest version 10 identifies the 18-monument ABI and the single-contract deployment, the recorded `metadataBaseURI`, sequential digital identities, and disjoint physical-only receipt identities, alongside mint splits, delivery proceeds, discounts, and batch operations. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests, checks `baseURI()` on the collection, probes the monument constants and extended statistics plus the payout getters, and verifies immutable mint recipients and shares before starting. It accepts a valid owner-rotated delivery receiver without requiring a new manifest. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
-
-Start the isolated API from the repository root:
-
-```sh
-npm run dev:ethereum:api
-```
-
-The helper reads `.local/deployment.json`, injects the public local test signer, creates temporary databases, and reads metadata directly from the CDN. Local manifests with loopback metadata URLs require a fresh local deployment; matching CDN manifests remain valid. Metadata reads require CDN connectivity and have no local fallback. Follow the [local API and frontend setup](../../scripts/docs/111k_testnet.md#run-locally). Public networks require a separately provisioned signer.
-
-Anvil's exposed accounts and keys are for local development only. The collection starts with sales closed, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, monument price `0.0088 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseAllMint()`, `releaseMint(recipient)`, or `releaseDelivery()`; payment always goes to the configured receiver.
+Follow the [local chain, API, and frontend setup](../../scripts/docs/111k_testnet.md#run-locally) for commands, configuration, sale activation, and manifest upgrades. The deployment helper accepts only loopback Anvil RPC on chain ID 31337 and writes `.local/deployment.json`. The isolated API uses temporary databases and local test keys. Public deployments require a separately provisioned signer.
 
 ## Future public network deployments
 

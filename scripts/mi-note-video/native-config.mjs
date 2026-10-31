@@ -9,7 +9,7 @@ export const engineDirectory = dirname(fileURLToPath(import.meta.url));
 export const sourceRoot = resolve(engineDirectory, '../..');
 export const contract = JSON.parse(readFileSync(join(engineDirectory, 'contract.json'), 'utf8'));
 export const hashFile = path => createHash('sha256').update(readFileSync(path)).digest('hex');
-export const requireValue = (condition, message) => { if (!condition) throw new Error(message); };
+const requireValue = (condition, message) => { if (!condition) throw new Error(message); };
 export const nativeSourceFiles = Object.freeze([
   'cli.mjs', 'native-runtime.mjs', 'native-config.mjs', 'native-render.mjs', 'native-processing.mjs', 'native-output.mjs',
   'frame-worker.mjs', 'native_processing_worker.py', 'processing_worker.py', 'frame_worker.py',

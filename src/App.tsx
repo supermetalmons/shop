@@ -1,6 +1,6 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
@@ -41,7 +41,7 @@ import { useShopInventorySelection, useShopInventorySelectionState } from './sho
 import { useShopInventoryMaintenance, useShopInventorySource } from './shop/inventory/useShopInventorySource';
 import { useShopInventoryView } from './shop/inventory/useShopInventoryView';
 import { useShopPurchaseActions } from './shop/purchase/useShopPurchaseActions';
-import { useShopPreorders } from './shop/purchase/useShopPreorders';
+import { useShopPreorderRecovery } from './shop/purchase/useShopPreorderRecovery';
 import { useEffectiveMintStats, useShopPurchaseState } from './shop/purchase/useShopPurchaseState';
 import { ShopRevealLayer } from './shop/reveal/ShopRevealLayer';
 import { useShopReveal } from './shop/reveal/useShopReveal';
@@ -59,20 +59,6 @@ import { ShopStatus } from './shop/ui/ShopStatus';
 import { useShopFeedback } from './shop/ui/useShopFeedback';
 import { useShopNotifications } from './shop/ui/useShopNotifications';
 import { useShopDrop } from './shop/useShopDrop';
-
-const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
-
-class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  render() {
-    return this.state.failed ? null : this.props.children;
-  }
-}
 
 type AppProps = {
   route: ResolvedAppRoute;
@@ -94,7 +80,7 @@ function App({ route, suspended = false }: AppProps) {
   const isNfcPage = route.kind === 'nfc';
   const commerceUiSuspended = suspended || isNfcPage;
   const isEthereum111kPage = route.ethereumDropId === '111k_devnet';
-  const ethereumWallet = useMiNoteEthereumWallet((route.preorderId !== null || isEthereum111kPage) && !commerceUiSuspended);
+  const ethereumWallet = useMiNoteEthereumWallet(isEthereum111kPage && !commerceUiSuspended);
   const feedback = useShopFeedback(statusUiSuspended);
   const { showToast, showSuccessHud } = feedback;
   const purchaseState = useShopPurchaseState(drop);
@@ -160,20 +146,14 @@ function App({ route, suspended = false }: AppProps) {
   const walletActionBusy = Boolean(pendingAction) || walletDisconnecting;
   const awaitingActionSignIn = pendingAction?.phase === 'authenticating';
   const preserveDelivery = awaitingActionSignIn && pendingAction.key === 'ship';
-  const { miNoteCardsPage, ethereumVerification, preorderCheckout } = useShopPreorders({
-    ethereumWallet,
-    preorderId: route.preorderId,
+  useShopPreorderRecovery({
     connectedWallet,
     authenticatedWallet: account.authenticatedWallet,
     isSignedInWallet,
     isViewerMode,
-    commerceUiSuspended,
     statusUiSuspended,
-    signTransaction: wallet.signTransaction,
-    ensureSignedIn: continuation.ensureActionSignedIn,
     refreshInventoryAfterMint: queries.refreshInventoryAfterMint,
     showToast,
-    showSuccessHud,
   });
   const transactions = useWalletTransactions(wallet, showToast);
   const runDeliveryRecovery = useDeliveryRecovery({
@@ -339,7 +319,7 @@ function App({ route, suspended = false }: AppProps) {
   const actionHandlers = useShopActionHandlers({
     continuation, owner, routeDropId: drop.routeDrop?.dropId,
     blockViewerModeAction, showToast, selection, selectionState,
-    inventory, queries, modals, preorder: preorderCheckout,
+    inventory, queries, modals,
     purchase: purchaseActions, delivery: deliveryActions, claim: claimActions,
     receipts: receiptActions, reveal,
   });
@@ -410,7 +390,6 @@ function App({ route, suspended = false }: AppProps) {
     'drop-page-frame',
     drop.routeDrop || drop.upcomingDropRoute || drop.normalizedCurrentPath === '/' ? 'drop-page-frame--active' : '',
     dropsPanelFrameActive ? 'drop-page-frame--drops-panel' : '',
-    miNoteCardsPage ? 'drop-page-frame--mi-note-cards' : '',
   ].filter(Boolean).join(' ');
   const shopHeader = (
     <ShopHeader
@@ -467,27 +446,6 @@ function App({ route, suspended = false }: AppProps) {
           {shopHeader}
           {isNfcPage ? (
             <NfcClaimPage key={route.nfcDeepLinkCode} />
-          ) : miNoteCardsPage ? (
-            <MiNoteCardsErrorBoundary>
-              <Suspense fallback={null}>
-                <MiNoteCardsGallery
-                  wallet={ethereumWallet}
-                  verification={ethereumVerification}
-                  onAdminSignIn={async () => { await actionHandlers.handleHeaderSignIn(); }}
-                  preorder={{
-                    ...preorderCheckout,
-                    purchase: actionHandlers.handlePreorder,
-                    busy: preorderCheckout.busy || walletActionBusy,
-                    phase: pendingAction?.key === 'preorder' && awaitingActionSignIn ? 'authenticating' : preorderCheckout.phase,
-                  }}
-                  onCancelPendingSignIn={pendingAction?.key === 'preorder' && awaitingActionSignIn ? continuation.cancel : undefined}
-                  showToast={statusUiSuspended ? undefined : showToast}
-                  onViewPreordered={(item, originRect, aspectRatio, sourceElement) => reveal.openImageViewer(item, originRect, {
-                    size: 'preorder', aspectRatio, sourceElement, unavailableMessage: 'Preorder image unavailable',
-                  })}
-                />
-              </Suspense>
-            </MiNoteCardsErrorBoundary>
           ) : (
             <ShopPurchaseSection
               {...drop}
@@ -510,7 +468,7 @@ function App({ route, suspended = false }: AppProps) {
           )}
         </div>
       )}
-      {!miNoteCardsPage && !isNfcPage && !isEthereum111kPage && (
+      {!isNfcPage && !isEthereum111kPage && (
         <ShopInventorySection
           {...inventory}
           selected={selection.selected}
@@ -547,7 +505,7 @@ function App({ route, suspended = false }: AppProps) {
       )}
       <ShopRevealLayer reveal={controlledReveal} suspended={revealOverlaySuspended} receiptControls={receiptControls} />
       {activeError ? <div className="error">{activeError}</div> : null}
-      {!miNoteCardsPage && !isNfcPage && (
+      {!isNfcPage && (
         <>
           <ShopShipmentsSection
             {...shipments}

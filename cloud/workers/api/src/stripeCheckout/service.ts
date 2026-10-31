@@ -352,10 +352,6 @@ export function stripeApiKeysForMode(apiKeys: readonly string[], mode: StripeApi
   return keys;
 }
 
-export function stripeApiKeyForMode(apiKeys: readonly string[], mode: StripeApiMode): string {
-  return stripeApiKeysForMode(apiKeys, mode)[0];
-}
-
 export function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
   const mode = stripeCheckoutModeForCluster(cluster);
   if (mode) return mode;

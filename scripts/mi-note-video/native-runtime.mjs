@@ -9,15 +9,15 @@ const directory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(directory, '../..');
 const checksum = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const check = (condition, message) => { if (!condition) throw new Error(message); };
-export const runtimeContract = Object.freeze(JSON.parse(readFileSync(join(directory, 'contract.json'), 'utf8')).runtime);
+const runtimeContract = Object.freeze(JSON.parse(readFileSync(join(directory, 'contract.json'), 'utf8')).runtime);
 export const expectedIccSha256 = '0ff6958f98684c61f6bbdce1368ddeaf3873baf84545baba482e920d92a914c0';
-export const preservedHashes = Object.freeze({
+const preservedHashes = Object.freeze({
   runtimeReceipt: '245e4a945f28034b830e722a59bf12af47915b99f046bf4b24cf6fb0f2429893',
   node: 'b468fb9c67427c9d3aec07ee1105e63020923a631a9a2a00beb71a7ba3768bfd',
   srgb: '2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e',
   packageLock: '30787c9a98225aa3ca68ecc788afbd881be7b6f6be170c2a90a7e1d9e5724a6d',
 });
-export const nativeAppHashes = Object.freeze({
+const nativeAppHashes = Object.freeze({
   app: 'e270a1def8c960e482401b12926dbbd1a857a2c559623cfeb5196468e8973b62',
   appInfo: '72a6fe00768dd3fef9aa4d1e9ed272c44557bc84bfec76f93a5d3e25d0b0e8e7',
   swift: '2984e40f71a7dc895b8b709cac6efeb066803ad084378b1a269b2bbb190a9cfa',

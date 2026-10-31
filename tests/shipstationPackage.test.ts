@@ -9,13 +9,13 @@ import {
   adoptOrPurchaseShipStationLabel,
   createShipStationLabelFromRate,
   isActiveShipStationLabel,
-  shipStationErrorMessage,
   shipStationLabelResult,
   shipStationTrackingCodeUpdate,
   shouldClearShipStationPurchaseState,
   shouldTransitionShipStationPurchaseState,
   voidShipStationLabel,
 } from '../shared/shipstationLabels.ts';
+import { shipStationErrorDetails } from '../shared/shipstationErrors.ts';
 import {
   buildShipStationPackages,
   getShipStationShipmentRates,
@@ -822,22 +822,22 @@ test('tracking follows active labels and is removed when its source label become
 });
 
 test('ShipStation failures do not return upstream messages containing address data', () => {
-  const funding = shipStationErrorMessage(
+  const funding = shipStationErrorDetails(
     { errors: [{ error_code: 'insufficient_funds', message: 'Balance failed for 12 Private Street' }] },
     'Request failed',
-  );
+  ).message;
   assert.equal(funding, 'Insufficient ShipStation funds. Add funds or enable auto-funding in ShipStation.');
   assert.equal(funding.includes('Private Street'), false);
   assert.equal(
-    shipStationErrorMessage(
+    shipStationErrorDetails(
       { errors: [{ error_code: 'validation_error', message: 'Invalid 12 Private Street' }] },
       'Request failed',
-    ),
+    ).message,
     'validation_error',
   );
-  assert.equal(shipStationErrorMessage({ message: 'Invalid 12 Private Street' }, 'Request failed'), 'Request failed');
+  assert.equal(shipStationErrorDetails({ message: 'Invalid 12 Private Street' }, 'Request failed').message, 'Request failed');
   assert.equal(
-    shipStationErrorMessage({ errors: [{ error_code: 'invalid 12 Private Street' }] }, 'Request failed'),
+    shipStationErrorDetails({ errors: [{ error_code: 'invalid 12 Private Street' }] }, 'Request failed').message,
     'Request failed',
   );
 });
