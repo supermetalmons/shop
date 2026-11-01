@@ -79,10 +79,14 @@ function transaction(value: unknown): EthereumPreparedTransaction {
 export const ethereumApi = {
   async config(signal?: AbortSignal) { return parseEthereumConfig(await request(ETHEREUM_API_PATHS.config, { signal })); },
   async relics(config: Ethereum111kConfig, owner: string | null, signal?: AbortSignal): Promise<EthereumRelicStatus> {
+    const contractAddress = normalizeEthereumAddress(config.contractAddress);
+    if (!contractAddress || /^0x0{40}$/.test(contractAddress)) return invalid();
     const address = owner === null ? null : normalizeEthereumAddress(owner);
     if (owner !== null && (!address || /^0x0{40}$/.test(address))) return invalid();
-    const value = await request(`${ETHEREUM_API_PATHS.relics}${address ? `?${new URLSearchParams({ owner: address })}` : ''}`, { signal });
-    if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
+    const params = new URLSearchParams({ chainId: String(config.chainId), contractAddress });
+    if (address) params.set('owner', address);
+    const value = await request(`${ETHEREUM_API_PATHS.relics}?${params}`, { signal });
+    if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== contractAddress ||
       (address === null ? value.owner !== null : normalizeEthereumAddress(value.owner) !== address) ||
       !Number.isSafeInteger(value.observedBlock) || Number(value.observedBlock) < 0 ||
       typeof value.blockHash !== 'string' || !/^0x[0-9a-f]{64}$/.test(value.blockHash) || typeof value.saleActive !== 'boolean' ||

@@ -20,6 +20,7 @@ import { requireShipStationEnabled } from '../src/shipstation/common.ts';
 import { createCommerceD1Harness, d1Database } from './commerceD1Harness.ts';
 import { ETHEREUM_CHECKOUT_PATHS as checkoutPaths, type EthereumCheckoutStatusResponse,
   type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
+import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 
 const SYNTHETIC_METADATA: EthereumMetadata = {
   name: 'Synthetic metadata fixture', image: 'data:image/svg+xml;base64,PHN2Zy8+',
@@ -50,9 +51,26 @@ const readPaths = new Set<string>([paths.config, paths.stats, paths.relics, path
 type Rpc = { id: number; method: string; params: unknown[] };
 type Item = { kind: number; displayId: number; owner: string };
 
+function relicPath(owner?: string, chainId = 31337, contractAddress = CONTRACT): string {
+  return `${paths.relics}?${new URLSearchParams({ chainId: String(chainId), contractAddress,
+    ...(owner === undefined ? {} : { owner }) })}`;
+}
+
 function fixture(controlActive = true) {
   const ops = new DatabaseSync(':memory:');
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql', 'utf8'));
+  ops.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
+  const registerDeployment = (chainId = 31337, contractAddress = CONTRACT, state: EthereumRevealDeployment['state'] = 'active') => {
+    const id = `test-${chainId}-${contractAddress.slice(2, 10)}`;
+    ops.prepare(`INSERT INTO ethereum_reveal_deployments
+      (deployment_id, drop_id, chain_id, contract_address, metadata_base_uri, deployment_block, catalog_version,
+        template_json, template_sha256, state, revision, created_at_ms, updated_at_ms)
+      VALUES (?, '111k_devnet', ?, ?, ?, 2, '111k-v1', ?, ?, ?, 1, ?, ?)`)
+      .run(id, chainId, contractAddress, `https://cdn.mons.shop/${chainId === 1 ? '111k' : '111k-sepolia'}/${id}/`,
+        JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
+        '0'.repeat(64), state, NOW, NOW);
+  };
+  registerDeployment();
   const failures = { quoteWrite: false, publishWrite: false, deliveryRetirementAck: false, claimRetirementAck: false };
   const databaseCalls = { requests: 0, statements: 0, limit: Infinity, claimReads: 0, claimInserts: 0 };
   const commerce = createCommerceD1Harness({ observeCall: (operation) => {
@@ -294,7 +312,7 @@ function fixture(controlActive = true) {
     assert.equal(result.body.status, 'confirmed');
     return ready;
   }
-  return { env, ops, commerce, failures, databaseCalls, state, metadata, providerFetch, request, challenge, session, saveAddress, prepared,
+  return { env, ops, commerce, failures, databaseCalls, state, metadata, providerFetch, request, registerDeployment, challenge, session, saveAddress, prepared,
     setReceipt, deliveryLog, claimLog, quoteRow, claimRow, order, confirmed,
     close: () => { ops.close(); commerce.database.close(); } };
 }
@@ -4235,12 +4253,116 @@ for (const kind of ['delivery', 'claim']) {
 }
 
 
+test('relic status requires valid explicit collection scope before registry and provider reads', async () => {
+  const f = fixture();
+  try {
+    for (const query of ['', `owner=${WALLET}`, 'chainId=1', `contractAddress=${CONTRACT}`,
+      `chainId=&contractAddress=${CONTRACT}`, `chainId=10&contractAddress=${CONTRACT}`,
+      `chainId=1e0&contractAddress=${CONTRACT}`, `chainId=1&chainId=11155111&contractAddress=${CONTRACT}`,
+      `chainId=1&contractAddress=${CONTRACT}&contractAddress=${OTHER_CONTRACT}`,
+      `chainId=1&contractAddress=${ZERO}`, 'chainId=1&contractAddress=invalid',
+      `chainId=1&contractAddress=${CONTRACT}&owner=${WALLET}&owner=${OTHER_WALLET}`]) {
+      const response = await f.request(`${paths.relics}?${query}`);
+      assert.equal(response.response.status, 400, query);
+    }
+    assert.equal((await f.request(relicPath(undefined, 1))).response.status, 404);
+    assert.equal((await f.request(relicPath(undefined, 31337, OTHER_CONTRACT))).response.status, 404);
+    assert.deepEqual(f.state.calls, []);
+  } finally { f.close(); }
+});
+
+for (const chainId of [1, 11155111]) {
+  test(`relic status selects registered chain ${chainId} independently of storefront scope`, async () => {
+    const f = fixture(false);
+    try {
+      const selected = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+      f.registerDeployment(chainId, selected);
+      f.state.rpcChainId = chainId;
+      Object.assign(f.state, { allocatedCrates: 1998, relicsAllocated: 18, relicsMinted: 1, claimedMask: 1n });
+      f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 1]);
+      for (const storefrontContract of [CONTRACT, '']) {
+        f.env.ETHEREUM_111K_CONTRACT_ADDRESS = storefrontContract;
+        f.state.calls.length = 0;
+        f.state.urls.length = 0;
+        const result = await f.request<EthereumRelicStatus>(relicPath(`0x${WALLET.slice(2).toUpperCase()}`, chainId,
+          `0x${selected.slice(2).toUpperCase()}`), undefined, undefined, { origin: 'https://vvv.so', csrf: false });
+        assert.equal(result.response.status, 200);
+        assert.equal(result.body.chainId, chainId);
+        assert.equal(result.body.contractAddress, selected);
+        assert.equal(result.body.owner, WALLET);
+        assert.equal(result.body.remainingRelics, 17);
+        assert.equal(result.body.remainingAllowance, 2);
+        assert.ok(f.state.urls.length > 0);
+        assert.ok(f.state.urls.every(url => url === `https://${chainId === 1 ? 'eth-mainnet' : 'eth-sepolia'}.g.alchemy.com/v2/test-alchemy-key`));
+        assert.ok(f.state.calls.filter(call => call.method === 'eth_call')
+          .every(call => (call.params[0] as { to: string }).to === selected && call.params[1] === blockHash(102)));
+        assert.equal(f.databaseCalls.requests, 0);
+      }
+      f.state.rpcChainId = chainId === 1 ? 11155111 : 1;
+      f.state.calls.length = 0;
+      assert.equal((await f.request(relicPath(undefined, chainId, selected))).response.status, 503);
+      assert.equal(f.state.calls.some(call => call.method === 'eth_call'), false);
+    } finally { f.close(); }
+  });
+}
+
+test('relic reads remain independent of reveal state and restrict local RPC to local environments', async () => {
+  const f = fixture();
+  try {
+    for (const state of ['provisioning', 'ready', 'active', 'paused']) {
+      f.ops.prepare('UPDATE ethereum_reveal_deployments SET state = ?').run(state);
+      f.state.saleActive = state === 'paused';
+      const result = await f.request<EthereumRelicStatus>(relicPath());
+      assert.equal(result.response.status, 200, state);
+      assert.equal(result.body.saleActive, state === 'paused');
+    }
+    f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
+    f.state.calls.length = 0;
+    assert.equal((await f.request(relicPath())).response.status, 400);
+    assert.deepEqual(f.state.calls, []);
+    f.env.ETHEREUM_111K_CHAIN_ID = '31337';
+    f.env.ETHEREUM_111K_RPC_URL = 'https://untrusted.example';
+    assert.equal((await f.request(relicPath())).response.status, 503);
+    assert.deepEqual(f.state.calls, []);
+  } finally { f.close(); }
+});
+
+test('relic status permits both VVV origins without sessions and rate limits before reading the chain', async () => {
+  const f = fixture();
+  try {
+    for (const origin of ['https://vvv.so', 'https://www.vvv.so']) {
+      const result = await f.request<EthereumRelicStatus>(relicPath(WALLET), undefined, undefined, { origin, csrf: false });
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body.owner, WALLET);
+    }
+    f.env.PUBLIC_SHOP_RATE_LIMITER = { limit: async () => ({ success: false }) };
+    f.state.calls.length = 0;
+    const denied = await f.request(relicPath(), undefined, undefined, { origin: 'https://vvv.so', csrf: false });
+    assert.equal(denied.response.status, 429);
+    assert.equal(denied.response.headers.get('Retry-After'), '60');
+    assert.deepEqual(f.state.calls, []);
+  } finally { f.close(); }
+});
+
+test('relic status fails closed on RPC outages and an unavailable network credential', async () => {
+  const f = fixture();
+  try {
+    const outage = await f.request(relicPath(), undefined, undefined,
+      { fetch: async () => Response.json({ error: 'Unavailable' }, { status: 503 }) });
+    assert.equal(outage.response.status, 503);
+    f.registerDeployment(1);
+    f.env.ALCHEMY_MI_NOTE_API_KEY = '';
+    assert.equal((await f.request(relicPath(undefined, 1))).response.status, 503);
+    assert.deepEqual(f.state.calls, []);
+  } finally { f.close(); }
+});
+
 test('relic status batches all state at one canonical latest block without metadata or sessions', async () => {
   const f = fixture();
   try {
     Object.assign(f.state, { allocatedCrates: 5555, relicsAllocated: 12, relicsMinted: 2, claimedMask: 131073n });
     f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 1]);
-    const result = await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`);
+    const result = await f.request<EthereumRelicStatus>(relicPath(WALLET));
     assert.equal(result.response.status, 200);
     assert.deepEqual(result.body, { chainId: 31337, contractAddress: CONTRACT, owner: WALLET,
       observedBlock: 102, blockHash: blockHash(102), saleActive: true,
@@ -4252,7 +4374,7 @@ test('relic status batches all state at one canonical latest block without metad
     assert.equal(f.state.metadataRequests.length, 0);
     assert.equal(f.databaseCalls.requests, 0);
     assert.match(result.response.headers.get('cache-control') ?? '', /no-store/);
-    const anonymous = await f.request<EthereumRelicStatus>(paths.relics);
+    const anonymous = await f.request<EthereumRelicStatus>(relicPath());
     assert.equal(anonymous.body.owner, null);
     assert.equal(anonymous.body.claimedMask, 131073);
     assert.equal(anonymous.body.remainingAllowance, 0);
@@ -4264,21 +4386,21 @@ test('relic status follows external claims, burned relics, revocation and canoni
   try {
     Object.assign(f.state, { allocatedCrates: 1332, relicsAllocated: 12 });
     f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 0]);
-    assert.equal((await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`)).body.claimedMask, 0);
+    assert.equal((await f.request<EthereumRelicStatus>(relicPath(WALLET))).body.claimedMask, 0);
     Object.assign(f.state, { relicsMinted: 1, claimedMask: 131072n });
     f.state.freeMintAllowances.set(WALLET, [0, 0, 0, 0, 0, 1]);
     f.state.tokens.delete('117189');
-    const claimed = await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`);
+    const claimed = await f.request<EthereumRelicStatus>(relicPath(WALLET));
     assert.equal(claimed.body.claimedMask, 131072);
     assert.equal(claimed.body.remainingAllowance, 0);
     f.state.afterRpc = async call => {
       if (call.method === 'eth_call') f.state.canonical.set(102, blockHash(999));
     };
-    assert.equal((await f.request(paths.relics)).response.status, 503);
+    assert.equal((await f.request(relicPath())).response.status, 503);
     f.state.afterRpc = null;
     Object.assign(f.state, { relicsMinted: 0, claimedMask: 0n, saleActive: false });
     f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 0]);
-    const rolledBack = await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`);
+    const rolledBack = await f.request<EthereumRelicStatus>(relicPath(WALLET));
     assert.equal(rolledBack.body.blockHash, blockHash(999));
     assert.equal(rolledBack.body.claimedMask, 0);
     assert.equal(rolledBack.body.remainingAllowance, 3);
@@ -4290,7 +4412,7 @@ test('relic status rejects invalid identities, missing getters and inconsistent 
   const f = fixture();
   try {
     for (const owner of ['', 'invalid', ZERO, `${WALLET}00`]) {
-      assert.equal((await f.request(`${paths.relics}?owner=${owner}`)).response.status, 400);
+      assert.equal((await f.request(relicPath(owner))).response.status, 400);
     }
     assert.deepEqual(f.state.calls, []);
     for (const invalid of [
@@ -4300,17 +4422,17 @@ test('relic status rejects invalid identities, missing getters and inconsistent 
       { relicsAllocated: 1, relicsMinted: 1, claimedMask: 262144n },
     ]) {
       Object.assign(f.state, { allocatedCrates: 1998, ...invalid });
-      assert.equal((await f.request(paths.relics)).response.status, 503);
+      assert.equal((await f.request(relicPath())).response.status, 503);
     }
     Object.assign(f.state, { allocatedCrates: 0, relicsAllocated: 1, relicsMinted: 0, claimedMask: 0n });
-    assert.equal((await f.request(paths.relics)).response.status, 503);
+    assert.equal((await f.request(relicPath())).response.status, 503);
     Object.assign(f.state, { allocatedCrates: 111 });
     for (const allowance of [[0, 0, 19, 0, 0, 0], [0, 0, 3, 0, 0, 19], [0, 0, 3, 0, 0, 1]]) {
       f.state.freeMintAllowances.set(WALLET, allowance);
-      assert.equal((await f.request(`${paths.relics}?owner=${WALLET}`)).response.status, 503);
+      assert.equal((await f.request(relicPath(WALLET))).response.status, 503);
     }
     Object.assign(f.state, { relicMaskInterface: false });
-    assert.equal((await f.request(paths.relics)).response.status, 503);
+    assert.equal((await f.request(relicPath())).response.status, 503);
   } finally { f.close(); }
 });
 

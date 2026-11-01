@@ -6,6 +6,7 @@ import { jsonResponse } from './httpResponse.js';
 import { ethereumCheckout } from './ethereumCheckout.js';
 import { isAllowedEthereumCheckoutStatusOrigin } from './ethereumCheckoutOrigin.js';
 import { ethereumRouteDefinition } from './ethereumRouteDefinitions.js';
+import { ethereumRelics } from './ethereumRelics.js';
 
 function unregisteredPathHandler(path: string) {
   if (path.startsWith('/ethereum/111k/checkout/')) return ethereumCheckout;
@@ -21,16 +22,18 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
     const methods: readonly string[] = route?.methods || ['POST'];
     if (!methods.includes(request.method)) return jsonResponse({ ok: false, error: { code: 'invalid-argument', message: 'Method not allowed.' } }, 405,
       { headers: { Allow: [...methods, 'OPTIONS'].join(', ') } });
-    ethereumRequestOrigin(request, route?.originPolicy === 'checkout-status' || route?.originPolicy === 'reveal'
-      ? isAllowedEthereumCheckoutStatusOrigin : undefined);
+    const isAllowedOrigin = route?.originPolicy === 'checkout-status' || route?.originPolicy === 'reveal'
+      ? isAllowedEthereumCheckoutStatusOrigin : undefined;
+    ethereumRequestOrigin(request, isAllowedOrigin);
     if (request.method === 'POST' && request.headers.get('X-Mons-CSRF') !== '1') {
       throw new EthereumApiError('permission-denied', 'Invalid Ethereum request.');
     }
-    const context: EthereumContext = { env, config: ethereumConfig(env), nowMs: (dependencies.nowMs || Date.now)(),
+    const context: Pick<EthereumContext, 'env' | 'nowMs' | 'signal' | 'fetch'> = { env, nowMs: (dependencies.nowMs || Date.now)(),
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(45_000)]), fetch: dependencies.fetch || ((input, init) => fetch(input, init)) };
-    if (route?.publicRateLimit) await limitEthereumRequest(request, context, path, env.PUBLIC_SHOP_RATE_LIMITER);
+    if (route?.publicRateLimit) await limitEthereumRequest(request, context, path, env.PUBLIC_SHOP_RATE_LIMITER, isAllowedOrigin);
     const handler = route?.handler || unregisteredPathHandler(path);
-    const result = await handler(request, context, path);
+    const result = handler === ethereumRelics ? await ethereumRelics(request, context)
+      : await handler(request, { ...context, config: ethereumConfig(env) }, path);
     return jsonResponse(result, 200);
   } catch (error) {
     if (request.signal.aborted) throw request.signal.reason;

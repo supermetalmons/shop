@@ -6,6 +6,7 @@ import { ethereumCheckout } from './ethereumCheckout.js';
 import { ethereumCommerce } from './ethereumCommerce.js';
 import { ethereumProfile } from './ethereumProfile.js';
 import { ethereumPublicRead } from './ethereumRead.js';
+import { ethereumRelics } from './ethereumRelics.js';
 import { ethereumReveal } from './ethereumReveal.js';
 import type { EthereumContext } from './ethereumRuntime.js';
 
@@ -35,7 +36,7 @@ export const ethereumRouteDefinitions = {
     methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.relics]: {
-    methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
+    methods: ['GET'], handler: ethereumRelics, commerceMutation: false, originPolicy: 'checkout-status', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.inventory]: {
     methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,

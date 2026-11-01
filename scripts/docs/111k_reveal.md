@@ -2,6 +2,8 @@
 
 Display artwork after an unpack's first canonical Ethereum confirmation. Use API results immediately; CDN metadata and marketplaces may update later.
 
+For the relic selection and claim page, use the [relic claims guide](111k_relic_claims.md).
+
 ## Connection
 
 - Base URL: `https://api.mons.shop`
@@ -30,7 +32,7 @@ POST /ethereum/111k/reveal/transaction
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+  "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
   "transactionHash": "<wallet-returned 0x-prefixed 64-hex-digit hash>"
 }
 ```
@@ -61,7 +63,7 @@ POST /ethereum/111k/reveal/tokens
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+  "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
   "tokenIds": ["1", "21"]
 }
 ```

@@ -74,6 +74,43 @@ test('Ethereum checkout status retains partner preflight and denies partner muta
   }
 });
 
+test('Ethereum relic status exposes partner GET and errors without broadening storefront access', async () => {
+  let providerCalls = 0;
+  const dependencies = { providerFetch: async () => { providerCalls++; return assert.fail('Unexpected provider call'); },
+    log: () => undefined };
+  for (const partner of ['https://vvv.so', 'https://www.vvv.so']) {
+    const preflight = await handleRequest(request(paths.relics, 'OPTIONS', partner, false), environment(), failOnDeferredWork, dependencies);
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), partner);
+    assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+    assert.equal(preflight.headers.get('Access-Control-Allow-Headers'), 'Accept, Content-Type');
+    const invalid = await handleRequest(request(paths.relics, 'GET', partner, false), environment(), failOnDeferredWork, dependencies);
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.headers.get('Access-Control-Allow-Origin'), partner);
+    assert.equal(invalid.headers.get('Cache-Control'), 'no-store');
+    assert.equal(invalid.headers.get('Vary'), 'Origin');
+    assert.equal(invalid.headers.get('Access-Control-Allow-Credentials'), null);
+    const limited = await handleRequest(request(paths.relics, 'GET', partner, false),
+      environment(async () => ({ success: false })), failOnDeferredWork, dependencies);
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get('Access-Control-Allow-Origin'), partner);
+    assert.equal(limited.headers.get('Access-Control-Expose-Headers'), 'Retry-After');
+    assert.equal(limited.headers.get('Retry-After'), '60');
+    for (const path of [paths.config, paths.stats, paths.inventory, paths.metadata, paths.profile]) {
+      const forbidden = await handleRequest(request(path, 'GET', partner, false), environment(), failOnDeferredWork, dependencies);
+      assert.equal(forbidden.status, 403, path);
+    }
+  }
+  for (const origin of ['https://vvv.so.evil.example', 'http://vvv.so', 'https://evil.example']) {
+    for (const method of ['OPTIONS', 'GET']) {
+      const denied = await handleRequest(request(paths.relics, method, origin, false), environment(), failOnDeferredWork, dependencies);
+      assert.equal(denied.status, 403);
+      assert.equal(denied.headers.get('Access-Control-Allow-Origin'), null);
+    }
+  }
+  assert.equal(providerCalls, 0);
+});
+
 test('Ethereum direct unknown paths retain fallback behavior while Worker routes return not found', async () => {
   for (const [path, expectedStatus, expectedLimitCalls] of [
     ['/ethereum/unknown', 401, 0],

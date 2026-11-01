@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
@@ -23,6 +24,7 @@ import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { readBoundedResponseJson } from '../src/boundedResponse.ts';
 import { runEthereumRevealE2E } from './ethereum111k-reveal-e2e.ts';
 import { readMetadataManifest } from '../../../../scripts/ethereum-metadata/catalog.ts';
+import { buildEthereumRevealRegistration } from '../../../../scripts/ops/ethereumRevealControl.ts';
 
 type Receipt = { status: string; transactionHash: string; blockNumber: string; blockHash: string; contractAddress: string | null; gasUsed: string; logs: EthereumLog[] };
 const root = resolve(import.meta.dirname, '../../../..');
@@ -782,6 +784,12 @@ try {
   const relicPreorderRevenue = 26400000000000000n;
   const relicDatabase = new DatabaseSync(':memory:');
   try {
+    relicDatabase.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql'), 'utf8'));
+    const templateJson = JSON.stringify(JSON.parse(await readFile(resolve(root, 'scripts/ethereum-metadata/templates/artwork.json'), 'utf8')));
+    relicDatabase.exec(buildEthereumRevealRegistration({ deploymentId: 'relic-e2e', dropId: '111k_devnet', chainId: 31337,
+      contractAddress: relicContract.toLowerCase(), metadataBaseUri: metadataBaseURI,
+      deploymentBlock: Number(BigInt(relicDeployment.blockNumber)), catalogVersion: '111k-v1', templateJson,
+      templateSha256: createHash('sha256').update(templateJson).digest('hex') }));
     const db = d1Database(relicDatabase);
     const api = apiClient(testEnvironment(relicContract, key, db, db));
     const initial = await api<EthereumStats>(ETHEREUM_API_PATHS.stats);
@@ -798,13 +806,14 @@ try {
     assert.equal(allocated.remainingRelics, 3);
     assert.equal(allocated.allocatedCrates, 333);
     assert.equal(allocated.remainingCrates, 5222);
-    const relicStatus = () => api<EthereumRelicStatus>(`${ETHEREUM_API_PATHS.relics}?owner=${buyer}`);
+    const relicPath = `${ETHEREUM_API_PATHS.relics}?${new URLSearchParams({ chainId: '31337', contractAddress: relicContract })}`;
+    const relicStatus = () => api<EthereumRelicStatus>(`${relicPath}&owner=${buyer}`);
     const closedStatus = await relicStatus();
     assert.equal(closedStatus.saleActive, false);
     assert.equal(closedStatus.claimedMask, 0);
     assert.equal(closedStatus.relicLimit, 3);
     assert.equal(closedStatus.remainingAllowance, 3);
-    const anonymousStatus = await api<EthereumRelicStatus>(ETHEREUM_API_PATHS.relics);
+    const anonymousStatus = await api<EthereumRelicStatus>(relicPath);
     assert.equal(anonymousStatus.owner, null);
     assert.equal(anonymousStatus.remainingAllowance, 0);
     assert.equal(anonymousStatus.remainingRelics, 3);

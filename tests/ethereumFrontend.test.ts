@@ -536,7 +536,7 @@ test('relic availability validates scope, lifetime usage and the complete claime
   const requests: string[] = [];
   t.mock.method(globalThis, 'fetch', async input => { requests.push(String(input)); return Response.json(value); });
   assert.deepEqual(await ethereumApi.relics(config, owner), valid);
-  assert.ok(requests[0].endsWith(`/ethereum/111k/relics?owner=${owner}`));
+  assert.ok(requests[0].endsWith(`/ethereum/111k/relics?chainId=${config.chainId}&contractAddress=${contract}&owner=${owner}`));
   for (const patch of [
     { owner: other }, { contractAddress: other }, { chainId: 1 }, { observedBlock: -1 }, { blockHash: '0x00' },
     { saleActive: 1 }, { claimedMask: 2 ** 18 }, { claimedMask: 1 }, { relicsAllocated: 19 },
@@ -547,8 +547,15 @@ test('relic availability validates scope, lifetime usage and the complete claime
   }
   value = { ...valid, owner: null };
   assert.equal((await ethereumApi.relics(config, null)).owner, null);
+  assert.ok(requests.at(-1)!.endsWith(`/ethereum/111k/relics?chainId=${config.chainId}&contractAddress=${contract}`));
+  value = { ...valid, chainId: 1 };
+  assert.equal((await ethereumApi.relics({ ...config, chainId: 1 }, owner)).chainId, 1);
+  assert.ok(requests.at(-1)!.endsWith(`/ethereum/111k/relics?chainId=1&contractAddress=${contract}&owner=${owner}`));
   const before = requests.length;
   await assert.rejects(ethereumApi.relics(config, 'bad'), /invalid response/);
+  for (const contractAddress of [null, 'bad', `0x${'0'.repeat(40)}`]) {
+    await assert.rejects(ethereumApi.relics({ ...config, contractAddress }, owner), /invalid response/);
+  }
   assert.equal(requests.length, before);
 });
 

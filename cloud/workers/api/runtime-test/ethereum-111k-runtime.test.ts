@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -7,12 +8,13 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
-  type EthereumSession, type EthereumStats } from '../../../../shared/ethereum/api.ts';
+  type EthereumSession, type EthereumStats, type EthereumRelicStatus } from '../../../../shared/ethereum/api.ts';
 import { ethereumSignerAddress, personalMessageHash, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import { ETHEREUM_CHECKOUT_PATHS as checkoutPaths } from '../../../../shared/ethereum/checkout.ts';
+import { buildEthereumRevealRegistration } from '../../../../scripts/ops/ethereumRevealControl.ts';
 
 const ORIGIN = 'https://mons.shop';
 const KEY = `0x${'11'.repeat(32)}`;
@@ -226,6 +228,105 @@ test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encryp
     assert.ok(await runtimeEnv.COMMERCE_DB.prepare("SELECT name FROM sqlite_schema WHERE name = 'ethereum_delivery_quotes'").first());
     assert.ok(await runtimeEnv.COMMERCE_DB.prepare("SELECT name FROM sqlite_schema WHERE name = 'ethereum_crate_claims'").first());
   } finally { await server.close(); }
+});
+
+test('native VVV relic reads resolve registered mainnet scope with the storefront disabled', async (context) => {
+  const production = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
+  const directory = await mkdtemp(join(tmpdir(), '111k-relics-runtime-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const fixturePath = join(directory, 'worker.mjs');
+  const contract = '0x2222222222222222222222222222222222222222';
+  const blockHash = `0x${'ab'.repeat(32)}`;
+  await writeFile(fixturePath, `
+import { handleRequest } from ${JSON.stringify(resolve('cloud/workers/api/src/index.ts'))};
+import { encodeAbi, encodeCall } from ${JSON.stringify(resolve('shared/ethereum/abi.ts'))};
+const contract = ${JSON.stringify(contract)};
+const blockHash = ${JSON.stringify(blockHash)};
+const zero = '0x0000000000000000000000000000000000000000';
+export default {
+  async fetch(request, env, ctx) {
+    const calls = [];
+    const providerFetch = async (input, init) => {
+      if (String(input) !== 'https://eth-mainnet.g.alchemy.com/v2/runtime-key') throw new Error('Wrong collection RPC');
+      const payload = JSON.parse(init.body);
+      const respond = rpc => {
+        calls.push(rpc.method);
+        let result;
+        if (rpc.method === 'eth_chainId') result = '0x1';
+        else if (rpc.method === 'eth_getBlockByNumber') result = { number: '0x66', hash: blockHash };
+        else if (rpc.method === 'eth_call') {
+          if (rpc.params[0].to !== contract || rpc.params[1] !== blockHash) throw new Error('Unscoped collection read');
+          const data = rpc.params[0].data;
+          if (data === encodeCall('getRelicClaimedMask()', [], [])) result = encodeAbi(['uint256'], [1 << 17]);
+          else if (data.startsWith(encodeCall('stats(address)', [], []))) {
+            result = encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
+              [333, 0, 0, 100000000000000n, 1100000000000000n, true, '0x' + '00'.repeat(32), 50000000000000n, 0, 0, 3, 1]);
+          } else if (data.startsWith(encodeCall('freeMintAllowances(address)', [], []))) {
+            const anonymous = data === encodeCall('freeMintAllowances(address)', ['address'], [zero]);
+            result = encodeAbi(['uint16', 'uint16', 'uint16', 'uint16', 'uint16', 'uint16'], anonymous ? [0, 0, 0, 0, 0, 0] : [0, 0, 3, 0, 0, 1]);
+          } else throw new Error('Unexpected contract call');
+        } else throw new Error('Unexpected RPC');
+        return { jsonrpc: '2.0', id: rpc.id, result };
+      };
+      return Response.json(Array.isArray(payload) ? payload.map(respond).reverse() : respond(payload));
+    };
+    const response = await handleRequest(request, { ...env,
+      PUBLIC_SHOP_RATE_LIMITER: { limit: async () => ({ success: !request.headers.has('X-Test-Rate-Limited') }) },
+    }, promise => ctx.waitUntil(promise), { providerFetch, log() {} });
+    response.headers.set('X-Test-RPC-Calls', String(calls.length));
+    return response;
+  },
+};
+`, 'utf8');
+  const server = createTestHarness({ root: resolve('.'), workers: [{ config: {
+    name: 'ethereum-relics-runtime', main: fixturePath,
+    compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
+    d1_databases: production.d1_databases.filter((database: Record<string, unknown>) => database.binding === 'OPS_DB')
+      .map((database: Record<string, unknown>) => ({ ...database, remote: false,
+        migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)) })),
+    vars: { ETHEREUM_111K_CHAIN_ID: '11155111', ETHEREUM_111K_CONTRACT_ADDRESS: '', ALCHEMY_MI_NOTE_API_KEY: 'runtime-key' },
+  } }] });
+  context.after(() => server.close());
+  await server.listen();
+  const worker = server.getWorker<Env>('ethereum-relics-runtime');
+  await worker.applyD1Migrations('OPS_DB');
+  const { OPS_DB } = await worker.getEnv();
+  const templateJson = JSON.stringify(JSON.parse(readFileSync('scripts/ethereum-metadata/templates/artwork.json', 'utf8')));
+  await OPS_DB.prepare(buildEthereumRevealRegistration({ deploymentId: 'relic-runtime', dropId: '111k', chainId: 1,
+    contractAddress: contract, metadataBaseUri: 'https://cdn.mons.shop/111k/relic-runtime/', deploymentBlock: 100,
+    catalogVersion: '111k-v1', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') })).first();
+  await OPS_DB.prepare("UPDATE ethereum_reveal_deployments SET state = 'paused' WHERE deployment_id = 'relic-runtime'").run();
+  const scope = `chainId=1&contractAddress=${contract}`;
+  for (const origin of ['https://vvv.so', 'https://www.vvv.so']) {
+    const headers = { Origin: origin, 'CF-Connecting-IP': '203.0.113.42' };
+    const preflight = await worker.fetch(`https://api.mons.shop${paths.relics}`, { method: 'OPTIONS', headers });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+    assert.equal(preflight.headers.get('X-Test-RPC-Calls'), '0');
+    const result = await worker.fetch(`https://api.mons.shop${paths.relics}?${scope}&owner=${WALLET}`, { headers });
+    assert.equal(result.status, 200, await result.clone().text());
+    assert.equal(result.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.equal(result.headers.get('Cache-Control'), 'no-store');
+    assert.equal(result.headers.get('X-Test-RPC-Calls'), '6');
+    assert.deepEqual(await result.json(), { chainId: 1, contractAddress: contract, owner: WALLET,
+      observedBlock: 102, blockHash, saleActive: true, relicsAllocated: 3, relicsMinted: 1,
+      remainingRelics: 2, claimedMask: 1 << 17, relicLimit: 3, relicsUsed: 1, remainingAllowance: 2 });
+    const anonymous = await worker.fetch(`https://api.mons.shop${paths.relics}?${scope}`, { headers });
+    const anonymousStatus = await anonymous.json() as EthereumRelicStatus;
+    assert.equal(anonymous.status, 200);
+    assert.equal(anonymousStatus.owner, null);
+    assert.equal(anonymousStatus.remainingAllowance, 0);
+    assert.equal(anonymousStatus.claimedMask, 1 << 17);
+    const limited = await worker.fetch(`https://api.mons.shop${paths.relics}?${scope}`, {
+      headers: { ...headers, 'X-Test-Rate-Limited': '1' },
+    });
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.equal(limited.headers.get('Retry-After'), '60');
+    assert.match(limited.headers.get('Access-Control-Expose-Headers') || '', /Retry-After/i);
+    assert.equal(limited.headers.get('X-Test-RPC-Calls'), '0');
+  }
 });
 
 test('native Worker contract batches consume synthetic metadata for a full 311-item confirmation and reject a changed snapshot', async () => {

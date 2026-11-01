@@ -16,6 +16,7 @@ export function applyEthereumCheckoutStatusCors(request: Request, response: Resp
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Accept, Content-Type',
+    'Access-Control-Expose-Headers': 'Retry-After',
     'Access-Control-Max-Age': '86400',
     'Cache-Control': 'no-store',
     Vary: 'Origin',

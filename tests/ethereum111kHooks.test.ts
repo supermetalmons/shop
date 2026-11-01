@@ -2763,7 +2763,13 @@ test('relic claims submit one zero-value ID and confirm without receipt authenti
   let confirmed = false;
   let reads = 0;
   const minted = { ...token(owner, '117189'), kind: 'relic' as const, displayId: 18, name: 'Relic #18' };
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => { reads++; return relicStatus(address); });
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input));
+    assert.equal(url.pathname, '/ethereum/111k/relics');
+    assert.deepEqual(Object.fromEntries(url.searchParams), { chainId: String(config.chainId), contractAddress: contract, owner });
+    reads++;
+    return Response.json(relicStatus());
+  });
   t.mock.method(ethereumApi, 'relicMetadata', async () => []);
   t.mock.method(ethereumApi, 'challenge', async () => { throw new Error('Relic claims must not authenticate'); });
   t.mock.method(ethereumApi, 'confirmClaim', async () => { throw new Error('Relic claims must not finalize physical receipt claims'); });
@@ -2814,7 +2820,13 @@ test('relic polling stops outside the visible panel and never reloads cached met
   speedUpConfirmationPolls(t);
   let reads = 0;
   let metadataReads = 0;
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => { reads++; return relicStatus(address); });
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input));
+    assert.equal(url.pathname, '/ethereum/111k/relics');
+    assert.deepEqual(Object.fromEntries(url.searchParams), { chainId: String(config.chainId), contractAddress: contract, owner });
+    reads++;
+    return Response.json(relicStatus());
+  });
   t.mock.method(ethereumApi, 'relicMetadata', async () => { metadataReads++; return []; });
   const connected = wallet();
   const view = relicHarness(connected);

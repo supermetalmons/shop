@@ -25,14 +25,19 @@ export type EthereumEnvironment = Pick<Env,
   'ETHEREUM_111K_DELIVERY_CONFIG_ID'>> &
   { ETHEREUM_111K_SIGNER_SECRET?: string };
 
-export type EthereumContext = {
-  env: EthereumEnvironment;
-  config: Ethereum111kConfig;
+export type EthereumReadContext = {
+  env: Pick<EthereumEnvironment, 'ALCHEMY_MI_NOTE_API_KEY' | 'ETHEREUM_111K_RPC_URL'>;
+  config: Pick<Ethereum111kConfig, 'chainId' | 'contractAddress' | 'enabled'>;
   signal: AbortSignal;
-  nowMs: number;
   fetch: typeof fetch;
   chainCheck?: Promise<void>;
   relicInterfaceCheck?: Promise<boolean>;
+};
+
+export type EthereumContext = EthereumReadContext & {
+  env: EthereumEnvironment;
+  config: Ethereum111kConfig;
+  nowMs: number;
 };
 
 export function ethereumConfig(env: EthereumEnvironment): Ethereum111kConfig {
@@ -56,14 +61,14 @@ function localEthereumRpcUrl(value: string): string {
   return url.toString();
 }
 
-export function requireEthereumContract(context: EthereumContext): string {
+export function requireEthereumContract(context: EthereumReadContext): string {
   if (!context.config.enabled || !context.config.contractAddress) {
     throw new EthereumApiError('failed-precondition', 'The Ethereum test collection has not been deployed yet.');
   }
   return context.config.contractAddress;
 }
 
-export async function ethereumRelicInterfaceAvailable(context: EthereumContext): Promise<boolean> {
+export async function ethereumRelicInterfaceAvailable(context: EthereumReadContext): Promise<boolean> {
   context.relicInterfaceCheck ??= (async () => {
     const [maximum, mask] = await ethereumCallBatch(context, [encodeCall('MAX_RELICS()', [], []),
       encodeCall(ETHEREUM_FUNCTIONS.relicClaimedMask, [], [])]);
@@ -74,18 +79,19 @@ export async function ethereumRelicInterfaceAvailable(context: EthereumContext):
   return context.relicInterfaceCheck;
 }
 
-function ethereumRpcUrl(context: EthereumContext): string {
+function ethereumRpcUrl(context: EthereumReadContext): string {
   if (context.config.chainId === 31337) {
     const configured = context.env.ETHEREUM_111K_RPC_URL;
     if (!configured) throw new EthereumApiError('unavailable', 'Local Ethereum RPC is not configured.');
     return localEthereumRpcUrl(configured);
   }
+  const host = context.config.chainId === 1 ? 'eth-mainnet' : context.config.chainId === 11155111 ? 'eth-sepolia' : null;
   const key = context.env.ALCHEMY_MI_NOTE_API_KEY?.trim();
-  if (!key) throw new EthereumApiError('unavailable', 'Ethereum RPC is not configured.');
-  return `https://eth-sepolia.g.alchemy.com/v2/${encodeURIComponent(key)}`;
+  if (!host || !key) throw new EthereumApiError('unavailable', 'Ethereum RPC is not configured.');
+  return `https://${host}.g.alchemy.com/v2/${encodeURIComponent(key)}`;
 }
 
-async function rpcRequest(context: EthereumContext, payload: unknown): Promise<unknown> {
+async function rpcRequest(context: EthereumReadContext, payload: unknown): Promise<unknown> {
   const signal = AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]);
   const response = await context.fetch(ethereumRpcUrl(context), {
     method: 'POST',
@@ -105,7 +111,7 @@ async function rpcRequest(context: EthereumContext, payload: unknown): Promise<u
   return body;
 }
 
-export async function ethereumRpc(context: EthereumContext, method: string, params: unknown[]): Promise<unknown> {
+export async function ethereumRpc(context: EthereumReadContext, method: string, params: unknown[]): Promise<unknown> {
   const chainCheck = method === 'eth_chainId' ? Promise.resolve() : checkEthereumChain(context);
   if (method !== 'eth_getTransactionReceipt') await chainCheck;
   const [, body] = await Promise.all([chainCheck, rpcRequest(context, { jsonrpc: '2.0', id: 1, method, params })]);
@@ -115,7 +121,7 @@ export async function ethereumRpc(context: EthereumContext, method: string, para
   return body.result;
 }
 
-export async function ethereumCallBatch(context: EthereumContext, calls: string[], blockReference = 'latest'): Promise<string[]> {
+export async function ethereumCallBatch(context: EthereumReadContext, calls: string[], blockReference = 'latest'): Promise<string[]> {
   if (!calls.length) return [];
   await checkEthereumChain(context);
   const to = requireEthereumContract(context);
@@ -152,7 +158,7 @@ export async function ethereumCallBatch(context: EthereumContext, calls: string[
   return values;
 }
 
-export async function ethereumBlockSnapshot(context: EthereumContext): Promise<EthereumBlockSnapshot> {
+export async function ethereumBlockSnapshot(context: EthereumReadContext): Promise<EthereumBlockSnapshot> {
   const block = await ethereumRpc(context, 'eth_getBlockByNumber', ['latest', false]);
   if (!block || typeof block !== 'object' || !('number' in block) || !('hash' in block) ||
     typeof block.hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(block.hash)) {
@@ -161,7 +167,7 @@ export async function ethereumBlockSnapshot(context: EthereumContext): Promise<E
   return { blockNumber: rpcInteger(block.number), blockHash: block.hash.toLowerCase() };
 }
 
-export async function verifyEthereumBlockSnapshot(context: EthereumContext, snapshot: EthereumBlockSnapshot): Promise<void> {
+export async function verifyEthereumBlockSnapshot(context: EthereumReadContext, snapshot: EthereumBlockSnapshot): Promise<void> {
   const block = await ethereumRpc(context, 'eth_getBlockByNumber', [ethereumHexQuantity(snapshot.blockNumber), false]);
   if (!block || typeof block !== 'object' || !('hash' in block) || typeof block.hash !== 'string' ||
     block.hash.toLowerCase() !== snapshot.blockHash.toLowerCase()) {
@@ -169,7 +175,7 @@ export async function verifyEthereumBlockSnapshot(context: EthereumContext, snap
   }
 }
 
-async function checkEthereumChain(context: EthereumContext): Promise<void> {
+async function checkEthereumChain(context: EthereumReadContext): Promise<void> {
   context.chainCheck ??= (async () => {
     const chain = await ethereumRpc(context, 'eth_chainId', []);
     if (rpcInteger(chain) !== context.config.chainId) throw new EthereumApiError('unavailable', 'Ethereum RPC is connected to the wrong network.');
@@ -177,7 +183,7 @@ async function checkEthereumChain(context: EthereumContext): Promise<void> {
   return context.chainCheck;
 }
 
-export async function ethereumCall(context: EthereumContext, data: string, to = requireEthereumContract(context)): Promise<string> {
+export async function ethereumCall(context: EthereumReadContext, data: string, to = requireEthereumContract(context)): Promise<string> {
   const result = await ethereumRpc(context, 'eth_call', [{ to, data }, 'latest']);
   if (typeof result !== 'string' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(result)) {
     throw new EthereumApiError('unavailable', 'Ethereum contract returned an invalid response.');

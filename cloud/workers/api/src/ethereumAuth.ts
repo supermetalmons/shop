@@ -42,7 +42,7 @@ export function ethereumRequestOrigin(request: Request, isAllowedOrigin = isAllo
   return origin;
 }
 
-export async function limitEthereumRequest(request: Request, context: EthereumContext, operation: string, limiter: RateLimit,
+export async function limitEthereumRequest(request: Request, context: Pick<EthereumContext, 'signal'>, operation: string, limiter: RateLimit,
   isAllowedOrigin = isAllowedProfileOrigin): Promise<void> {
   const origin = ethereumRequestOrigin(request, isAllowedOrigin);
   const ip = request.headers.get('CF-Connecting-IP') || (['localhost', '127.0.0.1'].includes(new URL(origin).hostname) ? 'local' : '');
