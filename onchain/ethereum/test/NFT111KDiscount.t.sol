@@ -54,7 +54,8 @@ contract NFT111KDiscountTest is TestSupport {
             "https://cdn.mons.shop/111k-sepolia/",
             root,
             _proceedsRecipients(),
-            _proceedsSharesBps()
+            _proceedsSharesBps(),
+            new NFT111K.FreeMintAllocation[](0)
         );
         token.setSaleActive(true);
         vm.deal(ALICE, 100 ether);

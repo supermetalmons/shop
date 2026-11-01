@@ -21,7 +21,11 @@ contract SecurityCollection is NFT111K {
         string memory baseURI_,
         address[] memory recipients_,
         uint256[] memory shares_
-    ) NFT111K(owner_, signer_, deliveryReceiver_, baseURI_, bytes32(0), recipients_, shares_) {}
+    )
+        NFT111K(
+            owner_, signer_, deliveryReceiver_, baseURI_, bytes32(0), recipients_, shares_, new FreeMintAllocation[](0)
+        )
+    {}
 
     function transientStateClean() external view returns (bool) {
         return _extraData(address(0), address(0), 0) == 0 && !_reentrancyGuardEntered();
@@ -1057,7 +1061,7 @@ contract NFT111KSecurityTest is TestSupport {
     function _reentry(uint256 route) internal {
         SecurityReceiver buyer = _receiver();
         SecurityCall memory call_ = _route(buyer, route);
-        SecurityCall[] memory attacks = new SecurityCall[](13);
+        SecurityCall[] memory attacks = new SecurityCall[](16);
         attacks[0] = SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         attacks[1] = SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice());
         attacks[2] = SecurityCall(abi.encodeCall(token.unboxWarehouse, (116667)), 0);
@@ -1088,6 +1092,9 @@ contract NFT111KSecurityTest is TestSupport {
         attacks[10] = SecurityCall(abi.encodeCall(token.mintMonuments, (1)), 0.0088 ether);
         attacks[11] = SecurityCall(abi.encodeCall(token.unboxMonument, (117172)), 0);
         attacks[12] = SecurityCall(abi.encodeCall(token.releaseAllMint, ()), 0);
+        attacks[13] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Crate, 1)), 0);
+        attacks[14] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Warehouse, 1)), 0);
+        attacks[15] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Monument, 1)), 0);
         buyer.configureAttacks(attacks);
         _expectRoutePurchaseTotals(buyer, route);
         buyer.execute(call_.data, call_.value);

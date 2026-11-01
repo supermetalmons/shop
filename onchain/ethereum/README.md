@@ -1,6 +1,6 @@
 # 111K contracts
 
-An ERC721A collection with public crate, warehouse, and monument sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata base URL. Mint recipients and their shares are fixed at deployment.
+An ERC721A collection with public crate, warehouse, and monument sales, allowlist crate discounts, per-wallet free mint allowances, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, free mint allowances, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata base URL. Mint recipients and their shares are fixed at deployment.
 
 The [v9 release](../../releases/111k-sepolia-v9/README.md) records the monument receipt collection and verification. The [v8 release](../../releases/111k-sepolia-v8/README.md), [v7 release](../../releases/111k-sepolia-v7/README.md), [single-contract release](../../releases/111k-sepolia-single-contract/README.md), and earlier releases remain historical records. The [offchain metadata release](../../releases/111k-sepolia-offchain/README.md) records the separate URL renderer, and the [first Sepolia deployment](../../releases/111k-sepolia/README.md) records the original SVG renderer. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
@@ -28,7 +28,7 @@ The repository-root `npm run check:all` runs these checks and the extended invar
 
 The tests cover monument supply and lifetime caps, mixed monument/warehouse/direct allocation, every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, sequential digital identities and disjoint physical receipts, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also verify receipt commitments and confirm that token-based artwork identities stay stable after an opening-order reorg.
 
-Stateful invariant tests mix public and discounted purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
+Stateful invariant tests mix public and discounted purchases, free mints and allowance changes, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount and free mint usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
 
 ```sh
 npm run test:invariants:extended
@@ -57,13 +57,13 @@ Follow the [local chain, API, and frontend setup](../../scripts/docs/111k_testne
 
 ## Future public network deployments
 
-`script/Deploy111K.s.sol` prepares a fresh collection on Ethereum mainnet (chain ID 1) or Sepolia (11155111) using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, `ETHEREUM_111K_DISCOUNT_ROOT`, and `ETHEREUM_111K_METADATA_BASE_URI`. It reads the immutable mint split and initial delivery receiver from `config/proceeds.json`. Existing contracts are non-upgradeable; the monument receipt release requires a new collection address. Replacing the existing Sepolia collection also uses its scoped commerce-state reset. The first mainnet deployment starts with fresh state.
+`script/Deploy111K.s.sol` prepares a fresh collection on Ethereum mainnet (chain ID 1) or Sepolia (11155111) using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, `ETHEREUM_111K_DISCOUNT_ROOT`, and `ETHEREUM_111K_METADATA_BASE_URI`. It reads the immutable mint split and initial delivery receiver from `config/proceeds.json`, and initial free allowances from `config/free-mints.json`. `ETHEREUM_111K_FREE_MINT_CONFIG` can select another readable configuration file. Existing contracts are non-upgradeable; free allowances require a new collection address. Replacing the existing Sepolia collection also uses its scoped commerce-state reset. The first mainnet deployment starts with fresh state.
 
 Sales are closed from contract creation. Verify the fresh collection's zero issuance, configuration, bytecode, and metadata while it remains closed, then have the owner call `setSaleActive(true)` as a separate launch action. Public acceptance uses read-only checks; minting and opening tests run on the local EVM. No deployment-time pause transaction is needed. Existing deployed contracts retain their current sale state.
 
 Each public deployment requires its own metadata namespace: `https://cdn.mons.shop/111k/{deploymentId}/` on mainnet or `https://cdn.mons.shop/111k-sepolia/{deploymentId}/` on Sepolia. Deployment IDs must be unique across networks; use distinct IDs such as `mainnet-monuments-v1` and `v9`. The script rejects bare collection roots, the other network's prefix, and unsupported chain IDs. Publish and validate the full seven-kind metadata set for the selected namespace before configuring it on a deployed collection. The set includes monument tokens 117172–117189 alongside the existing artwork, crate, warehouse, and receipt ranges.
 
-`NFT111KDeploymentTest` executes the deployment script locally for both public chain IDs with test keys and configuration. It checks the deployed collection's owner, signer, EIP-712 domain, proceeds configuration, default prices, runtime size, and metadata boundaries for all seven kinds. It verifies zero issuance while closed, rejects all four purchase paths and unauthorized activation, and explicitly opens sales as the owner. It then mints the lifetime maximum of 18 monuments at two independently configured prices, transfers one through the network's default Seaport approval, opens its 111 reserved crates, verifies the cap remains consumed, and releases mint proceeds to the configured recipients. Run this focused integration check without a public RPC:
+`NFT111KDeploymentTest` executes the deployment script locally for both public chain IDs with test keys and configuration. It checks the deployed collection's owner, signer, EIP-712 domain, proceeds configuration, initial free allowances, default prices, runtime size, and metadata boundaries for all seven kinds. It verifies zero issuance while closed, rejects paid, discounted, and free mint paths and unauthorized activation, and explicitly opens sales as the owner. It then mints the lifetime maximum of 18 monuments at two independently configured prices, transfers one through the network's default Seaport approval, opens its 111 reserved crates, verifies the cap remains consumed, and releases mint proceeds to the configured recipients. Run this focused integration check without a public RPC:
 
 ```sh
 forge test --offline --match-contract '^NFT111KDeploymentTest$' --gas-snapshot-emit=false
@@ -114,6 +114,39 @@ Every eligible wallet initially receives one discounted crate. The owner can cal
 `stats(address wallet)` returns the existing six global statistics followed by the root, discounted crate price, allowance, queried wallet's used count, lifetime monument count, and monument price. This gives the page one coherent contract read for price and remaining allowance. Passing the zero address returns zero usage. The draft holder snapshot and its generated proof fixture are checked independently of the live collection; no source-collection ownership query is required during minting.
 
 The page uses the same discount button behavior as Solana: if the selected crate quantity exceeds the remaining allowance, the entire selection uses the public mint price. There is no partial discount within a transaction.
+
+## Per-wallet free mints
+
+Future deployments read [`config/free-mints.json`](config/free-mints.json). Its A/B/C templates start with zero limits and empty wallet lists. Group names organize configuration only; the constructor receives flattened per-wallet limits and initializes them atomically, including when the deployer and owner differ. The local deployment manifest records the resulting `freeMintAllocations`. Configuring allowances does not mint tokens or open sales.
+
+For example, the following limits grant each wallet in A 100 crates and one warehouse, and each wallet in B five crates. Add the intended addresses to each `wallets` list:
+
+```json
+{
+  "groups": [
+    { "name": "A", "crates": 100, "warehouses": 1, "monuments": 0, "wallets": [] },
+    { "name": "B", "crates": 5, "warehouses": 0, "monuments": 0, "wallets": [] },
+    { "name": "C", "crates": 0, "warehouses": 0, "monuments": 0, "wallets": [] }
+  ]
+}
+```
+
+Configuration preserves group and wallet order, rejects duplicate names or wallet membership, and allows at most 32 distinct wallets in total. Wallets must be nonzero Ethereum addresses other than the collection itself. Limits are nonnegative integers capped at 5,555 crates, 505 warehouses, and 18 monuments per wallet. Write plain decimal integer literals such as `100`, not strings, `100.0`, or `1e2`, so both deployment parsers read the same values. The sum of all allowances may exceed inventory: **allowances do not reserve supply**. Free and paid mints compete for the same remaining allocations and lifetime monument cap.
+
+Validate configuration or generate unsigned owner transactions from the repository root:
+
+```sh
+npm --prefix onchain/ethereum run free-mints:check
+npm --prefix onchain/ethereum run free-mints:calldata -- COLLECTION_ADDRESS
+```
+
+Both commands accept an optional configuration path after their displayed arguments, resolved from `onchain/ethereum`. Calldata generation emits one `{group, to, data, value}` entry per nonempty group and never connects to an RPC or broadcasts. The owner executes these calls to `setFreeMintAllowances(address[] wallets, uint16 crates, uint16 warehouses, uint16 monuments)`. Each call replaces total limits for its 1–32 listed wallets while preserving usage. It does not affect omitted wallets: explicit zero limits revoke remaining entitlement. Repeated batches can configure more than 32 wallets over the collection's lifetime.
+
+`mintFree(uint8 kind, uint256 quantity)` accepts crate kind `2`, warehouse kind `3`, or monument kind `6`, and mints 1–15 items to the caller. It requires `saleActive`, rejects ETH payments, and charges no mint price; the wallet still pays gas. A 100-crate allowance needs at least seven transactions. Claiming a warehouse consumes one warehouse allowance and 11 shared crate allocations, without consuming the wallet's free-crate allowance. A monument similarly consumes one monument allowance and 111 allocations. Transfers, unpacking, and paid or discounted purchases do not change free usage.
+
+`freeMintAllowances(wallet)` returns `crateLimit`, `warehouseLimit`, `monumentLimit`, `cratesUsed`, `warehousesUsed`, and `monumentsUsed`. All six counters fit in one storage slot. Remaining entitlement is `max(0, limit - used)` independently for each item. Increasing a limit from 100 to 120 grants 20 additional items; reducing a limit below usage leaves none available, and revocation/re-addition never restores used allowance. `stats()` and discount accounting are unchanged.
+
+Configuration emits `FreeMintAllowanceUpdated`; successful claims emit `FreeMintClaimed` and the existing purchase event with payment zero. Claims produce no mint proceeds. Usage and supply are updated before receiver callbacks, and a rejected callback reverts the whole mint. The shop checkout does not expose free claims in this change; use the contract interface directly.
 
 ## Supply and identities
 
@@ -185,34 +218,39 @@ The owner can change the metadata prefix with `setBaseURI(string)`. The construc
 
 ### Mint payout batches (2026-10-31)
 
-The current collection runtime is 23,127 bytes, leaving 1,449 bytes below the EIP-170 limit. The isolated Prague benchmarks use 32 fixed recipients with positive basis points totaling 10,000. First payouts to ordinary wallets include creation of previously empty accounts; repeat payouts follow another purchase. Failure benchmarks exhaust the callback gas allowance for every receiver and verify all entitlements remain unpaid.
+The current collection runtime is 24,566 bytes, leaving 10 bytes below the EIP-170 limit. Runtime and maximum constructor payload sizes are enforced by tests. The isolated Prague benchmarks use 32 fixed recipients with positive basis points totaling 10,000. First payouts to ordinary wallets include creation of previously empty accounts; repeat payouts follow another purchase. Failure benchmarks exhaust the callback gas allowance for every receiver and verify all entitlements remain unpaid.
 
 | Operation | Gas used |
 | --- | ---: |
-| Mint one crate, 8 or 32 recipients | 142,888 |
-| Release all, 4 recipients, first payout | 304,340 |
-| Release all, 4 recipients, repeat payout | 118,840 |
-| Release all, 32 recipients, first payout | 2,099,392 |
-| Release all, 32 recipients, repeat payout | 735,092 |
-| Release all, 32 recipients, nothing pending | 268,526 |
-| Release all, 32 receivers exhausting callback gas | 4,169,783 |
+| Mint one crate, 8 or 32 recipients | 143,078 |
+| Mint one free crate, first claim | 128,758 |
+| Mint one free warehouse, first claim | 173,269 |
+| Mint one free monument, first claim | 173,508 |
+| Configure 32 free mint wallets, first assignment | 1,081,475 |
+| Configure 32 free mint wallets after usage | 534,287 |
+| Release all, 4 recipients, first payout | 304,385 |
+| Release all, 4 recipients, repeat payout | 118,885 |
+| Release all, 32 recipients, first payout | 2,099,437 |
+| Release all, 32 recipients, repeat payout | 735,137 |
+| Release all, 32 recipients, nothing pending | 268,571 |
+| Release all, 32 receivers exhausting callback gas | 4,169,819 |
 
 These are measured gas usage, including transaction overhead and refunds, not transaction gas limits. Estimate gas against the target chain before submitting; the batch also needs enough remaining gas to supply each full callback budget. Tests bound first and repeat 32-recipient payouts below 3 million and 1 million gas respectively, and the all-failing case below 5 million gas. The individual payout fallback retains normal gas forwarding for receivers that need more than the batch allowance.
 
 ### Batch operations (2026-10-27)
 
-The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the collection before monument support. That revision had 113 gas measurements and a 21,780-byte runtime, leaving 2,796 bytes below the EIP-170 limit. The current 127 measurements are checked in `snapshots/NFT111KGasTest.json`.
+The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the collection before monument support. That revision had 113 gas measurements and a 21,780-byte runtime, leaving 2,796 bytes below the EIP-170 limit. The current 137 measurements are checked in `snapshots/NFT111KGasTest.json`; the following table uses those current measurements.
 
 | Opening | One batch | Fifteen separate transactions | Gas saved |
 | --- | ---: | ---: | ---: |
-| 15 ordinary crates, EOA | 1,194,614 | 1,695,060 | 500,446 (29.52%) |
-| 15 crates including #5555, EOA | 1,215,801 | 1,716,247 | 500,446 (29.16%) |
-| 15 ordinary crates, minimal receiver | 1,651,535 | 2,151,810 | 500,275 (23.25%) |
-| 15 crates including #5555, minimal receiver | 1,689,353 | 2,189,609 | 500,256 (22.85%) |
+| 15 ordinary crates, EOA | 1,194,670 | 1,694,715 | 500,045 (29.51%) |
+| 15 crates including #5555, EOA | 1,215,857 | 1,715,902 | 500,045 (29.14%) |
+| 15 ordinary crates, minimal receiver | 1,651,591 | 2,151,465 | 499,874 (23.23%) |
+| 15 crates including #5555, minimal receiver | 1,689,409 | 2,189,264 | 499,855 (22.83%) |
 
 These isolated write measurements include intrinsic/calldata gas and refunds, with identical initial state and input order for each comparison. Setup and arbitrary contract-wallet callback work are excluded. The Anvil API lifecycle separately checks that batch opening saves gas using real transaction receipts.
 
-The 150-entry sparse artwork-info benchmark costs 6,915,998 gas. A 30-entry artwork-receipt metadata URL read costs 93,570 gas and returns 3,904 ABI bytes (7,810 bytes of hex, excluding the RPC envelope). Tests enforce a 25-million-gas call budget and 512 KiB hex-response budget for that metadata scenario. These are read simulations; inventory users do not submit a paid transaction for them.
+The 150-entry sparse artwork-info benchmark costs 6,916,021 gas. A 30-entry artwork-receipt metadata URL read costs 95,130 gas and returns 3,904 ABI bytes (7,810 bytes of hex, excluding the RPC envelope). Tests enforce a 25-million-gas call budget and 512 KiB hex-response budget for that metadata scenario. These are read simulations; inventory users do not submit a paid transaction for them.
 
 Regenerate the report after reviewing updated gas snapshots:
 

@@ -809,7 +809,8 @@ contract NFT111KProceedsTest is TestSupport {
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             recipients,
-            shares
+            shares,
+            new NFT111K.FreeMintAllocation[](0)
         );
     }
 

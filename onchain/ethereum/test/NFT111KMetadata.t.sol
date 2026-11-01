@@ -161,7 +161,8 @@ contract NFT111KMetadataTest is TestSupport {
             baseURI,
             bytes32(0),
             _proceedsRecipients(),
-            _proceedsSharesBps()
+            _proceedsSharesBps(),
+            new NFT111K.FreeMintAllocation[](0)
         );
     }
 

@@ -37,6 +37,22 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         address holder;
     }
 
+    struct FreeMintAllocation {
+        address wallet;
+        uint16 crateLimit;
+        uint16 warehouseLimit;
+        uint16 monumentLimit;
+    }
+
+    struct FreeMintAllowance {
+        uint16 crateLimit;
+        uint16 warehouseLimit;
+        uint16 monumentLimit;
+        uint16 cratesUsed;
+        uint16 warehousesUsed;
+        uint16 monumentsUsed;
+    }
+
     uint256 public constant MAX_ARTWORKS = 111_111;
     uint256 public constant MAX_ARTWORK_RECEIPTS = 222_222;
     address public constant SEAPORT = 0x0000000000000068F116a894984e2DB1123eB395;
@@ -93,6 +109,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     mapping(uint256 => bool) public usedDeliveryOrders;
     mapping(bytes32 => bool) public usedClaims;
     mapping(address => uint256) public discountUsed;
+    mapping(address => FreeMintAllowance) public freeMintAllowances;
     mapping(address => bool) private seaportApprovalRevoked;
 
     error InvalidQuantity();
@@ -119,6 +136,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     error InvalidDiscountProof();
     error DiscountAllowanceExceeded();
     error InvalidDiscountConfig();
+    error InvalidFreeMintConfig();
+    error FreeMintAllowanceExceeded();
 
     event CratesPurchased(address indexed wallet, uint256 firstCrateToken, uint256 quantity, uint256 paid);
     event WarehousesPurchased(address indexed wallet, uint256 firstWarehouseToken, uint256 quantity, uint256 paid);
@@ -139,6 +158,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     );
     event PricesUpdated(uint256 cratePrice, uint256 warehousePrice, uint256 discountCratePrice, uint256 monumentPrice);
     event DiscountConfigUpdated(bytes32 root, uint256 allowance);
+    event FreeMintAllowanceUpdated(
+        address indexed wallet, uint16 crateLimit, uint16 warehouseLimit, uint16 monumentLimit
+    );
+    event FreeMintClaimed(address indexed wallet, ItemKind indexed kind, uint256 quantity);
     event SaleStatusUpdated(bool active);
     event RedemptionsPauseUpdated(bool paused);
     event QuoteSignerUpdated(address indexed signer);
@@ -156,7 +179,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         string memory baseURI_,
         bytes32 discountRoot,
         address[] memory mintRecipients_,
-        uint256[] memory mintSharesBps_
+        uint256[] memory mintSharesBps_,
+        FreeMintAllocation[] memory freeMintAllocations_
     ) ERC721A("111K", "111K") Ownable(initialOwner) EIP712("111K", "2") {
         if (signer == address(0)) revert InvalidAddress();
         _validateBaseURI(baseURI_);
@@ -180,6 +204,16 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         deliveryPaymentReceiver = deliveryPaymentReceiver_;
         baseURI = baseURI_;
         discountMerkleRoot = discountRoot;
+        if (freeMintAllocations_.length > 32) revert InvalidFreeMintConfig();
+        for (uint256 i; i < freeMintAllocations_.length; ++i) {
+            FreeMintAllocation memory allocation = freeMintAllocations_[i];
+            for (uint256 j; j < i; ++j) {
+                if (freeMintAllocations_[j].wallet == allocation.wallet) revert InvalidFreeMintConfig();
+            }
+            _setFreeMintAllowance(
+                allocation.wallet, allocation.crateLimit, allocation.warehouseLimit, allocation.monumentLimit
+            );
+        }
     }
 
     function mintCrates(uint256 quantity) external payable nonReentrant {
@@ -200,31 +234,35 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function mintWarehouses(uint256 quantity) external payable nonReentrant {
         _checkPurchase(quantity, quantity * CRATES_PER_WAREHOUSE, warehousePrice);
-        uint256 firstWarehouse = warehousesMinted + 1;
-        uint256 firstCrate = allocatedCrates + 1;
-        allocatedCrates += quantity * CRATES_PER_WAREHOUSE;
-        warehousesMinted += quantity;
-        totalMintReceived += msg.value;
-        for (uint256 i; i < quantity; ++i) {
-            warehouseFirstCrate[firstWarehouse + i] = firstCrate + i * CRATES_PER_WAREHOUSE;
-            _mintSpotOnce(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse + i - 1);
-        }
-        emit WarehousesPurchased(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse - 1, quantity, msg.value);
+        _mintWarehouses(quantity);
     }
 
     function mintMonuments(uint256 quantity) external payable nonReentrant {
         _checkPurchase(quantity, quantity * CRATES_PER_MONUMENT, monumentPrice);
-        if (quantity > MAX_MONUMENTS - monumentsMinted) revert SoldOut();
-        uint256 firstMonument = monumentsMinted + 1;
-        uint256 firstCrate = allocatedCrates + 1;
-        allocatedCrates += quantity * CRATES_PER_MONUMENT;
-        monumentsMinted += quantity;
-        totalMintReceived += msg.value;
-        for (uint256 i; i < quantity; ++i) {
-            monumentFirstCrate[firstMonument + i] = firstCrate + i * CRATES_PER_MONUMENT;
-            _mintSpotOnce(msg.sender, MONUMENT_TOKEN_START + firstMonument + i - 1);
+        _mintMonuments(quantity);
+    }
+
+    function mintFree(ItemKind kind, uint256 quantity) external nonReentrant {
+        uint256 units;
+        if (kind == ItemKind.Crate) units = 1;
+        else if (kind == ItemKind.Warehouse) units = CRATES_PER_WAREHOUSE;
+        else if (kind == ItemKind.Monument) units = CRATES_PER_MONUMENT;
+        else revert WrongItemKind();
+        _checkPurchase(quantity, quantity * units, 0);
+        FreeMintAllowance storage allowance = freeMintAllowances[msg.sender];
+        if (kind == ItemKind.Crate) {
+            allowance.cratesUsed = _consumeFreeMintAllowance(allowance.cratesUsed, allowance.crateLimit, quantity);
+            _mintCrates(quantity);
+        } else if (kind == ItemKind.Warehouse) {
+            allowance.warehousesUsed =
+                _consumeFreeMintAllowance(allowance.warehousesUsed, allowance.warehouseLimit, quantity);
+            _mintWarehouses(quantity);
+        } else {
+            allowance.monumentsUsed =
+                _consumeFreeMintAllowance(allowance.monumentsUsed, allowance.monumentLimit, quantity);
+            _mintMonuments(quantity);
         }
-        emit MonumentsPurchased(msg.sender, MONUMENT_TOKEN_START + firstMonument - 1, quantity, msg.value);
+        emit FreeMintClaimed(msg.sender, kind, quantity);
     }
 
     function unboxMonument(uint256 tokenId) external nonReentrant {
@@ -484,6 +522,21 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit DiscountConfigUpdated(root, allowance);
     }
 
+    function setFreeMintAllowances(
+        address[] calldata wallets,
+        uint16 crateLimit,
+        uint16 warehouseLimit,
+        uint16 monumentLimit
+    ) external onlyOwner {
+        if (wallets.length == 0 || wallets.length > 32) revert InvalidFreeMintConfig();
+        for (uint256 i; i < wallets.length; ++i) {
+            for (uint256 j; j < i; ++j) {
+                if (wallets[j] == wallets[i]) revert InvalidFreeMintConfig();
+            }
+            _setFreeMintAllowance(wallets[i], crateLimit, warehouseLimit, monumentLimit);
+        }
+    }
+
     function setSaleActive(bool active) external onlyOwner {
         saleActive = active;
         emit SaleStatusUpdated(active);
@@ -588,13 +641,62 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function _mintCrates(uint256 quantity) private {
-        totalMintReceived += msg.value;
         uint256 firstCrate = allocatedCrates + 1;
-        allocatedCrates += quantity;
-        for (uint256 i; i < quantity; ++i) {
-            _mintSpotOnce(msg.sender, CRATE_TOKEN_START + firstCrate + i - 1);
-        }
+        // Single-crate mints skip the shared allocator's container mapping.
+        _mintAllocated(quantity, firstCrate, 1, CRATE_TOKEN_START, warehouseFirstCrate);
         emit CratesPurchased(msg.sender, CRATE_TOKEN_START + firstCrate - 1, quantity, msg.value);
+    }
+
+    function _mintWarehouses(uint256 quantity) private {
+        uint256 firstWarehouse = warehousesMinted + 1;
+        warehousesMinted += quantity;
+        _mintAllocated(quantity, firstWarehouse, CRATES_PER_WAREHOUSE, WAREHOUSE_TOKEN_START, warehouseFirstCrate);
+        emit WarehousesPurchased(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse - 1, quantity, msg.value);
+    }
+
+    function _mintMonuments(uint256 quantity) private {
+        if (quantity > MAX_MONUMENTS - monumentsMinted) revert SoldOut();
+        uint256 firstMonument = monumentsMinted + 1;
+        monumentsMinted += quantity;
+        _mintAllocated(quantity, firstMonument, CRATES_PER_MONUMENT, MONUMENT_TOKEN_START, monumentFirstCrate);
+        emit MonumentsPurchased(msg.sender, MONUMENT_TOKEN_START + firstMonument - 1, quantity, msg.value);
+    }
+
+    function _mintAllocated(
+        uint256 quantity,
+        uint256 firstItem,
+        uint256 crateUnits,
+        uint256 tokenStart,
+        mapping(uint256 => uint256) storage firstCrates
+    ) private {
+        uint256 firstCrate = allocatedCrates + 1;
+        allocatedCrates += quantity * crateUnits;
+        totalMintReceived += msg.value;
+        // Purchase checks bound every allocation and token index below the collection limits.
+        unchecked {
+            for (uint256 i; i < quantity; ++i) {
+                if (crateUnits != 1) firstCrates[firstItem + i] = firstCrate + i * crateUnits;
+                _mintSpotOnce(msg.sender, tokenStart + firstItem + i - 1);
+            }
+        }
+    }
+
+    function _setFreeMintAllowance(address wallet, uint16 crates, uint16 warehouses, uint16 monuments) private {
+        if (wallet == address(0) || wallet == address(this)) revert InvalidAddress();
+        if (crates > MAX_CRATES || warehouses > MAX_WAREHOUSES || monuments > MAX_MONUMENTS) {
+            revert InvalidFreeMintConfig();
+        }
+        FreeMintAllowance storage allowance = freeMintAllowances[wallet];
+        allowance.crateLimit = crates;
+        allowance.warehouseLimit = warehouses;
+        allowance.monumentLimit = monuments;
+        emit FreeMintAllowanceUpdated(wallet, crates, warehouses, monuments);
+    }
+
+    function _consumeFreeMintAllowance(uint16 used, uint16 limit, uint256 quantity) private pure returns (uint16) {
+        uint256 total = uint256(used) + quantity;
+        if (total > limit) revert FreeMintAllowanceExceeded();
+        return uint16(total);
     }
 
     function _requireOwnedKind(uint256 tokenId, ItemKind expected) private view returns (uint256 displayId) {

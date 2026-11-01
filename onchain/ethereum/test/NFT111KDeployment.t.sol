@@ -14,6 +14,14 @@ contract DeploymentMetadataHarness is Deploy111K {
     function validate(string memory uri, uint256 chainId) external pure {
         _validateDeploymentMetadataBaseURI(uri, chainId);
     }
+
+    function freeMints(string memory json, address collection)
+        external
+        pure
+        returns (NFT111K.FreeMintAllocation[] memory)
+    {
+        return _freeMintAllocations(json, collection);
+    }
 }
 
 contract NFT111KDeploymentTest is TestSupport {
@@ -26,6 +34,203 @@ contract NFT111KDeploymentTest is TestSupport {
 
     function setUp() public {
         harness = new DeploymentMetadataHarness();
+        DeploymentVm(address(vm)).setEnv("ETHEREUM_111K_FREE_MINT_CONFIG", "config/free-mints.json");
+    }
+
+    function testFreeMintConfigurationMatchesSharedFixture() public view {
+        NFT111K.FreeMintAllocation[] memory allocations =
+            harness.freeMints(vm.readFile("fixtures/free-mints.json"), address(0x123));
+        assertEq(allocations.length, 4);
+        assertEq(allocations[0].wallet, BUYER);
+        assertEq(allocations[0].crateLimit, 100);
+        assertEq(allocations[0].warehouseLimit, 1);
+        assertEq(allocations[0].monumentLimit, 0);
+        assertEq(allocations[1].wallet, address(0xCA10));
+        assertEq(allocations[1].crateLimit, 100);
+        assertEq(allocations[2].wallet, NEXT_OWNER);
+        assertEq(allocations[2].crateLimit, 5);
+        assertEq(allocations[2].warehouseLimit, 0);
+        assertEq(allocations[3].wallet, address(0xD00D));
+        assertEq(allocations[3].monumentLimit, 1);
+        assertEq(harness.freeMints('{"groups":[]}', address(0x123)).length, 0);
+        assertEq(harness.freeMints(_freeMintGroup("", "0", "0", "0"), address(0x123)).length, 0);
+    }
+
+    function testFreeMintConfigurationRejectsNonArrayGroupsAndWallets() public {
+        string[7] memory invalid =
+            ["null", "false", "0", '""', '"[]"', "{}", '"[0x000000000000000000000000000000000000a110]"'];
+        for (uint256 i; i < invalid.length; ++i) {
+            vm.expectRevert();
+            harness.freeMints(string.concat('{"groups":', invalid[i], "}"), address(0x123));
+            vm.expectRevert();
+            harness.freeMints(
+                string.concat(
+                    '{"groups":[{"name":"A","crates":0,"warehouses":1,"monuments":1,"wallets":', invalid[i], "}]}"
+                ),
+                address(0x123)
+            );
+        }
+    }
+
+    function testFreeMintConfigurationAcceptsHexLookingGroupNames() public view {
+        string[4] memory names = [
+            "0x01",
+            "0x000000000000000000000000000000000000a110",
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "0xnothex"
+        ];
+        for (uint256 i; i < names.length; ++i) {
+            NFT111K.FreeMintAllocation[] memory allocations = harness.freeMints(
+                string.concat(
+                    '{"groups":[{"name":"',
+                    names[i],
+                    '","crates":100,"warehouses":1,"monuments":0,"wallets":["0x000000000000000000000000000000000000a110"]}]}'
+                ),
+                address(0x123)
+            );
+            assertEq(allocations.length, 1);
+            assertEq(allocations[0].wallet, BUYER);
+            assertEq(allocations[0].crateLimit, 100);
+            assertEq(allocations[0].warehouseLimit, 1);
+            assertEq(allocations[0].monumentLimit, 0);
+        }
+    }
+
+    function testFreeMintConfigurationBoundsAndSharedInventoryOvercommit() public {
+        string memory wallets;
+        for (uint256 i; i < 33; ++i) {
+            wallets = string.concat(wallets, i == 0 ? "" : ",", '"', Strings.toHexString(address(uint160(i + 1))), '"');
+            if (i == 31) {
+                NFT111K.FreeMintAllocation[] memory allocations =
+                    harness.freeMints(_freeMintGroup(wallets, "5555", "505", "18"), address(0x123));
+                assertEq(allocations.length, 32);
+                assertEq(allocations[31].crateLimit, 5555);
+            }
+        }
+        vm.expectRevert(NFT111K.InvalidFreeMintConfig.selector);
+        harness.freeMints(_freeMintGroup(wallets, "1", "0", "0"), address(0x123));
+    }
+
+    function testFreeMintConfigurationRejectsInvalidLimitsAndGroups() public {
+        string[12] memory limits = [
+            "-1",
+            "1.5",
+            "5556",
+            '"1"',
+            "true",
+            "false",
+            "null",
+            "65536",
+            "[]",
+            '"0x01"',
+            '"0x0000000000000000000000000000000000000001"',
+            '"0x0000000000000000000000000000000000000000000000000000000000000001"'
+        ];
+        for (uint256 i; i < limits.length; ++i) {
+            vm.expectRevert();
+            harness.freeMints(_freeMintGroup("", limits[i], "0", "0"), address(0x123));
+        }
+        vm.expectRevert();
+        harness.freeMints(_freeMintGroup("", "0", "506", "0"), address(0x123));
+        vm.expectRevert();
+        harness.freeMints(_freeMintGroup("", "0", "0", "19"), address(0x123));
+        vm.expectRevert();
+        harness.freeMints(
+            '{"groups":[{"name":"A","crates":0,"warehouses":0,"monuments":0,"wallets":[],"extra":1}]}', address(0x123)
+        );
+        vm.expectRevert();
+        harness.freeMints(
+            '{"groups":[{"name":"","crates":0,"warehouses":0,"monuments":0,"wallets":[]}]}', address(0x123)
+        );
+        vm.expectRevert();
+        harness.freeMints(
+            '{"groups":[{"name":"A","crates":0,"warehouses":0,"monuments":0,"wallets":[]},{"name":"A","crates":0,"warehouses":0,"monuments":0,"wallets":[]}]}',
+            address(0x123)
+        );
+    }
+
+    function testFreeMintConfigurationRejectsInvalidAddressesAndDuplicateMembership() public {
+        string memory buyer = string.concat('"', Strings.toHexString(BUYER), '"');
+        vm.expectRevert(NFT111K.InvalidAddress.selector);
+        harness.freeMints(_freeMintGroup(buyer, "1", "0", "0"), BUYER);
+        vm.expectRevert(NFT111K.InvalidAddress.selector);
+        harness.freeMints(_freeMintGroup('"0x0000000000000000000000000000000000000000"', "1", "0", "0"), address(0x123));
+        vm.expectRevert();
+        harness.freeMints(_freeMintGroup('"0x1234"', "1", "0", "0"), address(0x123));
+        vm.expectRevert(NFT111K.InvalidFreeMintConfig.selector);
+        harness.freeMints(_freeMintGroup(string.concat(buyer, ",", buyer), "1", "0", "0"), address(0x123));
+        vm.expectRevert(NFT111K.InvalidFreeMintConfig.selector);
+        harness.freeMints(
+            '{"groups":[{"name":"A","crates":1,"warehouses":0,"monuments":0,"wallets":["0x000000000000000000000000000000000000A110"]},{"name":"B","crates":2,"warehouses":0,"monuments":0,"wallets":["0x000000000000000000000000000000000000a110"]}]}',
+            address(0x123)
+        );
+    }
+
+    function testFreeMintConfigurationRequiresDecimalIntegerLiterals() public {
+        vm.expectRevert();
+        harness.freeMints(_freeMintGroup("", "1.0", "0", "0"), address(0x123));
+        vm.expectRevert();
+        harness.freeMints(_freeMintGroup("", "1e2", "0", "0"), address(0x123));
+    }
+
+    function testConfiguredFreeMintsDeployAtomicallyWithDistinctOwner() public {
+        DeploymentVm env = DeploymentVm(address(vm));
+        env.setEnv("ETHEREUM_111K_DEPLOYER_KEY", Strings.toString(DEPLOYER_KEY));
+        env.setEnv("ETHEREUM_111K_OWNER", Strings.toHexString(address(this)));
+        env.setEnv("ETHEREUM_111K_QUOTE_SIGNER", Strings.toHexString(SIGNER));
+        env.setEnv("ETHEREUM_111K_DISCOUNT_ROOT", Strings.toHexString(uint256(DISCOUNT_ROOT), 32));
+        env.setEnv("ETHEREUM_111K_METADATA_BASE_URI", "https://cdn.mons.shop/111k/free-mints-test/");
+        env.setEnv("ETHEREUM_111K_FREE_MINT_CONFIG", "fixtures/free-mints.json");
+        vm.chainId(1);
+        address deployer = vm.addr(DEPLOYER_KEY);
+        uint64 nonce = vm.getNonce(deployer);
+        NFT111K token = harness.run();
+        assertEq(address(token), vm.computeCreateAddress(deployer, nonce));
+        assertEq(vm.getNonce(deployer), nonce + 1);
+        assertEq(token.owner(), address(this));
+        assertTrue(deployer != token.owner());
+        _assertZeroSupply(token);
+        NFT111K.FreeMintAllocation[] memory allocations =
+            harness.freeMints(vm.readFile("fixtures/free-mints.json"), address(token));
+        for (uint256 i; i < allocations.length; ++i) {
+            NFT111K.FreeMintAllocation memory allocation = allocations[i];
+            (
+                uint16 crates,
+                uint16 warehouses,
+                uint16 monuments,
+                uint16 cratesUsed,
+                uint16 warehousesUsed,
+                uint16 monumentsUsed
+            ) = token.freeMintAllowances(allocation.wallet);
+            assertEq(crates, allocation.crateLimit);
+            assertEq(warehouses, allocation.warehouseLimit);
+            assertEq(monuments, allocation.monumentLimit);
+            assertEq(cratesUsed + warehousesUsed + monumentsUsed, 0);
+        }
+        _assertClosedUntilOwnerOpens(token);
+        vm.prank(BUYER);
+        token.mintFree(NFT111K.ItemKind.Crate, 15);
+        assertEq(token.allocatedCrates(), 15);
+        assertEq(token.totalMintReceived(), 0);
+    }
+
+    function _freeMintGroup(
+        string memory wallets,
+        string memory crates,
+        string memory warehouses,
+        string memory monuments
+    ) private pure returns (string memory) {
+        return string.concat(
+            '{"groups":[{"name":"A","crates":',
+            crates,
+            ',"warehouses":',
+            warehouses,
+            ',"monuments":',
+            monuments,
+            ',"wallets":[',
+            wallets,
+            "]}]}"
+        );
     }
 
     function testRequiresDedicatedMetadataNamespace() public view {
@@ -139,6 +344,12 @@ contract NFT111KDeploymentTest is TestSupport {
         token.mintWarehouses{value: 0.0011 ether}(1);
         vm.expectRevert(NFT111K.SaleInactive.selector);
         token.mintMonuments{value: 0.0088 ether}(1);
+        vm.expectRevert(NFT111K.SaleInactive.selector);
+        token.mintFree(NFT111K.ItemKind.Crate, 1);
+        vm.expectRevert(NFT111K.SaleInactive.selector);
+        token.mintFree(NFT111K.ItemKind.Warehouse, 1);
+        vm.expectRevert(NFT111K.SaleInactive.selector);
+        token.mintFree(NFT111K.ItemKind.Monument, 1);
         DeploymentVm(address(vm)).expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", BUYER));
         token.setSaleActive(true);
         vm.stopPrank();

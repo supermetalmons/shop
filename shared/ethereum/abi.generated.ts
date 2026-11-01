@@ -36,6 +36,33 @@ export const nft111KAbi = [
         "name": "mintSharesBps_",
         "type": "uint256[]",
         "internalType": "uint256[]"
+      },
+      {
+        "name": "freeMintAllocations_",
+        "type": "tuple[]",
+        "internalType": "struct NFT111K.FreeMintAllocation[]",
+        "components": [
+          {
+            "name": "wallet",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "crateLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "warehouseLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "monumentLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          }
+        ]
       }
     ],
     "stateMutability": "nonpayable"
@@ -566,6 +593,50 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "freeMintAllowances",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "crateLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "warehouseLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "monumentLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "cratesUsed",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "warehousesUsed",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "monumentsUsed",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getApproved",
     "inputs": [
       {
@@ -702,6 +773,24 @@ export const nft111KAbi = [
     ],
     "outputs": [],
     "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "mintFree",
+    "inputs": [
+      {
+        "name": "kind",
+        "type": "uint8",
+        "internalType": "enum NFT111K.ItemKind"
+      },
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -1226,6 +1315,34 @@ export const nft111KAbi = [
         "name": "allowance",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setFreeMintAllowances",
+    "inputs": [
+      {
+        "name": "wallets",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "crateLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "warehouseLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "monumentLimit",
+        "type": "uint16",
+        "internalType": "uint16"
       }
     ],
     "outputs": [],
@@ -1992,6 +2109,62 @@ export const nft111KAbi = [
   },
   {
     "type": "event",
+    "name": "FreeMintAllowanceUpdated",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "crateLimit",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "warehouseLimit",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "monumentLimit",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FreeMintClaimed",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "kind",
+        "type": "uint8",
+        "indexed": true,
+        "internalType": "enum NFT111K.ItemKind"
+      },
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "MintProceedsReleaseFailed",
     "inputs": [
       {
@@ -2354,6 +2527,11 @@ export const nft111KAbi = [
   },
   {
     "type": "error",
+    "name": "FreeMintAllowanceExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InsufficientMintPayoutGas",
     "inputs": []
   },
@@ -2380,6 +2558,11 @@ export const nft111KAbi = [
   {
     "type": "error",
     "name": "InvalidDiscountProof",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidFreeMintConfig",
     "inputs": []
   },
   {

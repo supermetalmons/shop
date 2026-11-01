@@ -39,6 +39,8 @@ contract NFT111KInvariantHandler is TestSupport {
     mapping(uint256 => uint256) private firstCrates;
     mapping(uint256 => uint256) private monumentFirstCrates;
     mapping(address => uint256) private discountedPurchases;
+    mapping(address => uint256[3]) private freeLimits;
+    mapping(address => uint256[3]) private freeUsed;
     uint256[] private touched;
     DeliveryAttempt[] private deliveryAttempts;
     ClaimAttempt[] private claimAttempts;
@@ -65,7 +67,8 @@ contract NFT111KInvariantHandler is TestSupport {
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             _proceedsRecipients(),
-            _proceedsSharesBps()
+            _proceedsSharesBps(),
+            new NFT111K.FreeMintAllocation[](0)
         );
         token.setSaleActive(true);
         bytes32 firstLeaf = _discountLeaf(actors[0]);
@@ -98,6 +101,11 @@ contract NFT111KInvariantHandler is TestSupport {
         _unboxMonument(117172);
         _purchaseMonument(actors[1]);
         _deliver(117173);
+        for (uint256 i; i < actors.length; ++i) {
+            _setFreeLimits(actors[i], [uint256(30), 3, 2]);
+        }
+        _mintFree(actors[0], 0, 2);
+        _mintFree(actors[1], 1, 1);
     }
 
     function purchaseCrates(uint256 actorSeed, uint256 quantitySeed) external {
@@ -142,6 +150,32 @@ contract NFT111KInvariantHandler is TestSupport {
         for (uint256 i; i < quantity; ++i) {
             _issue(111111 + first + i, 2, first + i, wallet);
         }
+    }
+
+    function mintFree(uint256 actorSeed, uint256 kindSeed, uint256 quantitySeed) external {
+        address wallet = actors[actorSeed % actors.length];
+        uint256 index = kindSeed % 3;
+        uint256 limit = freeLimits[wallet][index];
+        uint256 used = freeUsed[wallet][index];
+        if (used >= limit) return;
+        uint256 remaining = limit - used;
+        uint256 units = index == 0 ? 1 : index == 1 ? 11 : 111;
+        uint256 available = (MODELED_CRATE_LIMIT - allocations) / units;
+        if (remaining > available) remaining = available;
+        if (index == 2 && remaining > 18 - monumentCount) remaining = 18 - monumentCount;
+        if (remaining > 15) remaining = 15;
+        if (remaining == 0) return;
+        _mintFree(wallet, index, quantitySeed % remaining + 1);
+    }
+
+    function configureFreeMints(uint256 actorSeed, uint256 crateSeed, uint256 warehouseSeed, uint256 monumentSeed)
+        external
+    {
+        _setFreeLimits(actors[actorSeed % actors.length], [crateSeed % 51, warehouseSeed % 6, monumentSeed % 3]);
+    }
+
+    function revokeFreeMints(uint256 actorSeed) external {
+        _setFreeLimits(actors[actorSeed % actors.length], [uint256(0), 0, 0]);
     }
 
     function unboxWarehouse(uint256 seed) external {
@@ -359,6 +393,7 @@ contract NFT111KInvariantHandler is TestSupport {
             assertEq(token.balanceOf(actors[i]), balances[i]);
             assertEq(token.discountUsed(actors[i]), discountedPurchases[actors[i]]);
             assertTrue(discountedPurchases[actors[i]] <= 3);
+            _assertFreeAllowance(actors[i]);
             liveTotal += balances[i];
         }
         assertEq(token.totalSupply(), liveTotal);
@@ -380,6 +415,55 @@ contract NFT111KInvariantHandler is TestSupport {
         }
         assertTrue(consumedOrders.length >= 3);
         assertTrue(consumedClaims.length >= 1);
+    }
+
+    function _assertFreeAllowance(address wallet) private view {
+        (
+            uint16 crates,
+            uint16 warehouses,
+            uint16 monuments,
+            uint16 cratesUsed,
+            uint16 warehousesUsed,
+            uint16 monumentsUsed
+        ) = token.freeMintAllowances(wallet);
+        assertEq(crates, freeLimits[wallet][0]);
+        assertEq(warehouses, freeLimits[wallet][1]);
+        assertEq(monuments, freeLimits[wallet][2]);
+        assertEq(cratesUsed, freeUsed[wallet][0]);
+        assertEq(warehousesUsed, freeUsed[wallet][1]);
+        assertEq(monumentsUsed, freeUsed[wallet][2]);
+    }
+
+    function _setFreeLimits(address wallet, uint256[3] memory limits) private {
+        address[] memory wallets = new address[](1);
+        wallets[0] = wallet;
+        token.setFreeMintAllowances(wallets, uint16(limits[0]), uint16(limits[1]), uint16(limits[2]));
+        freeLimits[wallet] = limits;
+    }
+
+    function _mintFree(address wallet, uint256 index, uint256 quantity) private {
+        NFT111K.ItemKind kind =
+            index == 0 ? NFT111K.ItemKind.Crate : index == 1 ? NFT111K.ItemKind.Warehouse : NFT111K.ItemKind.Monument;
+        vm.prank(wallet);
+        token.mintFree(kind, quantity);
+        freeUsed[wallet][index] += quantity;
+        for (uint256 i; i < quantity; ++i) {
+            uint256 first = allocations + 1;
+            if (index == 0) {
+                ++allocations;
+                _issue(111111 + first, 2, first, wallet);
+            } else if (index == 1) {
+                uint256 number = ++warehouseCount;
+                allocations += 11;
+                firstCrates[number] = first;
+                _issue(116666 + number, 3, number, wallet);
+            } else {
+                uint256 number = ++monumentCount;
+                allocations += 111;
+                monumentFirstCrates[number] = first;
+                _issue(117171 + number, 6, number, wallet);
+            }
+        }
     }
 
     function _purchaseCrates(address wallet, uint256 quantity) private {
@@ -637,7 +721,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](22);
+        bytes4[] memory selectors = new bytes4[](25);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -660,6 +744,9 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[19] = handler.unboxMonument.selector;
         selectors[20] = handler.releaseAllMint.selector;
         selectors[21] = handler.deliverMonument.selector;
+        selectors[22] = handler.mintFree.selector;
+        selectors[23] = handler.configureFreeMints.selector;
+        selectors[24] = handler.revokeFreeMints.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

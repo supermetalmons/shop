@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { decodeReturn, encodeCall } from '../../shared/ethereum/abi.ts';
+import { parseFreeMintConfig } from '../../onchain/ethereum/scripts/free-mint-config.mjs';
 
 test('local deployment rejects current-address payees and deploys one collection at the current nonce', { timeout: 90_000 }, async () => {
   const root = resolve(import.meta.dirname, '../..');
@@ -16,6 +17,8 @@ test('local deployment rejects current-address payees and deploys one collection
   const project = join(directory, 'onchain/ethereum');
   mkdirSync(project, { recursive: true });
   for (const path of ['onchain/ethereum/scripts/deploy-local.mjs', 'onchain/ethereum/scripts/proceeds-config.mjs',
+    'onchain/ethereum/scripts/free-mint-config.mjs', 'onchain/ethereum/config/free-mints.json',
+    'onchain/ethereum/fixtures/free-mints.json',
     'onchain/ethereum/foundry.toml', 'onchain/ethereum/fixtures/eip712.json',
     'onchain/ethereum/config/proceeds.json', 'src/ethereum/discounts/111k.json']) {
     const target = join(directory, path);
@@ -54,12 +57,14 @@ test('local deployment rejects current-address payees and deploys one collection
         await delay(25);
       }
     }
-    const [deployer] = await rpc<string[]>('eth_accounts');
+    const [deployer, owner] = await rpc<string[]>('eth_accounts');
     await rpc('anvil_setNonce', [deployer, '0x5']);
     const predicted = execFileSync('cast', ['compute-address', deployer, '--nonce', '5'], { encoding: 'utf8' })
       .match(/^Computed Address: (0x[0-9a-fA-F]{40})\s*$/)?.[1];
     assert.ok(predicted);
     const proceedsPath = join(project, 'config/proceeds.json');
+    const freeMintsPath = join(project, 'config/free-mints.json');
+    const freeMints = JSON.parse(readFileSync(join(project, 'fixtures/free-mints.json'), 'utf8'));
     const proceeds = JSON.parse(readFileSync(proceedsPath, 'utf8'));
     const fixture = JSON.parse(readFileSync(join(project, 'fixtures/eip712.json'), 'utf8'));
     const discounts = JSON.parse(readFileSync(join(directory, 'src/ethereum/discounts/111k.json'), 'utf8'));
@@ -68,7 +73,7 @@ test('local deployment rejects current-address payees and deploys one collection
       cwd: project, encoding: 'utf8', timeout: 60_000,
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(FOUNDRY_|DAPP_)/.test(name) && name !== 'ETHEREUM_111K_LOCAL_METADATA_BASE_URI')),
-        ETHEREUM_111K_LOCAL_RPC_URL: rpcUrl, ETHEREUM_111K_LOCAL_OWNER: deployer,
+        ETHEREUM_111K_LOCAL_RPC_URL: rpcUrl, ETHEREUM_111K_LOCAL_OWNER: owner,
         ETHEREUM_111K_LOCAL_QUOTE_SIGNER: fixture.signer, ETHEREUM_111K_LOCAL_DISCOUNT_ROOT: discounts.root,
       },
     });
@@ -84,6 +89,19 @@ test('local deployment rejects current-address payees and deploys one collection
       assert.equal(await rpc('eth_getTransactionCount', [deployer, 'latest']), '0x5');
     }
     writeFileSync(proceedsPath, JSON.stringify(proceeds));
+    for (const invalid of [
+      { groups: [{ name: 'A', crates: 1, warehouses: 0, monuments: 0, wallets: [predicted] }] },
+      { groups: [{ ...freeMints.groups[0], wallets: Array.from({ length: 33 }, (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`) }] },
+      { groups: [{ ...freeMints.groups[0], wallets: [freeMints.groups[0].wallets[0], freeMints.groups[0].wallets[0].toLowerCase()] }] },
+    ]) {
+      writeFileSync(freeMintsPath, JSON.stringify(invalid));
+      const invalidResult = run();
+      assert.ifError(invalidResult.error);
+      assert.equal(invalidResult.status, 1);
+      assert.match(invalidResult.stderr, /free mint|Free mint/);
+      assert.equal(await rpc('eth_getTransactionCount', [deployer, 'latest']), '0x5');
+    }
+    writeFileSync(freeMintsPath, JSON.stringify(freeMints));
     const result = run();
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
@@ -92,6 +110,8 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.equal(manifest.protocolVersion, 11);
     assert.equal(manifest.contractAddress.toLowerCase(), predicted.toLowerCase());
     assert.equal(manifest.metadataBaseURI, baseURI);
+    assert.equal(manifest.owner, owner);
+    assert.deepEqual(manifest.freeMintAllocations, parseFreeMintConfig(freeMints).allocations);
     assert.deepEqual(Object.keys(manifest).filter(key => /renderer/i.test(key)), []);
     assert.equal(await rpc('eth_getTransactionCount', [deployer, 'latest']), '0x6');
     const transaction = await rpc<{ nonce: string; to: string | null }>('eth_getTransactionByHash', [manifest.collectionTransactionHash]);
@@ -103,6 +123,14 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.deepEqual(decodeReturn(['bool'], encodedSale as `0x${string}`), [false]);
     const encodedSupply = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('totalSupply()', [], []) }, 'latest']);
     assert.deepEqual(decodeReturn(['uint256'], encodedSupply as `0x${string}`), [0n]);
+    const encodedOwner = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('owner()', [], []) }, 'latest']);
+    assert.deepEqual(decodeReturn(['address'], encodedOwner), [owner.toLowerCase()]);
+    for (const allocation of manifest.freeMintAllocations) {
+      const data = encodeCall('freeMintAllowances(address)', ['address'], [allocation.wallet]);
+      const encoded = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data }, 'latest']);
+      assert.deepEqual(decodeReturn(Array.from({ length: 6 }, () => 'uint16'), encoded),
+        [BigInt(allocation.crateLimit), BigInt(allocation.warehouseLimit), BigInt(allocation.monumentLimit), 0n, 0n, 0n]);
+    }
   } finally {
     if (anvil.exitCode === null && anvil.pid) {
       const stopped = once(anvil, 'exit');

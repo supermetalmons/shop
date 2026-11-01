@@ -200,7 +200,7 @@ contract NFT111KMonumentTest is TestSupport {
         buyer.configureAttacks(_attacks());
         buyer.execute(abi.encodeCall(token.mintMonuments, (3)), 0.0264 ether);
         assertEq(buyer.callbacks(), 3);
-        assertEq(buyer.blockedCalls(), 39);
+        assertEq(buyer.blockedCalls(), 48);
         assertEq(token.monumentFirstCrate(3), 223);
     }
 
@@ -217,7 +217,7 @@ contract NFT111KMonumentTest is TestSupport {
         buyer.configureAttacks(_attacks());
         buyer.execute(abi.encodeCall(token.unboxMonument, (117172)), 0);
         assertEq(buyer.callbacks(), 111);
-        assertEq(buyer.blockedCalls(), 1443);
+        assertEq(buyer.blockedCalls(), 1776);
         assertEq(buyer.sourceTransferFailures(), 111);
         _crates(1, 111, address(buyer));
     }
@@ -283,7 +283,7 @@ contract NFT111KMonumentTest is TestSupport {
     }
 
     function _attacks() private view returns (SecurityCall[] memory calls) {
-        calls = new SecurityCall[](13);
+        calls = new SecurityCall[](16);
         calls[0] = SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         calls[1] = SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice());
         calls[2] = SecurityCall(abi.encodeCall(token.mintMonuments, (1)), token.monumentPrice());
@@ -299,6 +299,9 @@ contract NFT111KMonumentTest is TestSupport {
         calls[10] = SecurityCall(abi.encodeCall(token.releaseMint, (token.mintRecipients(0))), 0);
         calls[11] = SecurityCall(abi.encodeCall(token.releaseDelivery, ()), 0);
         calls[12] = SecurityCall(abi.encodeCall(token.releaseAllMint, ()), 0);
+        calls[13] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Crate, 1)), 0);
+        calls[14] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Warehouse, 1)), 0);
+        calls[15] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Monument, 1)), 0);
     }
 
     function _receiver() private returns (SecurityReceiver buyer) {

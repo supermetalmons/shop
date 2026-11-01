@@ -48,7 +48,7 @@ if (baselineReference) {
   assert.deepEqual(Object.keys(baselineReference.gas), expectedNames, 'Compiler baseline benchmark names changed');
 }
 const temporaryRoot = mkdtempSync(join(tmpdir(), '111k-compiler-'));
-const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim|release)/.test(name));
+const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim|release|setFreeMintAllowances)/.test(name));
 const progress = message => process.stderr.write(message + '\n');
 const save = report => writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
 const sourceHashes = directory => Object.fromEntries(readdirSync(join(directory, 'src'))
@@ -125,7 +125,8 @@ contract ${harnessName} is NFT111KGasTest {
         returns (NFT111K)
     {
         return NFT111K(_deployCandidate("NFT111K", abi.encode(
-            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), "${metadataBaseURI}", bytes32(0), recipients, shares
+            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), "${metadataBaseURI}", bytes32(0), recipients, shares,
+            new NFT111K.FreeMintAllocation[](0)
         )));
     }
 
@@ -169,18 +170,21 @@ function measurements(directory, harnessDirectory) {
   return Object.fromEntries(Object.entries(values).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-function collectionArguments(owner, recipientCount = 4) {
+function collectionArguments(owner, recipientCount = 4, freeMintRecipientCount = 0, baseURI = metadataBaseURI) {
   const recipients = Array.from({ length: recipientCount }, (_, index) =>
     `0x${(0xA00001 + index).toString(16).padStart(40, '0')}`);
   const shares = recipientCount === 4 ? [5000, 2500, 1500, 1000] : Array.from({ length: recipientCount },
     (_, index) => Math.floor(10_000 / recipientCount) + (index < 10_000 % recipientCount ? 1 : 0));
-  return Buffer.from(encode(['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]'],
+  const freeMints = Array.from({ length: freeMintRecipientCount }, (_, index) =>
+    [`0x${(0xF00001 + index).toString(16).padStart(40, '0')}`, 5555, 505, 18]);
+  return Buffer.from(encode(['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]',
+    '(address,uint16,uint16,uint16)[]'],
     [owner, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', '0x000000000000000000000000000000000000beef',
-      metadataBaseURI, `0x${'0'.repeat(64)}`, recipients, shares])).toString('hex');
+      baseURI, `0x${'0'.repeat(64)}`, recipients, shares, freeMints])).toString('hex');
 }
 
 const maximumCollectionArgumentBytes = collectionArguments(
-  '0x0000000000000000000000000000000000000001', 32).length / 2;
+  '0x0000000000000000000000000000000000000001', 32, 32, `${metadataBaseURI}${'a'.repeat(64)}/`).length / 2;
 
 async function deploymentMeasurements(variants) {
   const server = createServer();

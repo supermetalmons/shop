@@ -37,19 +37,20 @@ test('compiler benchmarks regenerate and reproduce supported recipient configura
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const report = JSON.parse(read(join(directory, output)));
       assert.equal(report.status, 'complete');
-      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 2432);
+      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 6656);
       assert.equal(report.writeBenchmarkCount,
-        Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release)/.test(name)).length);
+        Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release|setFreeMintAllowances)/.test(name)).length);
       for (const variant of report.variants) {
         assert.equal(variant.status, 'measured');
         for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'mintCrates1ThirtyTwoRecipients',
           'releaseMint', 'releaseMintEightRecipients', 'releaseAllMintThirtyTwoRecipients',
-          'releaseAllMintThirtyTwoGasBurningRecipients']) {
+          'releaseAllMintThirtyTwoGasBurningRecipients', 'mintFreeCrates1', 'mintFreeWarehouses1',
+          'mintFreeMonuments1', 'setFreeMintAllowancesThirtyTwo']) {
           assert.ok(variant.gas[name] > 0, `${variant.label}: missing ${name}`);
         }
         assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);
         assert.deepEqual(Object.keys(variant.deploymentTransactions), ['collection']);
-        assert.equal(variant.deploymentTransactions.collection.constructorArgumentBytes, 640);
+        assert.equal(variant.deploymentTransactions.collection.constructorArgumentBytes, 704);
         assert.ok(variant.deploymentTransactions.collection.gasUsed > 0);
         assert.equal(variant.comparison.withinDeploymentSizeLimits, true);
       }

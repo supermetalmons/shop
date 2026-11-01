@@ -22,7 +22,8 @@ contract NFT111KBatchTest is TestSupport {
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             _proceedsRecipients(),
-            _proceedsSharesBps()
+            _proceedsSharesBps(),
+            new NFT111K.FreeMintAllocation[](0)
         );
         token.setSaleActive(true);
     }

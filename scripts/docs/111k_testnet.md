@@ -85,7 +85,7 @@ The draft allowlist contains the 317 holders of Ethereum mainnet collection `0x3
 
 The initial allowance is one discounted crate per wallet, priced at 0.00005 ETH. The owner can change the total allowance to 1–10 using `setDiscountConfig(root, allowance)` without resetting usage. Setting the root to zero disables discounts. `setPrices(cratePrice, warehousePrice, discountCratePrice, monumentPrice)` changes the four fixed prices together and rejects a discounted price above the public crate price. Changes to public prices do not automatically recalculate the discounted price or the monument price.
 
-Only successful `mintCratesDiscounted(quantity, proof)` purchases consume allowance. Public crate purchases, warehouse and monument purchases, transfers, and unboxing do not change it. Warehouses and monuments always use public pricing. The existing discounted mint button appears when the connected wallet is listed and its entire selected crate quantity fits the remaining allowance. Selecting more uses public pricing for the entire purchase, matching the Solana drops.
+Only successful `mintCratesDiscounted(quantity, proof)` purchases consume discount allowance. Public purchases, free mints, transfers, and unboxing do not change it. Warehouses and monuments have no discounted-price path; future deployments can grant their separate free allowances. The existing discounted mint button appears when the connected wallet is listed and its entire selected crate quantity fits the remaining allowance. Selecting more uses public pricing for the entire purchase, matching the Solana drops.
 
 The page loads the static Ethereum proof dataset once and reads the root, prices, allowance, and wallet usage through `GET /ethereum/111k/stats?owner=ADDRESS`, backed by one `stats(address)` contract call. It does not query the source collection while browsing. Connection, proof loading, and failed reads cannot silently submit a public-price transaction; mint terms are checked again before wallet submission. A root update requires publishing its matching proof dataset.
 
@@ -99,6 +99,23 @@ npm --prefix onchain/ethereum run discounts:check
 `npm --prefix onchain/ethereum run discounts:snapshot` rereads the same pinned mainnet block, with `ETHEREUM_DISCOUNT_SNAPSHOT_RPC_URL` available to select an RPC provider. It validates the complete ownership scan before writing. It does not advance the snapshot automatically.
 
 Local deployment loads the committed root from `src/ethereum/discounts/111k.json`; `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT` can override it for isolated tests. The Foundry deployment script requires `ETHEREUM_111K_DISCOUNT_ROOT`. The allowance and fixed discounted price start at their defaults on every fresh deployment.
+
+## Free mint allowances for future deployments
+
+Edit `onchain/ethereum/config/free-mints.json` before deploying. A/B/C are configuration group names; each group's `crates`, `warehouses`, and `monuments` limits apply independently to every address in its `wallets` list. For example, set A to `100 / 1 / 0` and B to `5 / 0 / 0`. The committed templates have zero limits and empty wallet lists, so they grant nothing by default.
+
+Both deployment paths flatten the groups into at most 32 unique wallet allocations and pass them to the constructor. Owner and deployer can differ. The constructor grants allowances without minting anything; the collection still starts closed. The local manifest records `freeMintAllocations`. The public Foundry script defaults to the same file and accepts `ETHEREUM_111K_FREE_MINT_CONFIG` for another file permitted by Foundry's filesystem configuration.
+
+```sh
+npm --prefix onchain/ethereum run free-mints:check
+npm --prefix onchain/ethereum run free-mints:calldata -- COLLECTION_ADDRESS
+```
+
+The second command prepares unsigned owner calls for later updates and does not broadcast them. Execute the generated calls as the collection owner. Updates replace total limits while preserving lifetime usage; omitted wallets are unchanged, and zero limits explicitly revoke remaining entitlement. Limits are checked per wallet, but their sum is not reserved against inventory. The 32-wallet bound applies to one configuration or update batch, not all wallets ever configured.
+
+Call `mintFree(uint8,uint256)` with kind `2` for crates, `3` for warehouses, or `6` for monuments, and quantity 1–15. It requires the existing `saleActive` switch and zero ETH. Free mints share paid-mint supply; warehouses consume 11 crate allocations and monuments consume 111. Usage is independent of discounts and is not restored by transfers, unpacking, or configuration changes. `freeMintAllowances(address)` exposes the three limits followed by the three used counts.
+
+The shop checkout is unchanged and does not submit free claims. Existing deployments retain their original bytecode. See the [contract documentation](../../onchain/ethereum/README.md#per-wallet-free-mints) for configuration examples, validation, events, and accounting details.
 
 ## Sepolia configuration
 

@@ -88,7 +88,9 @@ async function call(to: string, signature: string, types: string[] = [], args: u
 async function deploy(name: string, from: string, types: string[] = [], args: unknown[] = []): Promise<Receipt> {
   const artifact = JSON.parse(await readFile(resolve(project, `out/${name}.sol/${name}.json`), 'utf8')) as { bytecode: { object: string }; deployedBytecode: { object: string } };
   assert.ok(artifact.deployedBytecode.object.replace(/^0x/, '').length / 2 <= 24_576, 'Contract exceeds EIP-170 size');
-  const receipt = await send(from, `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(types, args).slice(2)}`);
+  const creationData = `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(types, args).slice(2)}`;
+  assert.ok((creationData.length - 2) / 2 <= 49_152, 'Contract exceeds EIP-3860 initcode size');
+  const receipt = await send(from, creationData);
   if (name === 'NFT111K') {
     assert.ok(receipt.contractAddress);
     assert.equal(typeof args[0], 'string');
@@ -156,10 +158,11 @@ try {
     root: string; proofs: Record<string, string[]>;
   };
   const proceeds = parseProceedsConfig(JSON.parse(await readFile(resolve(project, 'config/proceeds.json'), 'utf8')));
-  const constructorTypes = ['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]'];
+  const constructorTypes = ['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]',
+    '(address,uint16,uint16,uint16)[]'];
   const deployment = await deploy('NFT111K', admin, constructorTypes,
     [admin, signer, proceeds.deliveryPaymentReceiver, metadataBaseURI, discounts.root,
-      proceeds.mintRecipients, proceeds.mintSharesBps]);
+      proceeds.mintRecipients, proceeds.mintSharesBps, []]);
   const contract = deployment.contractAddress!;
   assert.deepEqual(await call(contract, 'baseURI()', [], [], ['string']), [metadataBaseURI]);
   const reservedAddresses = new Set([
@@ -674,8 +677,10 @@ try {
 
   const maxRecipients = Array.from({ length: 32 }, () => reserveAddress());
   const maxShares = Array.from({ length: 32 }, (_, index) => index < 16 ? 313 : 312);
+  const freeMintWallets = [buyer, secondBuyer, ...Array.from({ length: 30 }, () => reserveAddress())];
+  const freeMintAllocations = freeMintWallets.map(wallet => [wallet, 5555, 505, 18]);
   const maxSplit = await deploy('NFT111K', admin, constructorTypes,
-    [admin, signer, replacementDeliveryReceiver, metadataBaseURI, discounts.root, maxRecipients, maxShares]);
+    [admin, signer, replacementDeliveryReceiver, metadataBaseURI, discounts.root, maxRecipients, maxShares, freeMintAllocations]);
   const maxContract = maxSplit.contractAddress!;
   gas.deploy32Recipients = BigInt(maxSplit.gasUsed).toString();
   assert.deepEqual(await call(maxContract, 'mintRecipientCount()', [], [], ['uint256']), [32n]);
@@ -694,6 +699,25 @@ try {
   assert.deepEqual(await call(maxContract, 'totalMintReleased()', [], [], ['uint256']), [maxMintRevenue]);
   assert.equal(await balance(maxContract), 0n);
 
+  const freeMintState = (wallet: string) => call(maxContract, ETHEREUM_FUNCTIONS.freeMintAllowances,
+    ['address'], [wallet], Array(6).fill('uint16'));
+  for (const wallet of freeMintWallets) assert.deepEqual(await freeMintState(wallet), [5555n, 505n, 18n, 0n, 0n, 0n]);
+  for (const [kind, name] of [[2, 'Crate'], [3, 'Warehouse'], [6, 'Monument']] as const) {
+    gas[`mintFree${name}`] = BigInt((await send(buyer,
+      encodeCall(ETHEREUM_FUNCTIONS.mintFree, ['uint8', 'uint256'], [kind, 1]), maxContract)).gasUsed).toString();
+  }
+  assert.deepEqual(await freeMintState(buyer), [5555n, 505n, 18n, 1n, 1n, 1n]);
+  assert.deepEqual(await call(maxContract, 'allocatedCrates()', [], [], ['uint256']), [124n]);
+  assert.deepEqual(await call(maxContract, 'totalMintReceived()', [], [], ['uint256']), [maxMintRevenue]);
+  assert.deepEqual(await call(maxContract, 'discountUsed(address)', ['address'], [buyer], ['uint256']), [0n]);
+  await send(admin, encodeCall(ETHEREUM_FUNCTIONS.setFreeMintAllowances,
+    ['address[]', 'uint16', 'uint16', 'uint16'], [[buyer], 2, 1, 1]), maxContract);
+  await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintFree, ['uint8', 'uint256'], [2, 1]), maxContract);
+  await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintFree, ['uint8', 'uint256'], [2, 1]), maxContract));
+  assert.deepEqual(await freeMintState(buyer), [2n, 1n, 1n, 2n, 1n, 1n]);
+  assert.deepEqual(await call(maxContract, 'allocatedCrates()', [], [], ['uint256']), [125n]);
+  assert.equal(await balance(maxContract), 0n);
+
   const mixedCaseRecipients = [checksumEthereumAddress(secondBuyer), `0x${'9'.repeat(40)}`];
   assert.notEqual(mixedCaseRecipients[0], secondBuyer.toLowerCase());
   const mixedCaseProceeds = parseProceedsConfig({
@@ -701,7 +725,7 @@ try {
   });
   const mixedCaseDeployment = await deploy('NFT111K', admin, constructorTypes,
     [admin, signer, mixedCaseProceeds.deliveryPaymentReceiver, metadataBaseURI, discounts.root,
-      mixedCaseProceeds.mintRecipients, mixedCaseProceeds.mintSharesBps]);
+      mixedCaseProceeds.mintRecipients, mixedCaseProceeds.mintSharesBps, []]);
   const mixedCaseContract = mixedCaseDeployment.contractAddress!;
   await send(buyer, encodeCall('mintCrates(uint256)', ['uint256'], [1]), mixedCaseContract, 100000000000000n);
   for (const [index, recipient] of mixedCaseProceeds.mintRecipients.entries()) {
@@ -716,7 +740,7 @@ try {
 
   const monumentDeployment = await deploy('NFT111K', admin, constructorTypes,
     [admin, signer, proceeds.deliveryPaymentReceiver, metadataBaseURI, discounts.root,
-      proceeds.mintRecipients, proceeds.mintSharesBps]);
+      proceeds.mintRecipients, proceeds.mintSharesBps, []]);
   const monumentContract = monumentDeployment.contractAddress!;
   const monumentDatabase = new DatabaseSync(':memory:');
   try {
@@ -874,7 +898,7 @@ try {
       metadataChecks.push({ uri: expectedUri, kind, displayId: preview.id, apiMatchesSource: true });
     }
   } finally { previewDatabase.close(); }
-  const report = { chainId: 31337, contract, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', '32-recipient deployment, mint, individual and batch payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details'] };
+  const report = { chainId: 31337, contract, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', '32-recipient deployment, mint, individual and batch payouts', '32 initial free allowances, three item kinds, cumulative owner edits and zero proceeds', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details'] };
   const reveal = await runEthereumRevealE2E({ root, rpcUrl, contractAddress: monumentContract.toLowerCase(),
     deploymentBlock: Number(BigInt(monumentDeployment.blockNumber)), metadataBaseUri: metadataBaseURI, buyer: secondBuyer, rpc });
   Object.assign(report, { reveal, monumentContract, metadataSource: metadataDirectory ? 'generated-files' : 'live-cdn',

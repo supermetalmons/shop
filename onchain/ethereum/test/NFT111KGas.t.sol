@@ -207,7 +207,8 @@ contract NFT111KGasTest is TestSupport {
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             recipients,
-            shares
+            shares,
+            new NFT111K.FreeMintAllocation[](0)
         );
     }
 
@@ -239,6 +240,93 @@ contract NFT111KGasTest is TestSupport {
         token.mintCratesDiscounted{value: 0.00005 ether}(1, proof);
         vm.snapshotGasLastCall("mintCratesDiscounted1After1");
         assertEq(token.discountUsed(wallet), 2);
+    }
+
+    function testGasMintFreeCrates1() public {
+        _configureFreeWallet(alice);
+        _mintFree(alice, NFT111K.ItemKind.Crate, 1, "mintFreeCrates1");
+        _assertFreeUsage(alice, 1, 0, 0);
+    }
+
+    function testGasMintFreeCrates15() public {
+        _configureFreeWallet(alice);
+        _mintFree(alice, NFT111K.ItemKind.Crate, 15, "mintFreeCrates15");
+        _assertFreeUsage(alice, 15, 0, 0);
+    }
+
+    function testGasMintFreeCrates15Receiver() public {
+        _configureFreeWallet(receiver);
+        _mintFree(receiver, NFT111K.ItemKind.Crate, 15, "mintFreeCrates15Receiver");
+        _assertFreeUsage(receiver, 15, 0, 0);
+    }
+
+    function testGasMintFreeCrates1After1() public {
+        _configureFreeWallet(alice);
+        vm.prank(alice);
+        token.mintFree(NFT111K.ItemKind.Crate, 1);
+        _mintFree(alice, NFT111K.ItemKind.Crate, 1, "mintFreeCrates1After1");
+        _assertFreeUsage(alice, 2, 0, 0);
+    }
+
+    function testGasMintFreeWarehouses1() public {
+        _configureFreeWallet(alice);
+        _mintFree(alice, NFT111K.ItemKind.Warehouse, 1, "mintFreeWarehouses1");
+        _assertFreeUsage(alice, 0, 1, 0);
+    }
+
+    function testGasMintFreeWarehouses1After1() public {
+        _configureFreeWallet(alice);
+        vm.prank(alice);
+        token.mintFree(NFT111K.ItemKind.Warehouse, 1);
+        _mintFree(alice, NFT111K.ItemKind.Warehouse, 1, "mintFreeWarehouses1After1");
+        _assertFreeUsage(alice, 0, 2, 0);
+    }
+
+    function testGasMintFreeMonuments1() public {
+        _configureFreeWallet(alice);
+        _mintFree(alice, NFT111K.ItemKind.Monument, 1, "mintFreeMonuments1");
+        _assertFreeUsage(alice, 0, 0, 1);
+    }
+
+    function testGasMintFreeMonuments1After1() public {
+        _configureFreeWallet(alice);
+        vm.prank(alice);
+        token.mintFree(NFT111K.ItemKind.Monument, 1);
+        _mintFree(alice, NFT111K.ItemKind.Monument, 1, "mintFreeMonuments1After1");
+        _assertFreeUsage(alice, 0, 0, 2);
+    }
+
+    function testGasSetFreeMintAllowancesThirtyTwo() public {
+        address[] memory wallets = _freeWallets();
+        token.setFreeMintAllowances(wallets, 100, 1, 0);
+        vm.snapshotGasLastCall("setFreeMintAllowancesThirtyTwo");
+        for (uint256 i; i < wallets.length; ++i) {
+            (uint16 crates, uint16 warehouses, uint16 monuments,,,) = token.freeMintAllowances(wallets[i]);
+            assertEq(crates, 100);
+            assertEq(warehouses, 1);
+            assertEq(monuments, 0);
+            _assertFreeUsage(wallets[i], 0, 0, 0);
+        }
+    }
+
+    function testGasSetFreeMintAllowancesThirtyTwoAfterUse() public {
+        address[] memory wallets = _freeWallets();
+        token.setFreeMintAllowances(wallets, 100, 1, 1);
+        vm.startPrank(alice);
+        token.mintFree(NFT111K.ItemKind.Crate, 1);
+        token.mintFree(NFT111K.ItemKind.Warehouse, 1);
+        token.mintFree(NFT111K.ItemKind.Monument, 1);
+        vm.stopPrank();
+        token.setFreeMintAllowances(wallets, 120, 2, 2);
+        vm.snapshotGasLastCall("setFreeMintAllowancesThirtyTwoAfterUse");
+        for (uint256 i; i < wallets.length; ++i) {
+            (uint16 crates, uint16 warehouses, uint16 monuments,,,) = token.freeMintAllowances(wallets[i]);
+            assertEq(crates, 120);
+            assertEq(warehouses, 2);
+            assertEq(monuments, 2);
+            uint256 used = i == 0 ? 1 : 0;
+            _assertFreeUsage(wallets[i], used, used, used);
+        }
     }
 
     function testGasMintCrates15() public {
@@ -804,6 +892,35 @@ contract NFT111KGasTest is TestSupport {
         vm.prank(wallet);
         token.mintCrates{value: quantity * 0.0001 ether}(quantity);
         vm.snapshotGasLastCall(name);
+    }
+
+    function _freeWallets() internal view returns (address[] memory wallets) {
+        wallets = new address[](32);
+        wallets[0] = alice;
+        for (uint256 i = 1; i < wallets.length; ++i) {
+            wallets[i] = address(uint160(0xF00001 + i));
+        }
+    }
+
+    function _configureFreeWallet(address wallet) internal {
+        address[] memory wallets = new address[](1);
+        wallets[0] = wallet;
+        token.setFreeMintAllowances(wallets, 100, 15, 18);
+    }
+
+    function _mintFree(address wallet, NFT111K.ItemKind kind, uint256 quantity, string memory name) internal {
+        vm.prank(wallet);
+        token.mintFree(kind, quantity);
+        vm.snapshotGasLastCall(name);
+    }
+
+    function _assertFreeUsage(address wallet, uint256 crates, uint256 warehouses, uint256 monuments) internal view {
+        (,,, uint16 cratesUsed, uint16 warehousesUsed, uint16 monumentsUsed) = token.freeMintAllowances(wallet);
+        assertEq(cratesUsed, crates);
+        assertEq(warehousesUsed, warehouses);
+        assertEq(monumentsUsed, monuments);
+        assertEq(token.totalMintReceived(), 0);
+        assertEq(token.discountUsed(wallet), 0);
     }
 
     function _mintMonuments(address wallet, uint256 quantity, string memory name) internal {
