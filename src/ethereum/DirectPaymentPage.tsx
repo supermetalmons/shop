@@ -68,14 +68,15 @@ export default function DirectPaymentPage() {
     <div className="drif-page">
       <ShopHeader scrollHomeToTop variant="drif" />
       <main className="drif-main">
-        <div className="drif-card-showcase">
+        <figure className="drif-card-showcase drif-card-showcase--caption">
           <img
             className="drif-static-artwork"
             src="https://wip.lil.org/111k/artwork_placeholder.png"
             alt="Artwork"
             draggable={false}
           />
-        </div>
+          <figcaption className="drif-artwork-caption">111k reserved relic</figcaption>
+        </figure>
       </main>
       <button type="button" className="drif-notify-btn" onClick={() => { void pay(); }}>
         Pay 2.3 ETH

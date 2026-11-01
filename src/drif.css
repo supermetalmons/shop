@@ -88,14 +88,28 @@ header.top--shop.top--drif .top__backdrop {
   max-height: 100%;
 }
 
+.drif-card-showcase--caption {
+  flex-direction: column;
+  gap: 16px;
+}
+
 .drif-static-artwork {
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
+  min-height: 0;
   max-height: 585px;
   object-fit: contain;
   pointer-events: none;
   user-select: none;
+}
+
+.drif-artwork-caption {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .drif-page .drif-effect-card,
