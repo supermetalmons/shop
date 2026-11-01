@@ -1,0 +1,2054 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "method": "Identical current source compiled at 200 and 500 optimizer runs with Solidity 0.8.38. The selected 500-run build is compared with the 200-run reference using one fixed 200-run harness and receiver. All measured writes, including every redemption, use the strict less-than-1-percent gate. Read-only execution costs are reported separately and do not gate release. Deployment gas comes from local Prague Anvil receipts. Temporary baseline regeneration does not modify repository snapshots or historical reports.",
+  "settings": {
+    "solc": "0.8.38",
+    "evm": "prague",
+    "viaIR": false,
+    "bytecodeHash": "none",
+    "referenceRuns": 200,
+    "candidateRuns": 500
+  },
+  "threshold": "candidateGas * 100 < referenceGas * 101",
+  "gateScope": "all measured state-changing operations",
+  "caseCount": 160,
+  "gatedCaseCount": 139,
+  "violations": [],
+  "readOnlyIncreasesOverOnePercent": [],
+  "worstPercentage": {
+    "name": "getTokenInfoAbsentSequential",
+    "reference": 3002,
+    "candidate": 3025,
+    "delta": 23,
+    "percent": 0.7661558960692871
+  },
+  "worstWritePercentage": {
+    "name": "releaseDeliveryEmpty",
+    "reference": 35619,
+    "candidate": 35694,
+    "delta": 75,
+    "percent": 0.21056177882590751
+  },
+  "worstReadPercentage": {
+    "name": "getTokenInfoAbsentSequential",
+    "reference": 3002,
+    "candidate": 3025,
+    "delta": 23,
+    "percent": 0.7661558960692871
+  },
+  "rows": [
+    {
+      "name": "allocateRelics1",
+      "reference": 94214,
+      "candidate": 94312,
+      "delta": 98,
+      "percent": 0.10401851104931327
+    },
+    {
+      "name": "allocateRelics18",
+      "reference": 94214,
+      "candidate": 94312,
+      "delta": 98,
+      "percent": 0.10401851104931327
+    },
+    {
+      "name": "allocateRelics18WithoutPayment",
+      "reference": 72016,
+      "candidate": 72114,
+      "delta": 98,
+      "percent": 0.13608087091757387
+    },
+    {
+      "name": "allocatedCrates",
+      "reference": 2439,
+      "candidate": 2439,
+      "delta": 0,
+      "percent": 0
+    },
+    {
+      "name": "claim20",
+      "reference": 602937,
+      "candidate": 601662,
+      "delta": -1275,
+      "percent": -0.2114648794152623
+    },
+    {
+      "name": "claim20Crate10",
+      "reference": 602949,
+      "candidate": 601674,
+      "delta": -1275,
+      "percent": -0.21146067080300324
+    },
+    {
+      "name": "claim20Receiver",
+      "reference": 637856,
+      "candidate": 636581,
+      "delta": -1275,
+      "percent": -0.19988837605980034
+    },
+    {
+      "name": "claim31",
+      "reference": 888808,
+      "candidate": 886851,
+      "delta": -1957,
+      "percent": -0.2201825366108316
+    },
+    {
+      "name": "claim31Receiver",
+      "reference": 942919,
+      "candidate": 940962,
+      "delta": -1957,
+      "percent": -0.20754698972021987
+    },
+    {
+      "name": "claimRelic",
+      "reference": 147728,
+      "candidate": 147735,
+      "delta": 7,
+      "percent": 0.0047384382107657315
+    },
+    {
+      "name": "claimRelicAfter1",
+      "reference": 96428,
+      "candidate": 96435,
+      "delta": 7,
+      "percent": 0.007259302277346829
+    },
+    {
+      "name": "claimRelicReceiver",
+      "reference": 149488,
+      "candidate": 149495,
+      "delta": 7,
+      "percent": 0.004682650112383602
+    },
+    {
+      "name": "deliverArtwork1",
+      "reference": 161014,
+      "candidate": 160925,
+      "delta": -89,
+      "percent": -0.05527469661023265
+    },
+    {
+      "name": "deliverArtwork1Receiver",
+      "reference": 162976,
+      "candidate": 162887,
+      "delta": -89,
+      "percent": -0.054609267622226586
+    },
+    {
+      "name": "deliverArtworks20Ascending",
+      "reference": 1239980,
+      "candidate": 1237934,
+      "delta": -2046,
+      "percent": -0.1650026613332473
+    },
+    {
+      "name": "deliverArtworks20AscendingReceiver",
+      "reference": 1275091,
+      "candidate": 1273045,
+      "delta": -2046,
+      "percent": -0.16045913585775445
+    },
+    {
+      "name": "deliverArtworks20Descending",
+      "reference": 1274294,
+      "candidate": 1272248,
+      "delta": -2046,
+      "percent": -0.1605594941198813
+    },
+    {
+      "name": "deliverArtworks20DescendingReceiver",
+      "reference": 1309441,
+      "candidate": 1307395,
+      "delta": -2046,
+      "percent": -0.15624988067427245
+    },
+    {
+      "name": "deliverArtworks20Shuffled",
+      "reference": 1244948,
+      "candidate": 1242902,
+      "delta": -2046,
+      "percent": -0.16434421357357898
+    },
+    {
+      "name": "deliverArtworks20ShuffledReceiver",
+      "reference": 1280083,
+      "candidate": 1278037,
+      "delta": -2046,
+      "percent": -0.15983338580388928
+    },
+    {
+      "name": "deliverArtworks31Ascending",
+      "reference": 1911101,
+      "candidate": 1907922,
+      "delta": -3179,
+      "percent": -0.16634390333111645
+    },
+    {
+      "name": "deliverArtworks31AscendingReceiver",
+      "reference": 1965497,
+      "candidate": 1962318,
+      "delta": -3179,
+      "percent": -0.16174026213217318
+    },
+    {
+      "name": "deliverArtworks31Descending",
+      "reference": 1997963,
+      "candidate": 1994784,
+      "delta": -3179,
+      "percent": -0.1591120556286578
+    },
+    {
+      "name": "deliverArtworks31DescendingReceiver",
+      "reference": 2052347,
+      "candidate": 2049168,
+      "delta": -3179,
+      "percent": -0.15489583389163722
+    },
+    {
+      "name": "deliverArtworks31Shuffled",
+      "reference": 1918799,
+      "candidate": 1915620,
+      "delta": -3179,
+      "percent": -0.16567655080078736
+    },
+    {
+      "name": "deliverArtworks31ShuffledReceiver",
+      "reference": 1973183,
+      "candidate": 1970004,
+      "delta": -3179,
+      "percent": -0.16111024674345967
+    },
+    {
+      "name": "deliverArtworks50",
+      "reference": 2947858,
+      "candidate": 2942722,
+      "delta": -5136,
+      "percent": -0.17422820230825228
+    },
+    {
+      "name": "deliverArtworks50Descending",
+      "reference": 3023842,
+      "candidate": 3018706,
+      "delta": -5136,
+      "percent": -0.1698501442866393
+    },
+    {
+      "name": "deliverArtworks50DescendingReceiver",
+      "reference": 3111494,
+      "candidate": 3106358,
+      "delta": -5136,
+      "percent": -0.1650653994511961
+    },
+    {
+      "name": "deliverArtworks50Receiver",
+      "reference": 3035522,
+      "candidate": 3030386,
+      "delta": -5136,
+      "percent": -0.16919659946460608
+    },
+    {
+      "name": "deliverArtworks50Shuffled",
+      "reference": 2960476,
+      "candidate": 2955340,
+      "delta": -5136,
+      "percent": -0.17348561515107705
+    },
+    {
+      "name": "deliverArtworks50ShuffledReceiver",
+      "reference": 3048128,
+      "candidate": 3042992,
+      "delta": -5136,
+      "percent": -0.16849686102420897
+    },
+    {
+      "name": "deliverCrate1",
+      "reference": 153627,
+      "candidate": 153505,
+      "delta": -122,
+      "percent": -0.07941312399513106
+    },
+    {
+      "name": "deliverCrate1Receiver",
+      "reference": 155576,
+      "candidate": 155454,
+      "delta": -122,
+      "percent": -0.07841826502802489
+    },
+    {
+      "name": "deliverCrates50",
+      "reference": 2018714,
+      "candidate": 2011928,
+      "delta": -6786,
+      "percent": -0.33615460139474934
+    },
+    {
+      "name": "deliverCrates50Descending",
+      "reference": 2018714,
+      "candidate": 2011928,
+      "delta": -6786,
+      "percent": -0.33615460139474934
+    },
+    {
+      "name": "deliverCrates50DescendingReceiver",
+      "reference": 2106327,
+      "candidate": 2099541,
+      "delta": -6786,
+      "percent": -0.32217219833387695
+    },
+    {
+      "name": "deliverCrates50Receiver",
+      "reference": 2106327,
+      "candidate": 2099541,
+      "delta": -6786,
+      "percent": -0.32217219833387695
+    },
+    {
+      "name": "deliverCrates50Shuffled",
+      "reference": 2018702,
+      "candidate": 2011916,
+      "delta": -6786,
+      "percent": -0.33615659963679634
+    },
+    {
+      "name": "deliverCrates50ShuffledReceiver",
+      "reference": 2106315,
+      "candidate": 2099529,
+      "delta": -6786,
+      "percent": -0.3221740337983635
+    },
+    {
+      "name": "deliverFragmentedArtworks50Ascending",
+      "reference": 2551308,
+      "candidate": 2546172,
+      "delta": -5136,
+      "percent": -0.20130850528434827
+    },
+    {
+      "name": "deliverFragmentedArtworks50AscendingReceiver",
+      "reference": 2638972,
+      "candidate": 2633836,
+      "delta": -5136,
+      "percent": -0.19462123887635033
+    },
+    {
+      "name": "deliverFragmentedArtworks50Descending",
+      "reference": 2557980,
+      "candidate": 2552844,
+      "delta": -5136,
+      "percent": -0.2007834306757676
+    },
+    {
+      "name": "deliverFragmentedArtworks50DescendingReceiver",
+      "reference": 2645632,
+      "candidate": 2640496,
+      "delta": -5136,
+      "percent": -0.194131307755576
+    },
+    {
+      "name": "deliverFragmentedArtworks50Shuffled",
+      "reference": 2553882,
+      "candidate": 2548746,
+      "delta": -5136,
+      "percent": -0.20110561098750843
+    },
+    {
+      "name": "deliverFragmentedArtworks50ShuffledReceiver",
+      "reference": 2641534,
+      "candidate": 2636398,
+      "delta": -5136,
+      "percent": -0.19443247749224504
+    },
+    {
+      "name": "deliverInitializedArtworks50Ascending",
+      "reference": 2008898,
+      "candidate": 2003762,
+      "delta": -5136,
+      "percent": -0.25566255728264947
+    },
+    {
+      "name": "deliverInitializedArtworks50AscendingReceiver",
+      "reference": 2096562,
+      "candidate": 2091426,
+      "delta": -5136,
+      "percent": -0.24497248352302484
+    },
+    {
+      "name": "deliverInitializedArtworks50Descending",
+      "reference": 2008910,
+      "candidate": 2003774,
+      "delta": -5136,
+      "percent": -0.2556610301108561
+    },
+    {
+      "name": "deliverInitializedArtworks50DescendingReceiver",
+      "reference": 2096562,
+      "candidate": 2091426,
+      "delta": -5136,
+      "percent": -0.24497248352302484
+    },
+    {
+      "name": "deliverInitializedArtworks50Shuffled",
+      "reference": 2008910,
+      "candidate": 2003774,
+      "delta": -5136,
+      "percent": -0.2556610301108561
+    },
+    {
+      "name": "deliverInitializedArtworks50ShuffledReceiver",
+      "reference": 2096562,
+      "candidate": 2091426,
+      "delta": -5136,
+      "percent": -0.24497248352302484
+    },
+    {
+      "name": "deliverMixed50",
+      "reference": 2475497,
+      "candidate": 2469536,
+      "delta": -5961,
+      "percent": -0.24080013023647373
+    },
+    {
+      "name": "deliverMixed50Descending",
+      "reference": 2511095,
+      "candidate": 2505134,
+      "delta": -5961,
+      "percent": -0.2373864788070543
+    },
+    {
+      "name": "deliverMixed50DescendingReceiver",
+      "reference": 2598716,
+      "candidate": 2592755,
+      "delta": -5961,
+      "percent": -0.22938251043977104
+    },
+    {
+      "name": "deliverMixed50Receiver",
+      "reference": 2563130,
+      "candidate": 2557169,
+      "delta": -5961,
+      "percent": -0.23256721274379372
+    },
+    {
+      "name": "deliverMixed50Shuffled",
+      "reference": 2481269,
+      "candidate": 2475308,
+      "delta": -5961,
+      "percent": -0.24023997398105565
+    },
+    {
+      "name": "deliverMixed50ShuffledReceiver",
+      "reference": 2568938,
+      "candidate": 2562977,
+      "delta": -5961,
+      "percent": -0.23204141166505382
+    },
+    {
+      "name": "deliverRelic1",
+      "reference": 153911,
+      "candidate": 153789,
+      "delta": -122,
+      "percent": -0.07926658913268057
+    },
+    {
+      "name": "deliverRelic1Receiver",
+      "reference": 155884,
+      "candidate": 155762,
+      "delta": -122,
+      "percent": -0.07826332401016141
+    },
+    {
+      "name": "deliverSparseArtworks50Ascending",
+      "reference": 4006965,
+      "candidate": 4001829,
+      "delta": -5136,
+      "percent": -0.1281768121258858
+    },
+    {
+      "name": "deliverSparseArtworks50AscendingReceiver",
+      "reference": 4094617,
+      "candidate": 4089481,
+      "delta": -5136,
+      "percent": -0.12543297700371
+    },
+    {
+      "name": "deliverSparseArtworks50Descending",
+      "reference": 4087155,
+      "candidate": 4082019,
+      "delta": -5136,
+      "percent": -0.12566198247925514
+    },
+    {
+      "name": "deliverSparseArtworks50DescendingReceiver",
+      "reference": 4174807,
+      "candidate": 4169671,
+      "delta": -5136,
+      "percent": -0.12302365115321498
+    },
+    {
+      "name": "deliverSparseArtworks50Shuffled",
+      "reference": 4029933,
+      "candidate": 4024797,
+      "delta": -5136,
+      "percent": -0.12744628756855264
+    },
+    {
+      "name": "deliverSparseArtworks50ShuffledReceiver",
+      "reference": 4117573,
+      "candidate": 4112437,
+      "delta": -5136,
+      "percent": -0.12473367199561489
+    },
+    {
+      "name": "deliverySingleCrateAfterRelease",
+      "reference": 119427,
+      "candidate": 119305,
+      "delta": -122,
+      "percent": -0.10215445418540196
+    },
+    {
+      "name": "deliverySingleCrateFresh",
+      "reference": 153627,
+      "candidate": 153505,
+      "delta": -122,
+      "percent": -0.07941312399513106
+    },
+    {
+      "name": "deliverySingleCratePending",
+      "reference": 119427,
+      "candidate": 119305,
+      "delta": -122,
+      "percent": -0.10215445418540196
+    },
+    {
+      "name": "deliverySingleMixed50Fresh",
+      "reference": 2475497,
+      "candidate": 2469536,
+      "delta": -5961,
+      "percent": -0.24080013023647373
+    },
+    {
+      "name": "deliverySingleMixed50Pending",
+      "reference": 2458397,
+      "candidate": 2452436,
+      "delta": -5961,
+      "percent": -0.2424750762387035
+    },
+    {
+      "name": "deliverySplitCrateAfterRelease",
+      "reference": 119427,
+      "candidate": 119305,
+      "delta": -122,
+      "percent": -0.10215445418540196
+    },
+    {
+      "name": "deliverySplitCrateFresh",
+      "reference": 153627,
+      "candidate": 153505,
+      "delta": -122,
+      "percent": -0.07941312399513106
+    },
+    {
+      "name": "deliverySplitCrateNewConfigAfterSingle",
+      "reference": 136527,
+      "candidate": 136405,
+      "delta": -122,
+      "percent": -0.08935961384927524
+    },
+    {
+      "name": "deliverySplitCratePending",
+      "reference": 119427,
+      "candidate": 119305,
+      "delta": -122,
+      "percent": -0.10215445418540196
+    },
+    {
+      "name": "deliverySplitMixed50Fresh",
+      "reference": 2475473,
+      "candidate": 2469512,
+      "delta": -5961,
+      "percent": -0.24080246482187445
+    },
+    {
+      "name": "deliverySplitMixed50Pending",
+      "reference": 2458373,
+      "candidate": 2452412,
+      "delta": -5961,
+      "percent": -0.24247744341481134
+    },
+    {
+      "name": "getRelicClaimedMaskEmpty",
+      "reference": 42015,
+      "candidate": 42015,
+      "delta": 0,
+      "percent": 0
+    },
+    {
+      "name": "getRelicClaimedMaskFull",
+      "reference": 42429,
+      "candidate": 42429,
+      "delta": 0,
+      "percent": 0
+    },
+    {
+      "name": "getTokenInfoAbsentSequential",
+      "reference": 3002,
+      "candidate": 3025,
+      "delta": 23,
+      "percent": 0.7661558960692871
+    },
+    {
+      "name": "getTokenInfoAbsentSpot",
+      "reference": 3120,
+      "candidate": 3131,
+      "delta": 11,
+      "percent": 0.3525641025641026
+    },
+    {
+      "name": "getTokenInfoBurnedSequential",
+      "reference": 5599,
+      "candidate": 5610,
+      "delta": 11,
+      "percent": 0.19646365422396855
+    },
+    {
+      "name": "getTokenInfoBurnedSpot",
+      "reference": 3134,
+      "candidate": 3145,
+      "delta": 11,
+      "percent": 0.3509891512444161
+    },
+    {
+      "name": "getTokenInfoFragmented",
+      "reference": 14463,
+      "candidate": 14474,
+      "delta": 11,
+      "percent": 0.07605614326211713
+    },
+    {
+      "name": "getTokenInfoFresh",
+      "reference": 47613,
+      "candidate": 47624,
+      "delta": 11,
+      "percent": 0.023102934072627222
+    },
+    {
+      "name": "getTokenInfoFresh31",
+      "reference": 71923,
+      "candidate": 71934,
+      "delta": 11,
+      "percent": 0.015294134004421395
+    },
+    {
+      "name": "getTokenInfoInitialized",
+      "reference": 5623,
+      "candidate": 5634,
+      "delta": 11,
+      "percent": 0.19562511115063133
+    },
+    {
+      "name": "getTokenInfoSpot",
+      "reference": 3442,
+      "candidate": 3453,
+      "delta": 11,
+      "percent": 0.31958163858221966
+    },
+    {
+      "name": "getTokenInfos150Fresh",
+      "reference": 6918478,
+      "candidate": 6915998,
+      "delta": -2480,
+      "percent": -0.035846034344548035
+    },
+    {
+      "name": "getTokenInfos150Missing",
+      "reference": 512225,
+      "candidate": 509745,
+      "delta": -2480,
+      "percent": -0.4841622333935282
+    },
+    {
+      "name": "getTokenInfos150Spot",
+      "reference": 560525,
+      "candidate": 558045,
+      "delta": -2480,
+      "percent": -0.4424423531510637
+    },
+    {
+      "name": "mintCrates1",
+      "reference": 143074,
+      "candidate": 143087,
+      "delta": 13,
+      "percent": 0.009086207137565177
+    },
+    {
+      "name": "mintCrates15",
+      "reference": 500004,
+      "candidate": 499149,
+      "delta": -855,
+      "percent": -0.17099863201094392
+    },
+    {
+      "name": "mintCrates15After1",
+      "reference": 431604,
+      "candidate": 430749,
+      "delta": -855,
+      "percent": -0.19809825673534073
+    },
+    {
+      "name": "mintCrates15After240",
+      "reference": 431604,
+      "candidate": 430749,
+      "delta": -855,
+      "percent": -0.19809825673534073
+    },
+    {
+      "name": "mintCrates15AfterWarehouse",
+      "reference": 431604,
+      "candidate": 430749,
+      "delta": -855,
+      "percent": -0.19809825673534073
+    },
+    {
+      "name": "mintCrates15Receiver",
+      "reference": 526191,
+      "candidate": 525336,
+      "delta": -855,
+      "percent": -0.1624885260295216
+    },
+    {
+      "name": "mintCrates1AfterWarehouse",
+      "reference": 74674,
+      "candidate": 74687,
+      "delta": 13,
+      "percent": 0.017409004472774995
+    },
+    {
+      "name": "mintCrates1EightRecipients",
+      "reference": 143074,
+      "candidate": 143087,
+      "delta": 13,
+      "percent": 0.009086207137565177
+    },
+    {
+      "name": "mintCrates1ThirtyTwoRecipients",
+      "reference": 143074,
+      "candidate": 143087,
+      "delta": 13,
+      "percent": 0.009086207137565177
+    },
+    {
+      "name": "mintCratesDiscounted1",
+      "reference": 176764,
+      "candidate": 176709,
+      "delta": -55,
+      "percent": -0.031114932904890136
+    },
+    {
+      "name": "mintCratesDiscounted1After1",
+      "reference": 91264,
+      "candidate": 91209,
+      "delta": -55,
+      "percent": -0.06026472650771388
+    },
+    {
+      "name": "mintCratesDiscounted3",
+      "reference": 227754,
+      "candidate": 227575,
+      "delta": -179,
+      "percent": -0.07859357025562669
+    },
+    {
+      "name": "mintFreeCrates1",
+      "reference": 126469,
+      "candidate": 126470,
+      "delta": 1,
+      "percent": 0.0007907076042350299
+    },
+    {
+      "name": "mintFreeCrates15",
+      "reference": 483399,
+      "candidate": 482532,
+      "delta": -867,
+      "percent": -0.17935494281121805
+    },
+    {
+      "name": "mintFreeCrates15Receiver",
+      "reference": 509586,
+      "candidate": 508719,
+      "delta": -867,
+      "percent": -0.17013811211454005
+    },
+    {
+      "name": "mintFreeCrates1After1",
+      "reference": 75169,
+      "candidate": 75170,
+      "delta": 1,
+      "percent": 0.0013303356436829012
+    },
+    {
+      "name": "mintFreeWarehouses1",
+      "reference": 170920,
+      "candidate": 170921,
+      "delta": 1,
+      "percent": 0.0005850690381465013
+    },
+    {
+      "name": "mintFreeWarehouses1After1",
+      "reference": 102520,
+      "candidate": 102521,
+      "delta": 1,
+      "percent": 0.0009754194303550526
+    },
+    {
+      "name": "mintWarehouses1",
+      "reference": 187586,
+      "candidate": 187555,
+      "delta": -31,
+      "percent": -0.016525753521051678
+    },
+    {
+      "name": "mintWarehouses15",
+      "reference": 855316,
+      "candidate": 854417,
+      "delta": -899,
+      "percent": -0.10510735213652031
+    },
+    {
+      "name": "mintWarehouses15AfterCrate",
+      "reference": 786916,
+      "candidate": 786017,
+      "delta": -899,
+      "percent": -0.11424345165176461
+    },
+    {
+      "name": "mintWarehouses15AfterWarehouse",
+      "reference": 769816,
+      "candidate": 768917,
+      "delta": -899,
+      "percent": -0.11678115289887453
+    },
+    {
+      "name": "mintWarehouses15Receiver",
+      "reference": 881503,
+      "candidate": 880604,
+      "delta": -899,
+      "percent": -0.10198490532647081
+    },
+    {
+      "name": "mintWarehouses1AfterCrate",
+      "reference": 119186,
+      "candidate": 119155,
+      "delta": -31,
+      "percent": -0.02600976624771366
+    },
+    {
+      "name": "mintWarehouses1AfterWarehouse",
+      "reference": 102086,
+      "candidate": 102055,
+      "delta": -31,
+      "percent": -0.030366553690026058
+    },
+    {
+      "name": "previewTokenURIs1ArtworkReceipt",
+      "reference": 10303,
+      "candidate": 10183,
+      "delta": -120,
+      "percent": -1.1647093079685529
+    },
+    {
+      "name": "previewTokenURIs30ArtworkReceipts",
+      "reference": 97192,
+      "candidate": 95332,
+      "delta": -1860,
+      "percent": -1.9137377561939255
+    },
+    {
+      "name": "previewTokenURIs30Artworks",
+      "reference": 86088,
+      "candidate": 84408,
+      "delta": -1680,
+      "percent": -1.9514914970727628
+    },
+    {
+      "name": "previewTokenURIs30Mixed",
+      "reference": 94441,
+      "candidate": 92689,
+      "delta": -1752,
+      "percent": -1.8551264810834278
+    },
+    {
+      "name": "registerDeliverySingle",
+      "reference": 58654,
+      "candidate": 58642,
+      "delta": -12,
+      "percent": -0.02045896273058956
+    },
+    {
+      "name": "registerDeliverySplit",
+      "reference": 81024,
+      "candidate": 81012,
+      "delta": -12,
+      "percent": -0.01481042654028436
+    },
+    {
+      "name": "releaseAllMintFourRecipients",
+      "reference": 303112,
+      "candidate": 303143,
+      "delta": 31,
+      "percent": 0.010227242735358548
+    },
+    {
+      "name": "releaseAllMintFourRecipientsAfterRelease",
+      "reference": 117612,
+      "candidate": 117643,
+      "delta": 31,
+      "percent": 0.026357854640682923
+    },
+    {
+      "name": "releaseAllMintThirtyTwoGasBurningRecipients",
+      "reference": 4151908,
+      "candidate": 4151932,
+      "delta": 24,
+      "percent": 0.0005780474904549908
+    },
+    {
+      "name": "releaseAllMintThirtyTwoRecipients",
+      "reference": 2089624,
+      "candidate": 2089655,
+      "delta": 31,
+      "percent": 0.0014835204802395071
+    },
+    {
+      "name": "releaseAllMintThirtyTwoRecipientsAfterRelease",
+      "reference": 725324,
+      "candidate": 725355,
+      "delta": 31,
+      "percent": 0.004273952054530113
+    },
+    {
+      "name": "releaseAllMintThirtyTwoRecipientsEmpty",
+      "reference": 264326,
+      "candidate": 264357,
+      "delta": 31,
+      "percent": 0.011727942011001566
+    },
+    {
+      "name": "releaseDelivery",
+      "reference": 92434,
+      "candidate": 92509,
+      "delta": 75,
+      "percent": 0.08113897483609928
+    },
+    {
+      "name": "releaseDeliveryAfterRelease",
+      "reference": 50334,
+      "candidate": 50409,
+      "delta": 75,
+      "percent": 0.14900464894504709
+    },
+    {
+      "name": "releaseDeliveryEmpty",
+      "reference": 35619,
+      "candidate": 35694,
+      "delta": 75,
+      "percent": 0.21056177882590751
+    },
+    {
+      "name": "releaseDeliveryFor",
+      "reference": 90583,
+      "candidate": 90658,
+      "delta": 75,
+      "percent": 0.08279699281322102
+    },
+    {
+      "name": "releaseMint",
+      "reference": 107630,
+      "candidate": 107728,
+      "delta": 98,
+      "percent": 0.09105268047942024
+    },
+    {
+      "name": "releaseMintAfterRelease",
+      "reference": 48430,
+      "candidate": 48528,
+      "delta": 98,
+      "percent": 0.20235391286392732
+    },
+    {
+      "name": "releaseMintEightRecipients",
+      "reference": 107630,
+      "candidate": 107728,
+      "delta": 98,
+      "percent": 0.09105268047942024
+    },
+    {
+      "name": "setBaseURI100",
+      "reference": 129631,
+      "candidate": 129595,
+      "delta": -36,
+      "percent": -0.02777113499085867
+    },
+    {
+      "name": "setBaseURI1024",
+      "reference": 1159270,
+      "candidate": 1159234,
+      "delta": -36,
+      "percent": -0.003105402537803963
+    },
+    {
+      "name": "setBaseURI256",
+      "reference": 287077,
+      "candidate": 287041,
+      "delta": -36,
+      "percent": -0.012540189565865605
+    },
+    {
+      "name": "setBaseURI40",
+      "reference": 58669,
+      "candidate": 58633,
+      "delta": -36,
+      "percent": -0.06136119586152824
+    },
+    {
+      "name": "setFreeMintAllowancesThirtyTwo",
+      "reference": 1087665,
+      "candidate": 1087597,
+      "delta": -68,
+      "percent": -0.006251924995288071
+    },
+    {
+      "name": "setFreeMintAllowancesThirtyTwoAfterUse",
+      "reference": 540477,
+      "candidate": 540409,
+      "delta": -68,
+      "percent": -0.012581478952850908
+    },
+    {
+      "name": "stats",
+      "reference": 26252,
+      "candidate": 26275,
+      "delta": 23,
+      "percent": 0.087612372390675
+    },
+    {
+      "name": "unboxCrate20",
+      "reference": 129504,
+      "candidate": 128948,
+      "delta": -556,
+      "percent": -0.42933036817395603
+    },
+    {
+      "name": "unboxCrate20Receiver",
+      "reference": 160854,
+      "candidate": 160298,
+      "delta": -556,
+      "percent": -0.34565506608477253
+    },
+    {
+      "name": "unboxCrate31",
+      "reference": 133910,
+      "candidate": 133035,
+      "delta": -875,
+      "percent": -0.6534239414532148
+    },
+    {
+      "name": "unboxCrate31Receiver",
+      "reference": 182367,
+      "candidate": 181492,
+      "delta": -875,
+      "percent": -0.4798017185126695
+    },
+    {
+      "name": "unboxCrates1",
+      "reference": 133478,
+      "candidate": 132807,
+      "delta": -671,
+      "percent": -0.5027045655463822
+    },
+    {
+      "name": "unboxCrates15",
+      "reference": 1204565,
+      "candidate": 1194738,
+      "delta": -9827,
+      "percent": -0.8158131773710842
+    },
+    {
+      "name": "unboxCrates15Bonus",
+      "reference": 1226071,
+      "candidate": 1215925,
+      "delta": -10146,
+      "percent": -0.8275214078140662
+    },
+    {
+      "name": "unboxCrates15BonusReceiver",
+      "reference": 1713618,
+      "candidate": 1703472,
+      "delta": -10146,
+      "percent": -0.5920806153996981
+    },
+    {
+      "name": "unboxCrates15BonusSeparate",
+      "reference": 1724666,
+      "candidate": 1716007,
+      "delta": -8659,
+      "percent": -0.5020682265435742
+    },
+    {
+      "name": "unboxCrates15BonusSeparateReceiver",
+      "reference": 2212023,
+      "candidate": 2203364,
+      "delta": -8659,
+      "percent": -0.39145162595506466
+    },
+    {
+      "name": "unboxCrates15Receiver",
+      "reference": 1674986,
+      "candidate": 1665159,
+      "delta": -9827,
+      "percent": -0.5866914708540848
+    },
+    {
+      "name": "unboxCrates15Separate",
+      "reference": 1703160,
+      "candidate": 1694820,
+      "delta": -8340,
+      "percent": -0.48967801028676106
+    },
+    {
+      "name": "unboxCrates15SeparateReceiver",
+      "reference": 2173410,
+      "candidate": 2165070,
+      "delta": -8340,
+      "percent": -0.3837287948431267
+    },
+    {
+      "name": "unboxRelic",
+      "reference": 2903129,
+      "candidate": 2896204,
+      "delta": -6925,
+      "percent": -0.23853573161922878
+    },
+    {
+      "name": "unboxRelicReceiver",
+      "reference": 3096918,
+      "candidate": 3089993,
+      "delta": -6925,
+      "percent": -0.22360940780479174
+    },
+    {
+      "name": "unboxWarehouse",
+      "reference": 350312,
+      "candidate": 349631,
+      "delta": -681,
+      "percent": -0.19439813651830368
+    },
+    {
+      "name": "unboxWarehouseReceiver",
+      "reference": 369521,
+      "candidate": 368840,
+      "delta": -681,
+      "percent": -0.18429263830743042
+    },
+    {
+      "name": "warehousesMinted",
+      "reference": 2373,
+      "candidate": 2373,
+      "delta": 0,
+      "percent": 0
+    }
+  ],
+  "provenance": {
+    "before": {
+      "src/NFT111K.sol": "d97df1cc2da8a855d43477b7ea3e56cc309a25cf5f11a3a0947d1852229ad3cb",
+      "test/NFT111KGas.t.sol": "638554f6254ab5f075254a04c08b9b3c4e79e99b6c4183d4c067f6ccb67f39e0",
+      "test/TestSupport.sol": "531bdae479ba39631ca7c4646ac90bdb1f745754d707c4afe99f9c103af07f3a",
+      "foundry.toml": "10c5988d58f30b0a8918ba82d812e60f0742dae482943e7181e90e6e38bbcf58",
+      "package-lock.json": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b",
+      "scripts/benchmark-compiler.mjs": "d4e791dc2968dfa02991c4aa37289225324430a3688ccf59afc248c7e22591e8",
+      "scripts/compiler-gate.mjs": "d9012062624f62dae629bfe43f67d2051a31749abe1127276c9df8f063e68528",
+      "snapshots/NFT111KGasTest.json": "571b30df2da0c913b7466615e0caeba369cd3bd0651992d9e114445625fcab29"
+    },
+    "after": {
+      "src/NFT111K.sol": "d97df1cc2da8a855d43477b7ea3e56cc309a25cf5f11a3a0947d1852229ad3cb",
+      "test/NFT111KGas.t.sol": "638554f6254ab5f075254a04c08b9b3c4e79e99b6c4183d4c067f6ccb67f39e0",
+      "test/TestSupport.sol": "531bdae479ba39631ca7c4646ac90bdb1f745754d707c4afe99f9c103af07f3a",
+      "foundry.toml": "10c5988d58f30b0a8918ba82d812e60f0742dae482943e7181e90e6e38bbcf58",
+      "package-lock.json": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b",
+      "scripts/benchmark-compiler.mjs": "d4e791dc2968dfa02991c4aa37289225324430a3688ccf59afc248c7e22591e8",
+      "scripts/compiler-gate.mjs": "d9012062624f62dae629bfe43f67d2051a31749abe1127276c9df8f063e68528",
+      "snapshots/NFT111KGasTest.json": "571b30df2da0c913b7466615e0caeba369cd3bd0651992d9e114445625fcab29"
+    },
+    "scriptSha256": "e7c98293dcfc89b202ef5eac24e42151e182e66362eec405385dc02caa4c39a2"
+  },
+  "comparison": {
+    "schemaVersion": 2,
+    "measuredAt": "2026-11-01T18:52:29.724Z",
+    "sourceCommit": "4514b4f34af39f18fd465171c9d03b3ff3590450",
+    "sourceSha256": {
+      "NFT111K.sol": "d97df1cc2da8a855d43477b7ea3e56cc309a25cf5f11a3a0947d1852229ad3cb"
+    },
+    "baselineReference": {
+      "path": "benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json",
+      "updated": true,
+      "sha256": "b27c4642a01b4982b433a0d0f2da2c34e7819bf1358890828c46482d18b9e626"
+    },
+    "benchmarkCount": 160,
+    "writeBenchmarkCount": 139,
+    "toolchain": {
+      "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+      "anvil": "anvil Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+      "node": "v26.5.0",
+      "dependencies": {
+        "@metamask/abi-utils": "2.0.4",
+        "@noble/hashes": "1.8.0",
+        "@openzeppelin/contracts": "5.6.1",
+        "@openzeppelin/merkle-tree": "1.0.8",
+        "erc721a": "4.3.0"
+      },
+      "packageLockSha256": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b"
+    },
+    "reproduction": {
+      "command": "node scripts/benchmark-compiler.mjs <output.json> [legacy|ir] [runs...] [--update-baseline]",
+      "defaultRuns": {
+        "legacy": [
+          1,
+          50,
+          200,
+          500,
+          1000,
+          1500,
+          2000,
+          5000,
+          10000
+        ],
+        "ir": [
+          1,
+          50,
+          200,
+          1000,
+          10000
+        ]
+      },
+      "requestedMatrix": {
+        "legacy": [
+          200,
+          500
+        ]
+      },
+      "scriptSha256": "d4e791dc2968dfa02991c4aa37289225324430a3688ccf59afc248c7e22591e8",
+      "fixedSettings": {
+        "solc": "0.8.38",
+        "optimizer": true,
+        "evmVersion": "prague",
+        "bytecodeHash": "none"
+      },
+      "maximumCollectionArgumentBytes": 6656,
+      "harness": "All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE at identical addresses, preserving signed calldata.",
+      "measurement": "All 160 measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; Separate benchmarks sum 15 isolated single-unpack calls with snapshotValue. Read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.",
+      "environment": "FOUNDRY_* and DAPP_* overrides are removed for isolated builds. Tracked sources and normal gas snapshots are never modified. The compiler baseline is rewritten only with --update-baseline.",
+      "harnessSha256": "bad988262404b8c0afc8b9c4999437629ca043e310e37cb62c8ccb34878d2d8f",
+      "testSupportSha256": "531bdae479ba39631ca7c4646ac90bdb1f745754d707c4afe99f9c103af07f3a"
+    },
+    "variants": [
+      {
+        "label": "legacy-200",
+        "viaIR": false,
+        "optimizerRuns": 200,
+        "sourceSha256": {
+          "NFT111K.sol": "d97df1cc2da8a855d43477b7ea3e56cc309a25cf5f11a3a0947d1852229ad3cb"
+        },
+        "status": "measured",
+        "artifacts": {
+          "NFT111K": {
+            "compilerVersion": "0.8.38+commit.1835d247",
+            "compilerSettings": {
+              "remappings": [
+                "@openzeppelin/=node_modules/@openzeppelin/",
+                "erc721a/=node_modules/erc721a/"
+              ],
+              "optimizer": {
+                "enabled": true,
+                "runs": 200
+              },
+              "metadata": {
+                "bytecodeHash": "none"
+              },
+              "compilationTarget": {
+                "src/NFT111K.sol": "NFT111K"
+              },
+              "evmVersion": "prague",
+              "libraries": {}
+            },
+            "creationBytes": 28004,
+            "runtimeBytes": 23929,
+            "creationSha256": "f7d651032d6684ca5e593720b468be4f1dc6861a909dde18f9566924a57169c8",
+            "runtimeTemplateSha256": "5855c60066ae6935618a461b9146541b7449d87e662f5c05ccfe57750385be11",
+            "canonicalAbiSha256": "d3be376da968c4b8db420d5e305678f05e4bdbcdffb2de9b98155fab0f62e5e6"
+          }
+        },
+        "gas": {
+          "allocatedCrates": 2439,
+          "allocateRelics1": 94214,
+          "allocateRelics18": 94214,
+          "allocateRelics18WithoutPayment": 72016,
+          "claim20": 602937,
+          "claim20Crate10": 602949,
+          "claim20Receiver": 637856,
+          "claim31": 888808,
+          "claim31Receiver": 942919,
+          "claimRelic": 147728,
+          "claimRelicAfter1": 96428,
+          "claimRelicReceiver": 149488,
+          "deliverArtwork1": 161014,
+          "deliverArtwork1Receiver": 162976,
+          "deliverArtworks20Ascending": 1239980,
+          "deliverArtworks20AscendingReceiver": 1275091,
+          "deliverArtworks20Descending": 1274294,
+          "deliverArtworks20DescendingReceiver": 1309441,
+          "deliverArtworks20Shuffled": 1244948,
+          "deliverArtworks20ShuffledReceiver": 1280083,
+          "deliverArtworks31Ascending": 1911101,
+          "deliverArtworks31AscendingReceiver": 1965497,
+          "deliverArtworks31Descending": 1997963,
+          "deliverArtworks31DescendingReceiver": 2052347,
+          "deliverArtworks31Shuffled": 1918799,
+          "deliverArtworks31ShuffledReceiver": 1973183,
+          "deliverArtworks50": 2947858,
+          "deliverArtworks50Descending": 3023842,
+          "deliverArtworks50DescendingReceiver": 3111494,
+          "deliverArtworks50Receiver": 3035522,
+          "deliverArtworks50Shuffled": 2960476,
+          "deliverArtworks50ShuffledReceiver": 3048128,
+          "deliverCrate1": 153627,
+          "deliverCrate1Receiver": 155576,
+          "deliverCrates50": 2018714,
+          "deliverCrates50Descending": 2018714,
+          "deliverCrates50DescendingReceiver": 2106327,
+          "deliverCrates50Receiver": 2106327,
+          "deliverCrates50Shuffled": 2018702,
+          "deliverCrates50ShuffledReceiver": 2106315,
+          "deliverFragmentedArtworks50Ascending": 2551308,
+          "deliverFragmentedArtworks50AscendingReceiver": 2638972,
+          "deliverFragmentedArtworks50Descending": 2557980,
+          "deliverFragmentedArtworks50DescendingReceiver": 2645632,
+          "deliverFragmentedArtworks50Shuffled": 2553882,
+          "deliverFragmentedArtworks50ShuffledReceiver": 2641534,
+          "deliverInitializedArtworks50Ascending": 2008898,
+          "deliverInitializedArtworks50AscendingReceiver": 2096562,
+          "deliverInitializedArtworks50Descending": 2008910,
+          "deliverInitializedArtworks50DescendingReceiver": 2096562,
+          "deliverInitializedArtworks50Shuffled": 2008910,
+          "deliverInitializedArtworks50ShuffledReceiver": 2096562,
+          "deliverMixed50": 2475497,
+          "deliverMixed50Descending": 2511095,
+          "deliverMixed50DescendingReceiver": 2598716,
+          "deliverMixed50Receiver": 2563130,
+          "deliverMixed50Shuffled": 2481269,
+          "deliverMixed50ShuffledReceiver": 2568938,
+          "deliverRelic1": 153911,
+          "deliverRelic1Receiver": 155884,
+          "deliverSparseArtworks50Ascending": 4006965,
+          "deliverSparseArtworks50AscendingReceiver": 4094617,
+          "deliverSparseArtworks50Descending": 4087155,
+          "deliverSparseArtworks50DescendingReceiver": 4174807,
+          "deliverSparseArtworks50Shuffled": 4029933,
+          "deliverSparseArtworks50ShuffledReceiver": 4117573,
+          "deliverySingleCrateAfterRelease": 119427,
+          "deliverySingleCrateFresh": 153627,
+          "deliverySingleCratePending": 119427,
+          "deliverySingleMixed50Fresh": 2475497,
+          "deliverySingleMixed50Pending": 2458397,
+          "deliverySplitCrateAfterRelease": 119427,
+          "deliverySplitCrateFresh": 153627,
+          "deliverySplitCrateNewConfigAfterSingle": 136527,
+          "deliverySplitCratePending": 119427,
+          "deliverySplitMixed50Fresh": 2475473,
+          "deliverySplitMixed50Pending": 2458373,
+          "getRelicClaimedMaskEmpty": 42015,
+          "getRelicClaimedMaskFull": 42429,
+          "getTokenInfoAbsentSequential": 3002,
+          "getTokenInfoAbsentSpot": 3120,
+          "getTokenInfoBurnedSequential": 5599,
+          "getTokenInfoBurnedSpot": 3134,
+          "getTokenInfoFragmented": 14463,
+          "getTokenInfoFresh": 47613,
+          "getTokenInfoFresh31": 71923,
+          "getTokenInfoInitialized": 5623,
+          "getTokenInfos150Fresh": 6918478,
+          "getTokenInfos150Missing": 512225,
+          "getTokenInfos150Spot": 560525,
+          "getTokenInfoSpot": 3442,
+          "mintCrates1": 143074,
+          "mintCrates15": 500004,
+          "mintCrates15After1": 431604,
+          "mintCrates15After240": 431604,
+          "mintCrates15AfterWarehouse": 431604,
+          "mintCrates15Receiver": 526191,
+          "mintCrates1AfterWarehouse": 74674,
+          "mintCrates1EightRecipients": 143074,
+          "mintCrates1ThirtyTwoRecipients": 143074,
+          "mintCratesDiscounted1": 176764,
+          "mintCratesDiscounted1After1": 91264,
+          "mintCratesDiscounted3": 227754,
+          "mintFreeCrates1": 126469,
+          "mintFreeCrates15": 483399,
+          "mintFreeCrates15Receiver": 509586,
+          "mintFreeCrates1After1": 75169,
+          "mintFreeWarehouses1": 170920,
+          "mintFreeWarehouses1After1": 102520,
+          "mintWarehouses1": 187586,
+          "mintWarehouses15": 855316,
+          "mintWarehouses15AfterCrate": 786916,
+          "mintWarehouses15AfterWarehouse": 769816,
+          "mintWarehouses15Receiver": 881503,
+          "mintWarehouses1AfterCrate": 119186,
+          "mintWarehouses1AfterWarehouse": 102086,
+          "previewTokenURIs1ArtworkReceipt": 10303,
+          "previewTokenURIs30ArtworkReceipts": 97192,
+          "previewTokenURIs30Artworks": 86088,
+          "previewTokenURIs30Mixed": 94441,
+          "registerDeliverySingle": 58654,
+          "registerDeliverySplit": 81024,
+          "releaseAllMintFourRecipients": 303112,
+          "releaseAllMintFourRecipientsAfterRelease": 117612,
+          "releaseAllMintThirtyTwoGasBurningRecipients": 4151908,
+          "releaseAllMintThirtyTwoRecipients": 2089624,
+          "releaseAllMintThirtyTwoRecipientsAfterRelease": 725324,
+          "releaseAllMintThirtyTwoRecipientsEmpty": 264326,
+          "releaseDelivery": 92434,
+          "releaseDeliveryAfterRelease": 50334,
+          "releaseDeliveryEmpty": 35619,
+          "releaseDeliveryFor": 90583,
+          "releaseMint": 107630,
+          "releaseMintAfterRelease": 48430,
+          "releaseMintEightRecipients": 107630,
+          "setBaseURI100": 129631,
+          "setBaseURI1024": 1159270,
+          "setBaseURI256": 287077,
+          "setBaseURI40": 58669,
+          "setFreeMintAllowancesThirtyTwo": 1087665,
+          "setFreeMintAllowancesThirtyTwoAfterUse": 540477,
+          "stats": 26252,
+          "unboxCrate20": 129504,
+          "unboxCrate20Receiver": 160854,
+          "unboxCrate31": 133910,
+          "unboxCrate31Receiver": 182367,
+          "unboxCrates1": 133478,
+          "unboxCrates15": 1204565,
+          "unboxCrates15Bonus": 1226071,
+          "unboxCrates15BonusReceiver": 1713618,
+          "unboxCrates15BonusSeparate": 1724666,
+          "unboxCrates15BonusSeparateReceiver": 2212023,
+          "unboxCrates15Receiver": 1674986,
+          "unboxCrates15Separate": 1703160,
+          "unboxCrates15SeparateReceiver": 2173410,
+          "unboxRelic": 2903129,
+          "unboxRelicReceiver": 3096918,
+          "unboxWarehouse": 350312,
+          "unboxWarehouseReceiver": 369521,
+          "warehousesMinted": 2373
+        },
+        "comparison": {
+          "deltas": {
+            "allocatedCrates": 0,
+            "allocateRelics1": 0,
+            "allocateRelics18": 0,
+            "allocateRelics18WithoutPayment": 0,
+            "claim20": 0,
+            "claim20Crate10": 0,
+            "claim20Receiver": 0,
+            "claim31": 0,
+            "claim31Receiver": 0,
+            "claimRelic": 0,
+            "claimRelicAfter1": 0,
+            "claimRelicReceiver": 0,
+            "deliverArtwork1": 0,
+            "deliverArtwork1Receiver": 0,
+            "deliverArtworks20Ascending": 0,
+            "deliverArtworks20AscendingReceiver": 0,
+            "deliverArtworks20Descending": 0,
+            "deliverArtworks20DescendingReceiver": 0,
+            "deliverArtworks20Shuffled": 0,
+            "deliverArtworks20ShuffledReceiver": 0,
+            "deliverArtworks31Ascending": 0,
+            "deliverArtworks31AscendingReceiver": 0,
+            "deliverArtworks31Descending": 0,
+            "deliverArtworks31DescendingReceiver": 0,
+            "deliverArtworks31Shuffled": 0,
+            "deliverArtworks31ShuffledReceiver": 0,
+            "deliverArtworks50": 0,
+            "deliverArtworks50Descending": 0,
+            "deliverArtworks50DescendingReceiver": 0,
+            "deliverArtworks50Receiver": 0,
+            "deliverArtworks50Shuffled": 0,
+            "deliverArtworks50ShuffledReceiver": 0,
+            "deliverCrate1": 0,
+            "deliverCrate1Receiver": 0,
+            "deliverCrates50": 0,
+            "deliverCrates50Descending": 0,
+            "deliverCrates50DescendingReceiver": 0,
+            "deliverCrates50Receiver": 0,
+            "deliverCrates50Shuffled": 0,
+            "deliverCrates50ShuffledReceiver": 0,
+            "deliverFragmentedArtworks50Ascending": 0,
+            "deliverFragmentedArtworks50AscendingReceiver": 0,
+            "deliverFragmentedArtworks50Descending": 0,
+            "deliverFragmentedArtworks50DescendingReceiver": 0,
+            "deliverFragmentedArtworks50Shuffled": 0,
+            "deliverFragmentedArtworks50ShuffledReceiver": 0,
+            "deliverInitializedArtworks50Ascending": 0,
+            "deliverInitializedArtworks50AscendingReceiver": 0,
+            "deliverInitializedArtworks50Descending": 0,
+            "deliverInitializedArtworks50DescendingReceiver": 0,
+            "deliverInitializedArtworks50Shuffled": 0,
+            "deliverInitializedArtworks50ShuffledReceiver": 0,
+            "deliverMixed50": 0,
+            "deliverMixed50Descending": 0,
+            "deliverMixed50DescendingReceiver": 0,
+            "deliverMixed50Receiver": 0,
+            "deliverMixed50Shuffled": 0,
+            "deliverMixed50ShuffledReceiver": 0,
+            "deliverRelic1": 0,
+            "deliverRelic1Receiver": 0,
+            "deliverSparseArtworks50Ascending": 0,
+            "deliverSparseArtworks50AscendingReceiver": 0,
+            "deliverSparseArtworks50Descending": 0,
+            "deliverSparseArtworks50DescendingReceiver": 0,
+            "deliverSparseArtworks50Shuffled": 0,
+            "deliverSparseArtworks50ShuffledReceiver": 0,
+            "deliverySingleCrateAfterRelease": 0,
+            "deliverySingleCrateFresh": 0,
+            "deliverySingleCratePending": 0,
+            "deliverySingleMixed50Fresh": 0,
+            "deliverySingleMixed50Pending": 0,
+            "deliverySplitCrateAfterRelease": 0,
+            "deliverySplitCrateFresh": 0,
+            "deliverySplitCrateNewConfigAfterSingle": 0,
+            "deliverySplitCratePending": 0,
+            "deliverySplitMixed50Fresh": 0,
+            "deliverySplitMixed50Pending": 0,
+            "getRelicClaimedMaskEmpty": 0,
+            "getRelicClaimedMaskFull": 0,
+            "getTokenInfoAbsentSequential": 0,
+            "getTokenInfoAbsentSpot": 0,
+            "getTokenInfoBurnedSequential": 0,
+            "getTokenInfoBurnedSpot": 0,
+            "getTokenInfoFragmented": 0,
+            "getTokenInfoFresh": 0,
+            "getTokenInfoFresh31": 0,
+            "getTokenInfoInitialized": 0,
+            "getTokenInfos150Fresh": 0,
+            "getTokenInfos150Missing": 0,
+            "getTokenInfos150Spot": 0,
+            "getTokenInfoSpot": 0,
+            "mintCrates1": 0,
+            "mintCrates15": 0,
+            "mintCrates15After1": 0,
+            "mintCrates15After240": 0,
+            "mintCrates15AfterWarehouse": 0,
+            "mintCrates15Receiver": 0,
+            "mintCrates1AfterWarehouse": 0,
+            "mintCrates1EightRecipients": 0,
+            "mintCrates1ThirtyTwoRecipients": 0,
+            "mintCratesDiscounted1": 0,
+            "mintCratesDiscounted1After1": 0,
+            "mintCratesDiscounted3": 0,
+            "mintFreeCrates1": 0,
+            "mintFreeCrates15": 0,
+            "mintFreeCrates15Receiver": 0,
+            "mintFreeCrates1After1": 0,
+            "mintFreeWarehouses1": 0,
+            "mintFreeWarehouses1After1": 0,
+            "mintWarehouses1": 0,
+            "mintWarehouses15": 0,
+            "mintWarehouses15AfterCrate": 0,
+            "mintWarehouses15AfterWarehouse": 0,
+            "mintWarehouses15Receiver": 0,
+            "mintWarehouses1AfterCrate": 0,
+            "mintWarehouses1AfterWarehouse": 0,
+            "previewTokenURIs1ArtworkReceipt": 0,
+            "previewTokenURIs30ArtworkReceipts": 0,
+            "previewTokenURIs30Artworks": 0,
+            "previewTokenURIs30Mixed": 0,
+            "registerDeliverySingle": 0,
+            "registerDeliverySplit": 0,
+            "releaseAllMintFourRecipients": 0,
+            "releaseAllMintFourRecipientsAfterRelease": 0,
+            "releaseAllMintThirtyTwoGasBurningRecipients": 0,
+            "releaseAllMintThirtyTwoRecipients": 0,
+            "releaseAllMintThirtyTwoRecipientsAfterRelease": 0,
+            "releaseAllMintThirtyTwoRecipientsEmpty": 0,
+            "releaseDelivery": 0,
+            "releaseDeliveryAfterRelease": 0,
+            "releaseDeliveryEmpty": 0,
+            "releaseDeliveryFor": 0,
+            "releaseMint": 0,
+            "releaseMintAfterRelease": 0,
+            "releaseMintEightRecipients": 0,
+            "setBaseURI100": 0,
+            "setBaseURI1024": 0,
+            "setBaseURI256": 0,
+            "setBaseURI40": 0,
+            "setFreeMintAllowancesThirtyTwo": 0,
+            "setFreeMintAllowancesThirtyTwoAfterUse": 0,
+            "stats": 0,
+            "unboxCrate20": 0,
+            "unboxCrate20Receiver": 0,
+            "unboxCrate31": 0,
+            "unboxCrate31Receiver": 0,
+            "unboxCrates1": 0,
+            "unboxCrates15": 0,
+            "unboxCrates15Bonus": 0,
+            "unboxCrates15BonusReceiver": 0,
+            "unboxCrates15BonusSeparate": 0,
+            "unboxCrates15BonusSeparateReceiver": 0,
+            "unboxCrates15Receiver": 0,
+            "unboxCrates15Separate": 0,
+            "unboxCrates15SeparateReceiver": 0,
+            "unboxRelic": 0,
+            "unboxRelicReceiver": 0,
+            "unboxWarehouse": 0,
+            "unboxWarehouseReceiver": 0,
+            "warehousesMinted": 0
+          },
+          "improvementCount": 0,
+          "regressionCount": 0,
+          "writeImprovementCount": 0,
+          "writeRegressionCount": 0,
+          "writeRegressions": [],
+          "worstWriteRegression": 0,
+          "abiUnchanged": true,
+          "withinDeploymentSizeLimits": true,
+          "deploymentDeltas": {
+            "collection": 0
+          }
+        },
+        "deploymentTransactions": {
+          "collection": {
+            "address": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+            "gasUsed": 5837949,
+            "constructorArgumentBytes": 704
+          }
+        }
+      },
+      {
+        "label": "legacy-500",
+        "viaIR": false,
+        "optimizerRuns": 500,
+        "sourceSha256": {
+          "NFT111K.sol": "d97df1cc2da8a855d43477b7ea3e56cc309a25cf5f11a3a0947d1852229ad3cb"
+        },
+        "status": "measured",
+        "artifacts": {
+          "NFT111K": {
+            "compilerVersion": "0.8.38+commit.1835d247",
+            "compilerSettings": {
+              "remappings": [
+                "@openzeppelin/=node_modules/@openzeppelin/",
+                "erc721a/=node_modules/erc721a/"
+              ],
+              "optimizer": {
+                "enabled": true,
+                "runs": 500
+              },
+              "metadata": {
+                "bytecodeHash": "none"
+              },
+              "compilationTarget": {
+                "src/NFT111K.sol": "NFT111K"
+              },
+              "evmVersion": "prague",
+              "libraries": {}
+            },
+            "creationBytes": 28476,
+            "runtimeBytes": 24401,
+            "creationSha256": "daf7d6997e1576c039b50811cc9d6f3839092ae47ad5ab73dd33e11b439b139c",
+            "runtimeTemplateSha256": "f9401482151bab4d086199cf72740c9b9b292653da9fbd4e4f527998903e0312",
+            "canonicalAbiSha256": "d3be376da968c4b8db420d5e305678f05e4bdbcdffb2de9b98155fab0f62e5e6"
+          }
+        },
+        "gas": {
+          "allocatedCrates": 2439,
+          "allocateRelics1": 94312,
+          "allocateRelics18": 94312,
+          "allocateRelics18WithoutPayment": 72114,
+          "claim20": 601662,
+          "claim20Crate10": 601674,
+          "claim20Receiver": 636581,
+          "claim31": 886851,
+          "claim31Receiver": 940962,
+          "claimRelic": 147735,
+          "claimRelicAfter1": 96435,
+          "claimRelicReceiver": 149495,
+          "deliverArtwork1": 160925,
+          "deliverArtwork1Receiver": 162887,
+          "deliverArtworks20Ascending": 1237934,
+          "deliverArtworks20AscendingReceiver": 1273045,
+          "deliverArtworks20Descending": 1272248,
+          "deliverArtworks20DescendingReceiver": 1307395,
+          "deliverArtworks20Shuffled": 1242902,
+          "deliverArtworks20ShuffledReceiver": 1278037,
+          "deliverArtworks31Ascending": 1907922,
+          "deliverArtworks31AscendingReceiver": 1962318,
+          "deliverArtworks31Descending": 1994784,
+          "deliverArtworks31DescendingReceiver": 2049168,
+          "deliverArtworks31Shuffled": 1915620,
+          "deliverArtworks31ShuffledReceiver": 1970004,
+          "deliverArtworks50": 2942722,
+          "deliverArtworks50Descending": 3018706,
+          "deliverArtworks50DescendingReceiver": 3106358,
+          "deliverArtworks50Receiver": 3030386,
+          "deliverArtworks50Shuffled": 2955340,
+          "deliverArtworks50ShuffledReceiver": 3042992,
+          "deliverCrate1": 153505,
+          "deliverCrate1Receiver": 155454,
+          "deliverCrates50": 2011928,
+          "deliverCrates50Descending": 2011928,
+          "deliverCrates50DescendingReceiver": 2099541,
+          "deliverCrates50Receiver": 2099541,
+          "deliverCrates50Shuffled": 2011916,
+          "deliverCrates50ShuffledReceiver": 2099529,
+          "deliverFragmentedArtworks50Ascending": 2546172,
+          "deliverFragmentedArtworks50AscendingReceiver": 2633836,
+          "deliverFragmentedArtworks50Descending": 2552844,
+          "deliverFragmentedArtworks50DescendingReceiver": 2640496,
+          "deliverFragmentedArtworks50Shuffled": 2548746,
+          "deliverFragmentedArtworks50ShuffledReceiver": 2636398,
+          "deliverInitializedArtworks50Ascending": 2003762,
+          "deliverInitializedArtworks50AscendingReceiver": 2091426,
+          "deliverInitializedArtworks50Descending": 2003774,
+          "deliverInitializedArtworks50DescendingReceiver": 2091426,
+          "deliverInitializedArtworks50Shuffled": 2003774,
+          "deliverInitializedArtworks50ShuffledReceiver": 2091426,
+          "deliverMixed50": 2469536,
+          "deliverMixed50Descending": 2505134,
+          "deliverMixed50DescendingReceiver": 2592755,
+          "deliverMixed50Receiver": 2557169,
+          "deliverMixed50Shuffled": 2475308,
+          "deliverMixed50ShuffledReceiver": 2562977,
+          "deliverRelic1": 153789,
+          "deliverRelic1Receiver": 155762,
+          "deliverSparseArtworks50Ascending": 4001829,
+          "deliverSparseArtworks50AscendingReceiver": 4089481,
+          "deliverSparseArtworks50Descending": 4082019,
+          "deliverSparseArtworks50DescendingReceiver": 4169671,
+          "deliverSparseArtworks50Shuffled": 4024797,
+          "deliverSparseArtworks50ShuffledReceiver": 4112437,
+          "deliverySingleCrateAfterRelease": 119305,
+          "deliverySingleCrateFresh": 153505,
+          "deliverySingleCratePending": 119305,
+          "deliverySingleMixed50Fresh": 2469536,
+          "deliverySingleMixed50Pending": 2452436,
+          "deliverySplitCrateAfterRelease": 119305,
+          "deliverySplitCrateFresh": 153505,
+          "deliverySplitCrateNewConfigAfterSingle": 136405,
+          "deliverySplitCratePending": 119305,
+          "deliverySplitMixed50Fresh": 2469512,
+          "deliverySplitMixed50Pending": 2452412,
+          "getRelicClaimedMaskEmpty": 42015,
+          "getRelicClaimedMaskFull": 42429,
+          "getTokenInfoAbsentSequential": 3025,
+          "getTokenInfoAbsentSpot": 3131,
+          "getTokenInfoBurnedSequential": 5610,
+          "getTokenInfoBurnedSpot": 3145,
+          "getTokenInfoFragmented": 14474,
+          "getTokenInfoFresh": 47624,
+          "getTokenInfoFresh31": 71934,
+          "getTokenInfoInitialized": 5634,
+          "getTokenInfos150Fresh": 6915998,
+          "getTokenInfos150Missing": 509745,
+          "getTokenInfos150Spot": 558045,
+          "getTokenInfoSpot": 3453,
+          "mintCrates1": 143087,
+          "mintCrates15": 499149,
+          "mintCrates15After1": 430749,
+          "mintCrates15After240": 430749,
+          "mintCrates15AfterWarehouse": 430749,
+          "mintCrates15Receiver": 525336,
+          "mintCrates1AfterWarehouse": 74687,
+          "mintCrates1EightRecipients": 143087,
+          "mintCrates1ThirtyTwoRecipients": 143087,
+          "mintCratesDiscounted1": 176709,
+          "mintCratesDiscounted1After1": 91209,
+          "mintCratesDiscounted3": 227575,
+          "mintFreeCrates1": 126470,
+          "mintFreeCrates15": 482532,
+          "mintFreeCrates15Receiver": 508719,
+          "mintFreeCrates1After1": 75170,
+          "mintFreeWarehouses1": 170921,
+          "mintFreeWarehouses1After1": 102521,
+          "mintWarehouses1": 187555,
+          "mintWarehouses15": 854417,
+          "mintWarehouses15AfterCrate": 786017,
+          "mintWarehouses15AfterWarehouse": 768917,
+          "mintWarehouses15Receiver": 880604,
+          "mintWarehouses1AfterCrate": 119155,
+          "mintWarehouses1AfterWarehouse": 102055,
+          "previewTokenURIs1ArtworkReceipt": 10183,
+          "previewTokenURIs30ArtworkReceipts": 95332,
+          "previewTokenURIs30Artworks": 84408,
+          "previewTokenURIs30Mixed": 92689,
+          "registerDeliverySingle": 58642,
+          "registerDeliverySplit": 81012,
+          "releaseAllMintFourRecipients": 303143,
+          "releaseAllMintFourRecipientsAfterRelease": 117643,
+          "releaseAllMintThirtyTwoGasBurningRecipients": 4151932,
+          "releaseAllMintThirtyTwoRecipients": 2089655,
+          "releaseAllMintThirtyTwoRecipientsAfterRelease": 725355,
+          "releaseAllMintThirtyTwoRecipientsEmpty": 264357,
+          "releaseDelivery": 92509,
+          "releaseDeliveryAfterRelease": 50409,
+          "releaseDeliveryEmpty": 35694,
+          "releaseDeliveryFor": 90658,
+          "releaseMint": 107728,
+          "releaseMintAfterRelease": 48528,
+          "releaseMintEightRecipients": 107728,
+          "setBaseURI100": 129595,
+          "setBaseURI1024": 1159234,
+          "setBaseURI256": 287041,
+          "setBaseURI40": 58633,
+          "setFreeMintAllowancesThirtyTwo": 1087597,
+          "setFreeMintAllowancesThirtyTwoAfterUse": 540409,
+          "stats": 26275,
+          "unboxCrate20": 128948,
+          "unboxCrate20Receiver": 160298,
+          "unboxCrate31": 133035,
+          "unboxCrate31Receiver": 181492,
+          "unboxCrates1": 132807,
+          "unboxCrates15": 1194738,
+          "unboxCrates15Bonus": 1215925,
+          "unboxCrates15BonusReceiver": 1703472,
+          "unboxCrates15BonusSeparate": 1716007,
+          "unboxCrates15BonusSeparateReceiver": 2203364,
+          "unboxCrates15Receiver": 1665159,
+          "unboxCrates15Separate": 1694820,
+          "unboxCrates15SeparateReceiver": 2165070,
+          "unboxRelic": 2896204,
+          "unboxRelicReceiver": 3089993,
+          "unboxWarehouse": 349631,
+          "unboxWarehouseReceiver": 368840,
+          "warehousesMinted": 2373
+        },
+        "comparison": {
+          "deltas": {
+            "allocatedCrates": 0,
+            "allocateRelics1": 98,
+            "allocateRelics18": 98,
+            "allocateRelics18WithoutPayment": 98,
+            "claim20": -1275,
+            "claim20Crate10": -1275,
+            "claim20Receiver": -1275,
+            "claim31": -1957,
+            "claim31Receiver": -1957,
+            "claimRelic": 7,
+            "claimRelicAfter1": 7,
+            "claimRelicReceiver": 7,
+            "deliverArtwork1": -89,
+            "deliverArtwork1Receiver": -89,
+            "deliverArtworks20Ascending": -2046,
+            "deliverArtworks20AscendingReceiver": -2046,
+            "deliverArtworks20Descending": -2046,
+            "deliverArtworks20DescendingReceiver": -2046,
+            "deliverArtworks20Shuffled": -2046,
+            "deliverArtworks20ShuffledReceiver": -2046,
+            "deliverArtworks31Ascending": -3179,
+            "deliverArtworks31AscendingReceiver": -3179,
+            "deliverArtworks31Descending": -3179,
+            "deliverArtworks31DescendingReceiver": -3179,
+            "deliverArtworks31Shuffled": -3179,
+            "deliverArtworks31ShuffledReceiver": -3179,
+            "deliverArtworks50": -5136,
+            "deliverArtworks50Descending": -5136,
+            "deliverArtworks50DescendingReceiver": -5136,
+            "deliverArtworks50Receiver": -5136,
+            "deliverArtworks50Shuffled": -5136,
+            "deliverArtworks50ShuffledReceiver": -5136,
+            "deliverCrate1": -122,
+            "deliverCrate1Receiver": -122,
+            "deliverCrates50": -6786,
+            "deliverCrates50Descending": -6786,
+            "deliverCrates50DescendingReceiver": -6786,
+            "deliverCrates50Receiver": -6786,
+            "deliverCrates50Shuffled": -6786,
+            "deliverCrates50ShuffledReceiver": -6786,
+            "deliverFragmentedArtworks50Ascending": -5136,
+            "deliverFragmentedArtworks50AscendingReceiver": -5136,
+            "deliverFragmentedArtworks50Descending": -5136,
+            "deliverFragmentedArtworks50DescendingReceiver": -5136,
+            "deliverFragmentedArtworks50Shuffled": -5136,
+            "deliverFragmentedArtworks50ShuffledReceiver": -5136,
+            "deliverInitializedArtworks50Ascending": -5136,
+            "deliverInitializedArtworks50AscendingReceiver": -5136,
+            "deliverInitializedArtworks50Descending": -5136,
+            "deliverInitializedArtworks50DescendingReceiver": -5136,
+            "deliverInitializedArtworks50Shuffled": -5136,
+            "deliverInitializedArtworks50ShuffledReceiver": -5136,
+            "deliverMixed50": -5961,
+            "deliverMixed50Descending": -5961,
+            "deliverMixed50DescendingReceiver": -5961,
+            "deliverMixed50Receiver": -5961,
+            "deliverMixed50Shuffled": -5961,
+            "deliverMixed50ShuffledReceiver": -5961,
+            "deliverRelic1": -122,
+            "deliverRelic1Receiver": -122,
+            "deliverSparseArtworks50Ascending": -5136,
+            "deliverSparseArtworks50AscendingReceiver": -5136,
+            "deliverSparseArtworks50Descending": -5136,
+            "deliverSparseArtworks50DescendingReceiver": -5136,
+            "deliverSparseArtworks50Shuffled": -5136,
+            "deliverSparseArtworks50ShuffledReceiver": -5136,
+            "deliverySingleCrateAfterRelease": -122,
+            "deliverySingleCrateFresh": -122,
+            "deliverySingleCratePending": -122,
+            "deliverySingleMixed50Fresh": -5961,
+            "deliverySingleMixed50Pending": -5961,
+            "deliverySplitCrateAfterRelease": -122,
+            "deliverySplitCrateFresh": -122,
+            "deliverySplitCrateNewConfigAfterSingle": -122,
+            "deliverySplitCratePending": -122,
+            "deliverySplitMixed50Fresh": -5961,
+            "deliverySplitMixed50Pending": -5961,
+            "getRelicClaimedMaskEmpty": 0,
+            "getRelicClaimedMaskFull": 0,
+            "getTokenInfoAbsentSequential": 23,
+            "getTokenInfoAbsentSpot": 11,
+            "getTokenInfoBurnedSequential": 11,
+            "getTokenInfoBurnedSpot": 11,
+            "getTokenInfoFragmented": 11,
+            "getTokenInfoFresh": 11,
+            "getTokenInfoFresh31": 11,
+            "getTokenInfoInitialized": 11,
+            "getTokenInfos150Fresh": -2480,
+            "getTokenInfos150Missing": -2480,
+            "getTokenInfos150Spot": -2480,
+            "getTokenInfoSpot": 11,
+            "mintCrates1": 13,
+            "mintCrates15": -855,
+            "mintCrates15After1": -855,
+            "mintCrates15After240": -855,
+            "mintCrates15AfterWarehouse": -855,
+            "mintCrates15Receiver": -855,
+            "mintCrates1AfterWarehouse": 13,
+            "mintCrates1EightRecipients": 13,
+            "mintCrates1ThirtyTwoRecipients": 13,
+            "mintCratesDiscounted1": -55,
+            "mintCratesDiscounted1After1": -55,
+            "mintCratesDiscounted3": -179,
+            "mintFreeCrates1": 1,
+            "mintFreeCrates15": -867,
+            "mintFreeCrates15Receiver": -867,
+            "mintFreeCrates1After1": 1,
+            "mintFreeWarehouses1": 1,
+            "mintFreeWarehouses1After1": 1,
+            "mintWarehouses1": -31,
+            "mintWarehouses15": -899,
+            "mintWarehouses15AfterCrate": -899,
+            "mintWarehouses15AfterWarehouse": -899,
+            "mintWarehouses15Receiver": -899,
+            "mintWarehouses1AfterCrate": -31,
+            "mintWarehouses1AfterWarehouse": -31,
+            "previewTokenURIs1ArtworkReceipt": -120,
+            "previewTokenURIs30ArtworkReceipts": -1860,
+            "previewTokenURIs30Artworks": -1680,
+            "previewTokenURIs30Mixed": -1752,
+            "registerDeliverySingle": -12,
+            "registerDeliverySplit": -12,
+            "releaseAllMintFourRecipients": 31,
+            "releaseAllMintFourRecipientsAfterRelease": 31,
+            "releaseAllMintThirtyTwoGasBurningRecipients": 24,
+            "releaseAllMintThirtyTwoRecipients": 31,
+            "releaseAllMintThirtyTwoRecipientsAfterRelease": 31,
+            "releaseAllMintThirtyTwoRecipientsEmpty": 31,
+            "releaseDelivery": 75,
+            "releaseDeliveryAfterRelease": 75,
+            "releaseDeliveryEmpty": 75,
+            "releaseDeliveryFor": 75,
+            "releaseMint": 98,
+            "releaseMintAfterRelease": 98,
+            "releaseMintEightRecipients": 98,
+            "setBaseURI100": -36,
+            "setBaseURI1024": -36,
+            "setBaseURI256": -36,
+            "setBaseURI40": -36,
+            "setFreeMintAllowancesThirtyTwo": -68,
+            "setFreeMintAllowancesThirtyTwoAfterUse": -68,
+            "stats": 23,
+            "unboxCrate20": -556,
+            "unboxCrate20Receiver": -556,
+            "unboxCrate31": -875,
+            "unboxCrate31Receiver": -875,
+            "unboxCrates1": -671,
+            "unboxCrates15": -9827,
+            "unboxCrates15Bonus": -10146,
+            "unboxCrates15BonusReceiver": -10146,
+            "unboxCrates15BonusSeparate": -8659,
+            "unboxCrates15BonusSeparateReceiver": -8659,
+            "unboxCrates15Receiver": -9827,
+            "unboxCrates15Separate": -8340,
+            "unboxCrates15SeparateReceiver": -8340,
+            "unboxRelic": -6925,
+            "unboxRelicReceiver": -6925,
+            "unboxWarehouse": -681,
+            "unboxWarehouseReceiver": -681,
+            "warehousesMinted": 0
+          },
+          "improvementCount": 119,
+          "regressionCount": 37,
+          "writeImprovementCount": 112,
+          "writeRegressionCount": 27,
+          "writeRegressions": [
+            "allocateRelics1",
+            "allocateRelics18",
+            "allocateRelics18WithoutPayment",
+            "claimRelic",
+            "claimRelicAfter1",
+            "claimRelicReceiver",
+            "mintCrates1",
+            "mintCrates1AfterWarehouse",
+            "mintCrates1EightRecipients",
+            "mintCrates1ThirtyTwoRecipients",
+            "mintFreeCrates1",
+            "mintFreeCrates1After1",
+            "mintFreeWarehouses1",
+            "mintFreeWarehouses1After1",
+            "releaseAllMintFourRecipients",
+            "releaseAllMintFourRecipientsAfterRelease",
+            "releaseAllMintThirtyTwoGasBurningRecipients",
+            "releaseAllMintThirtyTwoRecipients",
+            "releaseAllMintThirtyTwoRecipientsAfterRelease",
+            "releaseAllMintThirtyTwoRecipientsEmpty",
+            "releaseDelivery",
+            "releaseDeliveryAfterRelease",
+            "releaseDeliveryEmpty",
+            "releaseDeliveryFor",
+            "releaseMint",
+            "releaseMintAfterRelease",
+            "releaseMintEightRecipients"
+          ],
+          "worstWriteRegression": 98,
+          "abiUnchanged": true,
+          "withinDeploymentSizeLimits": true,
+          "deploymentDeltas": {
+            "collection": 101131
+          }
+        },
+        "deploymentTransactions": {
+          "collection": {
+            "address": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+            "gasUsed": 5939080,
+            "constructorArgumentBytes": 704
+          }
+        }
+      }
+    ],
+    "baseline": {
+      "label": "legacy-200",
+      "validation": "regenerated",
+      "snapshotCount": 160,
+      "mismatches": []
+    },
+    "status": "complete"
+  }
+}

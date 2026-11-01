@@ -6,7 +6,7 @@ The [v11 release](../../releases/111k-sepolia-v11/README.md) adds the relic clai
 
 Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving signer rotation and emergency controls. Proceeds releases are permissionless. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
 
-The contract dependencies are `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`; allowlist tooling uses OpenZeppelin's standard Merkle-tree generator. Foundry and Solidity 0.8.30 must already be installed. Builds and tests use `--offline` and do not download compilers. No Hardhat or forge-std dependency is needed.
+The contract dependencies are `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`; allowlist tooling uses OpenZeppelin's standard Merkle-tree generator. Foundry and Solidity 0.8.38 must already be installed. Builds and tests use `--offline` and do not download compilers. Historical benchmark reproductions also require Solidity 0.8.30. No Hardhat or forge-std dependency is needed.
 
 ## Check
 
@@ -28,7 +28,7 @@ The repository-root `npm run check:all` runs these checks and the extended invar
 
 The tests cover relic supply and lifetime caps, mixed relic/warehouse/direct allocation, every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, sequential digital identities and disjoint physical receipts, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also verify receipt commitments and confirm that token-based artwork identities stay stable after an opening-order reorg.
 
-Stateful invariant tests mix public and discounted purchases, free mints and allowance changes, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount and free mint usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
+Stateful invariant tests mix public and discounted purchases, free mints and allowance changes, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount and free mint usage, and consumed authorizations. A separate payout model mixes accepting, rejecting, and expensive receivers, new revenue, delivery configuration registration, individual withdrawals, and batch retries. It checks cumulative entitlements, retained credits, receiver balances, and ETH conservation after every action. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run both suites with the longer campaign:
 
 ```sh
 npm run test:invariants:extended
@@ -234,13 +234,41 @@ The owner can change the metadata prefix with `setBaseURI(string)`. The construc
 
 ## Gas comparison
 
-### Relic claim availability and 200-run build (2026-11-01)
+### Solidity 0.8.38 and 500-run build (2026-11-01)
 
-The [relic claim compiler comparison](benchmarks/relic-claims-compiler-200-comparison.json) measures the same canonical source at 200 and 500 runs, including owner allocation, individual claims, registered delivery configurations and payouts. All 139 measured writes must remain below a 1% increase; the 21 read-only cases are reported separately. Run `npm --prefix onchain/ethereum run gas:compiler-gate -- --check` to verify this gate without changing reports.
+The active build uses Solidity 0.8.38, 500 optimizer runs, the legacy pipeline (`via_ir = false`), Prague, and no bytecode metadata hash. The three source refactors skip zero-value mint revenue writes, calculate the physical claim's first receipt token before its loop, and cache mint payout accounting for explicit restoration after a failed receiver call. The public ABI, storage layout, authorization formats, events, and callback ordering are preserved.
+
+The [current compiler comparison](benchmarks/compiler-solc-0.8.38-legacy-500-comparison.json) compares the selected 500-run candidate with the same source compiled at 200 runs. Both use one fixed 200-run harness and receiver. All 139 measured writes must remain below a 1% increase; the 21 read-only cases are reported separately. Normal [gas snapshots](snapshots/NFT111KGasTest.json) instead compile the harness and receiver at the production 500-run setting. Run `npm --prefix onchain/ethereum run gas:compiler-gate -- --check` to reproduce the gate and verify the committed report's stable inputs and measurements without updating it.
+
+The selected runtime is 24,401 bytes, leaving 175 bytes under EIP-170. Creation bytecode plus maximum constructor arguments is 35,132 bytes. The contract's size tests enforce both runtime and initcode limits. Compiler settings affect new builds and deployments; historical deployed collections retain their original bytecode.
+
+The following production snapshots compare the preceding build at commit `4514b4f34af39f18fd465171c9d03b3ff3590450` with the current build. These differences include both the refactors and compiler settings; the compiler comparison above isolates optimizer settings on identical source.
+
+| Operation | Previous 0.8.30 / 200 runs | Current 0.8.38 / 500 runs | Change |
+| --- | ---: | ---: | ---: |
+| Mint one crate | 143,063 | 143,087 | +24 |
+| Mint 15 crates | 499,993 | 499,149 | -844 |
+| Mint one free crate | 128,756 | 126,470 | -2,286 |
+| Mint one free warehouse | 173,207 | 170,921 | -2,286 |
+| Unbox one ordinary crate | 129,504 | 128,948 | -556 |
+| Unbox 15 ordinary crates | 1,204,565 | 1,194,738 | -9,827 |
+| Unbox one warehouse | 350,312 | 349,631 | -681 |
+| Unbox one relic | 2,903,129 | 2,896,204 | -6,925 |
+| Redeem one crate | 153,627 | 153,505 | -122 |
+| Redeem one artwork | 161,014 | 160,925 | -89 |
+| Redeem 50 mixed items | 2,475,497 | 2,469,536 | -5,961 |
+| Claim 20 artwork receipts | 604,422 | 601,662 | -2,760 |
+| Claim 31 artwork receipts | 891,151 | 886,851 | -4,300 |
+| Release mint proceeds to 32 recipients, first payout | 2,098,520 | 2,089,655 | -8,865 |
+| Release mint proceeds to 32 recipients, repeat payout | 734,220 | 725,355 | -8,865 |
+
+### Historical relic claim availability and 200-run build (2026-11-01)
+
+The preserved [relic claim compiler comparison](benchmarks/relic-claims-compiler-200-comparison.json) measures the preceding source using Solidity 0.8.30 at 200 and 500 runs, including owner allocation, individual claims, registered delivery configurations and payouts. All 139 measured writes passed its less-than-1% gate; the 21 read-only cases were reported separately.
 
 The 200-run runtime is 23,922 bytes, leaving 654 bytes under EIP-170. Creation bytecode plus maximum constructor arguments is 34,639 bytes. The 500-run reference runtime is 24,394 bytes. All writes pass the compiler gate, with a maximum increase of about 0.835%; read-only increases reach about 1.99%. Exact fixed-width URI scheme comparisons preserve validation while avoiding repeated byte-index checks.
 
-The [preorder-only compiler report](benchmarks/relic-preorders-compiler-200-comparison.json), [v10 registered delivery report](benchmarks/v10-registered-delivery.json), [v10 compiler comparison](benchmarks/v10-compiler-200-comparison.json), [original three-way experiment](benchmarks/registered-delivery.json), and [frozen references](benchmarks/reference/README.md) remain historical evidence. `npm --prefix onchain/ethereum run gas:delivery:history` reproduces the original study independently of the canonical ABI. Its first configuration required a separate registration; the current constructor initializes it atomically.
+The [preorder-only compiler report](benchmarks/relic-preorders-compiler-200-comparison.json), [v10 registered delivery report](benchmarks/v10-registered-delivery.json), [v10 compiler comparison](benchmarks/v10-compiler-200-comparison.json), [original three-way experiment](benchmarks/registered-delivery.json), and [frozen references](benchmarks/reference/README.md) remain historical evidence. `npm --prefix onchain/ethereum run gas:delivery` reproduces the v10 study from pinned commit `b184cb4cbed24e0f306ee27d18c06d84debe3018`, writing `benchmarks/v10-registered-delivery-reproduction.json` and protecting the original report from overwrite. `npm --prefix onchain/ethereum run gas:delivery:history` reproduces the original three-way study independently of the canonical ABI. Its first configuration required a separate registration; the current constructor initializes it atomically.
 
 ### Historical signed-address experiment (2026-11-01)
 
@@ -258,7 +286,7 @@ Values include transaction and calldata costs and refunds; setup/signing are exc
 
 That signed-address revision had a 23,832-byte runtime and used 500 optimizer runs. The new feature intentionally changes the ABI and storage layout, so it has its own comparison rather than the optimizer-only 1% gate below.
 
-### 500-run build (2026-11-01)
+### Historical 500-run build (2026-11-01)
 
 The [fixed-reference report](benchmarks/optimizer-500-comparison.json) compares the original source at commit `32841d396ca81eb25c77ccd30e3a5546d0bc91fd`, compiled at 1,000 runs, against the historical 500-run build with URI character caching. The ABI and storage layout must remain identical. This applies to future deployments; existing collections retain their bytecode.
 
@@ -272,7 +300,7 @@ Both historical commits must be available in local Git history; the command does
 
 The recorded comparison passed all cases. Maximum increases were **0.0153% / 306 gas** for successful transaction receipts, **0.0228% / 6 gas** for failed URI-update receipts, and **0.214% / 180 gas** for read-call execution. Each build runs the 106 receipt operations twice, producing 424 measured receipts in total. These are measured gas units, independent of the ETH gas price.
 
-Normal gas snapshots compile the harness at the configured 200 runs; the fixed-reference comparison keeps the harness unchanged to isolate contract costs. After intentionally updating snapshots with `npm --prefix onchain/ethereum run gas:update`, verify them with `gas:check`. Historical compiler reports remain unchanged. The percentage gate covers measured scenarios under Prague rules, not every possible future input, receiver, or fork.
+Normal gas snapshots compile the harness at the configured 500 runs; the fixed-reference comparison keeps its historical harness unchanged to isolate contract costs. After intentionally updating snapshots with `npm --prefix onchain/ethereum run gas:update`, verify them with `gas:check`. Historical compiler reports remain unchanged. The percentage gate covers measured scenarios under Prague rules, not every possible future input, receiver, or fork.
 
 ### Mint payout batches (2026-10-31)
 
@@ -320,9 +348,9 @@ Regenerate the report after reviewing updated gas snapshots:
 node scripts/benchmark-batch.mjs
 ```
 
-### Compiler settings (2026-10-18)
+### Historical compiler settings (2026-10-18)
 
-The build uses Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), with `optimizer_runs = 200`. URI validation caches each character before applying its existing checks. The preserved [compiler comparison](benchmarks/compiler-settings.json) measures the renamed sources before batch operations were added, at legacy/200 and legacy/1000. Its 89 benchmarks, source/toolchain hashes, ABI comparisons, code sizes and deployment receipts describe that earlier revision, not the current batch implementation.
+The preserved [compiler comparison](benchmarks/compiler-settings.json) uses Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`) to measure the renamed sources before batch operations were added, at legacy/200 and legacy/1000. Its 89 benchmarks, source/toolchain hashes, ABI comparisons, code sizes and deployment receipts describe that earlier revision, not the current batch implementation.
 
 In that recorded comparison, all 77 write measurements and eight reads improve at 1000 runs; four reads are unchanged and none regress.
 
@@ -345,12 +373,16 @@ In that recorded comparison, all 77 write measurements and eight reads improve a
 
 At that revision, collection deployment costs 3,619,228 gas (+230,924); renderer deployment costs 2,579,059 (+291,853). Those one-time costs are separate from user-call savings. Normal gas snapshots also compile the test receiver at the selected settings; the compiler comparison keeps its bytecode fixed to isolate the collection's improvements.
 
-Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [historical legacy/200 baseline](benchmarks/compiler-legacy-200.json) records the source, harness, dependency and compiler provenance for those 89 measurements. The [CDN legacy/200 baseline](benchmarks/compiler-legacy-200-cdn.json) preserves the former two-contract implementation. Current tooling uses the [single-contract legacy/200 baseline](benchmarks/compiler-legacy-200-single-contract.json) and [single-contract comparison](benchmarks/compiler-single-contract.json). Normal runs reject changed provenance or measurements; they never silently replace the active baseline. In these records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
+Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [historical legacy/200 baseline](benchmarks/compiler-legacy-200.json) records the source, harness, dependency and compiler provenance for those 89 measurements. The [CDN legacy/200 baseline](benchmarks/compiler-legacy-200-cdn.json) preserves the former two-contract implementation. The [single-contract legacy/200 baseline](benchmarks/compiler-legacy-200-single-contract.json) and [single-contract comparison](benchmarks/compiler-single-contract.json) also remain historical. In these records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
 
-The source before relic support had 113 benchmarks and used the single-contract baseline. That revision’s selected legacy/1000 collection deploys in 5,338,642 gas on Prague Anvil; its creation bytecode is 25,616 bytes plus 640 constructor bytes for four recipients (896 for eight). Sepolia deployment gas must be estimated against the live chain. Reproduce the earlier comparison from its recorded source revision. To compare current sources against the active baseline, run:
+The source before relic support had 113 benchmarks and used the single-contract baseline. That revision’s selected legacy/1000 collection deploys in 5,338,642 gas on Prague Anvil; its creation bytecode is 25,616 bytes plus 640 constructor bytes for four recipients (896 for eight). Sepolia deployment gas must be estimated against the live chain. Reproduce the earlier comparison from its recorded source revision.
+
+### Compiler benchmark tooling
+
+Current tooling uses the [Solidity 0.8.38 legacy/200 baseline](benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json). Normal runs reject changed provenance or measurements; they never silently replace this baseline. To compare the current 200- and 500-run builds against it, run:
 
 ```sh
-node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 1000
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 500
 ```
 
 The full 14-configuration matrix remains available. Omitting pipeline and run arguments tests legacy runs 1, 50, 200, 500, 1000, 1500, 2000, 5000 and 10000, plus IR runs 1, 50, 200, 1000 and 10000:
@@ -363,8 +395,11 @@ node scripts/benchmark-compiler.mjs /tmp/111k-ir-settings.json ir 1 50 200 1000 
 After reviewing an intentional source, harness or toolchain change, explicitly regenerate the compiler baseline, then rerun the comparison without the update flag to verify it:
 
 ```sh
-node scripts/benchmark-compiler.mjs /tmp/111k-compiler-baseline-update.json legacy 200 1000 --update-baseline
-node scripts/benchmark-compiler.mjs /tmp/111k-single-contract-compiler-settings.json legacy 200 1000
+npm run gas:update
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-baseline-update.json legacy 200 500 --update-baseline
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 500
+npm run gas:compiler-gate
+npm run gas:compiler-gate -- --check
 ```
 
 Compiler comparisons leave normal gas snapshots unchanged. Regenerate those separately with `npm run gas:update` when intended. The compiler settings affect future builds and deployments; existing deployed contracts retain their original bytecode.

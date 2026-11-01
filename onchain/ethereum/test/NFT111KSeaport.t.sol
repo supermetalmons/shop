@@ -1,4 +1,4 @@
-pragma solidity 0.8.30;
+pragma solidity 0.8.38;
 
 import {NFT111K} from "../src/NFT111K.sol";
 import {IERC721A} from "erc721a/contracts/IERC721A.sol";

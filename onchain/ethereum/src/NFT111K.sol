@@ -1,4 +1,4 @@
-pragma solidity 0.8.30;
+pragma solidity 0.8.38;
 
 import {ERC721A} from "erc721a/contracts/ERC721A.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -267,7 +267,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
         relicsAllocated = quantity;
         allocatedCrates = quantity * CRATES_PER_RELIC;
-        totalMintReceived += msg.value;
+        if (msg.value != 0) totalMintReceived += msg.value;
         emit RelicsAllocated(quantity, msg.value);
     }
 
@@ -408,10 +408,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         usedClaims[claimId] = true;
         _burn(receiptId);
         uint256 count = _crateContentsCount(crateNumber);
-        uint256 firstDisplayId = MAX_ARTWORKS + (crateNumber - 1) * 20 + 1;
+        uint256 firstReceiptId = ARTWORK_RECEIPT_OFFSET + MAX_ARTWORKS + (crateNumber - 1) * 20 + 1;
         uint256[] memory receiptIds = new uint256[](count);
         for (uint256 i; i < count; ++i) {
-            receiptIds[i] = ARTWORK_RECEIPT_OFFSET + firstDisplayId + i;
+            receiptIds[i] = firstReceiptId + i;
             _mintSpotOnce(msg.sender, receiptIds[i]);
         }
         emit CrateReceiptClaimed(claimId, msg.sender, receiptId, receiptIds);
@@ -624,10 +624,13 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function _releaseMint(address recipient, bool batch) private {
-        uint256 amount = releasableMint(recipient);
+        uint256 released = mintReleased[recipient];
+        uint256 entitlement = _shareOf(totalMintReceived, mintSharesBps[recipient]);
+        uint256 amount = entitlement - released;
         if (amount == 0) return;
-        mintReleased[recipient] += amount;
-        totalMintReleased += amount;
+        mintReleased[recipient] = entitlement;
+        uint256 totalReleased = totalMintReleased;
+        totalMintReleased = totalReleased + amount;
         bool paid;
         if (batch) {
             paid = _payWithBoundedGas(recipient, amount);
@@ -636,8 +639,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
         if (!paid) {
             if (!batch) revert ProceedsPaymentFailed();
-            mintReleased[recipient] -= amount;
-            totalMintReleased -= amount;
+            mintReleased[recipient] = released;
+            totalMintReleased = totalReleased;
             emit MintProceedsReleaseFailed(recipient, amount);
             return;
         }
@@ -756,7 +759,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     ) private {
         uint256 firstCrate = allocatedCrates + 1;
         allocatedCrates += quantity * crateUnits;
-        totalMintReceived += msg.value;
+        if (msg.value != 0) totalMintReceived += msg.value;
         // Purchase checks bound every allocation and token index below the collection limits.
         unchecked {
             for (uint256 i; i < quantity; ++i) {

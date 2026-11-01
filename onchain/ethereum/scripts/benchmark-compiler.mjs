@@ -33,7 +33,7 @@ const testCommand = ['test', '--offline', '--isolate', '--match-contract', `^${h
   '--gas-snapshot-check=false', '--gas-snapshot-emit=false', '--json'];
 const names = ['NFT111K'];
 const metadataBaseURI = 'https://cdn.mons.shop/111k-sepolia/';
-const baselineName = 'benchmarks/compiler-legacy-200-single-contract.json';
+const baselineName = 'benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json';
 const baselinePath = join(packageRoot, baselineName);
 assert.notEqual(outputPath, baselinePath, 'The report output must differ from the checked-in baseline');
 const committedSnapshots = JSON.parse(read(join(packageRoot, 'snapshots/NFT111KGasTest.json')));
@@ -66,7 +66,7 @@ test = "test"
 out = "out"
 cache_path = "cache"
 libs = ["node_modules"]
-solc_version = "0.8.30"
+solc_version = "0.8.38"
 optimizer = true
 optimizer_runs = ${optimizerRuns}
 via_ir = ${viaIR}
@@ -109,7 +109,7 @@ function prepareHarness() {
   const directory = createProject('harness');
   mkdirSync(join(directory, 'test'));
   mkdirSync(join(directory, 'candidate'));
-  const harness = `pragma solidity 0.8.30;
+  const harness = `pragma solidity 0.8.38;
 
 import {NFT111KGasTest} from "./NFT111KGas.t.sol";
 import {NFT111K} from "../src/NFT111K.sol";
@@ -285,7 +285,7 @@ const report = {
     defaultRuns,
     requestedMatrix: Object.fromEntries(pipelines.map(pipeline => [pipeline, requestedRuns ?? defaultRuns[pipeline]])),
     scriptSha256: hash(read(fileURLToPath(import.meta.url))),
-    fixedSettings: { solc: '0.8.30', optimizer: true, evmVersion: 'prague', bytecodeHash: 'none' },
+    fixedSettings: { solc: '0.8.38', optimizer: true, evmVersion: 'prague', bytecodeHash: 'none' },
     maximumCollectionArgumentBytes,
     harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE at identical addresses, preserving signed calldata.',
     measurement: `All ${expectedNames.length} measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; Separate benchmarks sum 15 isolated single-unpack calls with snapshotValue. Read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.`,

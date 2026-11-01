@@ -1,4 +1,4 @@
-pragma solidity 0.8.30;
+pragma solidity 0.8.38;
 
 import {Deploy111K} from "../script/Deploy111K.s.sol";
 import {NFT111K} from "../src/NFT111K.sol";

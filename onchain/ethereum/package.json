@@ -16,7 +16,7 @@
     "gas:compiler-gate": "node scripts/check-registered-compiler.mjs",
     "test:gas-check": "node --test scripts/check-gas-snapshots.test.mjs",
     "test:gas-comparison": "node --test scripts/gas-comparison.test.mjs",
-    "test:compiler-benchmark": "node --test scripts/benchmark-compiler.test.mjs",
+    "test:compiler-benchmark": "node --test scripts/benchmark-compiler.test.mjs scripts/compiler-gate.test.mjs",
     "test:proceeds": "node --test scripts/proceeds-config.test.mjs",
     "test:free-mints": "node --test scripts/free-mint-config.test.mjs",
     "free-mints:check": "node scripts/free-mints.mjs check",
@@ -25,7 +25,7 @@
     "discounts:generate": "node scripts/generate-discounts.mjs",
     "discounts:check": "node scripts/generate-discounts.mjs --check",
     "test:discounts": "node --test scripts/generate-discounts.test.mjs",
-    "test:invariants:extended": "FOUNDRY_INVARIANT_RUNS=512 FOUNDRY_INVARIANT_DEPTH=128 forge test --offline --match-contract NFT111KInvariantTest --gas-snapshot-emit=false",
+    "test:invariants:extended": "FOUNDRY_INVARIANT_RUNS=512 FOUNDRY_INVARIANT_DEPTH=128 forge test --offline --match-contract '^NFT111K.*InvariantTest$' --gas-snapshot-emit=false",
     "chain:local": "anvil --host 127.0.0.1 --chain-id 31337 --block-time 1",
     "deploy:local": "node scripts/deploy-local.mjs"
   },

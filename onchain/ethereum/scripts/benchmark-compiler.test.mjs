@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const baseline = 'benchmarks/compiler-legacy-200-single-contract.json';
-const historical = ['compiler-legacy-200.json', 'compiler-legacy-200-cdn.json', 'compiler-settings.json'];
+const baseline = 'benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json';
+const historical = readdirSync(join(root, 'benchmarks')).filter(name => name.endsWith('.json') && `benchmarks/${name}` !== baseline).sort();
 const read = path => readFileSync(path, 'utf8');
 
 test('compiler benchmarks reproduce deployable variants and reject oversized bytecode without changing historical baselines', () => {
@@ -87,4 +87,65 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
     assert.deepEqual(historical.map(name => read(join(root, 'benchmarks', name))), historicalBaselines);
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('historical delivery reproduction refuses to overwrite original reports', () => {
+  for (const name of ['v10-registered-delivery.json', 'registered-delivery.json']) {
+    const path = join(root, 'benchmarks', name);
+    const before = read(path);
+    const result = spawnSync(process.execPath, ['scripts/benchmark-delivery-configs.mjs', path],
+      { cwd: root, encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Historical delivery reports are protected/);
+    assert.equal(read(path), before);
+  }
+});
+
+test('historical delivery output protection recognizes filesystem aliases', t => {
+  const directory = mkdtempSync(join(tmpdir(), '111k-output-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const repository = join(directory, 'repository');
+  const contractRoot = join(repository, 'onchain/ethereum');
+  mkdirSync(join(contractRoot, 'scripts'), { recursive: true });
+  mkdirSync(join(contractRoot, 'benchmarks'));
+  const script = join(contractRoot, 'scripts/benchmark-delivery-configs.mjs');
+  cpSync(join(root, 'scripts/benchmark-delivery-configs.mjs'), script);
+  const historicalReport = join(contractRoot, 'benchmarks/v10-registered-delivery.json');
+  const defaultOutput = join(contractRoot, 'benchmarks/v10-registered-delivery-reproduction.json');
+  writeFileSync(historicalReport, 'historical evidence');
+  const alias = join(directory, 'repository-alias');
+  symlinkSync(repository, alias, 'dir');
+  const linkedFile = join(directory, 'linked.json');
+  symlinkSync(historicalReport, linkedFile);
+  const hardLink = join(directory, 'hard-link.json');
+  const outputs = [historicalReport, linkedFile,
+    join(alias, 'onchain/ethereum/benchmarks/v10-registered-delivery.json'),
+    join(alias, 'onchain/ethereum/benchmarks/new-report.json')];
+  for (const alternateRoot of [join(directory, 'REPOSITORY'), `/System/Volumes/Data${realpathSync(repository)}`]) {
+    if (existsSync(alternateRoot)) outputs.push(join(alternateRoot, 'onchain/ethereum/benchmarks/v10-registered-delivery.json'));
+  }
+  const run = output => spawnSync(process.execPath, [script, output], { cwd: directory, encoding: 'utf8' });
+  for (const output of outputs) {
+    const result = run(output);
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Historical delivery reports are protected/);
+  }
+  linkSync(historicalReport, hardLink);
+  assert.match(run(hardLink).stderr, /Historical delivery reports are protected/);
+  const outsideOutput = join(directory, 'outside.json');
+  writeFileSync(outsideOutput, 'previous reproduction');
+  for (const output of [defaultOutput, outsideOutput, join(directory, 'new/report.json')]) {
+    const result = run(output);
+    assert.ifError(result.error);
+    assert.match(result.stderr, /Command failed: git cat-file/);
+    assert.doesNotMatch(result.stderr, /Historical delivery reports are protected/);
+  }
+  symlinkSync(historicalReport, defaultOutput);
+  assert.match(run(defaultOutput).stderr, /Historical delivery reports are protected/);
+  rmSync(defaultOutput);
+  linkSync(historicalReport, defaultOutput);
+  assert.match(run(defaultOutput).stderr, /Historical delivery reports are protected/);
+  assert.equal(read(historicalReport), 'historical evidence');
 });
