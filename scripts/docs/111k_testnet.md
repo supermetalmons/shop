@@ -123,7 +123,7 @@ The shop checkout is unchanged and does not submit free claims. Existing deploym
 
 ## Sepolia configuration
 
-The registered-config replacement uses deployment ID `v10`, metadata under `https://cdn.mons.shop/111k-sepolia/v10/`, and constructor configuration 1 paying 100% to `0x5555555555555555555555555555555555555555`. Its deployment identity, verification and activation evidence are recorded in the [v10 release](../../releases/111k-sepolia-v10/README.md). The API contract address, creation block, metadata prefix, and reveal registration must match that release.
+The [v10 release](../../releases/111k-sepolia-v10/README.md) is live at `0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5`, deployed at Sepolia block `12041084` in [transaction](https://sepolia.etherscan.io/tx/0x32cbca1ef5d48cfc0743f6ba15819dba82ab8490437e432d624eda6ed972e9f1). Its [source is verified on Sourcify](https://repo.sourcify.dev/11155111/0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5). Deployment ID `v10` uses `https://cdn.mons.shop/111k-sepolia/v10/` and constructor configuration 1 pays 100% to `0x5555555555555555555555555555555555555555`. The API contract address, creation block, metadata prefix, and reveal registration match this release. Sales, commerce and reveal admission are active; V9 sales, redemptions and new reveal admission remain paused.
 
 The [v9 release](../../releases/111k-sepolia-v9/README.md) preserves the preceding monument receipt collection at `0x4d127fceeaa8b652744c4cb1f62f1101290180a8`, block `12033427`, with metadata under `https://cdn.mons.shop/111k-sepolia/v9/`. V9 and older metadata and reveal ledgers remain historical records.
 

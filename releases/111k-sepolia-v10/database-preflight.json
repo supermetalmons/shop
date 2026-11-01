@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-11-01T13:39:58.075649+00:00",
+  "migrationAppliedAfterScopedReset": true,
+  "latestCommerceMigration": "0047_ethereum_delivery_routing.sql",
+  "commerceHealthy": true,
+  "packStatusHealthy": true,
+  "opsHealthy": true,
+  "logsSha256": {
+    "migration.log": "099f3b663c17142876bdf983d72d0bbf0197ab368bfd415be6e89fd2e9dc4465",
+    "check-commerce-d1.log": "c67b6797f37a09e1df0221607ea6ba235ad007e2438724fc53bb0eae75fdd208",
+    "check-pack-status-d1.log": "83edccd467c93faf8af706366a1b9071bc269e0895db5d505a68d7fa3a598906",
+    "check-ops-d1.log": "92e6dbfe1e5b6751c32e61ffa7b485e2fe5ea0e36f3d7c0a66b8926d984d03c2",
+    "api-cutover-dry-run.log": "3c50422b90ee9c9b1c2a3afc5a6c896d10498e54baccf65efad683f834258196"
+  }
+}

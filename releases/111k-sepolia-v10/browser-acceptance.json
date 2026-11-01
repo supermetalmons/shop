@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-11-01T13:39:58.075649+00:00",
+  "url": "https://mons.shop/111k_devnet",
+  "contractAddress": "0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5",
+  "closedSaleObserved": true,
+  "closedMintButtonDisabled": true,
+  "openSaleObserved": true,
+  "openMintButtonEnabled": true,
+  "remainingCratesObserved": 5555,
+  "remainingMonumentsObserved": 18,
+  "monumentPriceObserved": "0.0088 ETH",
+  "consoleErrors": 0,
+  "consoleWarnings": 0,
+  "walletConnectedForQa": false,
+  "transactionsSentForQa": 0,
+  "screenshots": {
+    "browser-preopening.jpg": "3c7dd97c1890895c302627d6a959bcc0745e7a47622515dc4ba10b3839d23083",
+    "browser-open.jpg": "62cce81169bfdaae26f89be7c759c3547e2d0ea58fe447bf472d56e4f5ca24fe"
+  }
+}

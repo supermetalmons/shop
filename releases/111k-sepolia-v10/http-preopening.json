@@ -1,0 +1,326 @@
+{
+  "config": {
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "chainName": "Sepolia",
+    "contractAddress": "0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v10/",
+    "deploymentBlock": 12041084,
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "enabled": true,
+    "testnet": true,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "monumentPriceWei": "8800000000000000",
+    "deliveryFeeWei": "100000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15,
+    "maxDeliveryItems": 50
+  },
+  "stats": {
+    "chainId": 11155111,
+    "contractAddress": "0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5",
+    "owner": null,
+    "allocatedCrates": 0,
+    "warehousesMinted": 0,
+    "artworksMinted": 0,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": false,
+    "remainingCrates": 5555,
+    "remainingWarehouses": 505,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "monumentsMinted": 0,
+    "monumentPriceWei": "8800000000000000",
+    "remainingMonuments": 18
+  },
+  "commerce": {
+    "paused": false,
+    "revision": 28,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5",
+    "resetGuardId": null,
+    "lastResetId": "bbf1e2ce-00ac-4abc-9d22-3ba0394a3f16",
+    "updatedAtMs": 1793539090000
+  },
+  "currentReveal": {
+    "deploymentId": "v10",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v10/",
+    "deploymentBlock": 12041084,
+    "catalogVersion": "111k-v1",
+    "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+    "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+    "state": "active",
+    "revision": 3,
+    "createdAtMs": 1793537315000,
+    "updatedAtMs": 1793539095000,
+    "activatedAtMs": 1793539095000,
+    "provisionedAtMs": 1793537414207,
+    "lastError": null
+  },
+  "previousReveal": {
+    "deploymentId": "v9",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v9/",
+    "deploymentBlock": 12033427,
+    "catalogVersion": "111k-v1",
+    "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+    "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+    "state": "paused",
+    "revision": 4,
+    "createdAtMs": 1793444946000,
+    "updatedAtMs": 1793538912185,
+    "activatedAtMs": 1793445518000,
+    "provisionedAtMs": 1793445014264,
+    "lastError": null
+  },
+  "receipts": [
+    {
+      "displayId": 1,
+      "tokenId": "3000001",
+      "name": "Monument Receipt #1",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 2,
+      "tokenId": "3000002",
+      "name": "Monument Receipt #2",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 3,
+      "tokenId": "3000003",
+      "name": "Monument Receipt #3",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 4,
+      "tokenId": "3000004",
+      "name": "Monument Receipt #4",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 5,
+      "tokenId": "3000005",
+      "name": "Monument Receipt #5",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 6,
+      "tokenId": "3000006",
+      "name": "Monument Receipt #6",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 7,
+      "tokenId": "3000007",
+      "name": "Monument Receipt #7",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 8,
+      "tokenId": "3000008",
+      "name": "Monument Receipt #8",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 9,
+      "tokenId": "3000009",
+      "name": "Monument Receipt #9",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 10,
+      "tokenId": "3000010",
+      "name": "Monument Receipt #10",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 11,
+      "tokenId": "3000011",
+      "name": "Monument Receipt #11",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 12,
+      "tokenId": "3000012",
+      "name": "Monument Receipt #12",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 13,
+      "tokenId": "3000013",
+      "name": "Monument Receipt #13",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 14,
+      "tokenId": "3000014",
+      "name": "Monument Receipt #14",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 15,
+      "tokenId": "3000015",
+      "name": "Monument Receipt #15",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 16,
+      "tokenId": "3000016",
+      "name": "Monument Receipt #16",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 17,
+      "tokenId": "3000017",
+      "name": "Monument Receipt #17",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 18,
+      "tokenId": "3000018",
+      "name": "Monument Receipt #18",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "monument receipt"
+        }
+      ]
+    }
+  ],
+  "frontendAsset": "/assets/index-CNylkn0n.js",
+  "frontendAssetSha256": "f062472ec4e0c3119d384a7c9241d4ebdd5df1ee8b23c8bf71ce5e4025e1de1f"
+}
