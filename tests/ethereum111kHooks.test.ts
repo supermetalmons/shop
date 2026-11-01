@@ -2744,3 +2744,165 @@ test('a relic opening retains all 111 crates through stale indexing and reload',
   await waitFor(() => assert.deepEqual(view.result.current.items.map(crate => crate.tokenId), crates.map(crate => crate.tokenId)));
   assert.equal(connected.sent.length, 1);
 });
+
+function relicStatus(address: string | null = owner) {
+  return { chainId: config.chainId, contractAddress: contract, owner: address, observedBlock: 1, blockHash: `0x${'01'.repeat(32)}`,
+    saleActive: true, relicsAllocated: 12, relicsMinted: 0, remainingRelics: 12, claimedMask: 0,
+    relicLimit: address ? 3 : 0, relicsUsed: 0, remainingAllowance: address ? 3 : 0 };
+}
+
+function relicHarness(initialWallet = wallet()) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  clients.push(client);
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+  return { ...renderHook(({ wallet: current, kind, suspended }) => useEthereum111k(current, '', kind, suspended),
+    { initialProps: { wallet: initialWallet, kind: 'relic' as 'crate' | 'relic', suspended: false }, wrapper }), client };
+}
+
+test('relic claims submit one zero-value ID and confirm without receipt authentication', async t => {
+  let confirmed = false;
+  let reads = 0;
+  const minted = { ...token(owner, '117189'), kind: 'relic' as const, displayId: 18, name: 'Relic #18' };
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => { reads++; return relicStatus(address); });
+  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
+  t.mock.method(ethereumApi, 'challenge', async () => { throw new Error('Relic claims must not authenticate'); });
+  t.mock.method(ethereumApi, 'confirmClaim', async () => { throw new Error('Relic claims must not finalize physical receipt claims'); });
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmed ? 'confirmed' : 'pending', confirmations: 1,
+    items: confirmed ? [minted] : [], burnedTokenIds: [] }));
+  t.mock.method(ethereumApi, 'inventory', async (_config, _address, _cursor, _signal, expected = []) => ({
+    items: expected.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 2 }));
+  const connected = wallet();
+  const view = relicHarness(connected);
+  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
+  const before = reads;
+  await act(async () => { assert.equal(await view.result.current.claimRelic(18), true); });
+  assert.ok(reads > before);
+  assert.equal(connected.sent.length, 1);
+  assert.deepEqual(connected.sent[0], [{ from: owner, to: contract,
+    data: encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), value: '0x0', chainId: '0xaa36a7' }]);
+  const scope = ethereumInventoryScope(config, owner)!;
+  assert.equal(readEthereumPending(scope)?.action, 'relic-claim');
+  assert.equal(readEthereumSession(scope, config, owner), null);
+  await act(async () => { assert.equal(await view.result.current.claimRelic(2), false); });
+  confirmed = true;
+  act(() => view.result.current.refresh());
+  await waitFor(() => assert.equal(view.result.current.pending, null));
+  await waitFor(() => assert.equal(view.result.current.items[0]?.tokenId, '117189'));
+  assert.deepEqual(readEthereumExpected(scope), ['117189']);
+});
+
+for (const [change, message] of [
+  [{ claimedMask: 1 << 17, relicsMinted: 1, remainingRelics: 11 }, /just claimed/],
+  [{ remainingAllowance: 0, relicLimit: 0 }, /no relic claims/],
+  [{ remainingRelics: 0, relicsMinted: 12 }, /All allocated/],
+  [{ saleActive: false }, /not open/],
+] as const) test(`relic preflight rejects changed chain state: ${String(message)}`, async t => {
+  let current = relicStatus();
+  t.mock.method(ethereumApi, 'relics', async () => current);
+  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
+  const connected = wallet();
+  const view = relicHarness(connected);
+  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
+  current = { ...current, ...change };
+  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
+  assert.match(view.result.current.error ?? '', message);
+  assert.equal(connected.sent.length, 0);
+  assert.equal(readEthereumSubmission(ethereumInventoryScope(config, owner)!), null);
+});
+
+test('relic polling stops outside the visible panel and never reloads cached metadata', async t => {
+  speedUpConfirmationPolls(t);
+  let reads = 0;
+  let metadataReads = 0;
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => { reads++; return relicStatus(address); });
+  t.mock.method(ethereumApi, 'relicMetadata', async () => { metadataReads++; return []; });
+  const connected = wallet();
+  const view = relicHarness(connected);
+  await waitFor(() => assert.ok(reads >= 2));
+  assert.equal(metadataReads, 1);
+  const pause = async (next: { kind: 'crate' | 'relic'; suspended: boolean }, hidden: boolean) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: hidden ? 'hidden' : 'visible' });
+    act(() => { document.dispatchEvent(new dom.window.Event('visibilitychange')); view.rerender({ wallet: connected, ...next }); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+    const before = reads;
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+    assert.equal(reads, before);
+  };
+  await pause({ kind: 'crate', suspended: false }, false);
+  await pause({ kind: 'relic', suspended: true }, false);
+  await pause({ kind: 'relic', suspended: false }, true);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  const before = reads;
+  act(() => document.dispatchEvent(new dom.window.Event('visibilitychange')));
+  await waitFor(() => assert.ok(reads > before));
+  act(() => view.result.current.refresh());
+  await waitFor(() => assert.ok(reads > before + 1));
+  assert.equal(metadataReads, 1);
+});
+
+test('late relic availability from another wallet cannot authorize the current wallet', async t => {
+  let finish: (value: ReturnType<typeof relicStatus>) => void = () => {};
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => address === owner
+    ? new Promise<ReturnType<typeof relicStatus>>(resolve => { finish = resolve; })
+    : { ...relicStatus(address), relicLimit: 0, remainingAllowance: 0 });
+  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
+  const view = relicHarness();
+  await waitFor(() => assert.equal(view.result.current.relics.isFetching, true));
+  const changed = wallet(other);
+  act(() => view.rerender({ wallet: changed, kind: 'relic', suspended: false }));
+  await waitFor(() => assert.equal(view.result.current.relics.data?.owner, other));
+  await act(async () => { finish(relicStatus(owner)); });
+  assert.equal(view.result.current.relics.data?.owner, other);
+  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
+  assert.equal(changed.sent.length, 0);
+});
+
+test('a relic claim with an uncertain broadcast stays recoverable after remount', async t => {
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => relicStatus(address));
+  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
+  const connected = wallet();
+  const request = connected.provider!.request;
+  connected.provider!.request = async args => {
+    if (args.method === 'eth_sendTransaction') throw new Error('Connection lost after submitting');
+    return request(args);
+  };
+  const view = relicHarness(connected);
+  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
+  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
+  const scope = ethereumInventoryScope(config, owner)!;
+  assert.equal(readEthereumSubmission(scope)?.action, 'relic-claim');
+  view.unmount();
+  const restored = relicHarness(connected);
+  await waitFor(() => assert.equal(restored.result.current.submission?.action, 'relic-claim'));
+  await act(async () => { assert.equal(await restored.result.current.claimRelic(1), false); });
+  assert.match(restored.result.current.error ?? '', /recover the previous/);
+});
+
+for (const failure of ['stale', 'refresh-error'] as const) test(`relic submission stops if availability becomes ${failure} during wallet checks`, async t => {
+  let failReads = false;
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => {
+    if (failReads) throw new Error('RPC unavailable');
+    return relicStatus(address);
+  });
+  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
+  const connected = wallet();
+  const view = relicHarness(connected);
+  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
+  const request = connected.provider!.request;
+  connected.provider!.request = async args => {
+    if (args.method === 'eth_getTransactionCount') {
+      if (failure === 'stale') now += 9_000;
+      else {
+        failReads = true;
+        await view.result.current.relics.refetch();
+      }
+    }
+    return request(args);
+  };
+  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
+  assert.match(view.result.current.error ?? '', /availability changed/);
+  assert.equal(connected.sent.length, 0);
+  assert.equal(readEthereumSubmission(ethereumInventoryScope(config, owner)!), null);
+});

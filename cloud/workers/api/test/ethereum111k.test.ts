@@ -5,7 +5,7 @@ import test from 'node:test';
 import type { DeliveryOrderSummary } from '../../../../shared/contracts.ts';
 import { encodeAbi, decodeReturn, ETHEREUM_EVENT_TOPICS, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
-  type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
+  type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse, type EthereumStats, type EthereumRelicStatus } from '../../../../shared/ethereum/api.ts';
 import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumItemKind, ethereumMetadataTokenId, type EthereumInventoryItem, type EthereumMetadata } from '../../../../shared/ethereum/protocol.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
@@ -46,7 +46,7 @@ const blockHash = (number: number) => `0x${number.toString(16).padStart(64, '0')
 const functionSelector = (signature: string) => encodeCall(signature, [], []).slice(0, 10);
 const topicNumber = (value: number | string) => encodeAbi(['uint256'], [value]);
 const topicAddress = (value: string) => encodeAbi(['address'], [value]);
-const readPaths = new Set<string>([paths.config, paths.stats, paths.inventory, paths.metadata, paths.profile, paths.shipments, checkoutPaths.status]);
+const readPaths = new Set<string>([paths.config, paths.stats, paths.relics, paths.inventory, paths.metadata, paths.profile, paths.shipments, checkoutPaths.status]);
 type Rpc = { id: number; method: string; params: unknown[] };
 type Item = { kind: number; displayId: number; owner: string };
 
@@ -96,6 +96,8 @@ function fixture(controlActive = true) {
       [1, [DELIVERY_RECEIVER, ZERO, 0n, 0n, 0n, 0n]],
     ]),
     allocatedCrates: 25, relicsAllocated: 0, relicsMinted: 0, relicInterface: true, relicLimit: 18,
+    claimedMask: 0n, relicMaskInterface: true, saleActive: true,
+    freeMintAllowances: new Map<string, number[]>(),
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 7, owner: WALLET }]]),
@@ -148,6 +150,14 @@ function fixture(controlActive = true) {
         if (!state.relicInterface) return '0x';
         return encodeAbi(['uint256'], [state.relicLimit]);
       }
+      if (selector === functionSelector('getRelicClaimedMask()')) {
+        return state.relicMaskInterface ? encodeAbi(['uint256'], [state.claimedMask]) : '0x';
+      }
+      if (selector === functionSelector('freeMintAllowances(address)')) {
+        const [owner] = decodeReturn(['address'], argumentsHex) as [string];
+        return encodeAbi(['uint16', 'uint16', 'uint16', 'uint16', 'uint16', 'uint16'],
+          state.freeMintAllowances.get(owner) ?? [0, 0, 0, 0, 0, 0]);
+      }
       if (selector === functionSelector('quoteSigner()')) return encodeAbi(['address'], [state.expectedSigner]);
       if (selector === functionSelector('deliveryConfigs(uint256)')) {
         const [configId] = decodeReturn(['uint256'], argumentsHex) as [bigint];
@@ -190,7 +200,7 @@ function fixture(controlActive = true) {
       if (selector === functionSelector('stats(address)')) {
         const [owner] = decodeReturn(['address'], argumentsHex) as [string];
         return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
-          [state.allocatedCrates, 2, 20, '100000000000000', '1100000000000000', true, state.discountRoot,
+          [state.allocatedCrates, 2, 20, '100000000000000', '1100000000000000', state.saleActive, state.discountRoot,
             '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.relicsAllocated, state.relicsMinted]);
       }
     }
@@ -1472,9 +1482,10 @@ test('public stats verify the relic interface then read wallet discount usage wi
         discountMerkleRoot: f.state.discountRoot, discountCratePriceWei: '50000000000000',
         discountAllowance: 3, discountUsed: owner === WALLET ? 1 : 0,
       });
-      assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call', 'eth_call']);
+      assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call', 'eth_call', 'eth_call']);
       assert.deepEqual(f.state.calls[1].params, [{ to: CONTRACT, data: encodeCall('MAX_RELICS()', [], []) }, 'latest']);
-      assert.deepEqual(f.state.calls[2].params, [{
+      assert.deepEqual(f.state.calls[2].params, [{ to: CONTRACT, data: encodeCall('getRelicClaimedMask()', [], []) }, 'latest']);
+      assert.deepEqual(f.state.calls[3].params, [{
         to: CONTRACT, data: encodeCall('stats(address)', ['address'], [owner ?? ZERO]),
       }, 'latest']);
       assert.match(result.response.headers.get('cache-control') ?? '', /no-store/);
@@ -4224,6 +4235,85 @@ for (const kind of ['delivery', 'claim']) {
 }
 
 
+test('relic status batches all state at one canonical latest block without metadata or sessions', async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.state, { allocatedCrates: 5555, relicsAllocated: 12, relicsMinted: 2, claimedMask: 131073n });
+    f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 1]);
+    const result = await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`);
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.body, { chainId: 31337, contractAddress: CONTRACT, owner: WALLET,
+      observedBlock: 102, blockHash: blockHash(102), saleActive: true,
+      relicsAllocated: 12, relicsMinted: 2, remainingRelics: 10, claimedMask: 131073,
+      relicLimit: 3, relicsUsed: 1, remainingAllowance: 2 });
+    assert.deepEqual(f.state.batchSizes, [3]);
+    assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_getBlockByNumber', 'eth_call', 'eth_call', 'eth_call', 'eth_getBlockByNumber']);
+    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === blockHash(102)));
+    assert.equal(f.state.metadataRequests.length, 0);
+    assert.equal(f.databaseCalls.requests, 0);
+    assert.match(result.response.headers.get('cache-control') ?? '', /no-store/);
+    const anonymous = await f.request<EthereumRelicStatus>(paths.relics);
+    assert.equal(anonymous.body.owner, null);
+    assert.equal(anonymous.body.claimedMask, 131073);
+    assert.equal(anonymous.body.remainingAllowance, 0);
+  } finally { f.close(); }
+});
+
+test('relic status follows external claims, burned relics, revocation and canonical rollback', async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.state, { allocatedCrates: 1332, relicsAllocated: 12 });
+    f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 0]);
+    assert.equal((await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`)).body.claimedMask, 0);
+    Object.assign(f.state, { relicsMinted: 1, claimedMask: 131072n });
+    f.state.freeMintAllowances.set(WALLET, [0, 0, 0, 0, 0, 1]);
+    f.state.tokens.delete('117189');
+    const claimed = await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`);
+    assert.equal(claimed.body.claimedMask, 131072);
+    assert.equal(claimed.body.remainingAllowance, 0);
+    f.state.afterRpc = async call => {
+      if (call.method === 'eth_call') f.state.canonical.set(102, blockHash(999));
+    };
+    assert.equal((await f.request(paths.relics)).response.status, 503);
+    f.state.afterRpc = null;
+    Object.assign(f.state, { relicsMinted: 0, claimedMask: 0n, saleActive: false });
+    f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 0]);
+    const rolledBack = await f.request<EthereumRelicStatus>(`${paths.relics}?owner=${WALLET}`);
+    assert.equal(rolledBack.body.blockHash, blockHash(999));
+    assert.equal(rolledBack.body.claimedMask, 0);
+    assert.equal(rolledBack.body.remainingAllowance, 3);
+    assert.equal(rolledBack.body.saleActive, false);
+  } finally { f.close(); }
+});
+
+test('relic status rejects invalid identities, missing getters and inconsistent snapshots', async () => {
+  const f = fixture();
+  try {
+    for (const owner of ['', 'invalid', ZERO, `${WALLET}00`]) {
+      assert.equal((await f.request(`${paths.relics}?owner=${owner}`)).response.status, 400);
+    }
+    assert.deepEqual(f.state.calls, []);
+    for (const invalid of [
+      { relicsAllocated: 19, relicsMinted: 0, claimedMask: 0n },
+      { relicsAllocated: 0, relicsMinted: 1, claimedMask: 1n },
+      { relicsAllocated: 1, relicsMinted: 1, claimedMask: 0n },
+      { relicsAllocated: 1, relicsMinted: 1, claimedMask: 262144n },
+    ]) {
+      Object.assign(f.state, { allocatedCrates: 1998, ...invalid });
+      assert.equal((await f.request(paths.relics)).response.status, 503);
+    }
+    Object.assign(f.state, { allocatedCrates: 0, relicsAllocated: 1, relicsMinted: 0, claimedMask: 0n });
+    assert.equal((await f.request(paths.relics)).response.status, 503);
+    Object.assign(f.state, { allocatedCrates: 111 });
+    for (const allowance of [[0, 0, 19, 0, 0, 0], [0, 0, 3, 0, 0, 19], [0, 0, 3, 0, 0, 1]]) {
+      f.state.freeMintAllowances.set(WALLET, allowance);
+      assert.equal((await f.request(`${paths.relics}?owner=${WALLET}`)).response.status, 503);
+    }
+    Object.assign(f.state, { relicMaskInterface: false });
+    assert.equal((await f.request(paths.relics)).response.status, 503);
+  } finally { f.close(); }
+});
+
 test('relic availability uses reserved supply independently of remaining public crates', async () => {
   const f = fixture();
   try {
@@ -4246,11 +4336,11 @@ test('the relic interface probe is shared within a request and refreshed for a n
   try {
     const context = readContext(f);
     assert.deepEqual(await Promise.all([ethereumRelicInterfaceAvailable(context), ethereumRelicInterfaceAvailable(context)]), [true, true]);
-    assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call']);
+    assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call', 'eth_call']);
     f.state.relicInterface = false;
     assert.equal(await ethereumRelicInterfaceAvailable(context), true);
     assert.equal(await ethereumRelicInterfaceAvailable(readContext(f)), false);
-    assert.equal(f.state.calls.filter(call => call.method === 'eth_call').length, 2);
+    assert.equal(f.state.calls.filter(call => call.method === 'eth_call').length, 4);
   } finally { f.close(); }
 });
 
@@ -4267,7 +4357,7 @@ test('stats reject relic claims exceeding their allocation or unreserved crate s
 test('legacy or incompatible collection interfaces disable configuration and reject stats', async () => {
   const f = fixture();
   try {
-    for (const state of [{ relicInterface: false, relicLimit: 18 }, { relicInterface: true, relicLimit: 17 }]) {
+    for (const state of [{ relicInterface: false, relicLimit: 18, relicMaskInterface: true }, { relicInterface: true, relicLimit: 17, relicMaskInterface: true }, { relicInterface: true, relicLimit: 18, relicMaskInterface: false }]) {
       Object.assign(f.state, state);
       const config = await f.request<{ enabled: boolean }>(paths.config);
       assert.equal(config.response.status, 200);

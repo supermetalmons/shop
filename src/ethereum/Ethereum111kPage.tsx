@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useQueryClient } from '@tanstack/react-query';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
 import { ETHEREUM_CHECKOUT_ID, checkoutEntryUrl, type EthereumCheckoutStatusResponse } from '../../shared/ethereum/checkout';
-import { ETHEREUM_MAX_EXPECTED_IDS, ethereumItemDisplayIdMaximum, ethereumReceiptTokenId, formatEtherAmount, isEthereumDeliveryKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
+import { ETHEREUM_MAX_EXPECTED_IDS, ethereumItemDisplayIdMaximum, ethereumReceiptTokenId, formatEtherAmount, isEthereumDeliveryKind, type EthereumContainerKind } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
 import { InventoryGrid } from '../components/InventoryGrid';
 import { Modal } from '../components/Modal';
@@ -15,6 +15,7 @@ import { ethereumMintPrice, ethereumMintRemaining } from './mint';
 import { ethereumInventoryQueryKey, ethereumInventoryScope, ethereumInventoryView, isEthereumInventoryView, readEthereumExpected, toggleEthereumSelection, writeEthereumExpected } from './state';
 import { useEthereum111k, type EthereumWallet } from './useEthereum111k';
 import { useEthereumMintAction } from './useEthereumMintAction';
+import { useEthereumRelicClaimAction } from './useEthereumRelicClaimAction';
 import { EthereumCheckoutReturn, type EthereumCheckoutReturnStatus } from './EthereumCheckoutReturn';
 import { EthereumArtworkMedia } from './EthereumArtworkMedia';
 import { checkoutReservesItems, useCheckoutReservations } from './checkoutReservations';
@@ -47,8 +48,40 @@ export default function Ethereum111kPage({
   pendingRevealIds, onSolanaReveal, onSolanaView, canOpenSolanaBoxes, solanaRevealLoading,
   solanaInventoryReady, externalBusy = false, suspended = false, onModalOpenChange, showToast,
 }: Ethereum111kPageProps) {
-  const [kind, setKind] = useState<EthereumMintKind>('crate');
-  const model = useEthereum111k(wallet, addressEncryptionPublicKey, kind);
+  const [kind, setKind] = useState<EthereumContainerKind>('crate');
+  const model = useEthereum111k(wallet, addressEncryptionPublicKey, kind, suspended);
+  const relicMode = kind === 'relic';
+  const publicKind = relicMode ? 'crate' : kind;
+  const deploymentKey = `${model.config.chainId}:${model.config.contractAddress}`;
+  const [relicSelection, setRelicSelection] = useState<{ deployment: string; owner: string | null; id: number } | null>(null);
+  const previousRelicWallet = useRef({ deployment: deploymentKey, owner: model.owner, provider: wallet.provider });
+  const selectedRelicId = relicSelection?.deployment === deploymentKey &&
+    (relicSelection.owner === null || relicSelection.owner === model.owner) ? relicSelection.id : null;
+  const relicData = model.relics.data?.chainId === model.config.chainId && model.relics.data.contractAddress === model.config.contractAddress &&
+    model.relics.data.owner === model.owner ? model.relics.data : undefined;
+  const [freshRelicRead, setFreshRelicRead] = useState(0);
+  useEffect(() => {
+    const remaining = model.relics.dataUpdatedAt + 8_000 - Date.now();
+    if (!relicMode || suspended || !relicData || model.relics.error || remaining <= 0) { setFreshRelicRead(0); return; }
+    setFreshRelicRead(model.relics.dataUpdatedAt);
+    const timer = setTimeout(() => setFreshRelicRead(0), remaining);
+    return () => clearTimeout(timer);
+  }, [relicMode, suspended, relicData, model.relics.dataUpdatedAt, model.relics.error]);
+  const relicReadFresh = Boolean(relicData && !model.relics.error && freshRelicRead === model.relics.dataUpdatedAt &&
+    Date.now() - model.relics.dataUpdatedAt < 8_000);
+  useLayoutEffect(() => {
+    const previous = previousRelicWallet.current;
+    previousRelicWallet.current = { deployment: deploymentKey, owner: model.owner, provider: wallet.provider };
+    if (previous.deployment !== deploymentKey || previous.owner && (previous.owner !== model.owner || previous.provider !== wallet.provider)) {
+      setRelicSelection(null);
+    } else if (model.owner) {
+      setRelicSelection(current => current?.owner === null ? { ...current, owner: model.owner } : current);
+    }
+  }, [deploymentKey, model.owner, wallet.provider]);
+  useEffect(() => {
+    if (selectedRelicId !== null && relicData &&
+      ((relicData.claimedMask & (1 << (selectedRelicId - 1))) !== 0 || relicData.remainingRelics === 0)) setRelicSelection(null);
+  }, [selectedRelicId, relicData]);
   const queryClient = useQueryClient();
   const onCheckoutConfirmed = useCallback((checkout: EthereumCheckoutStatusResponse) => {
     const scope = ethereumInventoryScope(checkout.config, checkout.wallet);
@@ -96,30 +129,38 @@ export default function Ethereum111kPage({
   const operationBlocked = Boolean(model.busy || model.pending || model.submission || externalBusy || suspended);
   const walletPickerOpen = wallet.status === 'choosing';
   const hasSubmittedTransaction = Boolean(model.pending || (model.submission && !model.busy));
-  const remaining = model.stats.data ? ethereumMintRemaining(kind, model.stats.data) : undefined;
-  const maxQuantity = Math.max(1, Math.min(model.config.maxMintQuantity, remaining ?? model.config.maxMintQuantity));
-  const total = ethereumItemDisplayIdMaximum(kind);
-  const unitPrice = ethereumMintPrice(kind, model.stats.data ?? model.config);
+  const remaining = relicMode ? relicData?.remainingRelics : model.stats.data ? ethereumMintRemaining(publicKind, model.stats.data) : undefined;
+  const maxQuantity = relicMode ? 1 : Math.max(1, Math.min(model.config.maxMintQuantity, remaining ?? model.config.maxMintQuantity));
+  const total = relicMode ? relicData?.relicsAllocated ?? 18 : ethereumItemDisplayIdMaximum(kind);
+  const unitPrice = relicMode ? '0' : ethereumMintPrice(publicKind, model.stats.data ?? model.config);
   const price = formatEtherAmount(BigInt(unitPrice) * BigInt(quantity));
-  const quote = model.mintQuote(kind, quantity);
+  const quote = relicMode ? null : model.mintQuote(publicKind, quantity);
   const discountPrice = quote?.discounted ? formatEtherAmount(BigInt(quote.unitPriceWei) * BigInt(quantity)) : price;
   const discountError = kind === 'crate' && model.discountCheckRequired && model.discountProof.error;
   const mintDataError = model.configQuery.error && !model.configQuery.data ? 'Couldn’t load this drop. Please try again.' :
     model.stats.error && !model.stats.data ? 'Couldn’t load availability. Please try again.' :
     discountError ? 'Couldn’t check your mint discount. Please try again.' : null;
   const mintAction = useEthereumMintAction({
-    wallet, config: model.configQuery.data, kind, quantity, remaining, saleActive: model.stats.data?.saleActive,
-    loadError: mintDataError, blocked: operationBlocked,
-    priceKey: model.stats.data ? kind !== 'crate' ? ethereumMintPrice(kind, model.stats.data) :
+    wallet, config: model.configQuery.data, kind: publicKind, quantity, remaining, saleActive: model.stats.data?.saleActive,
+    loadError: mintDataError, blocked: operationBlocked || relicMode,
+    priceKey: model.stats.data ? publicKind !== 'crate' ? ethereumMintPrice(publicKind, model.stats.data) :
       [model.stats.data.cratePriceWei, model.stats.data.discountCratePriceWei, model.stats.data.discountMerkleRoot].join(':') : undefined,
     suspended, onMint: model.mint, mintQuote: model.mintQuote,
   });
-  const disabled = operationBlocked || mintAction.pending;
+  const relicDataError = model.configQuery.error && !model.configQuery.data ? 'Couldn’t load this drop. Please try again.' :
+    model.relics.error ? 'Couldn’t refresh relic availability. Please try again.' : null;
+  const relicAction = useEthereumRelicClaimAction({ wallet, config: model.configQuery.data, active: relicMode,
+    selectedId: selectedRelicId, status: relicReadFresh ? relicData : undefined, loadError: relicDataError,
+    blocked: operationBlocked, suspended, onClaim: model.claimRelic });
+  const panelActionPending = mintAction.pending || relicAction.pending;
+  const disabled = operationBlocked || panelActionPending;
   const connectingWallet = wallet.status === 'connecting' || wallet.status === 'restoring' || walletPickerOpen;
   const kindDisabled = disabled || wallet.status === 'connecting' || walletPickerOpen;
   const mintDisabled = kindDisabled || Boolean(mintDataError) || model.configQuery.data?.enabled === false ||
     model.stats.data?.saleActive === false || remaining === 0 || quantity > maxQuantity;
-  const actionError = model.error || mintAction.error;
+  const relicDisabled = kindDisabled || !relicReadFresh || selectedRelicId === null || model.configQuery.data?.enabled !== true ||
+    !relicData?.saleActive || relicData.remainingRelics === 0 || Boolean(model.owner && relicData.remainingAllowance === 0);
+  const actionError = model.error || (relicMode ? relicAction.error : mintAction.error);
   const ethereumItems = useMemo(() => model.items.filter(item => !item.kind.endsWith('_receipt')).map(ethereumInventoryView), [model.items]);
   const receipts = useMemo(() => model.items.filter(item => item.kind.endsWith('_receipt')).map(ethereumInventoryView), [model.items]);
   const inventoryItems = useMemo(() => [...ethereumItems, ...solanaInventoryItems], [ethereumItems, solanaInventoryItems]);
@@ -132,7 +173,7 @@ export default function Ethereum111kPage({
   const txLink = model.pending ? ethereumExplorerTransaction(model.config, model.pending.hash) : null;
   const claimLinkKey = claimReceiptId && linkedClaimCode ? `${claimReceiptId}:${linkedClaimCode}` : null;
   const claimConnectionOpen = Boolean(claimLinkKey && claimLinkHandled !== claimLinkKey && dismissedClaimConnection !== claimLinkKey &&
-    !model.owner && !walletPickerOpen && !mintAction.pending);
+    !model.owner && !walletPickerOpen && !panelActionPending);
   const revealOpen = Boolean(model.revealed);
   const viewerOpen = Boolean(viewed) && !revealOpen;
   const recoveryDialogOpen = recoveryOpen && Boolean(model.pending || model.submission) && !revealOpen;
@@ -140,8 +181,8 @@ export default function Ethereum111kPage({
   useLayoutEffect(() => { onModalOpenChange?.(modalOpen); }, [modalOpen, onModalOpenChange]);
   useLayoutEffect(() => () => { onModalOpenChange?.(false); }, [onModalOpenChange]);
   useEffect(() => {
-    setQuantity(current => Math.min(current, maxQuantity));
-  }, [maxQuantity]);
+    if (!relicMode) setQuantity(current => Math.min(current, maxQuantity));
+  }, [maxQuantity, relicMode]);
   useEffect(() => {
     const error = wallet.error || actionError;
     if (!error) {
@@ -178,7 +219,7 @@ export default function Ethereum111kPage({
     model.refresh();
   }, [model.scope, claimReceiptId, claimLinkKey, claimLinkHandled, model.refresh]);
   useEffect(() => {
-    if (mintAction.pending || !claimLinkKey || claimLinkHandled === claimLinkKey || !linkedClaimCode) return;
+    if (panelActionPending || !claimLinkKey || claimLinkHandled === claimLinkKey || !linkedClaimCode) return;
     const receipt = model.items.find(item => item.tokenId === claimReceiptId && item.kind === 'crate_receipt');
     if (!receipt) return;
     clearSolanaSelection();
@@ -188,7 +229,7 @@ export default function Ethereum111kPage({
     setReceiptAction('claim');
     setClaimCode(linkedClaimCode);
     setClaimLinkHandled(claimLinkKey);
-  }, [mintAction.pending, claimLinkKey, claimLinkHandled, claimReceiptId, linkedClaimCode, model.items, clearSolanaSelection]);
+  }, [panelActionPending, claimLinkKey, claimLinkHandled, claimReceiptId, linkedClaimCode, model.items, clearSolanaSelection]);
   useEffect(() => {
     setRecoveryOpen(false);
     setReplacementHash('');
@@ -229,6 +270,7 @@ export default function Ethereum111kPage({
   }, [itemsById, model.scope, model.inventory.isSuccess]);
   const runAction = <T,>(action: () => T): T => {
     mintAction.clearError();
+    relicAction.clearError();
     model.clearError();
     return action();
   };
@@ -245,7 +287,7 @@ export default function Ethereum111kPage({
     }
   };
   const view = (item: InventoryItem, rect: DOMRect) => {
-    if (mintAction.pending) return;
+    if (panelActionPending) return;
     if (isEthereumInventoryView(item)) {
       clearSolanaSelection();
       setViewed(item.ethereum);
@@ -254,6 +296,9 @@ export default function Ethereum111kPage({
   };
   const mintStatus = model.configQuery.data?.enabled === false ? 'Mint unavailable' :
     model.stats.data && !model.stats.data.saleActive ? 'Minting is paused' : undefined;
+  const relicStatus = model.configQuery.data?.enabled === false || relicDataError ? 'Unavailable' :
+    !relicReadFresh ? 'Loading…' : !relicData?.saleActive ? 'Paused' : relicData.remainingRelics === 0 ? 'Sold out' :
+    model.owner ? relicData.relicLimit === 0 ? 'Not eligible' : `${relicData.remainingAllowance} claims left` : undefined;
   const revealItems = model.revealed ?? [];
   const viewedArtwork = viewed ? model.applyArtwork(viewed) : null;
 
@@ -261,23 +306,28 @@ export default function Ethereum111kPage({
     <div className="drop-page-frame drop-page-frame--active">
       {header}
       <EthereumMintPanel kind={kind} kindDisabled={kindDisabled}
-        onKindChange={value => { if (!kindDisabled && value !== kind) { mintAction.clearError(); setKind(value); } }}
-        quantity={quantity} maxQuantity={maxQuantity} remaining={remaining} total={total} price={price}
+        onKindChange={value => { if (!kindDisabled && value !== kind) { mintAction.clearError(); relicAction.clearError(); setKind(value); } }}
+        quantity={relicMode ? 1 : quantity} maxQuantity={maxQuantity} remaining={remaining} total={total} price={price}
         discountPrice={discountPrice} useDiscountMint={Boolean(quote?.discounted)}
-        statusText={mintStatus} disabled={Boolean(mintDisabled)} busy={mintAction.pending}
-        onQuantityChange={setQuantity} onMint={() => runAction(mintAction.mint)} />
+        statusText={relicMode ? relicStatus : mintStatus} disabled={Boolean(relicMode ? relicDisabled : mintDisabled)} busy={panelActionPending}
+        relicMetadata={model.relicMetadata.data} claimedRelicMask={relicData?.claimedMask ?? 0} selectedRelicId={selectedRelicId}
+        relicSelectionDisabled={kindDisabled || !relicReadFresh || relicData?.remainingRelics === 0}
+        onRelicSelect={id => { relicAction.clearError(); model.clearError(); setRelicSelection({ deployment: deploymentKey, owner: model.owner, id }); }}
+        onQuantityChange={setQuantity} onMint={() => runAction(relicMode ? relicAction.claim : mintAction.mint)} />
     </div>
     <div className="ethereum111k">
       <div className="ethereum111k__status">
         {checkoutReturnId ? <EthereumCheckoutReturn checkoutId={checkoutReturnId} onConfirmed={onCheckoutConfirmed} onStatus={onCheckoutStatus} /> : null}
         {model.configQuery.error ? <div className="error" role="alert">Couldn’t load this drop. <button type="button" className="ghost" onClick={() => void model.configQuery.refetch()}>Retry</button></div> : null}
         {model.stats.error || discountError ? <div className="error" role="alert">{discountError ? 'Couldn’t check your mint discount.' : 'Couldn’t load availability.'} <button type="button" className="ghost" onClick={model.refresh}>Retry</button></div> : null}
+        {relicMode && model.relics.error ? <div className="error" role="alert">Couldn’t refresh relic availability. <button type="button" className="ghost" onClick={model.refresh}>Retry</button></div> : null}
+        {relicMode && model.relicMetadata.error ? <div className="error" role="alert">Couldn’t load relic images. <button type="button" className="ghost" onClick={() => void model.relicMetadata.refetch()}>Retry</button></div> : null}
         {wallet.error && !model.owner ? <p className="error" role="alert">{wallet.error}</p> : null}
         {claimLinkKey && claimLinkHandled !== claimLinkKey ? <p className="muted small" role="status">
           {model.owner ? `Looking for crate receipt #${Number(claimReceiptId) - 2_000_000} in your wallet.` :
             <button type="button" className="ghost" onClick={() => setDismissedClaimConnection(null)}>Claim crate contents</button>}
         </p> : null}
-        {actionError ? <div className="error" role="alert">{actionError} <button type="button" className="ghost" onClick={() => { mintAction.clearError(); model.clearError(); }}>Dismiss</button></div> : null}
+        {actionError ? <div className="error" role="alert">{actionError} <button type="button" className="ghost" onClick={() => { mintAction.clearError(); relicAction.clearError(); model.clearError(); }}>Dismiss</button></div> : null}
         {model.notice ? <p className="muted small" role="status">{model.notice}</p> : null}
         {model.storageWarning ? <p className="error" role="alert" style={{ overflowWrap: 'anywhere' }}>{model.storageWarning}</p> : null}
         {model.submission && !model.busy ? <div className="ethereum111k__pending" role="status">
@@ -287,7 +337,7 @@ export default function Ethereum111kPage({
         {model.pending ? <div className="ethereum111k__pending" role="status" aria-live="polite">
           <span>{model.pending.action === 'unbox' ? 'Opening your containers' : model.pending.action === 'delivery' ? 'Confirming your delivery' : model.pending.action === 'cancel' ? 'Confirming your wallet cancellation' : 'Confirming your transaction'} · {model.confirmations}/{model.requiredConfirmations}</span>
           {txLink ? <a href={txLink} target="_blank" rel="noreferrer">View transaction ↗</a> : null}
-          {['delivery', 'claim'].includes(model.pending.action) && !model.session ? <button type="button" onClick={() => void runAction(model.signIn)} disabled={Boolean(model.busy || mintAction.pending)}>Sign in to finish</button> : null}
+          {['delivery', 'claim'].includes(model.pending.action) && !model.session ? <button type="button" onClick={() => void runAction(model.signIn)} disabled={Boolean(model.busy || panelActionPending)}>Sign in to finish</button> : null}
           <button type="button" className="ghost" onClick={model.refresh}>Refresh</button>
           <button type="button" className="ghost" onClick={() => { setRecoveryOpen(true); setReplacementHash(''); setConfirmDismiss(false); }} disabled={Boolean(model.busy)}>Transaction changed?</button>
         </div> : null}
@@ -296,7 +346,7 @@ export default function Ethereum111kPage({
         <div className="app-section__head">
           <div className="app-section__title">Inventory</div>
           {model.owner ? <button type="button" className="ghost" onClick={model.refresh} disabled={model.inventory.isFetching}>Refresh</button> :
-            <button type="button" className="ghost" onClick={() => { mintAction.cancel(); wallet.connect(); }} disabled={disabled || connectingWallet}>View collection</button>}
+            <button type="button" className="ghost" onClick={() => { mintAction.cancel(); relicAction.cancel(); wallet.connect(); }} disabled={disabled || connectingWallet}>View collection</button>}
         </div>
         <InventoryGrid items={inventoryItems} selected={combinedSelection} onToggle={select} pendingRevealIds={pendingRevealIds}
           onReveal={onSolanaReveal} canRevealItem={item => !isEthereumInventoryView(item) && canOpenSolanaBoxes(item.dropId)}
@@ -313,7 +363,7 @@ export default function Ethereum111kPage({
         </section>
         <section className="app-section ethereum111k__shipments">
           <div className="app-section__head"><div className="app-section__title">111K shipments</div></div>
-          {!model.session ? <button type="button" className="ghost" onClick={() => void runAction(model.signIn)} disabled={Boolean(model.busy || mintAction.pending)}>Sign in with Ethereum to see shipments</button> :
+          {!model.session ? <button type="button" className="ghost" onClick={() => void runAction(model.signIn)} disabled={Boolean(model.busy || panelActionPending)}>Sign in with Ethereum to see shipments</button> :
             model.shipments.isPending ? <p className="muted">Loading shipments…</p> : model.shipments.error ? <p className="error">Couldn’t load shipments. <button type="button" className="ghost" onClick={model.refresh}>Retry</button></p> :
             !model.shipments.data?.orders.length ? <p className="muted">No test shipments yet.</p> : <ol className="ethereum111k__orders">{model.shipments.data.orders.map(order => <li key={order.deliveryId}>
               <span>Shipment #{order.deliveryId} <small>{order.items.length} items</small></span>
@@ -327,7 +377,7 @@ export default function Ethereum111kPage({
         </span></div>
         <div className="selection-panel__actions">
           <button type="button" className="quiet" onClick={clear}>Cancel</button>
-          {selectedItems.length === 1 ? <button type="button" onClick={() => setViewed(selectedItems[0])} disabled={mintAction.pending}>View</button> : null}
+          {selectedItems.length === 1 ? <button type="button" onClick={() => setViewed(selectedItems[0])} disabled={panelActionPending}>View</button> : null}
           {selectedContainer || selectedCrates ? <button type="button" onClick={() => {
             if (!checkoutBlocksUnbox(selectedItems)) void runAction(() => model.unbox(selectedItems, () => !checkoutBlocksUnboxRef.current(selectedItems)));
           }} disabled={disabled || unboxLimitExceeded || checkoutUnboxBlocked}>
@@ -338,12 +388,12 @@ export default function Ethereum111kPage({
       </div></BackgroundLayerPortal> : null}
       <Modal open={claimConnectionOpen} title="Claim crate contents" onClose={() => { setDismissedClaimConnection(claimLinkKey); wallet.cancel(); }} suspended={suspended}>
         <p className="muted small">Connect the wallet that owns crate receipt #{Number(claimReceiptId) - 2_000_000} to claim its contents.</p>
-        <button type="button" onClick={() => { mintAction.cancel(); wallet.connect(); }} disabled={connectingWallet}>
+        <button type="button" onClick={() => { mintAction.cancel(); relicAction.cancel(); wallet.connect(); }} disabled={connectingWallet}>
           {connectingWallet ? 'Connecting…' : 'Connect wallet'}
         </button>
         {wallet.error ? <p className="error" role="alert">{wallet.error}</p> : null}
       </Modal>
-      <Modal open={walletPickerOpen} title="Connect Ethereum" onClose={() => { if (mintAction.connecting) mintAction.cancel(); else wallet.cancel(); }} suspended={suspended}>
+      <Modal open={walletPickerOpen} title="Connect Ethereum" onClose={() => { if (mintAction.connecting) mintAction.cancel(); else if (relicAction.connecting) relicAction.cancel(); else wallet.cancel(); }} suspended={suspended}>
         <div className="ethereum111k__wallets">{wallet.wallets.map((candidate, index) => {
           const icon = getInjectedWalletIconSrc(candidate.info.icon);
           return <button key={candidate.info.uuid} ref={index === 0 ? firstWalletRef : undefined} type="button" onClick={() => wallet.selectWallet(candidate)}>{icon ? <img src={icon} alt="" /> : null}{candidate.info.name}</button>;

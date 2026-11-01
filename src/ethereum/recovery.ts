@@ -94,6 +94,7 @@ async function ethereumReplacement(args: {
 const recoveryEventTopics = Object.fromEntries([
   'CratesPurchased(address,uint256,uint256,uint256)',
   'WarehousesPurchased(address,uint256,uint256,uint256)',
+  'RelicClaimed(address,uint256,uint256)',
   'WarehouseUnboxed(uint256,address,uint256,uint256)',
   'RelicUnboxed(uint256,address,uint256,uint256)',
   'CrateUnboxed(uint256,address,uint256,uint256)',
@@ -110,6 +111,13 @@ export function matchesEthereumOperationEvent(pending: EthereumSubmission, owner
   if (!intent || ethereumAddress(log.address) !== contract || log.removed) return false;
   if (pending.action !== 'mint' && pending.action !== 'delivery' && BigInt(intent.value) !== 0n) return false;
   const topic = log.topics[0]?.toLowerCase();
+  if (pending.action === 'relic-claim') {
+    const args = intentArguments(intent, ETHEREUM_FUNCTIONS.claimRelic, ['uint256']);
+    if (!args || intent.data.length !== 74 || topic !== recoveryEventTopics.RelicClaimed || log.topics.length !== 3 || log.data.length !== 66) return false;
+    const relicId = args[0] as bigint;
+    return relicId >= 1n && relicId <= 18n && decodeReturn(['address'], log.topics[1])[0] === owner &&
+      decodeReturn(['uint256'], log.topics[2])[0] === relicId && decodeReturn(['uint256'], log.data)[0] === 117171n + relicId;
+  }
   if (pending.action === 'mint') {
     for (const [signature, event, types] of [
       [ETHEREUM_FUNCTIONS.mintCrates, 'CratesPurchased', ['uint256']],

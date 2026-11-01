@@ -4,7 +4,7 @@ import type { EthereumDeliveryQuote, EthereumInventoryItem } from './protocol.ts
 
 export const ETHEREUM_SESSION_HEADER = 'X-Mons-Ethereum-Session';
 export const ETHEREUM_API_PATHS = {
-  config: '/ethereum/111k/config', stats: '/ethereum/111k/stats', inventory: '/ethereum/111k/inventory',
+  config: '/ethereum/111k/config', stats: '/ethereum/111k/stats', relics: '/ethereum/111k/relics', inventory: '/ethereum/111k/inventory',
   metadata: '/ethereum/111k/metadata', transactionsConfirm: '/ethereum/111k/transactions/confirm',
   authChallenge: '/ethereum/auth/challenge', authVerify: '/ethereum/auth/verify', authLogout: '/ethereum/auth/logout',
   profile: '/ethereum/profile', addresses: '/ethereum/addresses', shipments: '/ethereum/shipments',
@@ -20,6 +20,11 @@ export type EthereumStats = {
   cratePriceWei: string; warehousePriceWei: string; saleActive: boolean;
   remainingCrates: number; remainingWarehouses: number; remainingRelics: number;
   discountMerkleRoot: string; discountCratePriceWei: string; discountAllowance: number; discountUsed: number;
+};
+export type EthereumRelicStatus = {
+  chainId: number; contractAddress: string; owner: string | null; observedBlock: number; blockHash: string;
+  saleActive: boolean; relicsAllocated: number; relicsMinted: number; remainingRelics: number; claimedMask: number;
+  relicLimit: number; relicsUsed: number; remainingAllowance: number;
 };
 export type EthereumInventoryResponse = { items: EthereumInventoryItem[]; nextCursor: string | null; observedBlock: number };
 export type EthereumPreparedTransaction = { to: string; data: string; value: string; chainId: number };

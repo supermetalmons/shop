@@ -1,0 +1,17 @@
+{
+  "chainId": 11155111,
+  "groups": [
+    {
+      "name": "Relic claim UI test wallets",
+      "crates": 0,
+      "warehouses": 0,
+      "relics": 3,
+      "wallets": [
+        "0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE",
+        "0xE4790DD79c334e3f848904975272ec17f9F70366",
+        "0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9",
+        "0x440f0940F7fc3b5C4Efd087F8B947C85aD81FDe9"
+      ]
+    }
+  ]
+}

@@ -70,7 +70,7 @@ test('local deployment rejects current-address payees and deploys one collection
     const deliveryRouting = JSON.parse(readFileSync(deliveryRoutingPath, 'utf8'));
     const fixture = JSON.parse(readFileSync(join(project, 'fixtures/eip712.json'), 'utf8'));
     const discounts = JSON.parse(readFileSync(join(directory, 'src/ethereum/discounts/111k.json'), 'utf8'));
-    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v10/';
+    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v11/';
     const run = () => spawnSync(process.execPath, ['scripts/deploy-local.mjs'], {
       cwd: project, encoding: 'utf8', timeout: 60_000,
       env: {
@@ -103,6 +103,7 @@ test('local deployment rejects current-address payees and deploys one collection
     }
     writeFileSync(deliveryRoutingPath, JSON.stringify(deliveryRouting));
     for (const invalid of [
+      { chainId: 11155111, groups: [{ name: 'Sepolia only', crates: 0, warehouses: 0, relics: 3, wallets: [owner] }] },
       { groups: [{ name: 'A', crates: 1, warehouses: 0, relics: 0, wallets: [predicted] }] },
       { groups: [{ ...freeMints.groups[0], wallets: Array.from({ length: 33 }, (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`) }] },
       { groups: [{ ...freeMints.groups[0], wallets: [freeMints.groups[0].wallets[0], freeMints.groups[0].wallets[0].toLowerCase()] }] },
@@ -120,7 +121,7 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(result.stdout);
     assert.deepEqual(manifest, JSON.parse(readFileSync(join(project, '.local/deployment.json'), 'utf8')));
-    assert.equal(manifest.protocolVersion, 14);
+    assert.equal(manifest.protocolVersion, 15);
     assert.equal(manifest.initialDeliveryReceiver, deliveryRouting.initialReceiver.toLowerCase());
     assert.equal(manifest.deliveryConfigId, 1);
     const encodedConfig = await rpc<string>('eth_call', [{ to: manifest.contractAddress,
@@ -143,7 +144,7 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.deepEqual(decodeReturn(['bool'], encodedSale as `0x${string}`), [false]);
     const encodedSupply = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('totalSupply()', [], []) }, 'latest']);
     assert.deepEqual(decodeReturn(['uint256'], encodedSupply as `0x${string}`), [0n]);
-    for (const getter of ['relicsAllocated()', 'relicsMinted()', 'allocatedCrates()', 'totalMintReceived()']) {
+    for (const getter of ['relicsAllocated()', 'relicsMinted()', 'allocatedCrates()', 'totalMintReceived()', 'getRelicClaimedMask()']) {
       const encoded = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall(getter, [], []) }, 'latest']);
       assert.deepEqual(decodeReturn(['uint256'], encoded), [0n]);
     }

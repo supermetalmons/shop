@@ -911,6 +911,11 @@
   text-align: center;
 }
 
+.mint-panel__submit--no-price {
+  grid-template-columns: 1fr;
+  text-align: center;
+}
+
 .mint-panel__submit--busy .mint-panel__submit-text {
   justify-self: center;
 }

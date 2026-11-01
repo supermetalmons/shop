@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
-import { ETHEREUM_FUNCTIONS, ETHEREUM_MINT_KINDS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, ethereumHexQuantity, isEthereumDeliveryKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MINT_KINDS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_RELICS, ethereumAssetId, ethereumHexQuantity, isEthereumDeliveryKind, type EthereumContainerKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumRevealedArtwork } from '../../shared/ethereum/reveal';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { encryptAddressPayload } from '../lib/solana';
@@ -30,8 +30,14 @@ function isTransactionFailure(error: unknown): error is EthereumApiError {
   return error instanceof EthereumApiError && (error.code === 'transaction-reverted' || error.code === 'operation-failed');
 }
 
-export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, mintKind: EthereumMintKind = 'crate') {
+function subscribeVisibility(listener: () => void): () => void {
+  document.addEventListener('visibilitychange', listener);
+  return () => document.removeEventListener('visibilitychange', listener);
+}
+
+export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, mintKind: EthereumContainerKind = 'crate', suspended = false) {
   const queryClient = useQueryClient();
+  const pageVisible = useSyncExternalStore(subscribeVisibility, () => document.visibilityState !== 'hidden', () => true);
   const configQuery = useQuery({ queryKey: ['ethereum111k', 'config'], queryFn: ({ signal }) => ethereumApi.config(signal), retry: false, refetchInterval: 60_000 });
   const config = configQuery.data ?? DEFAULT_ETHEREUM_111K_CONFIG;
   const owner = ethereumAddress(wallet.address);
@@ -89,6 +95,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       if (!current && !currentSubmission) {
         void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
         void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
+        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
         void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments', scope] });
       }
     });
@@ -136,6 +143,13 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
   const statsKey = ['ethereum111k', 'stats', config.chainId, config.contractAddress, owner];
   const stats = useQuery({ queryKey: statsKey,
     queryFn: ({ signal }) => ethereumApi.stats(config, owner, signal), enabled: config.enabled, retry: false, refetchInterval: 30_000 });
+  const relicsEnabled = config.enabled && mintKind === 'relic' && pageVisible && !suspended;
+  const relics = useQuery({ queryKey: ['ethereum111k', 'relics', config.chainId, config.contractAddress, owner],
+    queryFn: ({ signal }) => ethereumApi.relics(config, owner, signal), enabled: relicsEnabled,
+    retry: false, staleTime: 0, refetchInterval: 4_000, refetchOnWindowFocus: 'always' });
+  const relicMetadata = useQuery({ queryKey: ['ethereum111k', 'relic-metadata', config.chainId, config.contractAddress, config.metadataBaseUri],
+    queryFn: ({ signal }) => ethereumApi.relicMetadata(config, signal), enabled: relicsEnabled,
+    retry: false, staleTime: Infinity, gcTime: Infinity });
   const discountRoot = stats.data?.discountMerkleRoot;
   const discountRemaining = Math.max(0, (stats.data?.discountAllowance ?? 0) - (stats.data?.discountUsed ?? 0));
   const discountCheckRequired = Boolean(config.enabled && owner && discountRoot &&
@@ -202,6 +216,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     if (confirmation.isSuccess && result?.status === 'pending') {
       if (inclusions.current.delete(transactionKey)) {
         void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
+        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
       }
       return;
     }
@@ -291,6 +306,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
           setError(null);
         }
         void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
+        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
         void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
         void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments', scope] });
       } catch (cause) {
@@ -315,6 +331,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       return true;
     }).then(cleared => {
       if (!cleared) { reverting.current.delete(pending.hash); return; }
+      void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
       if (mounted.current && scopeRef.current === scope) setError(failure.code === 'operation-failed' ? failure.message : 'The transaction reverted. Your NFTs are unchanged; you can try again.');
     }).catch(cause => {
       reverting.current.delete(pending.hash);
@@ -410,6 +427,34 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       await submit(operation, capturedScope, 'mint', transaction(data, ethereumHexQuantity(BigInt(expected.unitPriceWei) * BigInt(quantity))));
     });
   };
+  const claimRelic = (relicId: number) => run('Confirm relic claim in your wallet…', async (operation, capturedScope) => {
+    if (!Number.isInteger(relicId) || relicId < 1 || relicId > ETHEREUM_MAX_RELICS) throw new Error('Choose a relic from 1 to 18.');
+    await operation.ensureNetwork();
+    operation.assertCurrent();
+    const key = ['ethereum111k', 'relics', config.chainId, config.contractAddress, operation.address];
+    await queryClient.cancelQueries({ queryKey: key, exact: true });
+    operation.assertCurrent();
+    const checkedAt = Date.now();
+    const current = await queryClient.fetchQuery({ queryKey: key,
+      queryFn: ({ signal }) => ethereumApi.relics(config, operation.address, AbortSignal.any([signal, operation.signal])), staleTime: 0 });
+    operation.assertCurrent();
+    if (!current.saleActive) throw new Error('Relic claims are not open yet.');
+    if ((current.claimedMask & (1 << (relicId - 1))) !== 0) throw new Error('That relic was just claimed. Choose another relic.');
+    if (current.remainingRelics === 0) throw new Error('All allocated relics have been claimed.');
+    if (current.remainingAllowance === 0) throw new Error('This wallet has no relic claims remaining.');
+    try {
+      await submit(operation, capturedScope, 'relic-claim', transaction(encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [relicId])), {}, () => {
+        const state = queryClient.getQueryState<typeof current>(key);
+        const latest = state?.data;
+        if (Date.now() - checkedAt > 8_000 || state?.status !== 'success' || !latest || !latest.saleActive || latest.remainingRelics === 0 ||
+          latest.remainingAllowance === 0 || (latest.claimedMask & (1 << (relicId - 1))) !== 0) {
+          throw new Error('Relic availability changed. Refresh and try again.');
+        }
+      });
+    } finally {
+      void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
+    }
+  });
   const unbox = (selected: EthereumInventoryItem | readonly EthereumInventoryItem[], canOpen?: () => boolean) => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
     const items: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
     if (!items.length || items.length > config.maxUnboxQuantity || new Set(items.map(item => item.tokenId)).size !== items.length ||
@@ -505,6 +550,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
   const refresh = useCallback(() => {
     if (scope) void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
+    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'discountProof'] });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments'] });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] });
@@ -512,11 +558,11 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-tokens'] });
   }, [scope, queryClient]);
   return {
-    config, configQuery, stats, discountProof, discountCheckRequired, mintQuote, inventory, items, scope, owner, chainId, profile, shipments, session,
+    config, configQuery, stats, relics, relicMetadata, discountProof, discountCheckRequired, mintQuote, inventory, items, scope, owner, chainId, profile, shipments, session,
     pending, submission, storageWarning, requiredConfirmations, confirmations: confirmation.data?.confirmations ?? 0, busy, notice, error: error ?? (confirmation.error && confirmationErrorKey !== dismissedConfirmationError ? ethereumWalletError(confirmation.error) : null),
     revealed: revealed?.scope === scope ? revealed.items.map(applyArtwork) : null,
     applyArtwork,
     closeReveal: () => setRevealed(null), clearError: () => { setError(null); setDismissedConfirmationError(confirmationErrorKey); },
-    mint, unbox, deliver, transfer, claim, signIn, disconnect, refresh, replacePending, dismissPending,
+    mint, claimRelic, unbox, deliver, transfer, claim, signIn, disconnect, refresh, replacePending, dismissPending,
   };
 }

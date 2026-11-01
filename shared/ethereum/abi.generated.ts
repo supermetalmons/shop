@@ -726,6 +726,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "getRelicClaimedMask",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "mask",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getTokenInfo",
     "inputs": [
       {

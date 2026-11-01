@@ -1,0 +1,68 @@
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { ETHEREUM_MAX_RELICS, type EthereumMetadata } from '../../shared/ethereum/protocol';
+import { MediaWithFallback } from '../components/MediaWithFallback';
+
+type RelicClaimGridProps = {
+  metadata?: readonly EthereumMetadata[];
+  claimedMask: number;
+  selectedId: number | null;
+  disabled: boolean;
+  onSelect: (id: number) => void;
+};
+
+function layout(width: number, height: number, gap: number) {
+  let best = { size: 1, columns: 6, gap };
+  for (let columns = 1; columns <= ETHEREUM_MAX_RELICS; columns++) {
+    const rows = Math.ceil(ETHEREUM_MAX_RELICS / columns);
+    const size = Math.floor(Math.min((width - (columns - 1) * gap) / columns, (height - (rows - 1) * gap) / rows));
+    if (size > best.size || size === best.size && rows < Math.ceil(ETHEREUM_MAX_RELICS / best.columns)) {
+      best = { size, columns, gap };
+    }
+  }
+  return best;
+}
+
+export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, onSelect }: RelicClaimGridProps) {
+  const preview = useRef<HTMLDivElement>(null);
+  const [geometry, setGeometry] = useState({ size: 44, columns: 6, gap: 4 });
+  useLayoutEffect(() => {
+    const element = preview.current;
+    if (!element) return;
+    const update = () => {
+      const style = window.getComputedStyle(element);
+      const padding = (value: string) => Number.parseFloat(value) || 0;
+      const width = element.clientWidth - padding(style.paddingLeft) - padding(style.paddingRight);
+      const height = element.clientHeight - padding(style.paddingTop) - padding(style.paddingBottom);
+      if (width <= 0 || height <= 0) return;
+      const next = layout(width, height, window.innerWidth <= 860 ? 4 : 8);
+      setGeometry(previous => previous.size === next.size && previous.columns === next.columns && previous.gap === next.gap ? previous : next);
+    };
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    observer?.observe(element);
+    window.addEventListener('resize', update);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', update); };
+  }, []);
+
+  return <div ref={preview} className="mint-panel__preview ethereum111k__relic-preview">
+    <div className="ethereum111k__relic-grid" role="radiogroup" aria-label="Choose a relic"
+      style={{ '--relic-size': `${geometry.size}px`, '--relic-columns': geometry.columns, '--relic-gap': `${geometry.gap}px` } as CSSProperties}>
+      {Array.from({ length: ETHEREUM_MAX_RELICS }, (_, index) => {
+        const id = index + 1;
+        const claimed = (claimedMask & (1 << index)) !== 0;
+        const image = metadata?.[index]?.image;
+        return <label key={id} className="ethereum111k__relic" data-claimed={claimed} data-disabled={disabled || claimed}>
+          <input type="radio" name="ethereum-relic" value={id} checked={selectedId === id}
+            disabled={disabled || claimed} aria-label={`Relic #${id}${claimed ? ', claimed' : ''}`}
+            onChange={() => onSelect(id)} />
+          <span className="ethereum111k__relic-image">
+            <MediaWithFallback imageSources={image ? [image] : []} showPlaceholderWhileLoading
+              imageProps={{ alt: '', draggable: false, loading: 'eager', decoding: 'async', onDragStart: event => event.preventDefault() }}
+              renderPlaceholder={hidden => <span hidden={hidden} className="ethereum111k__relic-placeholder" aria-hidden="true" />} />
+            <span className="ethereum111k__relic-number" aria-hidden="true">{id}</span>
+          </span>
+        </label>;
+      })}
+    </div>
+  </div>;
+}

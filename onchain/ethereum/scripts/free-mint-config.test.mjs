@@ -106,3 +106,36 @@ test('CLI validates configuration and emits unsigned calls without RPC', () => {
   assert.deepEqual(calls, freeMintOwnerCalls(fixture, address(1)));
   assert.notEqual(spawnSync(process.execPath, [cli.pathname, 'calldata'], { encoding: 'utf8' }).status, 0);
 });
+
+test('Sepolia relic preset requires its exact chain and leaves generic defaults empty', () => {
+  const preset = JSON.parse(readFileSync(new URL('../config/free-mints.sepolia.json', import.meta.url), 'utf8'));
+  const defaults = JSON.parse(readFileSync(new URL('../config/free-mints.json', import.meta.url), 'utf8'));
+  assert.deepEqual(parseFreeMintConfig(defaults, undefined, 1).allocations, []);
+  for (const chainId of [undefined, 1, 31337, 11155112]) {
+    assert.throws(() => parseFreeMintConfig(preset, undefined, chainId), /explicit chain ID 11155111/);
+    assert.throws(() => freeMintOwnerCalls(preset, address(1), chainId), /explicit chain ID 11155111/);
+  }
+  const parsed = parseFreeMintConfig(preset, undefined, 11155111);
+  assert.equal(parsed.chainId, 11155111);
+  assert.equal(parsed.allocations.length, 4);
+  assert.equal(parsed.allocations.reduce((sum, item) => sum + item.relicLimit, 0), 12);
+  assert.ok(parsed.allocations.every(item => item.crateLimit === 0 && item.warehouseLimit === 0 && item.relicLimit === 3));
+  assert.deepEqual(parsed.allocations.map(item => item.wallet), [
+    '0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe', '0xe4790dd79c334e3f848904975272ec17f9f70366',
+    '0xe938ebb66b92692ab01f76c99cfac1928482e7b9', '0x440f0940f7fc3b5c4efd087f8b947c85ad81fde9',
+  ]);
+  for (const invalid of [1, 31337, '11155111', null, true]) {
+    assert.throws(() => parseFreeMintConfig({ ...preset, chainId: invalid }, undefined, 11155111), /Sepolia/);
+  }
+  const cli = new URL('./free-mints.mjs', import.meta.url).pathname;
+  const path = new URL('../config/free-mints.sepolia.json', import.meta.url).pathname;
+  for (const args of [['check', path], ['check', path, '--chain-id', '1'], ['calldata', address(1), path, '--chain-id', '1']]) {
+    const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /explicit chain ID 11155111/);
+  }
+  const calls = JSON.parse(execFileSync(process.execPath, [cli, 'calldata', address(1), path, '--chain-id', '11155111'], { encoding: 'utf8' }));
+  assert.deepEqual(calls, freeMintOwnerCalls(preset, address(1), 11155111));
+  assert.equal(calls[0].chainId, 11155111);
+  assert.equal(calls[0].value, '0');
+});

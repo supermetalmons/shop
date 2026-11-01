@@ -441,7 +441,9 @@ contract NFT111KInvariantHandler is TestSupport {
         assertTrue(token.redemptionsPaused() == paused);
         assertTrue(allocations <= MODELED_CRATE_LIMIT);
         assertTrue(warehouseCount * 11 + MODELED_RELIC_LIMIT * 111 <= allocations);
+        uint256 claimedMask;
         for (uint256 number = 1; number <= 18; ++number) {
+            if (model[117171 + number].issued) claimedMask |= 1 << (number - 1);
             assertEq(token.relicFirstCrate(number), relicFirstCrates[number]);
             assertTrue(model[117171 + number].issued == (relicFirstCrates[number] != 0));
             if (relicFirstCrates[number] != 0) {
@@ -452,6 +454,7 @@ contract NFT111KInvariantHandler is TestSupport {
                 }
             }
         }
+        assertEq(token.getRelicClaimedMask(), claimedMask);
         for (uint256 number = 1; number <= warehouseCount; ++number) {
             assertEq(token.warehouseFirstCrate(number), firstCrates[number]);
         }

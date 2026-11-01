@@ -12,7 +12,7 @@ import { checksumEthereumAddress, crateClaimDigest, deliveryDigest, ethereumRece
 import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ethereumItemKind, ethereumMetadataTokenId, type EthereumMetadata, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE } from '../../../../shared/ethereum/protocol.ts';
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.ts';
 import { ethereumMetadataBaseUri } from '../../../../shared/ethereum/config.ts';
-import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse, type EthereumStats, type EthereumInventoryResponse } from '../../../../shared/ethereum/api.ts';
+import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse, type EthereumStats, type EthereumInventoryResponse, type EthereumRelicStatus } from '../../../../shared/ethereum/api.ts';
 import { ETHEREUM_CHECKOUT_PATHS, type EthereumCheckoutStatusResponse, type EthereumCheckoutPrepareResponse, type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
 import { encryptAddressCipherText, serializeAddressCipherPayload } from '../../../../shared/addressCipher.ts';
 import { parseProceedsConfig } from '../../../../onchain/ethereum/scripts/proceeds-config.mjs';
@@ -31,7 +31,7 @@ const output = resolve(root, '.cache/111k-e2e');
 const { initialReceiver: initialDeliveryReceiver } = JSON.parse(await readFile(resolve(project, 'config/delivery-routing.json'), 'utf8')) as { initialReceiver: string };
 const build = spawnSync('forge', ['build', '--offline'], { cwd: project, stdio: 'inherit' });
 if (build.status !== 0) throw new Error('Contract compilation failed');
-const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v10/', 31337);
+const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v11/', 31337);
 const metadataDirectory = process.env.ETHEREUM_111K_E2E_METADATA_DIRECTORY;
 const metadataManifest = metadataDirectory ? await readMetadataManifest(metadataDirectory) : null;
 const metadataFetch: typeof fetch = async (input, init) => {
@@ -96,7 +96,7 @@ async function deploy(name: string, from: string, types: string[] = [], args: un
     assert.ok(receipt.contractAddress);
     assert.equal(typeof args[0], 'string');
     assert.deepEqual(await call(receipt.contractAddress, 'saleActive()', [], [], ['bool']), [false]);
-    for (const field of ['totalSupply', 'allocatedCrates', 'warehousesMinted', 'relicsAllocated', 'relicsMinted', 'totalMintReceived']) {
+    for (const field of ['totalSupply', 'allocatedCrates', 'warehousesMinted', 'relicsAllocated', 'relicsMinted', 'totalMintReceived', 'getRelicClaimedMask']) {
       assert.deepEqual(await call(receipt.contractAddress, `${field}()`, [], [], ['uint256']), [0n]);
     }
     if (openSale) await send(args[0] as string, encodeCall('setSaleActive(bool)', ['bool'], [true]), receipt.contractAddress);
@@ -798,6 +798,16 @@ try {
     assert.equal(allocated.remainingRelics, 3);
     assert.equal(allocated.allocatedCrates, 333);
     assert.equal(allocated.remainingCrates, 5222);
+    const relicStatus = () => api<EthereumRelicStatus>(`${ETHEREUM_API_PATHS.relics}?owner=${buyer}`);
+    const closedStatus = await relicStatus();
+    assert.equal(closedStatus.saleActive, false);
+    assert.equal(closedStatus.claimedMask, 0);
+    assert.equal(closedStatus.relicLimit, 3);
+    assert.equal(closedStatus.remainingAllowance, 3);
+    const anonymousStatus = await api<EthereumRelicStatus>(ETHEREUM_API_PATHS.relics);
+    assert.equal(anonymousStatus.owner, null);
+    assert.equal(anonymousStatus.remainingAllowance, 0);
+    assert.equal(anonymousStatus.remainingRelics, 3);
     const recipientBalances = await Promise.all(proceeds.mintRecipients.map(balance));
     await send(payoutCaller, encodeCall('releaseAllMint()', [], []), relicContract);
     for (const [index, recipient] of proceeds.mintRecipients.entries()) {
@@ -806,6 +816,17 @@ try {
     }
     assert.deepEqual(await call(relicContract, 'totalMintReleased()', [], [], ['uint256']), [relicPreorderRevenue]);
     await send(admin, encodeCall('setSaleActive(bool)', ['bool'], [true]), relicContract);
+    const beforeExternalClaim = await rpc<string>('evm_snapshot');
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), relicContract);
+    const externalClaim = await relicStatus();
+    assert.equal(externalClaim.claimedMask, 1 << 17);
+    assert.equal(externalClaim.remainingAllowance, 2);
+    assert.equal(externalClaim.remainingRelics, 2);
+    assert.equal(await rpc<boolean>('evm_revert', [beforeExternalClaim]), true);
+    const revertedClaim = await relicStatus();
+    assert.equal(revertedClaim.claimedMask, 0);
+    assert.equal(revertedClaim.relicsUsed, 0);
+    assert.equal(revertedClaim.remainingAllowance, 3);
     for (const id of [18, 2]) {
       const claimed = await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [id]), relicContract);
       gas[`claimRelic${id}`] = BigInt(claimed.gasUsed).toString();
@@ -816,6 +837,10 @@ try {
         [String(117171 + id), 'relic', id, `https://wip.lil.org/111k/monuments/${id}.webp`],
       ]);
     }
+    const claimedStatus = await relicStatus();
+    assert.equal(claimedStatus.claimedMask, (1 << 17) | (1 << 1));
+    assert.equal(claimedStatus.relicsUsed, 2);
+    assert.equal(claimedStatus.remainingAllowance, 1);
     await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), relicContract));
     const inventory = await api<EthereumInventoryResponse>(`${ETHEREUM_API_PATHS.inventory}?owner=${buyer}`);
     assert.deepEqual(inventory.items.map(item => item.tokenId).sort(), ['117173', '117189']);
@@ -826,6 +851,7 @@ try {
     await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.unboxRelic, ['uint256'], [117189]), relicContract));
     const opened = await send(secondBuyer, encodeCall(ETHEREUM_FUNCTIONS.unboxRelic, ['uint256'], [117189]), relicContract);
     gas.unboxRelic = BigInt(opened.gasUsed).toString();
+    assert.equal((await relicStatus()).claimedMask, claimedStatus.claimedMask);
     await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), relicContract));
     const crates = Array.from({ length: 111 }, (_, index) => String(111112 + index));
     const unpacked = await api<EthereumTransactionConfirmResponse>(ETHEREUM_API_PATHS.transactionsConfirm,

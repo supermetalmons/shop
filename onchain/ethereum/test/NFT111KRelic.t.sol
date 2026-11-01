@@ -84,6 +84,7 @@ contract NFT111KRelicTest is TestSupport {
     }
 
     function testInitialSupplyIsZeroAndAllowancesDoNotAllocate() public {
+        assertEq(token.getRelicClaimedMask(), 0);
         assertEq(token.relicsAllocated(), 0);
         assertEq(token.relicsMinted(), 0);
         assertEq(token.allocatedCrates(), 0);
@@ -109,6 +110,7 @@ contract NFT111KRelicTest is TestSupport {
         assertEq(token.allocatedCrates(), 222);
         assertEq(token.remainingCrates(), 5333);
         assertEq(token.totalSupply(), 0);
+        assertEq(token.getRelicClaimedMask(), 0);
         assertEq(token.totalMintReceived(), 101);
         token.releaseAllMint();
         uint256 released;
@@ -168,6 +170,7 @@ contract NFT111KRelicTest is TestSupport {
         token.setSaleActive(true);
         vm.recordLogs();
         _claim(ALICE, 18);
+        assertEq(token.getRelicClaimedMask(), 1 << 17);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         Vm.Log memory event_ = logs[logs.length - 1];
         assertEq(event_.topics[0], keccak256("RelicClaimed(address,uint256,uint256)"));
@@ -175,6 +178,7 @@ contract NFT111KRelicTest is TestSupport {
         assertEq(event_.topics[2], bytes32(uint256(18)));
         assertEq(abi.decode(event_.data, (uint256)), 117189);
         _claim(BOB, 4);
+        assertEq(token.getRelicClaimedMask(), (1 << 17) | (1 << 3));
         assertEq(token.relicFirstCrate(18), 1);
         assertEq(token.relicFirstCrate(4), 112);
         assertEq(token.relicFirstCrate(1), 0);
@@ -239,11 +243,13 @@ contract NFT111KRelicTest is TestSupport {
         assertEq(token.relicFirstCrate(18), 1);
         vm.prank(ALICE);
         token.transferFrom(ALICE, BOB, 117189);
+        assertEq(token.getRelicClaimedMask(), 1 << 17);
         vm.prank(ALICE);
         vm.expectRevert(NFT111K.TokenAlreadyIssued.selector);
         token.claimRelic(18);
         vm.prank(BOB);
         token.unboxRelic(117189);
+        assertEq(token.getRelicClaimedMask(), 1 << 17);
         vm.prank(ALICE);
         vm.expectRevert(NFT111K.TokenAlreadyIssued.selector);
         token.claimRelic(18);
@@ -304,6 +310,7 @@ contract NFT111KRelicTest is TestSupport {
         for (uint256 id = 18; id != 0; --id) {
             _claim(ALICE, id);
             assertEq(token.relicFirstCrate(id), (18 - id) * 111 + 1);
+            assertEq(token.getRelicClaimedMask(), ((1 << 18) - 1) ^ ((1 << (id - 1)) - 1));
         }
         assertEq(token.relicsMinted(), 18);
         assertEq(_used(ALICE), 18);
@@ -348,6 +355,7 @@ contract NFT111KRelicTest is TestSupport {
         assertEq(_used(address(buyer)), 0);
         assertEq(token.relicsMinted(), 0);
         assertEq(token.relicFirstCrate(18), 0);
+        assertEq(token.getRelicClaimedMask(), 0);
         assertEq(token.allocatedCrates(), 222);
         assertEq(token.totalMintReceived(), 17);
         buyer.configure(0, 1, 1, ALICE);
@@ -385,6 +393,7 @@ contract NFT111KRelicTest is TestSupport {
         token.allocateRelics{value: 37}(quantity);
         token.setSaleActive(true);
         _claim(ALICE, id);
+        assertEq(token.getRelicClaimedMask(), 1 << (id - 1));
         assertEq(token.allocatedCrates(), quantity * 111);
         assertEq(token.remainingCrates(), 5555 - quantity * 111);
         assertEq(token.relicFirstCrate(id), 1);

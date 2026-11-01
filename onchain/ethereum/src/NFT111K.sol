@@ -475,6 +475,12 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
     }
 
+    function getRelicClaimedMask() external view returns (uint256 mask) {
+        for (uint256 i; i < MAX_RELICS; ++i) {
+            if (relicFirstCrate[i + 1] != 0) mask |= 1 << i;
+        }
+    }
+
     function stats(address wallet)
         external
         view

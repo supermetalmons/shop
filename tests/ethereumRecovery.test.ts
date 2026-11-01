@@ -75,6 +75,8 @@ test('contract-wallet recovery binds every supported action to its emitted colle
       encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, [`0x${'12'.repeat(32)}`]]), '0x3'), log: mintEvent(1, 3) },
     { name: 'warehouse mint', pending: submission('mint', encodeCall(ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [2]), '0x16'),
       log: event('WarehousesPurchased(address,uint256,uint256,uint256)', ['address'], [owner], ['uint256', 'uint256', 'uint256'], [116667, 2, 22]) },
+    { name: 'relic claim', pending: submission('relic-claim', encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18])),
+      log: event('RelicClaimed(address,uint256,uint256)', ['address', 'uint256'], [owner, 18], ['uint256'], [117189]) },
     { name: 'crate opening', pending: submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [111112])),
       log: event('CrateUnboxed(uint256,address,uint256,uint256)', ['uint256', 'address'], [111112, owner], ['uint256', 'uint256'], [1, 20]) },
     { name: 'batch crate opening', pending: submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [[116666, 111112]])),
@@ -104,7 +106,7 @@ test('contract-wallet recovery binds every supported action to its emitted colle
     assert.equal(recovered.nonce, '0x7');
     assert.equal(recovered.transactionSender, relayer);
     assert.equal(recovered.transactionCallHash, originalCallHash);
-    if (['unbox', 'delivery', 'claim'].includes(pending.action)) {
+    if (['unbox', 'delivery', 'claim', 'relic-claim'].includes(pending.action)) {
       const recorded = known(pending);
       const original = f.transactions.get(hash)!;
       for (const changed of [{ from: recipient }, { nonce: '0x8' }, { from: recipient, nonce: '0x8' }]) {
@@ -309,4 +311,35 @@ test('submission capture caches the real outer nonce for wrapped wallets without
   assert.match(direct!.transactionCallHash, /^0x[0-9a-f]{64}$/);
   assert.notEqual(direct?.transactionCallHash, originalCallHash);
   await assert.rejects(readEthereumSubmittedTransaction(f.provider, hash, config.chainId, owner, mint(2).intent!), /changes the saved/);
+});
+
+test('relic recovery binds claimant, selected ID, token identity and zero payment', async () => {
+  const pending = submission('relic-claim', encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]));
+  const log = event('RelicClaimed(address,uint256,uint256)', ['address', 'uint256'], [owner, 18], ['uint256'], [117189]);
+  const f = fixture([log]);
+  assert.equal((await f.recover(pending)).action, 'relic-claim');
+  for (const invalid of [
+    { ...log, topics: [log.topics[0], encodeAbi(['address'], [recipient]), log.topics[2]] },
+    { ...log, topics: [log.topics[0], log.topics[1], encodeAbi(['uint256'], [17])] },
+    { ...log, data: encodeAbi(['uint256'], [117188]) },
+    { ...log, data: `${log.data}${'0'.repeat(64)}` },
+    { ...log, removed: true },
+  ]) {
+    f.state.receipt!.logs = [invalid];
+    await assert.rejects(f.recover(pending), /does not contain/);
+  }
+  f.state.receipt!.logs = [log];
+  await assert.rejects(f.recover({ ...pending, intent: { ...pending.intent!, value: '0x1' } }), /does not contain/);
+  await assert.rejects(f.recover({ ...pending, intent: { ...pending.intent!, data: `${pending.intent!.data}${'0'.repeat(64)}` } }), /does not contain/);
+});
+
+test('EOA relic cancellation preserves the saved claim action and selected ID', async () => {
+  const pending: EthereumPendingTransaction = { ...submission('relic-claim', encodeCall(ETHEREUM_FUNCTIONS.claimRelic,
+    ['uint256'], [18])), hash: originalHash, nonce: '0x7' };
+  const f = fixture();
+  f.transactions.set(hash, { ...f.transactions.get(hash)!, from: owner, to: owner, input: '0x', value: '0x0' });
+  const cancelled = await f.recover(pending);
+  assert.equal(cancelled.action, 'cancel');
+  assert.equal(cancelled.actionBeforeCancellation, 'relic-claim');
+  assert.equal(cancelled.intent?.data, pending.intent?.data);
 });

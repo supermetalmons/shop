@@ -34,6 +34,9 @@ export const ethereumRouteDefinitions = {
   [ETHEREUM_API_PATHS.stats]: {
     methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
   },
+  [ETHEREUM_API_PATHS.relics]: {
+    methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
+  },
   [ETHEREUM_API_PATHS.inventory]: {
     methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
   },

@@ -136,11 +136,11 @@ function MintPanelPackStatusPopover({
 }
 
 export function MintPanelFrame({
-  children, ariaLabel, ...preview
-}: ComponentProps<typeof MintPreview> & { children: ReactNode; ariaLabel?: string }) {
+  children, ariaLabel, previewContent, ...preview
+}: ComponentProps<typeof MintPreview> & { children: ReactNode; ariaLabel?: string; previewContent?: ReactNode }) {
   return (
     <section className="mint-panel" aria-label={ariaLabel}>
-      <MintPreview {...preview} />
+      {previewContent ?? <MintPreview {...preview} />}
       {children}
     </section>
   );

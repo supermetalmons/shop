@@ -458,6 +458,7 @@ contract NFT111KTest is TestSupport {
         vm.prank(alice);
         token.claimRelic(18);
         _redeem(alice, _one(117189), 1);
+        assertEq(token.getRelicClaimedMask(), 1 << 17);
         vm.prank(bob);
         vm.expectRevert(NFT111K.TokenAlreadyIssued.selector);
         token.claimRelic(18);
@@ -474,6 +475,7 @@ contract NFT111KTest is TestSupport {
         vm.prank(bob);
         token.claimRelic(4);
         assertEq(token.relicFirstCrate(4), 112);
+        assertEq(token.getRelicClaimedMask(), (1 << 17) | (1 << 3));
         _info(3000018, 7, 18, alice);
     }
 

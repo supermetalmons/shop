@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
-import { encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
+import { encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS, type EthereumLog } from '../shared/ethereum/abi.ts';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex } from '@noble/hashes/utils';
 import { ethereumReceiptIdsHash, ethereumTokenIdsHash } from '../shared/ethereum/crypto.ts';
@@ -65,7 +65,7 @@ test('batch opening confirmation requires one complete ordered summary including
     error => error instanceof EthereumApiError && error.code === 'operation-ambiguous');
 });
 
-for (const action of ['mint', 'unbox', 'transfer', 'delivery', 'claim'] as const) {
+for (const action of ['mint', 'relic-claim', 'unbox', 'transfer', 'delivery', 'claim'] as const) {
   test(`${action} confirmation waits for finality before reporting a caught inner failure`, async t => {
     let confirmations = 1;
     t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations, items: [], burnedTokenIds: [], logs: [] }));
@@ -526,4 +526,78 @@ test('a local address encryption public key is accepted only in development on c
   assert.equal(ethereumAddressEncryptionKey('production', 11155111, true, 'local'), 'production');
   assert.equal(ethereumAddressEncryptionKey('production', 31337, false, 'local'), 'production');
   assert.equal(ethereumAddressEncryptionKey('production', 31337, true, undefined), 'production');
+});
+
+test('relic availability validates scope, lifetime usage and the complete claimed mask', async t => {
+  const valid = { chainId: config.chainId, contractAddress: contract, owner: owner as string | null, observedBlock: 12,
+    blockHash: `0x${'cd'.repeat(32)}`, saleActive: true, relicsAllocated: 12, relicsMinted: 2,
+    remainingRelics: 10, claimedMask: (1 << 17) | 1, relicLimit: 0, relicsUsed: 2, remainingAllowance: 0 };
+  let value = valid;
+  const requests: string[] = [];
+  t.mock.method(globalThis, 'fetch', async input => { requests.push(String(input)); return Response.json(value); });
+  assert.deepEqual(await ethereumApi.relics(config, owner), valid);
+  assert.ok(requests[0].endsWith(`/ethereum/111k/relics?owner=${owner}`));
+  for (const patch of [
+    { owner: other }, { contractAddress: other }, { chainId: 1 }, { observedBlock: -1 }, { blockHash: '0x00' },
+    { saleActive: 1 }, { claimedMask: 2 ** 18 }, { claimedMask: 1 }, { relicsAllocated: 19 },
+    { relicsMinted: 13 }, { relicLimit: 19 }, { relicsUsed: 19 }, { relicsUsed: 3 }, { remainingAllowance: 2 }, { remainingRelics: 11 },
+  ]) {
+    value = { ...valid, ...patch } as typeof valid;
+    await assert.rejects(ethereumApi.relics(config, owner), /invalid response/);
+  }
+  value = { ...valid, owner: null };
+  assert.equal((await ethereumApi.relics(config, null)).owner, null);
+  const before = requests.length;
+  await assert.rejects(ethereumApi.relics(config, 'bad'), /invalid response/);
+  assert.equal(requests.length, before);
+});
+
+test('relic metadata requests stay bounded and preserve ID order across out-of-order completions', async t => {
+  let active = 0;
+  let maximum = 0;
+  const requested: number[] = [];
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input));
+    assert.equal(url.pathname, '/ethereum/111k/metadata');
+    assert.equal(url.searchParams.get('kind'), 'relic');
+    const id = Number(url.searchParams.get('displayId'));
+    requested.push(id);
+    active++;
+    maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, (19 - id) % 4));
+    active--;
+    return Response.json({ name: `Relic #${id}`, image: `https://wip.lil.org/111k/monuments/${id}.webp` });
+  });
+  const metadata = await ethereumApi.relicMetadata(config);
+  assert.equal(maximum, 4);
+  assert.deepEqual(requested.sort((a, b) => a - b), Array.from({ length: 18 }, (_, index) => index + 1));
+  assert.deepEqual(metadata.map(item => item.name), Array.from({ length: 18 }, (_, index) => `Relic #${index + 1}`));
+});
+
+test('relic confirmation requires the exact zero-value ID claim event even after the NFT moves', async t => {
+  const operation: EthereumSubmission = { ...mintOperation, action: 'relic-claim', intent: {
+    to: contract, data: encodeCall('claimRelic(uint256)', ['uint256'], [18]), value: '0x0',
+  } };
+  const log: EthereumLog = { address: contract, topics: [
+    `0x${bytesToHex(keccak_256(new TextEncoder().encode('RelicClaimed(address,uint256,uint256)')))}`,
+    encodeAbi(['address'], [owner]), encodeAbi(['uint256'], [18]),
+  ], data: encodeAbi(['uint256'], [117189]) };
+  let logs = [log];
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [], logs }));
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined, operation)).status, 'confirmed');
+  for (const invalid of [
+    { ...log, topics: [log.topics[0], encodeAbi(['address'], [other]), log.topics[2]] },
+    { ...log, topics: [log.topics[0], log.topics[1], encodeAbi(['uint256'], [17])] },
+    { ...log, data: encodeAbi(['uint256'], [117188]) },
+    { ...log, data: `${log.data}${'0'.repeat(64)}` },
+    { ...log, removed: true },
+  ]) {
+    logs = [invalid];
+    await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, operation),
+      error => error instanceof EthereumApiError && error.code === 'operation-failed');
+  }
+  logs = [log];
+  await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, {
+    ...operation, intent: { ...operation.intent!, value: '0x1' },
+  }), error => error instanceof EthereumApiError && error.code === 'operation-failed');
 });

@@ -1,13 +1,14 @@
-import { ETHEREUM_MINT_KINDS, type EthereumMintKind } from '../../shared/ethereum/protocol';
+import { type EthereumContainerKind, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle, MintQuantityControl } from '../components/MintPanel';
 import { MintPanelActions } from '../components/MintPanelActions';
 import type { PrimaryMediaControls } from '../components/MediaWithFallback';
 import { EthereumContainerPreview } from './EthereumContainerPreview';
 import { EthereumContainerIcon } from './EthereumContainerIcon';
 import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
+import { RelicClaimGrid } from './RelicClaimGrid';
 
 type EthereumMintPanelProps = {
-  kind: EthereumMintKind;
+  kind: EthereumContainerKind;
   kindDisabled: boolean;
   quantity: number;
   maxQuantity: number;
@@ -19,9 +20,14 @@ type EthereumMintPanelProps = {
   statusText?: string;
   disabled: boolean;
   busy: boolean;
-  onKindChange: (kind: EthereumMintKind) => void;
+  onKindChange: (kind: EthereumContainerKind) => void;
   onQuantityChange: (quantity: number) => void;
   onMint: () => void;
+  relicMetadata?: readonly EthereumMetadata[];
+  claimedRelicMask?: number;
+  selectedRelicId?: number | null;
+  relicSelectionDisabled?: boolean;
+  onRelicSelect?: (id: number) => void;
 };
 
 const containerPreviews = {
@@ -31,9 +37,11 @@ const containerPreviews = {
 
 export function EthereumMintPanel({
   kind, kindDisabled, quantity, maxQuantity, remaining, total, price, discountPrice, useDiscountMint, statusText, disabled, busy, onKindChange, onQuantityChange, onMint,
+  relicMetadata, claimedRelicMask = 0, selectedRelicId = null, relicSelectionDisabled = true, onRelicSelect,
 }: EthereumMintPanelProps) {
+  const relic = kind === 'relic';
   const quantityLabel = `${quantity} ${quantity === 1 ? kind : ETHEREUM_CONTAINER_MEDIA[kind].pluralLabel.toLowerCase()}`;
-  const showQuantitySlider = maxQuantity > 1;
+  const showQuantitySlider = !relic && maxQuantity > 1;
   const formId = 'ethereum-mint-form';
 
   return <MintPanelFrame
@@ -41,9 +49,12 @@ export function EthereumMintPanel({
     quantity={quantity}
     quantityLabel={quantityLabel}
     boxMedia={{ aspectRatio: ETHEREUM_CONTAINER_MEDIA[kind].aspectRatio }}
-    renderPreviewPrimary={containerPreviews[kind]}
+    renderPreviewPrimary={relic ? undefined : containerPreviews[kind]}
     repeatPreviewPrimary
     previewPrimaryKey={`111k-${kind}`}
+    previewContent={relic ? <RelicClaimGrid metadata={relicMetadata} claimedMask={claimedRelicMask}
+      selectedId={selectedRelicId} disabled={relicSelectionDisabled}
+      onSelect={id => onRelicSelect?.(id)} /> : undefined}
   >
     <MintPanelPurchaseFooter
       hasControls={showQuantitySlider}
@@ -51,7 +62,7 @@ export function EthereumMintPanel({
         <div className="ethereum111k__mint-title">
           <MintPanelTitle title="111K" />
           <fieldset className="ethereum111k__mint-kind" aria-label="Container type" disabled={kindDisabled}>
-            {ETHEREUM_MINT_KINDS.map(value => <label key={value} title={ETHEREUM_CONTAINER_MEDIA[value].label}>
+            {(['crate', 'warehouse', 'relic'] as const).map(value => <label key={value} title={ETHEREUM_CONTAINER_MEDIA[value].label}>
               <input type="radio" name="ethereum-container" value={value} aria-label={ETHEREUM_CONTAINER_MEDIA[value].label}
                 checked={kind === value} onChange={() => onKindChange(value)} />
               <span><EthereumContainerIcon kind={value} /></span>
@@ -96,6 +107,9 @@ export function EthereumMintPanel({
         totalPriceLabel={price}
         totalDiscountPriceLabel={discountPrice}
         currencyLabel="ETH"
+        actionLabel={relic ? 'Claim' : undefined}
+        busyLabel={relic ? 'Claiming…' : undefined}
+        showPrice={!relic}
         onStripePayment={async () => {}}
       />}
     />

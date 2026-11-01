@@ -1,0 +1,37 @@
+{
+  "url": "https://mons.shop/111k_devnet",
+  "closedSale": {
+    "all18ImagesLoaded": true,
+    "claimDisabled": true,
+    "status": "Paused"
+  },
+  "openSale": {
+    "all18ImagesLoaded": true,
+    "selectedRelicId": 18,
+    "claimEnabledForConnection": true,
+    "noQuantitySlider": true,
+    "noPrice": true,
+    "noOwnerCaptions": true
+  },
+  "desktop": {
+    "width": 1280,
+    "height": 720,
+    "cratePanelHeight": 624.921875,
+    "relicPanelHeight": 624.921875
+  },
+  "mobile": {
+    "width": 390,
+    "height": 844,
+    "documentWidth": 390,
+    "cratePanelHeight": 742,
+    "relicPanelHeight": 742,
+    "all18Fit": true
+  },
+  "localClaimedState": {
+    "claimedImagesDimmed": true,
+    "claimedSelectionDisabled": true,
+    "keyboardSkipsClaimed": true
+  },
+  "consoleErrors": [],
+  "liveClaimsSubmitted": 0
+}

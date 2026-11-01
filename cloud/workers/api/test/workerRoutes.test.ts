@@ -73,6 +73,7 @@ const EXPECTED_EXACT_ROUTES = [
   ['/fulfillment/shipstation-shipment', 'profile', true, 'required', true, 'profile', '/fulfillment/shipstation-shipment'],
   ['/ethereum/111k/config', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/config'],
   ['/ethereum/111k/stats', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/stats'],
+  ['/ethereum/111k/relics', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/relics'],
   ['/ethereum/111k/inventory', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/inventory'],
   ['/ethereum/111k/metadata', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/metadata'],
   ['/ethereum/111k/reveal/transaction', 'ethereum-reveal', false, 'skip', false, 'profile', '/ethereum/111k/reveal/transaction'],

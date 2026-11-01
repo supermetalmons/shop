@@ -6,6 +6,12 @@ const CRATE_COUNT = 5_555;
 const WAREHOUSE_COUNT = 505;
 export const ETHEREUM_MAX_RELICS = 18;
 export const ETHEREUM_CRATES_PER_RELIC = 111;
+
+export function ethereumRelicClaimCount(mask: number): number {
+  let count = 0;
+  for (let remaining = mask; remaining; remaining &= remaining - 1) count++;
+  return count;
+}
 const ARTWORK_RECEIPT_COUNT = 2 * ARTWORK_COUNT;
 const ARTWORK_RECEIPT_OFFSET = 1_000_000n;
 const CRATE_RECEIPT_OFFSET = 2_000_000n;
@@ -148,6 +154,7 @@ export const ETHEREUM_FUNCTIONS = {
   mintWarehouses: 'mintWarehouses(uint256)',
   allocateRelics: 'allocateRelics(uint256)',
   claimRelic: 'claimRelic(uint256)',
+  relicClaimedMask: 'getRelicClaimedMask()',
   mintFree: 'mintFree(uint8,uint256)',
   freeMintAllowances: 'freeMintAllowances(address)',
   setFreeMintAllowances: 'setFreeMintAllowances(address[],uint16,uint16,uint16)',

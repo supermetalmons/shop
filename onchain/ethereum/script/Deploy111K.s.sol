@@ -48,11 +48,32 @@ contract Deploy111K {
 
     function _freeMintAllocations(string memory json, address collection)
         internal
-        pure
+        view
         returns (NFT111K.FreeMintAllocation[] memory allocations)
     {
         string[] memory keys = vm.parseJsonKeys(json, ".");
-        if (keys.length != 1 || keccak256(bytes(keys[0])) != keccak256("groups")) {
+        if (keys.length == 1) {
+            if (keccak256(bytes(keys[0])) != keccak256("groups")) revert NFT111K.InvalidFreeMintConfig();
+        } else if (keys.length == 2) {
+            bytes32 first = keccak256(bytes(keys[0]));
+            bytes32 second = keccak256(bytes(keys[1]));
+            if (
+                !(first == keccak256("chainId") && second == keccak256("groups"))
+                    && !(first == keccak256("groups") && second == keccak256("chainId"))
+            ) {
+                revert NFT111K.InvalidFreeMintConfig();
+            }
+            bytes memory encodedChain = vm.parseJson(json, ".chainId");
+            uint256 chainId = vm.parseJsonUint(json, ".chainId");
+            if (
+                encodedChain.length != 32 || chainId != 11155111 || block.chainid != chainId
+                    || keccak256(encodedChain) != keccak256(abi.encode(chainId))
+            ) revert NFT111K.InvalidFreeMintConfig();
+            bytes memory text = bytes(vm.parseJsonString(json, ".chainId"));
+            for (uint256 i; i < text.length; ++i) {
+                if (text[i] < "0" || text[i] > "9") revert NFT111K.InvalidFreeMintConfig();
+            }
+        } else {
             revert NFT111K.InvalidFreeMintConfig();
         }
         _rejectJsonScalar(json, ".groups");

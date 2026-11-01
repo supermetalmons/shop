@@ -12,9 +12,13 @@ function requireAddress(value, collectionAddress) {
   return value.toLowerCase();
 }
 
-export function parseFreeMintConfig(value, collectionAddress) {
+export function parseFreeMintConfig(value, collectionAddress, chainId) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.groups) ||
-    Object.keys(value).length !== 1) throw new Error('Invalid free mint configuration.');
+    Object.keys(value).some(key => key !== 'groups' && key !== 'chainId')) throw new Error('Invalid free mint configuration.');
+  const restricted = Object.hasOwn(value, 'chainId');
+  if (restricted && (value.chainId !== 11155111 || chainId !== value.chainId)) {
+    throw new Error('The Sepolia free mint configuration requires explicit chain ID 11155111.');
+  }
   const names = new Set();
   const wallets = new Set();
   const allocations = [];
@@ -39,25 +43,26 @@ export function parseFreeMintConfig(value, collectionAddress) {
     });
     return { name: group.name, crates: group.crates, warehouses: group.warehouses, relics: group.relics, wallets: addresses };
   });
-  return { groups, allocations };
+  return { ...(restricted ? { chainId: value.chainId } : {}), groups, allocations };
 }
 
-export function parseFreeMintConfigJson(json, collectionAddress) {
+export function parseFreeMintConfigJson(json, collectionAddress, chainId) {
   const value = JSON.parse(json);
   for (const match of json.matchAll(/"(?:[^"\\]|\\.)*"|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/g)) {
     if (match[1] !== undefined && !/^(?:0|[1-9]\d*)$/.test(match[1])) {
       throw new Error('Free mint limits must use nonnegative decimal integer JSON literals.');
     }
   }
-  return parseFreeMintConfig(value, collectionAddress);
+  return parseFreeMintConfig(value, collectionAddress, chainId);
 }
 
-export function freeMintOwnerCalls(value, collectionAddress) {
+export function freeMintOwnerCalls(value, collectionAddress, chainId) {
   const to = requireAddress(collectionAddress);
-  const { groups } = parseFreeMintConfig(value, to);
+  const { groups, chainId: restrictedChainId } = parseFreeMintConfig(value, to, chainId);
   const selector = bytesToHex(keccak_256(utf8ToBytes('setFreeMintAllowances(address[],uint16,uint16,uint16)'))).slice(0, 8);
   return groups.filter(group => group.wallets.length > 0).map(group => ({
     group: group.name,
+    ...(restrictedChainId === undefined ? {} : { chainId: restrictedChainId }),
     to,
     data: `0x${selector}${bytesToHex(encode(['address[]', 'uint16', 'uint16', 'uint16'],
       [group.wallets, group.crates, group.warehouses, group.relics]))}`,

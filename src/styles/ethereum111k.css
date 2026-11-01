@@ -56,6 +56,86 @@
   cursor: default;
   opacity: 0.5;
 }
+.ethereum111k__relic-preview {
+  align-items: center;
+  justify-content: center;
+}
+.ethereum111k__relic-grid {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-content: center;
+  gap: var(--relic-gap);
+  width: calc(var(--relic-columns) * var(--relic-size) + (var(--relic-columns) - 1) * var(--relic-gap));
+  max-width: 100%;
+}
+.ethereum111k__relic {
+  position: relative;
+  flex: 0 0 var(--relic-size);
+  width: var(--relic-size);
+  height: var(--relic-size);
+  cursor: pointer;
+}
+.ethereum111k__relic[data-disabled="true"] {
+  cursor: default;
+}
+.ethereum111k__relic input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+}
+.ethereum111k__relic-image {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+.ethereum111k__relic-image > img,
+.ethereum111k__relic-placeholder {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+.ethereum111k__relic-image > [hidden] {
+  display: none;
+}
+.ethereum111k__relic-placeholder {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.ethereum111k__relic[data-claimed="true"] .ethereum111k__relic-image {
+  opacity: 0.35;
+}
+.ethereum111k__relic input:checked + .ethereum111k__relic-image {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ethereum111k__relic input:focus-visible + .ethereum111k__relic-image {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.ethereum111k__relic-number {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  min-width: 14px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+}
 .ethereum111k__pending {
   display: flex;
   flex-wrap: wrap;
@@ -205,5 +285,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .ethereum111k__mint-kind svg { transition: none; }
+  .ethereum111k__relic-image { transition: none; }
   .ethereum111k__reveal-grid button { animation: none; }
 }

@@ -5,10 +5,11 @@ import {
   type EthereumInventoryResponse, type EthereumPreparedTransaction, type EthereumProfileResponse,
   type EthereumSaveAddressRequest, type EthereumSaveAddressResponse, type EthereumSession,
   type EthereumShipmentsResponse, type EthereumStats, type EthereumTransactionConfirmResponse,
+  type EthereumRelicStatus,
   type EthereumDeliveryPrepareRequest, type EthereumDeliveryConfirmRequest,
   type EthereumClaimPrepareRequest, type EthereumClaimConfirmRequest,
 } from '../../shared/ethereum/api';
-import { ethereumAssetId, ethereumItemDisplayIdMaximum, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
+import { ethereumAssetId, ethereumItemDisplayIdMaximum, ethereumRelicClaimCount, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { requestEthereumJson, type EthereumRequestOptions } from './request';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
@@ -77,6 +78,42 @@ function transaction(value: unknown): EthereumPreparedTransaction {
 
 export const ethereumApi = {
   async config(signal?: AbortSignal) { return parseEthereumConfig(await request(ETHEREUM_API_PATHS.config, { signal })); },
+  async relics(config: Ethereum111kConfig, owner: string | null, signal?: AbortSignal): Promise<EthereumRelicStatus> {
+    const address = owner === null ? null : normalizeEthereumAddress(owner);
+    if (owner !== null && (!address || /^0x0{40}$/.test(address))) return invalid();
+    const value = await request(`${ETHEREUM_API_PATHS.relics}${address ? `?${new URLSearchParams({ owner: address })}` : ''}`, { signal });
+    if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
+      (address === null ? value.owner !== null : normalizeEthereumAddress(value.owner) !== address) ||
+      !Number.isSafeInteger(value.observedBlock) || Number(value.observedBlock) < 0 ||
+      typeof value.blockHash !== 'string' || !/^0x[0-9a-f]{64}$/.test(value.blockHash) || typeof value.saleActive !== 'boolean' ||
+      !['relicsAllocated', 'relicsMinted', 'remainingRelics', 'relicLimit', 'relicsUsed', 'remainingAllowance']
+        .every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= ETHEREUM_MAX_RELICS) ||
+      !Number.isSafeInteger(value.claimedMask) || Number(value.claimedMask) < 0 || Number(value.claimedMask) >= 2 ** ETHEREUM_MAX_RELICS ||
+      Number(value.relicsMinted) > Number(value.relicsAllocated) || Number(value.relicsUsed) > Number(value.relicsMinted) ||
+      ethereumRelicClaimCount(Number(value.claimedMask)) !== Number(value.relicsMinted) ||
+      Number(value.remainingRelics) !== Number(value.relicsAllocated) - Number(value.relicsMinted) ||
+      Number(value.remainingAllowance) !== Math.max(0, Number(value.relicLimit) - Number(value.relicsUsed))) return invalid();
+    return value as EthereumRelicStatus;
+  },
+  async relicMetadata(_config: Ethereum111kConfig, signal?: AbortSignal): Promise<EthereumMetadata[]> {
+    const metadata = new Array<EthereumMetadata>(ETHEREUM_MAX_RELICS);
+    const cancellation = new AbortController();
+    const combined = signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal;
+    let next = 0;
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      try {
+        while (next < metadata.length) {
+          combined.throwIfAborted();
+          const index = next++;
+          const value = await request(`${ETHEREUM_API_PATHS.metadata}?${new URLSearchParams({ kind: 'relic', displayId: String(index + 1) })}`, { signal: combined });
+          if (!record(value) || typeof value.name !== 'string' || !hasValidEthereumMedia(value)) return invalid();
+          metadata[index] = value as EthereumMetadata;
+        }
+      } catch (error) { cancellation.abort(error); throw error; }
+    }));
+    combined.throwIfAborted();
+    return metadata;
+  },
   async stats(config: Ethereum111kConfig, owner: string | null, signal?: AbortSignal): Promise<EthereumStats> {
     const address = owner === null ? null : normalizeEthereumAddress(owner);
     if (owner !== null && (!address || /^0x0{40}$/.test(address))) return invalid();

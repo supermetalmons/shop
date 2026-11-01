@@ -17,7 +17,7 @@ const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
   initialDeliveryReceiver: string; deliveryConfigId: number;
 };
-if (deployment.protocolVersion !== 14) throw new Error('The local deployment does not support reserved relic claims. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 15) throw new Error('The local deployment does not support relic claim availability. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -63,7 +63,7 @@ if (typeof collectionCode !== 'string' || collectionCode.length < 4) {
 if (requireEthereumAddress(deployment.quoteSigner) !== signer || typeof signerResult !== 'string' ||
   decodeReturn(['address'], signerResult)[0] !== signer) throw new Error('Local API requires the public A11CE test signer used by deploy:local.');
 
-const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, relicLimit, relicCrates, relicReceiptOffset] = await Promise.all([
+const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, relicLimit, relicCrates, relicReceiptOffset, relicClaimedMask] = await Promise.all([
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_UNBOX_QUANTITY()', [], []) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[]]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[], []]) }, 'latest']),
@@ -72,6 +72,7 @@ const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, reli
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_RELICS()', [], []) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('CRATES_PER_RELIC()', [], []) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('RELIC_RECEIPT_OFFSET()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('getRelicClaimedMask()', [], []) }, 'latest']),
 ]);
 if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBaseURI)[0] !== deployment.metadataBaseURI) {
   throw new Error('The local collection metadata base URI does not match its deployment manifest.');
@@ -79,7 +80,11 @@ if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBase
 const statsValues = typeof collectionStats === 'string' && collectionStats.length === 2 + 64 * 12
   ? decodeReturn(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
     'uint256', 'uint256', 'uint256', 'uint256', 'uint256'], collectionStats) : [];
-if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
+const claimedMask = typeof relicClaimedMask === 'string' && relicClaimedMask.length === 66
+  ? decodeReturn(['uint256'], relicClaimedMask)[0] as bigint : -1n;
+const claimedCount = claimedMask >= 0n ? claimedMask.toString(2).replaceAll('0', '').length : -1;
+if (claimedMask < 0n || claimedMask >= 1n << BigInt(ETHEREUM_MAX_RELICS) || BigInt(claimedCount) !== statsValues[11] ||
+  typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
   typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
   typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0 ||
   typeof relicLimit !== 'string' || decodeReturn(['uint256'], relicLimit)[0] !== BigInt(ETHEREUM_MAX_RELICS) ||
@@ -88,7 +93,7 @@ if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !
   statsValues[9] !== 0n || typeof statsValues[10] !== 'bigint' || statsValues[10] > BigInt(ETHEREUM_MAX_RELICS) ||
   typeof statsValues[0] !== 'bigint' || statsValues[0] < statsValues[10] * BigInt(ETHEREUM_CRATES_PER_RELIC) ||
   typeof statsValues[11] !== 'bigint' || statsValues[11] > statsValues[10]) {
-  throw new Error('The local collection does not implement the current reserved relic claim interface. Run npm --prefix onchain/ethereum run deploy:local again.');
+  throw new Error('The local collection does not implement the current relic claim availability interface. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
 
 async function proceedsRead(signature: string, types: string[], values: unknown[], resultType: string) {

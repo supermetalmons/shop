@@ -1016,6 +1016,25 @@ contract NFT111KGasTest is TestSupport {
         _setBaseURI(1024, "setBaseURI1024");
     }
 
+    function testGasGetRelicClaimedMaskEmpty() public {
+        uint256 mask = token.getRelicClaimedMask();
+        vm.snapshotGasLastCall("getRelicClaimedMaskEmpty");
+        assertEq(mask, 0);
+    }
+
+    function testGasGetRelicClaimedMaskFull() public {
+        _configureRelics(18);
+        _configureFreeWallet(alice);
+        vm.startPrank(alice);
+        for (uint256 id = 1; id <= 18; ++id) {
+            token.claimRelic(id);
+        }
+        vm.stopPrank();
+        uint256 mask = token.getRelicClaimedMask();
+        vm.snapshotGasLastCall("getRelicClaimedMaskFull");
+        assertEq(mask, (1 << 18) - 1);
+    }
+
     function testGasStats() public {
         _buyCrates(alice, 1);
         _buyWarehouses(alice, 1);

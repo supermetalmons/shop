@@ -52,7 +52,8 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
         for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'mintCrates1ThirtyTwoRecipients',
           'releaseMint', 'releaseMintEightRecipients', 'releaseAllMintThirtyTwoRecipients',
           'releaseAllMintThirtyTwoGasBurningRecipients', 'mintFreeCrates1', 'mintFreeWarehouses1',
-          'allocateRelics1', 'allocateRelics18', 'claimRelic', 'claimRelicReceiver', 'setFreeMintAllowancesThirtyTwo', 'setBaseURI40', 'setBaseURI1024']) {
+          'allocateRelics1', 'allocateRelics18', 'claimRelic', 'claimRelicReceiver', 'getRelicClaimedMaskEmpty',
+          'getRelicClaimedMaskFull', 'setFreeMintAllowancesThirtyTwo', 'setBaseURI40', 'setBaseURI1024']) {
           assert.ok(variant.gas[name] > 0, `${variant.label}: missing ${name}`);
         }
         assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);

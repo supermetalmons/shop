@@ -5,7 +5,7 @@ import { parseInitialDeliveryReceiver, parseProceedsConfig } from './proceeds-co
 import { parseFreeMintConfigJson } from './free-mint-config.mjs';
 
 const root = new URL('../', import.meta.url);
-const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v10/';
+const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v11/';
 const metadataUrl = new URL(metadataBaseURI);
 const hostedMetadata = metadataUrl.origin === 'https://cdn.mons.shop' &&
   /^\/111k(?:-sepolia)?\/(?:[a-z0-9][a-z0-9-]{0,63}\/)?$/.test(metadataUrl.pathname);
@@ -54,7 +54,7 @@ if (!predictedCollection) throw new Error('Unable to predict the collection addr
 parseProceedsConfig(proceeds, predictedCollection);
 const initialDeliveryReceiver = parseInitialDeliveryReceiver(
   JSON.parse(await readFile(new URL('config/delivery-routing.json', root), 'utf8')), predictedCollection, mintRecipients);
-const { allocations: freeMintAllocations } = parseFreeMintConfigJson(freeMintConfig, predictedCollection);
+const { allocations: freeMintAllocations } = parseFreeMintConfigJson(freeMintConfig, predictedCollection, 31337);
 run('forge', ['build', '--offline']);
 const artifact = async name => JSON.parse(await readFile(new URL(`out/${name}.sol/${name}.json`, root), 'utf8'));
 const send = creation => JSON.parse(run('cast', [
@@ -72,7 +72,7 @@ if (!collection.contractAddress || Number(collection.status) !== 1) throw new Er
 if (collection.contractAddress.toLowerCase() !== predictedCollection.toLowerCase()) throw new Error('Unexpected collection deployment address.');
 
 const result = {
-  protocolVersion: 14,
+  protocolVersion: 15,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, initialDeliveryReceiver, deliveryConfigId: 1, mintRecipients, mintSharesBps, discountRoot, freeMintAllocations,

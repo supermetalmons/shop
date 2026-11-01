@@ -1,0 +1,11 @@
+{
+  "manifestSha256": "bfca227b1e44f145ca1f31ccf255e751594f00becbb90ea482ce5319d6a50e2d",
+  "reports": [
+    {
+      "name": "NFT111K",
+      "address": "0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c",
+      "verificationId": "9edd7ada-2352-44fe-a268-05f45dd7ea00",
+      "submitted": true
+    }
+  ]
+}

@@ -25,6 +25,9 @@ interface MintPanelActionsProps {
   currencyLabel?: string;
   totalDiscountPriceLabel: string;
   onStripePayment: () => Promise<void>;
+  actionLabel?: string;
+  busyLabel?: string;
+  showPrice?: boolean;
 }
 
 const ACTION_TEXT_FIT_MIN_SCALE = 0.62;
@@ -195,6 +198,7 @@ export function MintPanelActions({
   submitBusy, disabled, walletActionBusy = false, useDiscountMint, showQuantitySlider, quantityLabel,
   revealActionBusy = false, cardQuantityLabel,
   stripePaymentDisplayPriceLabel, totalPriceLabel, totalDiscountPriceLabel, currencyLabel = 'SOL', onStripePayment,
+  actionLabel = 'Mint', busyLabel = 'Minting…', showPrice = true,
 }: MintPanelActionsProps) {
   const stripePaymentButtonRef = useRef<HTMLButtonElement | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -226,6 +230,9 @@ export function MintPanelActions({
     totalPriceLabel,
     totalDiscountPriceLabel,
     currencyLabel,
+    actionLabel,
+    busyLabel,
+    showPrice,
   ]);
   const pairedActionTextFit = showStripePaymentButton && showMintButton
     ? tighterActionTextFit(stripeActionTextFit, submitActionTextFit)
@@ -282,17 +289,17 @@ export function MintPanelActions({
             ref={submitButtonRef}
             type="submit"
             form={formId}
-            className={`${submitClassName}${walletActionBusy && revealActionBusy && !disabled ? ' mint-panel__submit--reveal-locked' : ''}`}
+            className={`${submitClassName}${showPrice ? '' : ' mint-panel__submit--no-price'}${walletActionBusy && revealActionBusy && !disabled ? ' mint-panel__submit--reveal-locked' : ''}`}
             style={submitActionTextFitStyle}
             disabled={disabled || walletActionBusy}
             aria-label={submitAriaLabel}
           >
             {submitBusy ? (
-              <span className="mint-panel__submit-text" data-mint-action-fit="label">Minting…</span>
+              <span className="mint-panel__submit-text" data-mint-action-fit="label">{busyLabel}</span>
             ) : (
               <>
                 <span className="mint-panel__submit-text" data-mint-action-fit="label">
-                  Mint
+                  {actionLabel}
                   {showQuantitySlider ? (
                     <span className="mint-panel__submit-quantity">
                       {' '}{quantityLabel}
@@ -300,7 +307,7 @@ export function MintPanelActions({
                     </span>
                   ) : null}
                 </span>
-                {useDiscountMint ? (
+                {showPrice && (useDiscountMint ? (
                   <span
                     className="mint-panel__submit-price mint-panel__submit-price--discounted"
                     data-mint-action-fit="price"
@@ -312,7 +319,7 @@ export function MintPanelActions({
                   </span>
                 ) : (
                   <span className="mint-panel__submit-price" data-mint-action-fit="price">{totalPriceLabel} {currencyLabel}</span>
-                )}
+                ))}
               </>
             )}
           </button>

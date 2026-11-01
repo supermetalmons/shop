@@ -18,7 +18,7 @@ contract DeploymentMetadataHarness is Deploy111K {
 
     function freeMints(string memory json, address collection)
         external
-        pure
+        view
         returns (NFT111K.FreeMintAllocation[] memory)
     {
         return _freeMintAllocations(json, collection);
@@ -198,6 +198,45 @@ contract NFT111KDeploymentTest is TestSupport {
         harness.freeMints(_freeMintGroup("", "1.0", "0", "0"), address(0x123));
         vm.expectRevert();
         harness.freeMints(_freeMintGroup("", "1e2", "0", "0"), address(0x123));
+    }
+
+    function testSepoliaConfigurationAcceptsEitherRootKeyOrder() public {
+        string memory groups =
+            '[{"name":"A","crates":0,"warehouses":0,"relics":3,"wallets":["0x000000000000000000000000000000000000a110"]}]';
+        string[2] memory configs = [
+            string.concat('{"chainId":11155111,"groups":', groups, "}"),
+            string.concat('{"groups":', groups, ',"chainId":11155111}')
+        ];
+        for (uint256 i; i < configs.length; ++i) {
+            vm.chainId(11155111);
+            NFT111K.FreeMintAllocation[] memory allocations = harness.freeMints(configs[i], address(0x123));
+            assertEq(allocations.length, 1);
+            assertEq(allocations[0].wallet, BUYER);
+            assertEq(allocations[0].relicLimit, 3);
+            vm.chainId(1);
+            vm.expectRevert(NFT111K.InvalidFreeMintConfig.selector);
+            harness.freeMints(configs[i], address(0x123));
+        }
+    }
+
+    function testSepoliaRelicPresetCannotBeUsedOnMainnetOrAnvil() public {
+        string memory preset = vm.readFile("config/free-mints.sepolia.json");
+        vm.chainId(1);
+        vm.expectRevert(NFT111K.InvalidFreeMintConfig.selector);
+        harness.freeMints(preset, address(0x123));
+        vm.chainId(31337);
+        vm.expectRevert(NFT111K.InvalidFreeMintConfig.selector);
+        harness.freeMints(preset, address(0x123));
+        vm.chainId(11155111);
+        NFT111K.FreeMintAllocation[] memory allocations = harness.freeMints(preset, address(0x123));
+        assertEq(allocations.length, 4);
+        for (uint256 i; i < allocations.length; ++i) {
+            assertEq(allocations[i].crateLimit, 0);
+            assertEq(allocations[i].warehouseLimit, 0);
+            assertEq(allocations[i].relicLimit, 3);
+        }
+        vm.chainId(1);
+        assertEq(harness.freeMints(vm.readFile("config/free-mints.json"), address(0x123)).length, 0);
     }
 
     function testConfiguredFreeMintsDeployAtomicallyWithDistinctOwner() public {

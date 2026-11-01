@@ -46,15 +46,20 @@ test('native Ethereum reconciliation and HTTP reads use the default Worker fetch
   const rpc = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
-    const { id, method, params } = JSON.parse(body) as { id: number; method: string; params?: [{ data?: string }] };
-    methods.push(method);
-    const results: Record<string, unknown> = {
-      eth_chainId: '0x7a69', eth_blockNumber: '0x66', eth_getLogs: [],
-      eth_call: params?.[0]?.data === encodeCall('MAX_RELICS()', [], []) ? encodeAbi(['uint256'], [18]) : encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
-        [0, 0, 0, 100000000000000n, 1100000000000000n, true, `0x${'ab'.repeat(32)}`, 50000000000000n, 1, 0, 0, 0]),
+    const payload = JSON.parse(body);
+    const respond = ({ id, method, params }: { id: number; method: string; params?: [{ data?: string }] }) => {
+      methods.push(method);
+      const results: Record<string, unknown> = {
+        eth_chainId: '0x7a69', eth_blockNumber: '0x66', eth_getLogs: [],
+        eth_call: params?.[0]?.data === encodeCall('MAX_RELICS()', [], []) ? encodeAbi(['uint256'], [18]) :
+          params?.[0]?.data === encodeCall('getRelicClaimedMask()', [], []) ? encodeAbi(['uint256'], [0]) :
+            encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
+              [0, 0, 0, 100000000000000n, 1100000000000000n, true, `0x${'ab'.repeat(32)}`, 50000000000000n, 1, 0, 0, 0]),
+      };
+      return { jsonrpc: '2.0', id, result: results[method] };
     };
-    response.writeHead(Object.hasOwn(results, method) ? 200 : 400, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ jsonrpc: '2.0', id, result: results[method] }));
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(Array.isArray(payload) ? payload.map(respond) : respond(payload)));
   });
   context.after(() => new Promise<void>((resolve, reject) => rpc.close(error => error ? reject(error) : resolve())));
   await new Promise<void>((resolve) => rpc.listen(0, '127.0.0.1', resolve));
@@ -110,7 +115,7 @@ export default {
   await activateEthereumControl((await worker.getEnv()).COMMERCE_DB, contract);
   const activeConfig = await worker.fetch(`https://api.mons.shop${paths.config}`, { headers: { Origin: ORIGIN } });
   assert.equal((await activeConfig.json() as { enabled: boolean }).enabled, true);
-  assert.deepEqual(methods, ['eth_chainId', 'eth_call']);
+  assert.deepEqual(methods, ['eth_chainId', 'eth_call', 'eth_call']);
   methods.length = 0;
   const response = await worker.fetch('https://api.mons.shop/reconcile');
   assert.equal(response.status, 200, await response.clone().text());
@@ -127,7 +132,7 @@ export default {
   assert.equal(current.relicsMinted, 0);
   assert.equal(current.relicsAllocated, 0);
   assert.equal(current.remainingRelics, 0);
-  assert.deepEqual(methods, ['eth_chainId', 'eth_blockNumber', 'eth_getLogs', 'eth_chainId', 'eth_call', 'eth_call']);
+  assert.deepEqual(methods, ['eth_chainId', 'eth_blockNumber', 'eth_getLogs', 'eth_chainId', 'eth_call', 'eth_call', 'eth_call']);
 });
 
 test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encrypted address isolation', async () => {

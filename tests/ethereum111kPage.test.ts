@@ -5,7 +5,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import { encodeCall } from '../shared/ethereum/abi.ts';
-import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumStats } from '../shared/ethereum/api.ts';
+import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumRelicStatus, EthereumStats } from '../shared/ethereum/api.ts';
 import type { EthereumWallet } from '../src/ethereum/useEthereum111k.ts';
 import type { EthereumCheckoutStatusResponse } from '../shared/ethereum/checkout.ts';
 import type { HeaderWallet } from '../src/shop/account/useHeaderWallet.ts';
@@ -54,6 +54,12 @@ function stats(overrides: Partial<EthereumStats> = {}): EthereumStats {
     chainId: config.chainId, contractAddress: contract, owner, discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT,
     discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0, ...overrides };
 }
+function relicStatus(address: string | null = owner, overrides: Partial<EthereumRelicStatus> = {}): EthereumRelicStatus {
+  return { chainId: config.chainId, contractAddress: contract, owner: address, observedBlock: 10, blockHash: `0x${'ab'.repeat(32)}`,
+    saleActive: true, relicsAllocated: 12, relicsMinted: 0, remainingRelics: 12, claimedMask: 0,
+    relicLimit: address ? 3 : 0, relicsUsed: 0, remainingAllowance: address ? 3 : 0, ...overrides };
+}
+const relicQueryKey = (address: string | null = owner) => ['ethereum111k', 'relics', config.chainId, contract, address];
 beforeEach(context => {
   const t = context as TestContext;
   ({ dom } = setupFrontendDom());
@@ -64,6 +70,8 @@ beforeEach(context => {
   window.history.replaceState(null, '', '/111k_devnet');
   t.mock.method(ethereumApi, 'config', async () => config);
   t.mock.method(ethereumApi, 'stats', async () => stats());
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => relicStatus(address));
+  t.mock.method(ethereumApi, 'relicMetadata', async () => Array.from({ length: 18 }, (_, i) => ({ name: `Relic #${i + 1}`, image })));
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [item()], nextCursor: null, observedBlock: 10 }));
   t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
     dropId: config.dropId, deploymentId: 'test', status: 'pending', artworks: [], retryAfterMs: 2_000 }));
@@ -663,7 +671,7 @@ test('the mint panel shares the drop frame and previews the selected crate quant
   assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 1);
   assert.equal(view.getByRole('img', { name: '111K crate' }), crateImage);
   assert.equal(view.queryByRole('img', { name: '111K warehouse' }), null);
-  assert.equal(view.getByRole('group', { name: 'Container type' }).querySelectorAll('input[type="radio"]').length, 2);
+  assert.equal(view.getByRole('group', { name: 'Container type' }).querySelectorAll('input[type="radio"]').length, 3);
   assert.equal((view.getByRole('radio', { name: 'Crate' }) as HTMLInputElement).checked, true);
   assert.equal((view.getByRole('radio', { name: 'Warehouse' }) as HTMLInputElement).checked, false);
   assert.equal(view.queryByRole('button', { name: /Connect Ethereum|Disconnect Ethereum/ }), null);
@@ -1735,13 +1743,12 @@ test('completing a transaction clears recovery state before the next transaction
   assert.equal(Boolean(view.queryByRole('button', { name: 'Stop tracking this transaction' })), false);
 });
 
-test('public mint only offers crates and warehouses even when relic claims remain', async t => {
+test('the relic icon opens claims without adding a public relic mint', async t => {
   t.mock.method(ethereumApi, 'stats', async () => stats({ relicsAllocated: 18, relicsMinted: 16, remainingRelics: 2,
     allocatedCrates: 1998, remainingCrates: 3557, remainingWarehouses: 323 }));
   const view = page();
   await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Crate' })));
-  assert.deepEqual(view.getAllByRole('radio').map(input => input.getAttribute('aria-label')), ['Crate', 'Warehouse']);
-  assert.equal(view.queryByRole('radio', { name: 'Relic' }), null);
+  assert.deepEqual(view.getAllByRole('radio').map(input => input.getAttribute('aria-label')), ['Crate', 'Warehouse', 'Relic']);
   assert.equal(view.queryByRole('button', { name: /Mint.*relic/i }), null);
 });
 
@@ -1793,4 +1800,122 @@ test('an unresolved relic redemption blocks opening until checkout releases its 
   assert.equal((view.getByRole('button', { name: 'Open relic' }) as HTMLButtonElement).disabled, true);
   act(() => { observeCheckoutReservation(returnedCheckoutId)({ ...pending, status: 'failed' }); });
   await waitFor(() => assert.equal((view.getByRole('button', { name: 'Open relic' }) as HTMLButtonElement).disabled, false));
+});
+
+
+test('the relic panel shows all eighteen selectable IDs, hides slider and price, and dims claimed IDs', async t => {
+  t.mock.method(ethereumApi, 'relics', async () => relicStatus(owner, { claimedMask: 1 << 3, relicsMinted: 1, remainingRelics: 11 }));
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Relic' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
+  await waitFor(() => assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).disabled, false));
+  const grid = view.getByRole('radiogroup', { name: 'Choose a relic' });
+  assert.equal(grid.querySelectorAll('input[type=radio]').length, 18);
+  assert.equal(grid.querySelectorAll('a').length, 0);
+  const claimed = view.getByRole('radio', { name: 'Relic #4, claimed' }) as HTMLInputElement;
+  assert.equal(claimed.disabled, true);
+  assert.equal(claimed.closest('label')!.getAttribute('data-claimed'), 'true');
+  assert.equal(view.queryByRole('slider', { name: 'Mint quantity' }), null);
+  assert.equal(view.container.querySelector('.mint-panel__submit-price'), null);
+  assert.match(view.container.querySelector('.mint-panel__availability')!.textContent!, /3 claims left/);
+  const button = view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement;
+  assert.equal(button.disabled, true);
+  fireEvent.click(view.getByRole('radio', { name: 'Relic #18' }));
+  assert.equal(button.disabled, false);
+  assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).checked, true);
+  fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
+  assert.ok(view.getByRole('slider', { name: 'Mint quantity' }));
+  assert.ok(view.getByRole('button', { name: /Mint.*warehouse/ }));
+});
+
+test('external claims clear selected IDs, reorgs restore availability, and exhausted allocation disables unclaimed IDs', async () => {
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Relic' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
+  const relic = () => view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement;
+  await waitFor(() => assert.equal(relic().disabled, false));
+  fireEvent.click(relic());
+  act(() => view.client.setQueryData(relicQueryKey(), relicStatus(owner, { claimedMask: 1 << 17, relicsMinted: 1, remainingRelics: 11 })));
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, true));
+  assert.equal((view.getByRole('radio', { name: 'Relic #18, claimed' }) as HTMLInputElement).checked, false);
+  act(() => view.client.setQueryData(relicQueryKey(), relicStatus()));
+  await waitFor(() => assert.equal(relic().disabled, false));
+  assert.equal(relic().checked, false);
+  act(() => view.client.setQueryData(relicQueryKey(), relicStatus(owner, { claimedMask: (1 << 12) - 1, relicsMinted: 12, remainingRelics: 0 })));
+  await waitFor(() => assert.equal(relic().disabled, true));
+  assert.equal(relic().closest('label')!.getAttribute('data-claimed'), 'false');
+  assert.equal(view.getByRole('radiogroup', { name: 'Choose a relic' }).querySelectorAll('input').length, 18);
+  assert.match(view.container.querySelector('.mint-panel__availability')!.textContent!, /Sold out/);
+});
+
+for (const [label, state, expected] of [
+  ['ineligible', { relicLimit: 0, remainingAllowance: 0 }, 'Not eligible'],
+  ['exhausted', { relicsUsed: 3, remainingAllowance: 0 }, '0 claims left'],
+  ['paused', { saleActive: false }, 'Paused'],
+] as const) test(`the relic panel lets ${label} wallets browse without enabling Claim`, async t => {
+  t.mock.method(ethereumApi, 'relics', async () => relicStatus(owner, state));
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Relic' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
+  await waitFor(() => assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).disabled, false));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic #18' }));
+  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, true);
+  assert.equal(view.container.querySelector('.mint-panel__availability')!.textContent, expected);
+});
+
+test('stale or failed relic reads disable Claim until a fresh snapshot arrives', async t => {
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Relic' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
+  await waitFor(() => assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).disabled, false));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic #18' }));
+  act(() => view.client.setQueryData(relicQueryKey(), relicStatus(), { updatedAt: Date.now() - 8_001 }));
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, true));
+  act(() => view.client.setQueryData(relicQueryKey(), relicStatus()));
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  t.mock.method(ethereumApi, 'relics', async () => { throw new Error('RPC unavailable'); });
+  await act(async () => { await view.client.invalidateQueries({ queryKey: relicQueryKey() }); });
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, true));
+  assert.ok(view.getByText('Couldn’t refresh relic availability.'));
+});
+
+test('guest Claim preserves the chosen ID through connection and submits it once without payment', async t => {
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
+  let connects = 0;
+  const transactions: Array<{ data: string; value: string }> = [];
+  const provider = { request: async ({ method, params }: { method: string; params?: unknown }) => {
+    if (method === 'eth_sendTransaction') { transactions.push((params as typeof transactions)[0]); return `0x${'ab'.repeat(32)}`; }
+    if (method === 'eth_chainId') return '0xaa36a7';
+    if (method === 'eth_getTransactionCount') return '0x7';
+    if (method === 'eth_getTransactionByHash') return null;
+    return [owner];
+  } };
+  let view!: ReturnType<typeof page>;
+  const disconnected: EthereumWallet = { ...wallet, address: null, provider: null, status: 'disconnected',
+    connect() { connects++; view.rerenderPage({ wallet: { ...disconnected, status: 'connecting' } }); } };
+  view = page({ wallet: disconnected });
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Relic' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
+  await waitFor(() => assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).disabled, false));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic #18' }));
+  fireEvent.click(view.getByRole('button', { name: 'Claim' }));
+  assert.equal(connects, 1);
+  await act(async () => view.rerenderPage({ wallet: { ...wallet, provider } }));
+  await waitFor(() => assert.equal(transactions.length, 1));
+  assert.equal(transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]));
+  assert.equal(transactions[0].value, '0x0');
+  assert.equal(readEthereumPending(ethereumInventoryScope(config, owner)!)!.action, 'relic-claim');
+  assert.equal(view.queryByRole('button', { name: 'Sign in to finish' }), null);
+});
+
+test('changing the connected wallet clears relic selection without discarding the metadata cache', async () => {
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Relic' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
+  await waitFor(() => assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).disabled, false));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic #18' }));
+  view.rerenderPage({ wallet: { ...wallet, address: '0x2222222222222222222222222222222222222222' } });
+  await waitFor(() => assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).checked, false));
+  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, true);
+  assert.ok(view.client.getQueryData(['ethereum111k', 'relic-metadata', config.chainId, contract, config.metadataBaseUri]));
 });

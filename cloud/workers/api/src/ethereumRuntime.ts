@@ -1,7 +1,7 @@
 import { resolveEthereum111kConfig } from '../../../../shared/ethereum/config.js';
 import type { Ethereum111kConfig } from '../../../../shared/ethereum/api.js';
 import { decodeReturn, encodeCall } from '../../../../shared/ethereum/abi.js';
-import { ETHEREUM_MAX_RELICS, ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_RELICS, ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
 import { EthereumApiError } from './ethereumError.js';
 import { readBoundedResponseJson } from './boundedResponse.js';
 import { rpcInteger } from './ethereumRpcValue.js';
@@ -65,8 +65,11 @@ export function requireEthereumContract(context: EthereumContext): string {
 
 export async function ethereumRelicInterfaceAvailable(context: EthereumContext): Promise<boolean> {
   context.relicInterfaceCheck ??= (async () => {
-    const result = await ethereumCall(context, encodeCall('MAX_RELICS()', [], []));
-    return result.length === 66 && decodeReturn(['uint256'], result)[0] === BigInt(ETHEREUM_MAX_RELICS);
+    const [maximum, mask] = await ethereumCallBatch(context, [encodeCall('MAX_RELICS()', [], []),
+      encodeCall(ETHEREUM_FUNCTIONS.relicClaimedMask, [], [])]);
+    return maximum.length === 66 && mask.length === 66 &&
+      decodeReturn(['uint256'], maximum)[0] === BigInt(ETHEREUM_MAX_RELICS) &&
+      (decodeReturn(['uint256'], mask)[0] as bigint) < 1n << BigInt(ETHEREUM_MAX_RELICS);
   })();
   return context.relicInterfaceCheck;
 }
