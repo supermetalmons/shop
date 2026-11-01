@@ -73,14 +73,14 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(allocations[0].wallet, BUYER);
         assertEq(allocations[0].crateLimit, 100);
         assertEq(allocations[0].warehouseLimit, 1);
-        assertEq(allocations[0].monumentLimit, 0);
+        assertEq(allocations[0].relicLimit, 0);
         assertEq(allocations[1].wallet, address(0xCA10));
         assertEq(allocations[1].crateLimit, 100);
         assertEq(allocations[2].wallet, NEXT_OWNER);
         assertEq(allocations[2].crateLimit, 5);
         assertEq(allocations[2].warehouseLimit, 0);
         assertEq(allocations[3].wallet, address(0xD00D));
-        assertEq(allocations[3].monumentLimit, 1);
+        assertEq(allocations[3].relicLimit, 1);
         assertEq(harness.freeMints('{"groups":[]}', address(0x123)).length, 0);
         assertEq(harness.freeMints(_freeMintGroup("", "0", "0", "0"), address(0x123)).length, 0);
     }
@@ -94,7 +94,7 @@ contract NFT111KDeploymentTest is TestSupport {
             vm.expectRevert();
             harness.freeMints(
                 string.concat(
-                    '{"groups":[{"name":"A","crates":0,"warehouses":1,"monuments":1,"wallets":', invalid[i], "}]}"
+                    '{"groups":[{"name":"A","crates":0,"warehouses":1,"relics":1,"wallets":', invalid[i], "}]}"
                 ),
                 address(0x123)
             );
@@ -113,7 +113,7 @@ contract NFT111KDeploymentTest is TestSupport {
                 string.concat(
                     '{"groups":[{"name":"',
                     names[i],
-                    '","crates":100,"warehouses":1,"monuments":0,"wallets":["0x000000000000000000000000000000000000a110"]}]}'
+                    '","crates":100,"warehouses":1,"relics":0,"wallets":["0x000000000000000000000000000000000000a110"]}]}'
                 ),
                 address(0x123)
             );
@@ -121,7 +121,7 @@ contract NFT111KDeploymentTest is TestSupport {
             assertEq(allocations[0].wallet, BUYER);
             assertEq(allocations[0].crateLimit, 100);
             assertEq(allocations[0].warehouseLimit, 1);
-            assertEq(allocations[0].monumentLimit, 0);
+            assertEq(allocations[0].relicLimit, 0);
         }
     }
 
@@ -165,15 +165,13 @@ contract NFT111KDeploymentTest is TestSupport {
         harness.freeMints(_freeMintGroup("", "0", "0", "19"), address(0x123));
         vm.expectRevert();
         harness.freeMints(
-            '{"groups":[{"name":"A","crates":0,"warehouses":0,"monuments":0,"wallets":[],"extra":1}]}', address(0x123)
+            '{"groups":[{"name":"A","crates":0,"warehouses":0,"relics":0,"wallets":[],"extra":1}]}', address(0x123)
         );
         vm.expectRevert();
-        harness.freeMints(
-            '{"groups":[{"name":"","crates":0,"warehouses":0,"monuments":0,"wallets":[]}]}', address(0x123)
-        );
+        harness.freeMints('{"groups":[{"name":"","crates":0,"warehouses":0,"relics":0,"wallets":[]}]}', address(0x123));
         vm.expectRevert();
         harness.freeMints(
-            '{"groups":[{"name":"A","crates":0,"warehouses":0,"monuments":0,"wallets":[]},{"name":"A","crates":0,"warehouses":0,"monuments":0,"wallets":[]}]}',
+            '{"groups":[{"name":"A","crates":0,"warehouses":0,"relics":0,"wallets":[]},{"name":"A","crates":0,"warehouses":0,"relics":0,"wallets":[]}]}',
             address(0x123)
         );
     }
@@ -190,7 +188,7 @@ contract NFT111KDeploymentTest is TestSupport {
         harness.freeMints(_freeMintGroup(string.concat(buyer, ",", buyer), "1", "0", "0"), address(0x123));
         vm.expectRevert(NFT111K.InvalidFreeMintConfig.selector);
         harness.freeMints(
-            '{"groups":[{"name":"A","crates":1,"warehouses":0,"monuments":0,"wallets":["0x000000000000000000000000000000000000A110"]},{"name":"B","crates":2,"warehouses":0,"monuments":0,"wallets":["0x000000000000000000000000000000000000a110"]}]}',
+            '{"groups":[{"name":"A","crates":1,"warehouses":0,"relics":0,"wallets":["0x000000000000000000000000000000000000A110"]},{"name":"B","crates":2,"warehouses":0,"relics":0,"wallets":["0x000000000000000000000000000000000000a110"]}]}',
             address(0x123)
         );
     }
@@ -242,36 +240,35 @@ contract NFT111KDeploymentTest is TestSupport {
             (
                 uint16 crates,
                 uint16 warehouses,
-                uint16 monuments,
+                uint16 relics,
                 uint16 cratesUsed,
                 uint16 warehousesUsed,
-                uint16 monumentsUsed
+                uint16 relicsUsed
             ) = token.freeMintAllowances(allocation.wallet);
             assertEq(crates, allocation.crateLimit);
             assertEq(warehouses, allocation.warehouseLimit);
-            assertEq(monuments, allocation.monumentLimit);
-            assertEq(cratesUsed + warehousesUsed + monumentsUsed, 0);
+            assertEq(relics, allocation.relicLimit);
+            assertEq(cratesUsed + warehousesUsed + relicsUsed, 0);
         }
-        _assertClosedUntilOwnerOpens(token);
+        _assertClosedUntilOwnerOpens(token, false);
         vm.prank(BUYER);
         token.mintFree(NFT111K.ItemKind.Crate, 15);
         assertEq(token.allocatedCrates(), 15);
         assertEq(token.totalMintReceived(), 0);
     }
 
-    function _freeMintGroup(
-        string memory wallets,
-        string memory crates,
-        string memory warehouses,
-        string memory monuments
-    ) private pure returns (string memory) {
+    function _freeMintGroup(string memory wallets, string memory crates, string memory warehouses, string memory relics)
+        private
+        pure
+        returns (string memory)
+    {
         return string.concat(
             '{"groups":[{"name":"A","crates":',
             crates,
             ',"warehouses":',
             warehouses,
-            ',"monuments":',
-            monuments,
+            ',"relics":',
+            relics,
             ',"wallets":[',
             wallets,
             "]}]}"
@@ -319,10 +316,10 @@ contract NFT111KDeploymentTest is TestSupport {
         }
     }
 
-    function testFreshPublicNetworkDeploymentsStartClosedAndSupportMonumentsAndReceipts() public {
+    function testFreshPublicNetworkDeploymentsStartClosedAndSupportRelicsAndReceipts() public {
         uint256[2] memory chains = [uint256(1), 11155111];
         string[2] memory prefixes =
-            ["https://cdn.mons.shop/111k/mainnet-monuments-v1/", "https://cdn.mons.shop/111k-sepolia/v9/"];
+            ["https://cdn.mons.shop/111k/mainnet-relics-v1/", "https://cdn.mons.shop/111k-sepolia/v9/"];
         DeploymentVm env = DeploymentVm(address(vm));
         env.setEnv("ETHEREUM_111K_DEPLOYER_KEY", Strings.toString(DEPLOYER_KEY));
         env.setEnv("ETHEREUM_111K_OWNER", Strings.toHexString(address(this)));
@@ -337,8 +334,8 @@ contract NFT111KDeploymentTest is TestSupport {
             assertEq(address(token), expected);
             _assertDeployment(token, chains[i], prefixes[i]);
             _assertMetadataBoundaries(token, prefixes[i]);
-            _assertClosedUntilOwnerOpens(token);
-            _exerciseMonumentSale(token, prefixes[i]);
+            _assertClosedUntilOwnerOpens(token, true);
+            _exerciseRelicSale(token, prefixes[i]);
         }
     }
 
@@ -357,14 +354,14 @@ contract NFT111KDeploymentTest is TestSupport {
         assertTrue(token.isApprovedForAll(BUYER, token.SEAPORT()));
         assertEq(token.CRATE_TOKEN_START(), 111112);
         assertEq(token.WAREHOUSE_TOKEN_START(), 116667);
-        assertEq(token.MONUMENT_TOKEN_START(), 117172);
-        assertEq(token.MONUMENT_RECEIPT_OFFSET(), 3000000);
-        assertEq(token.MAX_MONUMENTS(), 18);
-        assertEq(token.CRATES_PER_MONUMENT(), 111);
+        assertEq(token.RELIC_TOKEN_START(), 117172);
+        assertEq(token.RELIC_RECEIPT_OFFSET(), 3000000);
+        assertEq(token.MAX_RELICS(), 18);
+        assertEq(token.CRATES_PER_RELIC(), 111);
         assertEq(token.cratePrice(), 0.0001 ether);
         assertEq(token.warehousePrice(), 0.0011 ether);
         assertEq(token.discountCratePrice(), 0.00005 ether);
-        assertEq(token.monumentPrice(), 0.0088 ether);
+        assertEq(token.relicsAllocated(), 0);
         (, string memory name, string memory version, uint256 domainChainId, address collection,,) =
             token.eip712Domain();
         assertEq(name, "111K");
@@ -381,7 +378,7 @@ contract NFT111KDeploymentTest is TestSupport {
         }
     }
 
-    function _assertClosedUntilOwnerOpens(NFT111K token) private {
+    function _assertClosedUntilOwnerOpens(NFT111K token, bool allocate) private {
         assertFalse(token.saleActive());
         _assertZeroSupply(token);
         vm.deal(BUYER, 1 ether);
@@ -393,28 +390,36 @@ contract NFT111KDeploymentTest is TestSupport {
         vm.expectRevert(NFT111K.SaleInactive.selector);
         token.mintWarehouses{value: 0.0011 ether}(1);
         vm.expectRevert(NFT111K.SaleInactive.selector);
-        token.mintMonuments{value: 0.0088 ether}(1);
+        token.claimRelic(1);
         vm.expectRevert(NFT111K.SaleInactive.selector);
         token.mintFree(NFT111K.ItemKind.Crate, 1);
         vm.expectRevert(NFT111K.SaleInactive.selector);
         token.mintFree(NFT111K.ItemKind.Warehouse, 1);
-        vm.expectRevert(NFT111K.SaleInactive.selector);
-        token.mintFree(NFT111K.ItemKind.Monument, 1);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
+        token.mintFree(NFT111K.ItemKind.Relic, 1);
         DeploymentVm(address(vm)).expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", BUYER));
         token.setSaleActive(true);
         vm.stopPrank();
         assertFalse(token.saleActive());
         _assertZeroSupply(token);
+        if (allocate) {
+            vm.deal(address(this), 1 ether);
+            token.allocateRelics{value: 0.15 ether}(18);
+            address[] memory wallets = new address[](1);
+            wallets[0] = BUYER;
+            token.setFreeMintAllowances(wallets, 0, 0, 18);
+        }
         token.setSaleActive(true);
         assertTrue(token.saleActive());
-        _assertZeroSupply(token);
+        assertEq(token.relicsAllocated(), allocate ? 18 : 0);
+        assertEq(token.totalSupply(), 0);
     }
 
     function _assertZeroSupply(NFT111K token) private view {
         assertEq(token.totalSupply(), 0);
         assertEq(token.allocatedCrates(), 0);
         assertEq(token.warehousesMinted(), 0);
-        assertEq(token.monumentsMinted(), 0);
+        assertEq(token.relicsMinted(), 0);
         assertEq(token.remainingCrates(), 5555);
         (,, uint256 artworks,,,,,,,,,) = token.stats(BUYER);
         assertEq(artworks, 0);
@@ -439,25 +444,31 @@ contract NFT111KDeploymentTest is TestSupport {
         token.previewTokenURI(7, 19);
     }
 
-    function _exerciseMonumentSale(NFT111K token, string memory prefix) private {
+    function _exerciseRelicSale(NFT111K token, string memory prefix) private {
         vm.deal(BUYER, 1 ether);
-        vm.prank(BUYER);
-        token.mintMonuments{value: 15 * 0.0088 ether}(15);
-        token.setPrices(0.0002 ether, 0.0033 ether, 0.00007 ether, 0.0077 ether);
-        vm.prank(BUYER);
-        token.mintMonuments{value: 3 * 0.0077 ether}(3);
+        vm.startPrank(BUYER);
+        for (uint256 id = 1; id <= 15; ++id) {
+            token.claimRelic(id);
+        }
+        vm.stopPrank();
+        token.setPrices(0.0002 ether, 0.0033 ether, 0.00007 ether);
+        vm.startPrank(BUYER);
+        for (uint256 id = 16; id <= 18; ++id) {
+            token.claimRelic(id);
+        }
+        vm.stopPrank();
         assertEq(token.allocatedCrates(), 1998);
         assertEq(token.remainingCrates(), 3557);
-        assertEq(token.monumentFirstCrate(18), 1888);
-        (,,,,,,,,,, uint256 minted, uint256 price) = token.stats(BUYER);
+        assertEq(token.relicFirstCrate(18), 1888);
+        (,,,,,,,,,, uint256 allocated, uint256 minted) = token.stats(BUYER);
         assertEq(minted, 18);
-        assertEq(price, 0.0077 ether);
+        assertEq(allocated, 18);
         _assertToken(token, 117189, 6, 18, BUYER);
         assertEq(token.tokenURI(117189), _uri(prefix, 117189));
         vm.prank(token.SEAPORT());
         token.transferFrom(BUYER, NEXT_OWNER, 117189);
         vm.prank(NEXT_OWNER);
-        token.unboxMonument(117189);
+        token.unboxRelic(117189);
         _assertToken(token, 117189, 0, 0, address(0));
         assertEq(token.balanceOf(NEXT_OWNER), 111);
         for (uint256 i; i < 111; ++i) {
@@ -466,11 +477,11 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(token.tokenURI(112999), _uri(prefix, 112999));
         assertEq(token.tokenURI(113109), _uri(prefix, 113109));
         assertEq(token.allocatedCrates(), 1998);
-        assertEq(token.monumentsMinted(), 18);
+        assertEq(token.relicsMinted(), 18);
         vm.prank(BUYER);
         vm.expectRevert(NFT111K.SoldOut.selector);
-        token.mintMonuments{value: 0.0077 ether}(1);
-        _assertMintProceeds(token, 15 * 0.0088 ether + 3 * 0.0077 ether);
+        token.claimRelic(1);
+        _assertMintProceeds(token, 0.15 ether);
     }
 
     function _assertMintProceeds(NFT111K token, uint256 received) private {

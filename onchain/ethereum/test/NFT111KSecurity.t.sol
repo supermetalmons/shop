@@ -53,8 +53,8 @@ contract SecurityReceiver {
     uint256 public sourceTransferFailures;
     bool private checkPurchaseTotals;
     uint256[3] private expectedPurchaseTotals;
-    uint256 private expectedMonuments;
-    bool private checkMonuments;
+    uint256 private expectedRelics;
+    bool private checkRelics;
     bool private checkProceeds;
     uint256[2] private expectedProceeds;
     uint256[] private deliverySources;
@@ -81,7 +81,7 @@ contract SecurityReceiver {
         transferOtherId = 0;
         sourceTransferFailures = 0;
         checkPurchaseTotals = false;
-        checkMonuments = false;
+        checkRelics = false;
         checkProceeds = false;
         delete deliverySources;
         delete deliveryReceipts;
@@ -94,9 +94,9 @@ contract SecurityReceiver {
         expectedPurchaseTotals = [allocated, warehouses, artworks];
     }
 
-    function expectMonumentCount(uint256 count) external {
-        checkMonuments = true;
-        expectedMonuments = count;
+    function expectRelicCount(uint256 count) external {
+        checkRelics = true;
+        expectedRelics = count;
     }
 
     function expectProceeds(uint256 mintReceived, uint256 deliveryReceived) external {
@@ -181,12 +181,9 @@ contract SecurityReceiver {
             require(token.totalMintReceived() == expectedProceeds[0], "callback mint proceeds mismatch");
             require(DeliveryAccounting.received(token) == expectedProceeds[1], "callback delivery proceeds mismatch");
         }
-        if (checkMonuments) {
-            (,,,,,,,,,, uint256 monuments,) = token.stats(address(0));
-            require(
-                monuments == expectedMonuments && token.monumentsMinted() == expectedMonuments,
-                "callback monument count mismatch"
-            );
+        if (checkRelics) {
+            (,,,,,,,,,,, uint256 relics) = token.stats(address(0));
+            require(relics == expectedRelics && token.relicsMinted() == expectedRelics, "callback relic count mismatch");
         }
         if (checkPurchaseTotals) {
             (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,,,) = token.stats(address(0));
@@ -762,16 +759,32 @@ contract NFT111KSecurityTest is TestSupport {
         _info(3, 1, 3, address(buyer));
     }
 
-    function testMonumentMixedDeliveryCallbacksSeeAllBurnsAndRejectWholeBatchAtomically() public {
-        SecurityReceiver buyer = _artworkReceiver();
-        buyer.execute(abi.encodeCall(token.mintMonuments, (1)), 0.0088 ether);
+    function testRelicMixedDeliveryCallbacksSeeAllBurnsAndRejectWholeBatchAtomically() public {
+        token = new SecurityCollection(
+            address(this),
+            vm.addr(SIGNER_KEY),
+            DELIVERY_RECEIVER,
+            "https://cdn.mons.shop/111k-sepolia/",
+            _proceedsRecipients(),
+            _proceedsSharesBps()
+        );
+        token.allocateRelics(1);
+        token.setSaleActive(true);
+        SecurityReceiver buyer = new SecurityReceiver(token);
+        vm.deal(address(buyer), 100 ether);
+        address[] memory wallets = new address[](1);
+        wallets[0] = address(buyer);
+        token.setFreeMintAllowances(wallets, 0, 0, 1);
+        buyer.execute(abi.encodeCall(token.mintCrates, (3)), 0.0003 ether);
+        buyer.execute(abi.encodeCall(token.unboxCrate, (111223)), 0);
+        buyer.execute(abi.encodeCall(token.claimRelic, (1)), 0);
         uint256[] memory ids = new uint256[](3);
         ids[0] = 117172;
-        ids[1] = 111114;
+        ids[1] = 111225;
         ids[2] = 1;
         uint256[] memory receipts = new uint256[](3);
         receipts[0] = 3000001;
-        receipts[1] = 2000003;
+        receipts[1] = 2000114;
         receipts[2] = 1000001;
         SecurityCall memory call_ = _deliveryCall(buyer, ids);
         uint256 allocations = token.allocatedCrates();
@@ -783,7 +796,7 @@ contract NFT111KSecurityTest is TestSupport {
                 .expectRevert(abi.encodeWithSelector(SecurityReceiver.ReceiverRejected.selector, rejectAt));
             buyer.execute(call_.data, call_.value);
             _info(117172, 6, 1, address(buyer));
-            _info(111114, 2, 3, address(buyer));
+            _info(111225, 2, 114, address(buyer));
             _info(1, 1, 1, address(buyer));
             for (uint256 i; i < receipts.length; ++i) {
                 _info(receipts[i], 0, 0, address(0));
@@ -803,7 +816,7 @@ contract NFT111KSecurityTest is TestSupport {
             _info(ids[i], 0, 0, address(0));
         }
         _info(3000001, 7, 1, address(buyer));
-        _info(2000003, 5, 3, address(buyer));
+        _info(2000114, 5, 114, address(buyer));
         _info(1000001, 4, 1, address(buyer));
         assertTrue(token.usedDeliveryOrders(2));
     }
@@ -1097,12 +1110,12 @@ contract NFT111KSecurityTest is TestSupport {
         attacks[8] = SecurityCall(abi.encodeCall(token.releaseDelivery, ()), 0);
         attacks[9] =
             SecurityCall(abi.encodeCall(token.mintCratesDiscounted, (1, new bytes32[](0))), token.discountCratePrice());
-        attacks[10] = SecurityCall(abi.encodeCall(token.mintMonuments, (1)), 0.0088 ether);
-        attacks[11] = SecurityCall(abi.encodeCall(token.unboxMonument, (117172)), 0);
+        attacks[10] = SecurityCall(abi.encodeCall(token.claimRelic, (1)), 0);
+        attacks[11] = SecurityCall(abi.encodeCall(token.unboxRelic, (117172)), 0);
         attacks[12] = SecurityCall(abi.encodeCall(token.releaseAllMint, ()), 0);
         attacks[13] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Crate, 1)), 0);
         attacks[14] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Warehouse, 1)), 0);
-        attacks[15] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Monument, 1)), 0);
+        attacks[15] = SecurityCall(abi.encodeCall(token.mintFree, (NFT111K.ItemKind.Relic, 1)), 0);
         buyer.configureAttacks(attacks);
         _expectRoutePurchaseTotals(buyer, route);
         buyer.execute(call_.data, call_.value);

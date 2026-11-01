@@ -24,19 +24,19 @@ async function publicationFixture(t: TestContext) {
   const placeholderDigest = digest(placeholder);
   const digests = new Map<string, ReturnType<typeof digest>>();
   const files: string[] = [];
-  const monumentIds: string[] = [];
-  const monumentReceiptIds: string[] = [];
+  const relicIds: string[] = [];
+  const relicReceiptIds: string[] = [];
   const ledger = await open(join(directory, 'objects.jsonl'), 'w');
   let rows: string[] = [];
   let totalBytes = 0;
   try {
     for (const identity of metadataIdentities()) {
       let checksum = placeholderDigest;
-      if (identity.kind === 'monument' || identity.kind === 'monument_receipt') {
+      if (identity.kind === 'relic' || identity.kind === 'relic_receipt') {
         const body = Buffer.from(metadataBody(identity, templates));
         bodies.set(identity.file, body);
         digests.set(identity.file, checksum = digest(body));
-        (identity.kind === 'monument' ? monumentIds : monumentReceiptIds).push(identity.tokenId);
+        (identity.kind === 'relic' ? relicIds : relicReceiptIds).push(identity.tokenId);
       }
       files.push(identity.file);
       totalBytes += checksum.bytes;
@@ -48,7 +48,7 @@ async function publicationFixture(t: TestContext) {
   const bodyFor = (file: string) => bodies.get(file) ?? placeholder;
   const digestFor = (file: string) => digests.get(file) ?? placeholderDigest;
   const publicSamples = ['1', '55556', '111111', '111112', '116666', '116667', '117171',
-    '1000001', '1111111', '1111112', '1222222', '2000001', '2005555', ...monumentIds, ...monumentReceiptIds];
+    '1000001', '1111111', '1111112', '1222222', '2000001', '2005555', ...relicIds, ...relicReceiptIds];
   await Promise.all(publicSamples.map(id => writeFile(join(directory, `${id}.json`), bodyFor(`${id}.json`))));
   const manifest: MetadataManifest = { version: 1, objectCount: files.length, totalBytes, counts: metadataCounts(),
     objectsFile: 'objects.jsonl', objectsSha256: await fileSha256(join(directory, 'objects.jsonl')),
@@ -59,20 +59,20 @@ async function publicationFixture(t: TestContext) {
     objectCount: manifest.objectCount, totalBytes,
   }));
   files.sort();
-  return { directory, manifest, files, monumentIds, monumentReceiptIds, bodyFor, digestFor };
+  return { directory, manifest, files, relicIds, relicReceiptIds, bodyFor, digestFor };
 }
 
 test('both deployment networks require the complete seven-kind publication before reveal registration', async t => {
   const publication = await publicationFixture(t);
   assert.equal(publication.manifest.objectCount, 344984);
-  assert.deepEqual(publication.monumentIds, Array.from({ length: 18 }, (_, index) => String(117172 + index)));
-  assert.deepEqual(publication.monumentReceiptIds, Array.from({ length: 18 }, (_, index) => String(3000001 + index)));
+  assert.deepEqual(publication.relicIds, Array.from({ length: 18 }, (_, index) => String(117172 + index)));
+  assert.deepEqual(publication.relicReceiptIds, Array.from({ length: 18 }, (_, index) => String(3000001 + index)));
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', import.meta.url), 'utf8'));
   for (const [network, chainId, root] of [['sepolia', 11155111, '111k-sepolia'], ['mainnet', 1, '111k']] as const) {
     await t.test(network, async t => {
-      const deploymentId = `${network}-monuments-test`;
+      const deploymentId = `${network}-relics-test`;
       const prefix = `${root}/${deploymentId}/`;
       const keys = publication.files.map(file => prefix + file);
       const indices = new Map(keys.map((key, index) => [key, index]));
@@ -112,14 +112,14 @@ test('both deployment networks require the complete seven-kind publication befor
         const body = await storage.get(url.pathname.slice(1));
         return new Response(body.toString('utf8'), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
       });
-      const [sampleUpload] = await uploadMetadata(publication.directory, network, { storage, prefix, tokenIds: publication.monumentIds });
+      const [sampleUpload] = await uploadMetadata(publication.directory, network, { storage, prefix, tokenIds: publication.relicIds });
       assert.equal(sampleUpload.uploaded, 18);
       assert.equal(sampleUpload.complete, false);
-      assert.deepEqual([...uploaded.keys()].sort(), publication.monumentIds.map(id => `${prefix}${id}.json`));
-      const [sample] = await verifyMetadata(publication.directory, network, { storage, prefix, tokenIds: publication.monumentIds });
+      assert.deepEqual([...uploaded.keys()].sort(), publication.relicIds.map(id => `${prefix}${id}.json`));
+      const [sample] = await verifyMetadata(publication.directory, network, { storage, prefix, tokenIds: publication.relicIds });
       assert.equal(sample.objectCount, 18);
       assert.equal(sample.complete, false);
-      assert.deepEqual(sample.samples.map(value => value.tokenId), publication.monumentIds);
+      assert.deepEqual(sample.samples.map(value => value.tokenId), publication.relicIds);
 
       const deploymentFile = join(publication.directory, `deployment-${network}.json`);
       const deployment = { deploymentId, dropId: '111k_devnet', chainId,
@@ -140,8 +140,8 @@ test('both deployment networks require the complete seven-kind publication befor
       });
       const existingDeployments = network === 'sepolia' ? 0 : 1;
       if (network === 'mainnet') {
-        await writeFile(deploymentFile, JSON.stringify({ ...deployment, deploymentId: 'sepolia-monuments-test',
-          metadataBaseUri: 'https://cdn.mons.shop/111k/sepolia-monuments-test/' }));
+        await writeFile(deploymentFile, JSON.stringify({ ...deployment, deploymentId: 'sepolia-relics-test',
+          metadataBaseUri: 'https://cdn.mons.shop/111k/sepolia-relics-test/' }));
         await assert.rejects(register(), /already registered with different immutable settings/);
         assert.equal(chainChecks, 0);
         assert.equal(verified, undefined);
@@ -174,5 +174,5 @@ test('both deployment networks require the complete seven-kind publication befor
     });
   }
   assert.deepEqual(database.prepare('SELECT deployment_id, chain_id FROM ethereum_reveal_deployments ORDER BY chain_id').all()
-    .map(row => [row.deployment_id, row.chain_id]), [['mainnet-monuments-test', 1], ['sepolia-monuments-test', 11155111]]);
+    .map(row => [row.deployment_id, row.chain_id]), [['mainnet-relics-test', 1], ['sepolia-relics-test', 11155111]]);
 });

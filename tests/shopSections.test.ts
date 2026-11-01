@@ -203,9 +203,9 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
   for (const args of opened) assert.equal(args[2]?.sourceElement, tile);
 
   view.rerender(createElement(ShopShipmentsSection, { ...props,
-    deliveryOrders: [{ dropId: '111k_devnet', deliveryId: 8, status: 'processing', items: [{ kind: 'monument', refId: 18 }] }],
+    deliveryOrders: [{ dropId: '111k_devnet', deliveryId: 8, status: 'processing', items: [{ kind: 'relic', refId: 18 }] }],
   }));
-  assert.ok(view.getByText('Monument #18'));
+  assert.ok(view.getByText('Relic #18'));
   assert.equal(view.queryByRole('button', { name: /^View / }), null);
   assert.equal(view.queryByRole('img'), null);
 

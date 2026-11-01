@@ -103,7 +103,7 @@ test('local deployment rejects current-address payees and deploys one collection
     }
     writeFileSync(deliveryRoutingPath, JSON.stringify(deliveryRouting));
     for (const invalid of [
-      { groups: [{ name: 'A', crates: 1, warehouses: 0, monuments: 0, wallets: [predicted] }] },
+      { groups: [{ name: 'A', crates: 1, warehouses: 0, relics: 0, wallets: [predicted] }] },
       { groups: [{ ...freeMints.groups[0], wallets: Array.from({ length: 33 }, (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`) }] },
       { groups: [{ ...freeMints.groups[0], wallets: [freeMints.groups[0].wallets[0], freeMints.groups[0].wallets[0].toLowerCase()] }] },
     ]) {
@@ -120,7 +120,7 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(result.stdout);
     assert.deepEqual(manifest, JSON.parse(readFileSync(join(project, '.local/deployment.json'), 'utf8')));
-    assert.equal(manifest.protocolVersion, 13);
+    assert.equal(manifest.protocolVersion, 14);
     assert.equal(manifest.initialDeliveryReceiver, deliveryRouting.initialReceiver.toLowerCase());
     assert.equal(manifest.deliveryConfigId, 1);
     const encodedConfig = await rpc<string>('eth_call', [{ to: manifest.contractAddress,
@@ -143,13 +143,17 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.deepEqual(decodeReturn(['bool'], encodedSale as `0x${string}`), [false]);
     const encodedSupply = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('totalSupply()', [], []) }, 'latest']);
     assert.deepEqual(decodeReturn(['uint256'], encodedSupply as `0x${string}`), [0n]);
+    for (const getter of ['relicsAllocated()', 'relicsMinted()', 'allocatedCrates()', 'totalMintReceived()']) {
+      const encoded = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall(getter, [], []) }, 'latest']);
+      assert.deepEqual(decodeReturn(['uint256'], encoded), [0n]);
+    }
     const encodedOwner = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('owner()', [], []) }, 'latest']);
     assert.deepEqual(decodeReturn(['address'], encodedOwner), [owner.toLowerCase()]);
     for (const allocation of manifest.freeMintAllocations) {
       const data = encodeCall('freeMintAllowances(address)', ['address'], [allocation.wallet]);
       const encoded = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data }, 'latest']);
       assert.deepEqual(decodeReturn(Array.from({ length: 6 }, () => 'uint16'), encoded),
-        [BigInt(allocation.crateLimit), BigInt(allocation.warehouseLimit), BigInt(allocation.monumentLimit), 0n, 0n, 0n]);
+        [BigInt(allocation.crateLimit), BigInt(allocation.warehouseLimit), BigInt(allocation.relicLimit), 0n, 0n, 0n]);
     }
   } finally {
     if (anvil.exitCode === null && anvil.pid) {

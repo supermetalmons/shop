@@ -1,6 +1,7 @@
 import { resolveEthereum111kConfig } from '../../../../shared/ethereum/config.js';
 import type { Ethereum111kConfig } from '../../../../shared/ethereum/api.js';
-import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
+import { decodeReturn, encodeCall } from '../../../../shared/ethereum/abi.js';
+import { ETHEREUM_MAX_RELICS, ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
 import { EthereumApiError } from './ethereumError.js';
 import { readBoundedResponseJson } from './boundedResponse.js';
 import { rpcInteger } from './ethereumRpcValue.js';
@@ -31,6 +32,7 @@ export type EthereumContext = {
   nowMs: number;
   fetch: typeof fetch;
   chainCheck?: Promise<void>;
+  relicInterfaceCheck?: Promise<boolean>;
 };
 
 export function ethereumConfig(env: EthereumEnvironment): Ethereum111kConfig {
@@ -59,6 +61,14 @@ export function requireEthereumContract(context: EthereumContext): string {
     throw new EthereumApiError('failed-precondition', 'The Ethereum test collection has not been deployed yet.');
   }
   return context.config.contractAddress;
+}
+
+export async function ethereumRelicInterfaceAvailable(context: EthereumContext): Promise<boolean> {
+  context.relicInterfaceCheck ??= (async () => {
+    const result = await ethereumCall(context, encodeCall('MAX_RELICS()', [], []));
+    return result.length === 66 && decodeReturn(['uint256'], result)[0] === BigInt(ETHEREUM_MAX_RELICS);
+  })();
+  return context.relicInterfaceCheck;
 }
 
 function ethereumRpcUrl(context: EthereumContext): string {

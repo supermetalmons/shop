@@ -70,6 +70,26 @@ contract NFT111KMetadataTest is TestSupport {
         assertEq(local.previewTokenURI(1, 42), "http://localhost:8789/111k/42.json");
     }
 
+    function testEveryBaseUriSchemeByteMustMatchExactly() public {
+        vm.chainId(31337);
+        string[2] memory uris = ["https://a/", "http://a/"];
+        for (uint256 scheme; scheme < uris.length; ++scheme) {
+            token.setBaseURI(uris[scheme]);
+            bytes memory value = bytes(uris[scheme]);
+            for (uint256 index; index < (scheme == 0 ? 8 : 7); ++index) {
+                bytes1 original = value[index];
+                for (uint256 replacement; replacement < 256; ++replacement) {
+                    if (bytes1(uint8(replacement)) == original) continue;
+                    value[index] = bytes1(uint8(replacement));
+                    vm.expectRevert(NFT111K.InvalidBaseURI.selector);
+                    token.setBaseURI(string(value));
+                }
+                value[index] = original;
+            }
+            assertEq(token.baseURI(), uris[scheme]);
+        }
+    }
+
     function testMalformedBaseUrisRevertInConstructorAndSetter() public {
         string[14] memory invalid = [
             "",

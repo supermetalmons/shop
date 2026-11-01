@@ -6,7 +6,7 @@ import nacl from 'tweetnacl';
 import { decodeReturn, encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
 import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
-import { ETHEREUM_CRATES_PER_MONUMENT, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_DELIVERY_CONFIGS, ETHEREUM_MAX_MONUMENTS,
+import { ETHEREUM_CRATES_PER_RELIC, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_DELIVERY_CONFIGS, ETHEREUM_MAX_RELICS,
   ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
 import { parseInitialDeliveryReceiver, parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from './shared/ethereum111kLocalReveal.ts';
@@ -17,7 +17,7 @@ const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
   initialDeliveryReceiver: string; deliveryConfigId: number;
 };
-if (deployment.protocolVersion !== 13) throw new Error('The local deployment does not support registered delivery configurations. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 14) throw new Error('The local deployment does not support reserved relic claims. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -63,15 +63,15 @@ if (typeof collectionCode !== 'string' || collectionCode.length < 4) {
 if (requireEthereumAddress(deployment.quoteSigner) !== signer || typeof signerResult !== 'string' ||
   decodeReturn(['address'], signerResult)[0] !== signer) throw new Error('Local API requires the public A11CE test signer used by deploy:local.');
 
-const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, monumentLimit, monumentCrates, monumentReceiptOffset] = await Promise.all([
+const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, relicLimit, relicCrates, relicReceiptOffset] = await Promise.all([
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_UNBOX_QUANTITY()', [], []) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[]]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[], []]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [`0x${'0'.repeat(40)}`]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('baseURI()', [], []) }, 'latest']),
-  rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_MONUMENTS()', [], []) }, 'latest']),
-  rpc('eth_call', [{ to: contractAddress, data: encodeCall('CRATES_PER_MONUMENT()', [], []) }, 'latest']),
-  rpc('eth_call', [{ to: contractAddress, data: encodeCall('MONUMENT_RECEIPT_OFFSET()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_RELICS()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('CRATES_PER_RELIC()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('RELIC_RECEIPT_OFFSET()', [], []) }, 'latest']),
 ]);
 if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBaseURI)[0] !== deployment.metadataBaseURI) {
   throw new Error('The local collection metadata base URI does not match its deployment manifest.');
@@ -82,13 +82,13 @@ const statsValues = typeof collectionStats === 'string' && collectionStats.lengt
 if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
   typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
   typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0 ||
-  typeof monumentLimit !== 'string' || decodeReturn(['uint256'], monumentLimit)[0] !== BigInt(ETHEREUM_MAX_MONUMENTS) ||
-  typeof monumentCrates !== 'string' || decodeReturn(['uint256'], monumentCrates)[0] !== BigInt(ETHEREUM_CRATES_PER_MONUMENT) ||
-  typeof monumentReceiptOffset !== 'string' || decodeReturn(['uint256'], monumentReceiptOffset)[0] !== 3_000_000n ||
-  statsValues[9] !== 0n || typeof statsValues[10] !== 'bigint' || statsValues[10] > BigInt(ETHEREUM_MAX_MONUMENTS) ||
-  typeof statsValues[0] !== 'bigint' || statsValues[0] < statsValues[10] * BigInt(ETHEREUM_CRATES_PER_MONUMENT) ||
-  typeof statsValues[11] !== 'bigint') {
-  throw new Error('The local collection does not implement the current discount and monument receipt interface. Run npm --prefix onchain/ethereum run deploy:local again.');
+  typeof relicLimit !== 'string' || decodeReturn(['uint256'], relicLimit)[0] !== BigInt(ETHEREUM_MAX_RELICS) ||
+  typeof relicCrates !== 'string' || decodeReturn(['uint256'], relicCrates)[0] !== BigInt(ETHEREUM_CRATES_PER_RELIC) ||
+  typeof relicReceiptOffset !== 'string' || decodeReturn(['uint256'], relicReceiptOffset)[0] !== 3_000_000n ||
+  statsValues[9] !== 0n || typeof statsValues[10] !== 'bigint' || statsValues[10] > BigInt(ETHEREUM_MAX_RELICS) ||
+  typeof statsValues[0] !== 'bigint' || statsValues[0] < statsValues[10] * BigInt(ETHEREUM_CRATES_PER_RELIC) ||
+  typeof statsValues[11] !== 'bigint' || statsValues[11] > statsValues[10]) {
+  throw new Error('The local collection does not implement the current reserved relic claim interface. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
 
 async function proceedsRead(signature: string, types: string[], values: unknown[], resultType: string) {

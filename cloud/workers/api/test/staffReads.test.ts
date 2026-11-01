@@ -559,7 +559,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       address: { full: '***' },
       boxes: [],
       looseDudes: [],
-      monuments: [],
+      relics: [],
       cardClaims: [],
     }],
     nextCursor: null,

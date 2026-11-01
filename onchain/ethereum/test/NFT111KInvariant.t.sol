@@ -25,6 +25,7 @@ contract NFT111KInvariantHandler is TestSupport {
 
     uint256 private constant SIGNER_KEY = 0xA11CE;
     uint256 private constant MODELED_CRATE_LIMIT = 444;
+    uint256 private constant MODELED_RELIC_LIMIT = 3;
     uint256 private constant DELIVERY_FEE = 0.0001 ether;
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -38,7 +39,7 @@ contract NFT111KInvariantHandler is TestSupport {
     address[3] private actors = [address(0xA110), address(0xB0B), address(0xCA10)];
     mapping(uint256 => ModelToken) private model;
     mapping(uint256 => uint256) private firstCrates;
-    mapping(uint256 => uint256) private monumentFirstCrates;
+    mapping(uint256 => uint256) private relicFirstCrates;
     mapping(address => uint256) private discountedPurchases;
     mapping(address => uint256[3]) private freeLimits;
     mapping(address => uint256[3]) private freeUsed;
@@ -49,7 +50,7 @@ contract NFT111KInvariantHandler is TestSupport {
     bytes32[] private consumedClaims;
     uint256 private allocations;
     uint256 private warehouseCount;
-    uint256 private monumentCount;
+    uint256 private relicCount;
     uint256 private artworkCount;
     uint256 private openedCrates;
     uint256 private claimedCrates;
@@ -80,6 +81,11 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(token.registerDeliveryConfig(_deliveryReceiver(1), address(0), 0), 2);
         assertEq(token.registerDeliveryConfig(_deliveryReceiver(0), _deliveryReceiver(1), 3333), 3);
         assertEq(token.registerDeliveryConfig(_deliveryReceiver(1), _deliveryReceiver(0), 6667), 4);
+        vm.deal(address(this), 100 ether);
+        assertEq(token.relicsAllocated(), 0);
+        token.allocateRelics{value: 0.0264 ether}(MODELED_RELIC_LIMIT);
+        allocations = MODELED_RELIC_LIMIT * 111;
+        mintRevenue = 0.0264 ether;
         token.setSaleActive(true);
         bytes32 firstLeaf = _discountLeaf(actors[0]);
         bytes32 secondLeaf = _discountLeaf(actors[1]);
@@ -91,29 +97,29 @@ contract NFT111KInvariantHandler is TestSupport {
         );
         for (uint256 i; i < actors.length; ++i) {
             vm.deal(actors[i], 100 ether);
+            _setFreeLimits(actors[i], [uint256(30), 3, 2]);
         }
+        uint256 firstPublicCrate = 111112 + allocations;
+        uint256 firstPublicReceipt = 2000001 + allocations;
         _purchaseCrates(actors[0], 4);
         _purchaseWarehouse(actors[1]);
         _unboxWarehouse(116667);
-        _unboxCrate(111112);
+        _unboxCrate(firstPublicCrate);
         _transfer(1, actors[2]);
         _deliver(1);
-        _deliver(111113);
-        _transfer(2000002, actors[1]);
-        _claim(2000002);
-        _deliver(111114);
+        _deliver(firstPublicCrate + 1);
+        _transfer(firstPublicReceipt + 1, actors[1]);
+        _claim(firstPublicReceipt + 1);
+        _deliver(firstPublicCrate + 2);
         _purchaseWarehouse(actors[2]);
         _setPause(true);
         _deliver(2);
-        _claim(2000003);
+        _claim(firstPublicReceipt + 2);
         _setPause(false);
-        _purchaseMonument(actors[0]);
-        _unboxMonument(117172);
-        _purchaseMonument(actors[1]);
-        _deliver(117173);
-        for (uint256 i; i < actors.length; ++i) {
-            _setFreeLimits(actors[i], [uint256(30), 3, 2]);
-        }
+        _claimRelic(actors[0], 18);
+        _unboxRelic(117189);
+        _claimRelic(actors[1], 4);
+        _deliver(117175);
         _mintFree(actors[0], 0, 2);
         _mintFree(actors[1], 1, 1);
     }
@@ -126,14 +132,50 @@ contract NFT111KInvariantHandler is TestSupport {
         _purchaseCrates(actors[actorSeed % actors.length], quantity);
     }
 
-    function purchaseMonument(uint256 actorSeed) external {
-        if (allocations + 111 > MODELED_CRATE_LIMIT || monumentCount == 18) return;
-        _purchaseMonument(actors[actorSeed % actors.length]);
+    function claimRelic(uint256 actorSeed, uint256 idSeed) external {
+        address wallet = actors[actorSeed % actors.length];
+        uint256 id = idSeed % 18 + 1;
+        if (
+            relicCount == MODELED_RELIC_LIMIT || model[117171 + id].issued
+                || freeUsed[wallet][2] >= freeLimits[wallet][2]
+        ) return;
+        _claimRelic(wallet, id);
     }
 
-    function unboxMonument(uint256 seed) external {
+    function rejectRelicReissue(uint256 idSeed, uint256 actorSeed) external {
+        uint256 id = idSeed % 18 + 1;
+        if (!model[117171 + id].issued) return;
+        vm.prank(actors[actorSeed % actors.length]);
+        (bool success,) = address(token).call(abi.encodeCall(token.claimRelic, (id)));
+        assertFalse(success);
+    }
+
+    function rejectRelicAllocationAfterLaunch(uint256 quantitySeed, uint256 valueSeed) external {
+        token.setSaleActive(false);
+        (bool success,) = address(token).call{value: valueSeed % 1 ether}(
+            abi.encodeCall(token.allocateRelics, (quantitySeed % 18 + 1))
+        );
+        assertFalse(success);
+        token.setSaleActive(true);
+    }
+
+    function rejectPausedRelicClaim(uint256 actorSeed, uint256 idSeed) external {
+        token.setSaleActive(false);
+        vm.prank(actors[actorSeed % actors.length]);
+        vm.expectRevert(NFT111K.SaleInactive.selector);
+        token.claimRelic(idSeed % 18 + 1);
+        token.setSaleActive(true);
+    }
+
+    function rejectFreeRelicMint(uint256 actorSeed) external {
+        vm.prank(actors[actorSeed % actors.length]);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
+        token.mintFree(NFT111K.ItemKind.Relic, 1);
+    }
+
+    function unboxRelic(uint256 seed) external {
         uint256 id = _select(6, seed);
-        if (id != 0) _unboxMonument(id);
+        if (id != 0) _unboxRelic(id);
     }
 
     function purchaseWarehouse(uint256 actorSeed) external {
@@ -164,24 +206,23 @@ contract NFT111KInvariantHandler is TestSupport {
 
     function mintFree(uint256 actorSeed, uint256 kindSeed, uint256 quantitySeed) external {
         address wallet = actors[actorSeed % actors.length];
-        uint256 index = kindSeed % 3;
+        uint256 index = kindSeed % 2;
         uint256 limit = freeLimits[wallet][index];
         uint256 used = freeUsed[wallet][index];
         if (used >= limit) return;
         uint256 remaining = limit - used;
-        uint256 units = index == 0 ? 1 : index == 1 ? 11 : 111;
+        uint256 units = index == 0 ? 1 : 11;
         uint256 available = (MODELED_CRATE_LIMIT - allocations) / units;
         if (remaining > available) remaining = available;
-        if (index == 2 && remaining > 18 - monumentCount) remaining = 18 - monumentCount;
         if (remaining > 15) remaining = 15;
         if (remaining == 0) return;
         _mintFree(wallet, index, quantitySeed % remaining + 1);
     }
 
-    function configureFreeMints(uint256 actorSeed, uint256 crateSeed, uint256 warehouseSeed, uint256 monumentSeed)
+    function configureFreeMints(uint256 actorSeed, uint256 crateSeed, uint256 warehouseSeed, uint256 relicSeed)
         external
     {
-        _setFreeLimits(actors[actorSeed % actors.length], [crateSeed % 51, warehouseSeed % 6, monumentSeed % 3]);
+        _setFreeLimits(actors[actorSeed % actors.length], [crateSeed % 51, warehouseSeed % 6, relicSeed % 3]);
     }
 
     function revokeFreeMints(uint256 actorSeed) external {
@@ -263,7 +304,7 @@ contract NFT111KInvariantHandler is TestSupport {
         if (id != 0) _deliver(id);
     }
 
-    function deliverMonument(uint256 seed) external {
+    function deliverRelic(uint256 seed) external {
         uint256 id = _select(6, seed);
         if (id != 0) _deliver(id);
     }
@@ -359,8 +400,9 @@ contract NFT111KInvariantHandler is TestSupport {
     function assertState() external view {
         assertEq(token.allocatedCrates(), allocations);
         assertEq(token.warehousesMinted(), warehouseCount);
-        assertEq(token.monumentsMinted(), monumentCount);
-        assertTrue(monumentCount <= 18);
+        assertEq(token.relicsAllocated(), MODELED_RELIC_LIMIT);
+        assertEq(token.relicsMinted(), relicCount);
+        assertTrue(relicCount <= MODELED_RELIC_LIMIT);
         assertEq(token.remainingCrates(), 5555 - allocations);
         (,, uint256 minted,,,,,,,,,) = token.stats(address(0));
         assertEq(minted, artworkCount);
@@ -398,9 +440,17 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(address(token).balance + released + deliveryPaid, mintRevenue + deliveryRevenue);
         assertTrue(token.redemptionsPaused() == paused);
         assertTrue(allocations <= MODELED_CRATE_LIMIT);
-        assertTrue(warehouseCount * 11 + monumentCount * 111 <= allocations);
-        for (uint256 number = 1; number <= monumentCount; ++number) {
-            assertEq(token.monumentFirstCrate(number), monumentFirstCrates[number]);
+        assertTrue(warehouseCount * 11 + MODELED_RELIC_LIMIT * 111 <= allocations);
+        for (uint256 number = 1; number <= 18; ++number) {
+            assertEq(token.relicFirstCrate(number), relicFirstCrates[number]);
+            assertTrue(model[117171 + number].issued == (relicFirstCrates[number] != 0));
+            if (relicFirstCrates[number] != 0) {
+                assertTrue(relicFirstCrates[number] <= MODELED_RELIC_LIMIT * 111);
+                assertEq((relicFirstCrates[number] - 1) % 111, 0);
+                for (uint256 other = number + 1; other <= 18; ++other) {
+                    assertTrue(relicFirstCrates[other] != relicFirstCrates[number]);
+                }
+            }
         }
         for (uint256 number = 1; number <= warehouseCount; ++number) {
             assertEq(token.warehouseFirstCrate(number), firstCrates[number]);
@@ -445,8 +495,8 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(token.totalSupply(), liveTotal);
         assertEq(
             allocations,
-            (liveKinds[6] + liveKinds[7]) * 111 + liveKinds[3] * 11 + liveKinds[2] + liveKinds[5] + openedCrates
-                + claimedCrates
+            (MODELED_RELIC_LIMIT - relicCount + liveKinds[6] + liveKinds[7]) * 111 + liveKinds[3] * 11 + liveKinds[2]
+                + liveKinds[5] + openedCrates + claimedCrates
         );
         assertEq(artworkCount, openedCrates * 20);
         assertEq(liveKinds[1], artworkCount - redeemedArtworks);
@@ -464,20 +514,14 @@ contract NFT111KInvariantHandler is TestSupport {
     }
 
     function _assertFreeAllowance(address wallet) private view {
-        (
-            uint16 crates,
-            uint16 warehouses,
-            uint16 monuments,
-            uint16 cratesUsed,
-            uint16 warehousesUsed,
-            uint16 monumentsUsed
-        ) = token.freeMintAllowances(wallet);
+        (uint16 crates, uint16 warehouses, uint16 relics, uint16 cratesUsed, uint16 warehousesUsed, uint16 relicsUsed) =
+            token.freeMintAllowances(wallet);
         assertEq(crates, freeLimits[wallet][0]);
         assertEq(warehouses, freeLimits[wallet][1]);
-        assertEq(monuments, freeLimits[wallet][2]);
+        assertEq(relics, freeLimits[wallet][2]);
         assertEq(cratesUsed, freeUsed[wallet][0]);
         assertEq(warehousesUsed, freeUsed[wallet][1]);
-        assertEq(monumentsUsed, freeUsed[wallet][2]);
+        assertEq(relicsUsed, freeUsed[wallet][2]);
     }
 
     function _setFreeLimits(address wallet, uint256[3] memory limits) private {
@@ -488,8 +532,7 @@ contract NFT111KInvariantHandler is TestSupport {
     }
 
     function _mintFree(address wallet, uint256 index, uint256 quantity) private {
-        NFT111K.ItemKind kind =
-            index == 0 ? NFT111K.ItemKind.Crate : index == 1 ? NFT111K.ItemKind.Warehouse : NFT111K.ItemKind.Monument;
+        NFT111K.ItemKind kind = index == 0 ? NFT111K.ItemKind.Crate : NFT111K.ItemKind.Warehouse;
         vm.prank(wallet);
         token.mintFree(kind, quantity);
         freeUsed[wallet][index] += quantity;
@@ -498,16 +541,11 @@ contract NFT111KInvariantHandler is TestSupport {
             if (index == 0) {
                 ++allocations;
                 _issue(111111 + first, 2, first, wallet);
-            } else if (index == 1) {
+            } else {
                 uint256 number = ++warehouseCount;
                 allocations += 11;
                 firstCrates[number] = first;
                 _issue(116666 + number, 3, number, wallet);
-            } else {
-                uint256 number = ++monumentCount;
-                allocations += 111;
-                monumentFirstCrates[number] = first;
-                _issue(117171 + number, 6, number, wallet);
             }
         }
     }
@@ -528,23 +566,21 @@ contract NFT111KInvariantHandler is TestSupport {
         return keccak256(bytes.concat(keccak256(abi.encode(wallet))));
     }
 
-    function _purchaseMonument(address wallet) private {
-        uint256 number = monumentCount + 1;
-        uint256 first = allocations + 1;
+    function _claimRelic(address wallet, uint256 number) private {
+        uint256 first = relicCount * 111 + 1;
         vm.prank(wallet);
-        token.mintMonuments{value: 0.0088 ether}(1);
-        allocations += 111;
-        monumentCount = number;
-        monumentFirstCrates[number] = first;
-        mintRevenue += 0.0088 ether;
+        token.claimRelic(number);
+        relicCount++;
+        freeUsed[wallet][2]++;
+        relicFirstCrates[number] = first;
         _issue(117171 + number, 6, number, wallet);
     }
 
-    function _unboxMonument(uint256 id) private {
+    function _unboxRelic(uint256 id) private {
         address wallet = model[id].holder;
-        uint256 first = monumentFirstCrates[model[id].displayId];
+        uint256 first = relicFirstCrates[model[id].displayId];
         vm.prank(wallet);
-        token.unboxMonument(id);
+        token.unboxRelic(id);
         model[id].live = false;
         for (uint256 i; i < 111; ++i) {
             _issue(111111 + first + i, 2, first + i, wallet);
@@ -788,7 +824,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](25);
+        bytes4[] memory selectors = new bytes4[](29);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -807,13 +843,17 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[15] = handler.purchaseCratesDiscounted.selector;
         selectors[16] = handler.releaseMint.selector;
         selectors[17] = handler.releaseDelivery.selector;
-        selectors[18] = handler.purchaseMonument.selector;
-        selectors[19] = handler.unboxMonument.selector;
+        selectors[18] = handler.claimRelic.selector;
+        selectors[19] = handler.unboxRelic.selector;
         selectors[20] = handler.releaseAllMint.selector;
-        selectors[21] = handler.deliverMonument.selector;
+        selectors[21] = handler.deliverRelic.selector;
         selectors[22] = handler.mintFree.selector;
         selectors[23] = handler.configureFreeMints.selector;
         selectors[24] = handler.revokeFreeMints.selector;
+        selectors[25] = handler.rejectRelicReissue.selector;
+        selectors[26] = handler.rejectRelicAllocationAfterLaunch.selector;
+        selectors[27] = handler.rejectPausedRelicClaim.selector;
+        selectors[28] = handler.rejectFreeRelicMint.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

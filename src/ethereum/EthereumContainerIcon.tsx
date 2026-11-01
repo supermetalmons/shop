@@ -1,6 +1,6 @@
-import type { EthereumMintKind } from '../../shared/ethereum/protocol';
+import type { EthereumContainerKind } from '../../shared/ethereum/protocol';
 
-export function EthereumContainerIcon({ kind }: { kind: EthereumMintKind }) {
+export function EthereumContainerIcon({ kind }: { kind: EthereumContainerKind }) {
   return <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
     {kind === 'crate' ? <g stroke="#68513b" strokeWidth="1.8" strokeLinejoin="round">
       <path d="M24 5L41 14L24 23L7 14Z" fill="#e8c77f" />

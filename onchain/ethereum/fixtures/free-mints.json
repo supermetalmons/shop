@@ -4,21 +4,21 @@
       "name": "A",
       "crates": 100,
       "warehouses": 1,
-      "monuments": 0,
+      "relics": 0,
       "wallets": ["0x000000000000000000000000000000000000A110", "0x000000000000000000000000000000000000Ca10"]
     },
     {
       "name": "B",
       "crates": 5,
       "warehouses": 0,
-      "monuments": 0,
+      "relics": 0,
       "wallets": ["0x0000000000000000000000000000000000000B0B"]
     },
     {
       "name": "C",
       "crates": 0,
       "warehouses": 0,
-      "monuments": 1,
+      "relics": 1,
       "wallets": ["0x000000000000000000000000000000000000D00D"]
     }
   ]

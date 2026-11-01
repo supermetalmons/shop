@@ -1,8 +1,8 @@
 {
-  "name": "Monument Receipt #{{displayId}}",
+  "name": "Relic Receipt #{{displayId}}",
   "description": "",
   "image": "https://wip.lil.org/111k/receipt_background.webp",
   "attributes": [
-    { "trait_type": "type", "value": "monument receipt" }
+    { "trait_type": "type", "value": "relic receipt" }
   ]
 }

@@ -415,18 +415,26 @@ contract NFT111KGasTest is TestSupport {
         _assertFreeUsage(alice, 0, 2, 0);
     }
 
-    function testGasMintFreeMonuments1() public {
-        _configureFreeWallet(alice);
-        _mintFree(alice, NFT111K.ItemKind.Monument, 1, "mintFreeMonuments1");
-        _assertFreeUsage(alice, 0, 0, 1);
-    }
-
-    function testGasMintFreeMonuments1After1() public {
+    function testGasClaimRelic() public {
+        _configureRelics(18);
         _configureFreeWallet(alice);
         vm.prank(alice);
-        token.mintFree(NFT111K.ItemKind.Monument, 1);
-        _mintFree(alice, NFT111K.ItemKind.Monument, 1, "mintFreeMonuments1After1");
+        token.claimRelic(18);
+        vm.snapshotGasLastCall("claimRelic");
+        _assertFreeUsage(alice, 0, 0, 1);
+        assertEq(token.relicFirstCrate(18), 1);
+    }
+
+    function testGasClaimRelicAfter1() public {
+        _configureRelics(18);
+        _configureFreeWallet(alice);
+        vm.prank(alice);
+        token.claimRelic(18);
+        vm.prank(alice);
+        token.claimRelic(7);
+        vm.snapshotGasLastCall("claimRelicAfter1");
         _assertFreeUsage(alice, 0, 0, 2);
+        assertEq(token.relicFirstCrate(7), 112);
     }
 
     function testGasSetFreeMintAllowancesThirtyTwo() public {
@@ -434,29 +442,30 @@ contract NFT111KGasTest is TestSupport {
         token.setFreeMintAllowances(wallets, 100, 1, 0);
         vm.snapshotGasLastCall("setFreeMintAllowancesThirtyTwo");
         for (uint256 i; i < wallets.length; ++i) {
-            (uint16 crates, uint16 warehouses, uint16 monuments,,,) = token.freeMintAllowances(wallets[i]);
+            (uint16 crates, uint16 warehouses, uint16 relics,,,) = token.freeMintAllowances(wallets[i]);
             assertEq(crates, 100);
             assertEq(warehouses, 1);
-            assertEq(monuments, 0);
+            assertEq(relics, 0);
             _assertFreeUsage(wallets[i], 0, 0, 0);
         }
     }
 
     function testGasSetFreeMintAllowancesThirtyTwoAfterUse() public {
+        _configureRelics(1);
         address[] memory wallets = _freeWallets();
         token.setFreeMintAllowances(wallets, 100, 1, 1);
         vm.startPrank(alice);
         token.mintFree(NFT111K.ItemKind.Crate, 1);
         token.mintFree(NFT111K.ItemKind.Warehouse, 1);
-        token.mintFree(NFT111K.ItemKind.Monument, 1);
+        token.claimRelic(18);
         vm.stopPrank();
         token.setFreeMintAllowances(wallets, 120, 2, 2);
         vm.snapshotGasLastCall("setFreeMintAllowancesThirtyTwoAfterUse");
         for (uint256 i; i < wallets.length; ++i) {
-            (uint16 crates, uint16 warehouses, uint16 monuments,,,) = token.freeMintAllowances(wallets[i]);
+            (uint16 crates, uint16 warehouses, uint16 relics,,,) = token.freeMintAllowances(wallets[i]);
             assertEq(crates, 120);
             assertEq(warehouses, 2);
-            assertEq(monuments, 2);
+            assertEq(relics, 2);
             uint256 used = i == 0 ? 1 : 0;
             _assertFreeUsage(wallets[i], used, used, used);
         }
@@ -498,24 +507,34 @@ contract NFT111KGasTest is TestSupport {
         _mintCrates(alice, 15, "mintCrates15AfterWarehouse");
     }
 
-    function testGasMintMonuments1() public {
-        _mintMonuments(alice, 1, "mintMonuments1");
+    function testGasAllocateRelics1() public {
+        _allocateRelics(1, 0.0088 ether, "allocateRelics1");
     }
 
-    function testGasMintMonuments15() public {
-        _mintMonuments(alice, 15, "mintMonuments15");
+    function testGasAllocateRelics18() public {
+        _allocateRelics(18, 0.1584 ether, "allocateRelics18");
     }
 
-    function testGasMintMonuments15Receiver() public {
-        _mintMonuments(receiver, 15, "mintMonuments15Receiver");
+    function testGasAllocateRelics18WithoutPayment() public {
+        _allocateRelics(18, 0, "allocateRelics18WithoutPayment");
     }
 
-    function testGasUnboxMonument() public {
-        _unboxMonument(alice, "unboxMonument");
+    function testGasClaimRelicReceiver() public {
+        _configureRelics(18);
+        _configureFreeWallet(receiver);
+        vm.prank(receiver);
+        token.claimRelic(18);
+        vm.snapshotGasLastCall("claimRelicReceiver");
+        _assertFreeUsage(receiver, 0, 0, 1);
+        assertEq(token.ownerOf(117189), receiver);
     }
 
-    function testGasUnboxMonumentReceiver() public {
-        _unboxMonument(receiver, "unboxMonumentReceiver");
+    function testGasUnboxRelic() public {
+        _unboxRelic(alice, "unboxRelic");
+    }
+
+    function testGasUnboxRelicReceiver() public {
+        _unboxRelic(receiver, "unboxRelicReceiver");
     }
 
     function testGasMintWarehouses1() public {
@@ -674,16 +693,20 @@ contract NFT111KGasTest is TestSupport {
         _deliverCrates(alice, 1, "deliverCrate1");
     }
 
-    function testGasDeliverMonument1() public {
+    function testGasDeliverRelic1() public {
+        _configureRelics(1);
+        _configureFreeWallet(alice);
         vm.prank(alice);
-        token.mintMonuments{value: 0.0088 ether}(1);
-        _deliver(alice, _range(117172, 1), "deliverMonument1");
+        token.claimRelic(18);
+        _deliver(alice, _range(117189, 1), "deliverRelic1");
     }
 
-    function testGasDeliverMonument1Receiver() public {
+    function testGasDeliverRelic1Receiver() public {
+        _configureRelics(1);
+        _configureFreeWallet(receiver);
         vm.prank(receiver);
-        token.mintMonuments{value: 0.0088 ether}(1);
-        _deliver(receiver, _range(117172, 1), "deliverMonument1Receiver");
+        token.claimRelic(18);
+        _deliver(receiver, _range(117189, 1), "deliverRelic1Receiver");
     }
 
     function testGasDeliverCrates50() public {
@@ -1080,28 +1103,39 @@ contract NFT111KGasTest is TestSupport {
         vm.snapshotGasLastCall(name);
     }
 
-    function _assertFreeUsage(address wallet, uint256 crates, uint256 warehouses, uint256 monuments) internal view {
-        (,,, uint16 cratesUsed, uint16 warehousesUsed, uint16 monumentsUsed) = token.freeMintAllowances(wallet);
+    function _assertFreeUsage(address wallet, uint256 crates, uint256 warehouses, uint256 relics) internal view {
+        (,,, uint16 cratesUsed, uint16 warehousesUsed, uint16 relicsUsed) = token.freeMintAllowances(wallet);
         assertEq(cratesUsed, crates);
         assertEq(warehousesUsed, warehouses);
-        assertEq(monumentsUsed, monuments);
+        assertEq(relicsUsed, relics);
         assertEq(token.totalMintReceived(), 0);
         assertEq(token.discountUsed(wallet), 0);
     }
 
-    function _mintMonuments(address wallet, uint256 quantity, string memory name) internal {
-        vm.prank(wallet);
-        token.mintMonuments{value: quantity * 0.0088 ether}(quantity);
+    function _allocateRelics(uint256 quantity, uint256 paid, string memory name) internal {
+        token = _deployCollection(_proceedsRecipients(), _proceedsSharesBps());
+        vm.deal(address(this), paid);
+        token.allocateRelics{value: paid}(quantity);
         vm.snapshotGasLastCall(name);
-        assertEq(token.monumentsMinted(), quantity);
+        assertEq(token.relicsAllocated(), quantity);
+        assertEq(token.relicsMinted(), 0);
         assertEq(token.allocatedCrates(), quantity * 111);
+        assertEq(token.totalMintReceived(), paid);
     }
 
-    function _unboxMonument(address wallet, string memory name) internal {
+    function _configureRelics(uint256 quantity) internal {
+        token = _deployCollection(_proceedsRecipients(), _proceedsSharesBps());
+        token.allocateRelics(quantity);
+        token.setSaleActive(true);
+    }
+
+    function _unboxRelic(address wallet, string memory name) internal {
+        _configureRelics(1);
+        _configureFreeWallet(wallet);
         vm.prank(wallet);
-        token.mintMonuments{value: 0.0088 ether}(1);
+        token.claimRelic(18);
         vm.prank(wallet);
-        token.unboxMonument(117172);
+        token.unboxRelic(117189);
         vm.snapshotGasLastCall(name);
         assertEq(token.balanceOf(wallet), 111);
         assertEq(token.ownerOf(111222), wallet);
@@ -1327,8 +1361,7 @@ contract NFT111KGasTest is TestSupport {
             (uint8 kind, uint256 displayId,) = token.getTokenInfo(ids[i]);
             receipts[i] = (kind == 1 ? 1_000_000 : kind == 2 ? 2_000_000 : 3_000_000) + displayId;
         }
-        return NFT111K.DeliveryQuote(1, wallet, 0.0001 ether, block.timestamp + 300,
-            keccak256(abi.encode(receipts)), 1);
+        return NFT111K.DeliveryQuote(1, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)), 1);
     }
 
     function _deliverySignature(uint256[] memory ids, NFT111K.DeliveryQuote memory quote)

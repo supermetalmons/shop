@@ -48,7 +48,7 @@ if (baselineReference) {
   assert.deepEqual(Object.keys(baselineReference.gas), expectedNames, 'Compiler baseline benchmark names changed');
 }
 const temporaryRoot = mkdtempSync(join(tmpdir(), '111k-compiler-'));
-const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name));
+const writeNames = expectedNames.filter(name => /^(allocateRelics|mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name));
 const progress = message => process.stderr.write(message + '\n');
 const save = report => writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
 const sourceHashes = directory => Object.fromEntries(readdirSync(join(directory, 'src'))

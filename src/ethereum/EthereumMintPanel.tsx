@@ -26,7 +26,6 @@ type EthereumMintPanelProps = {
 
 const containerPreviews = {
   crate: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="crate" className="mint-panel__box" {...controls} />,
-  monument: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="monument" className="mint-panel__box" {...controls} />,
   warehouse: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="warehouse" className="mint-panel__box" {...controls} />,
 };
 

@@ -131,12 +131,13 @@ test('delivery and claim digests and calldata match Solidity-generated fixtures'
 
 test('batch calldata and ordered crate hashes match Solidity-generated fixtures', () => {
   const fixture = JSON.parse(readFileSync(new URL('../onchain/ethereum/fixtures/eip712.json', import.meta.url), 'utf8')) as {
-    calls: { unboxCratesUnsorted: string; mintMonuments2: string; unboxMonument18: string; getTokenInfos: string; previewTokenURIs: string };
+    calls: { unboxCratesUnsorted: string; allocateRelics2: string; claimRelic18: string; unboxRelic18: string; getTokenInfos: string; previewTokenURIs: string };
     batchUnbox: { tokenIds: number[]; artworkCount: number; tokenIdsHash: string };
   };
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [fixture.batchUnbox.tokenIds]), fixture.calls.unboxCratesUnsorted);
-  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.mintMonuments, ['uint256'], [2]), fixture.calls.mintMonuments2);
-  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxMonument, ['uint256'], [117189]), fixture.calls.unboxMonument18);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.allocateRelics, ['uint256'], [2]), fixture.calls.allocateRelics2);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), fixture.calls.claimRelic18);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxRelic, ['uint256'], [117189]), fixture.calls.unboxRelic18);
   assert.equal(ethereumTokenIdsHash(fixture.batchUnbox.tokenIds), fixture.batchUnbox.tokenIdsHash);
   assert.equal(fixture.batchUnbox.tokenIds.flatMap(id => physicalCrateArtworkIds(id - 111111)).length, fixture.batchUnbox.artworkCount);
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[1, 0, 111112]]), fixture.calls.getTokenInfos);
@@ -166,9 +167,9 @@ test('events decode only the configured contract and retain exact uint256 token 
 test('digital and physical-only receipt identities occupy separate complete ranges', () => {
   assert.equal(ethereumReceiptTokenId('crate', 5555), '2005555');
   assert.equal(ethereumReceiptTokenId('artwork', 111111), '1111111');
-  assert.equal(ethereumReceiptTokenId('monument', 1), '3000001');
-  assert.equal(ethereumReceiptTokenId('monument', 18), '3000018');
-  for (const id of [0, 19]) assert.throws(() => ethereumReceiptTokenId('monument', id));
+  assert.equal(ethereumReceiptTokenId('relic', 1), '3000001');
+  assert.equal(ethereumReceiptTokenId('relic', 18), '3000018');
+  for (const id of [0, 19]) assert.throws(() => ethereumReceiptTokenId('relic', id));
   assert.throws(() => ethereumReceiptTokenId('artwork', 111112));
   assert.deepEqual(physicalCrateArtworkIds(1), Array.from({ length: 20 }, (_, i) => 111112 + i));
   assert.deepEqual(physicalCrateArtworkIds(5555), Array.from({ length: 31 }, (_, i) => 222192 + i));
@@ -177,12 +178,12 @@ test('digital and physical-only receipt identities occupy separate complete rang
   assert.equal(ethereumMetadataTokenId('warehouse', 505), '117171');
   assert.equal(ethereumItemDisplayIdMaximum('artwork'), 111111);
   assert.equal(ethereumItemDisplayIdMaximum('artwork_receipt'), 222222);
-  assert.equal(ethereumItemDisplayIdMaximum('monument_receipt'), 18);
-  assert.equal(ethereumMetadataTokenId('monument_receipt', 18), '3000018');
-  assert.equal(ethereumItemKind(7), 'monument_receipt');
+  assert.equal(ethereumItemDisplayIdMaximum('relic_receipt'), 18);
+  assert.equal(ethereumMetadataTokenId('relic_receipt', 18), '3000018');
+  assert.equal(ethereumItemKind(7), 'relic_receipt');
   assert.equal(ethereumItemKind(8), null);
-  assert.deepEqual(ETHEREUM_ITEM_KINDS.filter(isEthereumDeliveryKind), ['artwork', 'crate', 'monument']);
-  assert.throws(() => ethereumMetadataTokenId('monument_receipt', 19));
+  assert.deepEqual(ETHEREUM_ITEM_KINDS.filter(isEthereumDeliveryKind), ['artwork', 'crate', 'relic']);
+  assert.throws(() => ethereumMetadataTokenId('relic_receipt', 19));
   assert.throws(() => ethereumMetadataTokenId('artwork_receipt', 222223));
   assert.throws(() => ethereumMetadataTokenId('artwork', 111112));
   assert.throws(() => physicalCrateArtworkIds(5556));

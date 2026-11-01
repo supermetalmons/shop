@@ -12,7 +12,7 @@ const repository = resolve(root, '../..');
 const args = process.argv.slice(2);
 if (args.length > 1) throw new Error('Usage: node scripts/check-registered-compiler.mjs [--check|output.json]');
 const checkOnly = args[0] === '--check';
-const defaultOutput = join(root, 'benchmarks/v10-compiler-200-comparison.json');
+const defaultOutput = join(root, 'benchmarks/relic-preorders-compiler-200-comparison.json');
 const output = resolve(checkOnly || !args.length ? defaultOutput : args[0]);
 assert.ok(output === defaultOutput || !output.startsWith(`${repository}/`), 'Custom reports must be outside the repository');
 assert.deepEqual(Object.keys(process.env).filter(name => /^(FOUNDRY_|DAPP_)/.test(name)), [], 'Remove FOUNDRY_/DAPP_ overrides');
@@ -60,7 +60,7 @@ try {
   const after = snapshot();
   assert.deepEqual(after, before, 'Benchmark inputs changed during compiler comparison');
   const report = { schemaVersion: 1, status: violations.length ? 'failed' : 'passed',
-    method: 'Identical canonical registered-config source compiled at200 and500optimizer runs. One fixed200-run harness deploys each compiled artifact at the same addresses. '
+    method: 'Identical relic preorder source compiled at200 and500optimizer runs. One fixed200-run harness deploys each compiled artifact at the same addresses. '
       + 'All measured writes, including every redemption, use the strict less-than1percent gate. Read-only execution costs are reported separately and do not gate release. Deployment gas comes from local Prague Anvil receipts. '
       + 'Temporary baseline regeneration does not modify repository snapshots or historical reports.',
     settings: { solc: '0.8.30', evm: 'prague', viaIR: false, bytecodeHash: 'none', referenceRuns: 500, candidateRuns: 200 },

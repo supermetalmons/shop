@@ -36,7 +36,7 @@ function order(deliveryId = 42): FulfillmentOrder {
     address: { full: `${deliveryId} Main Street`, email: 'recipient@example.com', countryCode: 'US' },
     boxes: [],
     looseDudes: [],
-    monuments: [],
+    relics: [],
     cardClaims: [],
   };
 }

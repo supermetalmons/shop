@@ -41,7 +41,7 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
       assert.equal(result.status, report.variants.some(oversize) ? 1 : 0, `${result.stdout}\n${result.stderr}`);
       assert.equal(report.reproduction.maximumCollectionArgumentBytes, 6656);
       assert.equal(report.writeBenchmarkCount,
-        Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name)).length);
+        Object.keys(report.variants[0].gas).filter(name => /^(allocateRelics|mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name)).length);
       for (const variant of report.variants) {
         if (oversize(variant)) {
           assert.equal(variant.status, 'benchmark-failed');
@@ -52,7 +52,7 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
         for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'mintCrates1ThirtyTwoRecipients',
           'releaseMint', 'releaseMintEightRecipients', 'releaseAllMintThirtyTwoRecipients',
           'releaseAllMintThirtyTwoGasBurningRecipients', 'mintFreeCrates1', 'mintFreeWarehouses1',
-          'mintFreeMonuments1', 'setFreeMintAllowancesThirtyTwo', 'setBaseURI40', 'setBaseURI1024']) {
+          'allocateRelics1', 'allocateRelics18', 'claimRelic', 'claimRelicReceiver', 'setFreeMintAllowancesThirtyTwo', 'setBaseURI40', 'setBaseURI1024']) {
           assert.ok(variant.gas[name] > 0, `${variant.label}: missing ${name}`);
         }
         assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);

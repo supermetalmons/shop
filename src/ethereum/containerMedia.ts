@@ -15,9 +15,9 @@ export const ETHEREUM_CONTAINER_MEDIA = {
     height: 1104,
     aspectRatio: 1254 / 1104,
   },
-  monument: {
-    label: 'Monument',
-    pluralLabel: 'Monuments',
+  relic: {
+    label: 'Relic',
+    pluralLabel: 'Relics',
     src: 'https://wip.lil.org/111k/monuments/1.webp',
     width: 1400,
     height: 1400,

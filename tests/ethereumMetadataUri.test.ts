@@ -11,9 +11,9 @@ const scopes = [
 
 for (const [kind, first, last] of [
   ['artwork', '1', '111111'], ['crate', '111112', '116666'], ['warehouse', '116667', '117171'],
-  ['monument', '117172', '117189'],
+  ['relic', '117172', '117189'],
   ['artwork_receipt', '1000001', '1222222'], ['crate_receipt', '2000001', '2005555'],
-  ['monument_receipt', '3000001', '3000018'],
+  ['relic_receipt', '3000001', '3000018'],
 ]) test(`${kind} metadata boundaries preserve every configured deployment prefix`, () => {
   for (const scope of scopes) for (const id of [first, last]) {
     assert.equal(ethereumTokenMetadataUri(scope, id), `${scope.metadataBaseUri}${id}.json`);

@@ -12,7 +12,7 @@ import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import { cleanupEthereumAuth } from '../src/ethereumAuth.ts';
 import { reconcileEthereumCheckoutAttempt, type EthereumCheckoutAttemptRow } from '../src/ethereumCheckout.ts';
-import { ethereumCallBatch, ethereumConfig, type EthereumContext, type EthereumEnvironment } from '../src/ethereumRuntime.ts';
+import { ethereumCallBatch, ethereumConfig, ethereumRelicInterfaceAvailable, type EthereumContext, type EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { ethereumInventoryItems, ethereumTokenInfos, type EthereumLog, type EthereumReceipt } from '../src/ethereumRead.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { planReadyToShipNotifications } from '../src/readyToShipNotifications.ts';
@@ -95,7 +95,7 @@ function fixture(controlActive = true) {
     deliveryConfigs: new Map<number, [string, string, bigint, bigint, bigint, bigint]>([
       [1, [DELIVERY_RECEIVER, ZERO, 0n, 0n, 0n, 0n]],
     ]),
-    allocatedCrates: 25, monumentsMinted: 0,
+    allocatedCrates: 25, relicsAllocated: 0, relicsMinted: 0, relicInterface: true, relicLimit: 18,
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 7, owner: WALLET }]]),
@@ -144,6 +144,10 @@ function fixture(controlActive = true) {
       const call = params[0] as { to: string; data: string };
       const selector = call.data.slice(0, 10);
       const argumentsHex = `0x${call.data.slice(10)}`;
+      if (selector === functionSelector('MAX_RELICS()')) {
+        if (!state.relicInterface) return '0x';
+        return encodeAbi(['uint256'], [state.relicLimit]);
+      }
       if (selector === functionSelector('quoteSigner()')) return encodeAbi(['address'], [state.expectedSigner]);
       if (selector === functionSelector('deliveryConfigs(uint256)')) {
         const [configId] = decodeReturn(['uint256'], argumentsHex) as [bigint];
@@ -187,7 +191,7 @@ function fixture(controlActive = true) {
         const [owner] = decodeReturn(['address'], argumentsHex) as [string];
         return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
           [state.allocatedCrates, 2, 20, '100000000000000', '1100000000000000', true, state.discountRoot,
-            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.monumentsMinted, '8800000000000000']);
+            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.relicsAllocated, state.relicsMinted]);
       }
     }
     throw new Error(`Unexpected mocked RPC: ${payload.method}`);
@@ -1453,7 +1457,7 @@ for (const cancellation of ['deadline', 'client'] as const) {
   });
 }
 
-test('public stats include wallet discount usage with one coherent contract read and no session', async () => {
+test('public stats verify the relic interface then read wallet discount usage without a session', async () => {
   const f = fixture();
   try {
     for (const owner of [null, WALLET, OTHER_WALLET]) {
@@ -1462,14 +1466,15 @@ test('public stats include wallet discount usage with one coherent contract read
       assert.equal(result.response.status, 200);
       assert.deepEqual(result.body, {
         chainId: 31337, contractAddress: CONTRACT, owner,
-        allocatedCrates: 25, warehousesMinted: 2, monumentsMinted: 0, artworksMinted: 20,
-        cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', monumentPriceWei: '8800000000000000', saleActive: true,
-        remainingCrates: 5530, remainingWarehouses: 502, remainingMonuments: 18,
+        allocatedCrates: 25, warehousesMinted: 2, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 20,
+        cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', saleActive: true,
+        remainingCrates: 5530, remainingWarehouses: 502, remainingRelics: 0,
         discountMerkleRoot: f.state.discountRoot, discountCratePriceWei: '50000000000000',
         discountAllowance: 3, discountUsed: owner === WALLET ? 1 : 0,
       });
-      assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call']);
-      assert.deepEqual(f.state.calls[1].params, [{
+      assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call', 'eth_call']);
+      assert.deepEqual(f.state.calls[1].params, [{ to: CONTRACT, data: encodeCall('MAX_RELICS()', [], []) }, 'latest']);
+      assert.deepEqual(f.state.calls[2].params, [{
         to: CONTRACT, data: encodeCall('stats(address)', ['address'], [owner ?? ZERO]),
       }, 'latest']);
       assert.match(result.response.headers.get('cache-control') ?? '', /no-store/);
@@ -3387,7 +3392,7 @@ test('offchain metadata fetches current JSON over HTTP without storing previous 
 test('all six metadata kinds preserve HTTPS images, empty descriptions and a single type attribute', async () => {
   const f = fixture();
   try {
-    const kinds = ['artwork', 'warehouse', 'crate', 'crate_receipt', 'artwork_receipt', 'monument'] as const;
+    const kinds = ['artwork', 'warehouse', 'crate', 'crate_receipt', 'artwork_receipt', 'relic'] as const;
     const metadata = kinds.map(kind => ({ name: `${kind} #1`, description: '',
       image: `https://future-cdn.example/${kind}.webp`, attributes: [{ trait_type: 'type', value: kind }] }));
     const infos = kinds.map(kind => ({ tokenId: ethereumMetadataTokenId(kind, 1), kind, displayId: 1, owner: WALLET }));
@@ -4219,47 +4224,87 @@ for (const kind of ['delivery', 'claim']) {
 }
 
 
-test('monument availability enforces both the lifetime cap and shared crate capacity', async () => {
+test('relic availability uses reserved supply independently of remaining public crates', async () => {
   const f = fixture();
   try {
-    for (const [allocatedCrates, monumentsMinted, expected] of [
-      [0, 0, 18], [1998, 18, 0], [1887, 17, 1], [5444, 0, 1], [5445, 0, 0], [5333, 17, 1], [5333, 0, 2],
+    for (const [allocatedCrates, relicsAllocated, relicsMinted, expected] of [
+      [0, 0, 0, 0], [1998, 18, 18, 0], [1998, 18, 17, 1], [5555, 2, 0, 2], [5555, 18, 17, 1], [222, 2, 1, 1],
     ]) {
-      f.state.allocatedCrates = allocatedCrates;
-      f.state.monumentsMinted = monumentsMinted;
+      Object.assign(f.state, { allocatedCrates, relicsAllocated, relicsMinted });
       const result = await f.request<EthereumStats>(paths.stats);
       assert.equal(result.response.status, 200);
-      assert.equal(result.body.remainingMonuments, expected);
-      assert.equal(result.body.monumentsMinted, monumentsMinted);
+      assert.equal(result.body.remainingRelics, expected);
+      assert.equal(result.body.relicsAllocated, relicsAllocated);
+      assert.equal(result.body.relicsMinted, relicsMinted);
+      assert.equal(result.body.remainingCrates, 5555 - allocatedCrates);
     }
   } finally { f.close(); }
 });
 
+test('the relic interface probe is shared within a request and refreshed for a new request', async () => {
+  const f = fixture();
+  try {
+    const context = readContext(f);
+    assert.deepEqual(await Promise.all([ethereumRelicInterfaceAvailable(context), ethereumRelicInterfaceAvailable(context)]), [true, true]);
+    assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call']);
+    f.state.relicInterface = false;
+    assert.equal(await ethereumRelicInterfaceAvailable(context), true);
+    assert.equal(await ethereumRelicInterfaceAvailable(readContext(f)), false);
+    assert.equal(f.state.calls.filter(call => call.method === 'eth_call').length, 2);
+  } finally { f.close(); }
+});
 
-test('monument token information and numbered metadata are available throughout the eighteen-item range', async () => {
+test('stats reject relic claims exceeding their allocation or unreserved crate supply', async () => {
+  const f = fixture();
+  try {
+    for (const [relicsAllocated, relicsMinted] of [[19, 0], [0, 1], [2, 3], [1, 0]]) {
+      Object.assign(f.state, { relicsAllocated, relicsMinted });
+      assert.equal((await f.request(paths.stats)).response.status, 503);
+    }
+  } finally { f.close(); }
+});
+
+test('legacy or incompatible collection interfaces disable configuration and reject stats', async () => {
+  const f = fixture();
+  try {
+    for (const state of [{ relicInterface: false, relicLimit: 18 }, { relicInterface: true, relicLimit: 17 }]) {
+      Object.assign(f.state, state);
+      const config = await f.request<{ enabled: boolean }>(paths.config);
+      assert.equal(config.response.status, 200);
+      assert.equal(config.body.enabled, false);
+      const before = f.state.calls.length;
+      const stats = await f.request(paths.stats);
+      assert.equal(stats.response.status, 409);
+      assert.equal(f.state.calls.slice(before).some(call => call.method === 'eth_call' &&
+        (call.params[0] as { data: string }).data.startsWith(functionSelector('stats(address)'))), false);
+    }
+  } finally { f.close(); }
+});
+
+test('relic token information and numbered metadata are available throughout the eighteen-item range', async () => {
   const f = fixture();
   try {
     for (const displayId of [1, 18]) {
       const tokenId = String(117171 + displayId);
-      const metadata = { name: `Monument #${displayId}`, description: '',
-        image: `https://wip.lil.org/111k/monuments/${displayId}.webp`, attributes: [{ trait_type: 'type', value: 'monument' }] };
+      const metadata = { name: `Relic #${displayId}`, description: '',
+        image: `https://wip.lil.org/111k/monuments/${displayId}.webp`, attributes: [{ trait_type: 'type', value: 'relic' }] };
       f.state.tokens.set(tokenId, { kind: 6, displayId, owner: WALLET });
       f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
       const infos = await ethereumTokenInfos(readContext(f), [tokenId]);
-      assert.deepEqual(infos, [{ tokenId, kind: 'monument', displayId, owner: WALLET }]);
+      assert.deepEqual(infos, [{ tokenId, kind: 'relic', displayId, owner: WALLET }]);
       const [item] = await ethereumInventoryItems(readContext(f), infos);
       assert.equal(item.image, metadata.image);
       assert.equal(item.name, metadata.name);
-      assert.equal((await f.request(`${paths.metadata}?kind=monument&displayId=${displayId}`)).response.status, 200);
+      assert.equal((await f.request(`${paths.metadata}?kind=relic&displayId=${displayId}`)).response.status, 200);
     }
     for (const displayId of [0, 19]) {
-      assert.equal((await f.request(`${paths.metadata}?kind=monument&displayId=${displayId}`)).response.status, 400);
+      assert.equal((await f.request(`${paths.metadata}?kind=relic&displayId=${displayId}`)).response.status, 400);
     }
   } finally { f.close(); }
 });
 
 for (const mixed of [false, true]) {
-  test(`${mixed ? 'mixed' : 'monument-only'} checkout delivery preserves monument identity and creates claims only for crates`, async () => {
+  test(`${mixed ? 'mixed' : 'relic-only'} checkout delivery preserves relic identity and creates claims only for crates`, async () => {
     const f = fixture();
     try {
       f.state.tokens.set('117189', { kind: 6, displayId: 18, owner: WALLET });
@@ -4267,7 +4312,7 @@ for (const mixed of [false, true]) {
       const receipts = mixed ? ['1000007', '2000001', '3000018'] : ['3000018'];
       const ready = await startedCheckout(f, [...ids].reverse());
       assert.deepEqual(ready.checkout.tokenIds, ids);
-      assert.ok(ready.checkout.items.some(item => item.kind === 'monument' && item.displayId === 18));
+      assert.ok(ready.checkout.items.some(item => item.kind === 'relic' && item.displayId === 18));
       assert.equal(ready.prepared.quote.receiptIdsHash, ethereumReceiptIdsHash(receipts));
       f.state.transactions.set(HASH, { hash: HASH, from: WALLET, to: CONTRACT,
         input: ready.prepared.transaction.data, value: ready.prepared.transaction.value, nonce: '0x0', chainId: '0x7a69' });
@@ -4285,12 +4330,12 @@ for (const mixed of [false, true]) {
       assert.equal(order.status, 'ready_to_ship');
       assert.deepEqual(order.receiptTokenIds, receipts);
       assert.deepEqual((order.items as Array<Record<string, unknown>>).at(-1), {
-        assetId: `eip155:31337:${CONTRACT}:117189`, tokenId: '117189', kind: 'monument', refId: 18,
+        assetId: `eip155:31337:${CONTRACT}:117189`, tokenId: '117189', kind: 'relic', refId: 18,
       });
       assert.equal((order.irlClaims as unknown[]).length, mixed ? 1 : 0);
       assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_crate_claims').get()!.n, mixed ? 1 : 0);
       const shipments = await f.request<{ orders: DeliveryOrderSummary[] }>(paths.shipments, undefined, ready.authentication.token);
-      assert.deepEqual(shipments.body.orders[0].items.at(-1), { kind: 'monument', refId: 18 });
+      assert.deepEqual(shipments.body.orders[0].items.at(-1), { kind: 'relic', refId: 18 });
       const claim = await f.request(paths.claimPrepare, { receiptId: '3000018', code: 'ABCDEF123456' }, ready.authentication.token);
       assert.equal(claim.response.status, 400);
       const status = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`);
@@ -4299,7 +4344,7 @@ for (const mixed of [false, true]) {
   });
 }
 
-test('delivery authorization rejects unpacked or unowned monuments and all monument receipts', async () => {
+test('delivery authorization rejects unpacked or unowned relics and all relic receipts', async () => {
   const f = fixture();
   try {
     const authentication = await f.session();
@@ -4320,24 +4365,24 @@ test('delivery authorization rejects unpacked or unowned monuments and all monum
   } finally { f.close(); }
 });
 
-test('monument receipt inventory and metadata retain the matching number and shared placeholder', async () => {
+test('relic receipt inventory and metadata retain the matching number and shared placeholder', async () => {
   const f = fixture();
   try {
     for (const displayId of [1, 18]) {
       const tokenId = String(3_000_000 + displayId);
-      const metadata = { name: `Monument Receipt #${displayId}`, description: '',
-        image: 'https://wip.lil.org/111k/receipt_background.webp', attributes: [{ trait_type: 'type', value: 'monument receipt' }] };
+      const metadata = { name: `Relic Receipt #${displayId}`, description: '',
+        image: 'https://wip.lil.org/111k/receipt_background.webp', attributes: [{ trait_type: 'type', value: 'relic receipt' }] };
       f.state.tokens.set(tokenId, { kind: 7, displayId, owner: WALLET });
       f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
       const infos = await ethereumTokenInfos(readContext(f), [tokenId]);
-      assert.deepEqual(infos, [{ tokenId, kind: 'monument_receipt', displayId, owner: WALLET }]);
+      assert.deepEqual(infos, [{ tokenId, kind: 'relic_receipt', displayId, owner: WALLET }]);
       const [item] = await ethereumInventoryItems(readContext(f), infos);
       assert.equal(item.image, metadata.image);
       assert.equal(item.name, metadata.name);
-      assert.equal((await f.request(`${paths.metadata}?kind=monument_receipt&displayId=${displayId}`)).response.status, 200);
+      assert.equal((await f.request(`${paths.metadata}?kind=relic_receipt&displayId=${displayId}`)).response.status, 200);
     }
     for (const displayId of [0, 19]) {
-      assert.equal((await f.request(`${paths.metadata}?kind=monument_receipt&displayId=${displayId}`)).response.status, 400);
+      assert.equal((await f.request(`${paths.metadata}?kind=relic_receipt&displayId=${displayId}`)).response.status, 400);
     }
   } finally { f.close(); }
 });

@@ -49,8 +49,8 @@ const wallet: EthereumWallet = {
   chooseWallet() {}, changeAccount() {}, checkAccount() {},
 };
 function stats(overrides: Partial<EthereumStats> = {}): EthereumStats {
-  return { allocatedCrates: 0, warehousesMinted: 0, monumentsMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
-    warehousePriceWei: config.warehousePriceWei, monumentPriceWei: config.monumentPriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingMonuments: 18,
+  return { allocatedCrates: 0, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
+    warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingRelics: 0,
     chainId: config.chainId, contractAddress: contract, owner, discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT,
     discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0, ...overrides };
 }
@@ -132,9 +132,9 @@ function returnedCheckout(overrides: Partial<EthereumCheckoutStatusResponse> = {
 test('confirmed checkout receipts survive lagging inventory indexing, refreshes, and a reorg', async t => {
   const scope = ethereumInventoryScope(config, owner)!;
   const sources = [item(), { ...item('332', 'artwork'), displayId: 821, name: 'Artwork #821' },
-    { ...item('117189', 'monument'), displayId: 18, name: 'Monument #18' }];
+    { ...item('117189', 'relic'), displayId: 18, name: 'Relic #18' }];
   const receipts = [item('2000001', 'crate_receipt'), { ...item('1000821', 'artwork_receipt'), displayId: 821, name: 'Artwork receipt #821' },
-    { ...item('3000018', 'monument_receipt'), displayId: 18, name: 'Monument Receipt #18' }];
+    { ...item('3000018', 'relic_receipt'), displayId: 18, name: 'Relic Receipt #18' }];
   const recovery = { hash: `0x${'cd'.repeat(32)}`, sourceIds: ['99'], mintedIds: ['77'] };
   writeEthereumExpected(scope, ['77'], recovery);
   const fresh = deferred<EthereumCheckoutStatusResponse>();
@@ -151,7 +151,7 @@ test('confirmed checkout receipts survive lagging inventory indexing, refreshes,
   await act(async () => { fresh.resolve(successful); });
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' })));
   assert.ok(view.getByRole('button', { name: 'View Artwork receipt #821' }));
-  assert.ok(view.getByRole('button', { name: 'View Monument Receipt #18' }));
+  assert.ok(view.getByRole('button', { name: 'View Relic Receipt #18' }));
   assert.deepEqual(readEthereumExpected(scope), ['77', '111112', '332', '117189', '2000001', '1000821', '3000018']);
   assert.deepEqual(JSON.parse(window.localStorage.getItem(`ethereum111k:${scope}:expected`)!).recovery, recovery);
   const refreshed = inventory.mock.callCount();
@@ -159,7 +159,7 @@ test('confirmed checkout receipts survive lagging inventory indexing, refreshes,
   await waitFor(() => assert.ok(inventory.mock.callCount() > refreshed));
   assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' }));
   assert.ok(view.getByRole('button', { name: 'View Artwork receipt #821' }));
-  assert.ok(view.getByRole('button', { name: 'View Monument Receipt #18' }));
+  assert.ok(view.getByRole('button', { name: 'View Relic Receipt #18' }));
   reverted = true;
   response = Promise.resolve({ ...successful, status: 'pending', confirmations: 0 });
   await act(async () => {
@@ -168,12 +168,12 @@ test('confirmed checkout receipts survive lagging inventory indexing, refreshes,
   });
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${sources[1].id}"]`)));
   assert.equal(view.queryByRole('button', { name: 'View Crate receipt #1' }), null);
-  assert.equal(view.queryByRole('button', { name: 'View Monument Receipt #18' }), null);
+  assert.equal(view.queryByRole('button', { name: 'View Relic Receipt #18' }), null);
   reverted = false;
   response = Promise.resolve(successful);
   await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', returnedCheckoutId] }); });
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' })));
-  assert.ok(view.getByRole('button', { name: 'View Monument Receipt #18' }));
+  assert.ok(view.getByRole('button', { name: 'View Relic Receipt #18' }));
 });
 
 test('checkout confirmation replaces an in-flight inventory read that predates the receipt hints', async t => {
@@ -663,7 +663,7 @@ test('the mint panel shares the drop frame and previews the selected crate quant
   assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 1);
   assert.equal(view.getByRole('img', { name: '111K crate' }), crateImage);
   assert.equal(view.queryByRole('img', { name: '111K warehouse' }), null);
-  assert.equal(view.getByRole('group', { name: 'Container type' }).querySelectorAll('input[type="radio"]').length, 3);
+  assert.equal(view.getByRole('group', { name: 'Container type' }).querySelectorAll('input[type="radio"]').length, 2);
   assert.equal((view.getByRole('radio', { name: 'Crate' }) as HTMLInputElement).checked, true);
   assert.equal((view.getByRole('radio', { name: 'Warehouse' }) as HTMLInputElement).checked, false);
   assert.equal(view.queryByRole('button', { name: /Connect Ethereum|Disconnect Ethereum/ }), null);
@@ -761,7 +761,7 @@ test('external actions and suspension disable container selection but a paused s
   assert.ok(view.getAllByRole('radio').every(input => !input.matches(':disabled')));
 });
 
-for (const kind of ['crate', 'warehouse', 'monument'] as const) test(`disconnected mint connects once and submits the captured ${kind} quantity with exact wei pricing`, async t => {
+for (const kind of ['crate', 'warehouse'] as const) test(`disconnected mint connects once and submits the captured ${kind} quantity with exact wei pricing`, async t => {
   const unitPriceWei = '123456789012345678';
   t.mock.method(ethereumApi, 'stats', async () => stats({ [`${kind}PriceWei`]: unitPriceWei }));
   t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
@@ -782,10 +782,10 @@ for (const kind of ['crate', 'warehouse', 'monument'] as const) test(`disconnect
   } } };
   const view = page({ wallet: disconnected });
   startConnecting = () => view.rerenderPage({ wallet: { ...disconnected, status: 'connecting' } });
-  if (kind !== 'crate') fireEvent.click(view.getByRole('radio', { name: kind === 'warehouse' ? 'Warehouse' : 'Monument' }));
+  if (kind !== 'crate') fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: new RegExp(`Mint\\s*1 ${kind}.*0.123456 ETH`) })));
   fireEvent.change(view.getByRole('slider', { name: 'Mint quantity' }), { target: { value: '3' } });
-  const mintButton = view.getByRole('button', { name: new RegExp(`Mint\\s*3 ${kind === 'monument' ? 'monuments' : `${kind}s`}.*0.37037 ETH`) }) as HTMLButtonElement;
+  const mintButton = view.getByRole('button', { name: new RegExp(`Mint\\s*3 ${kind}s.*0.37037 ETH`) }) as HTMLButtonElement;
   fireEvent.click(mintButton);
   fireEvent.click(mintButton);
   assert.equal(connections, 1);
@@ -794,7 +794,7 @@ for (const kind of ['crate', 'warehouse', 'monument'] as const) test(`disconnect
   assert.equal(transactions.length, 0);
   view.rerenderPage({ wallet: connected });
   await waitFor(() => assert.equal(transactions.length, 1));
-  assert.equal(transactions[0].data, encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses, monument: ETHEREUM_FUNCTIONS.mintMonuments }[kind], ['uint256'], [3]));
+  assert.equal(transactions[0].data, encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses }[kind], ['uint256'], [3]));
   assert.equal(transactions[0].value, `0x${(BigInt(unitPriceWei) * 3n).toString(16)}`);
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
   assert.ok(view.getAllByRole('radio').every(input => input.matches(':disabled')));
@@ -807,7 +807,7 @@ for (const status of ['connected', 'disconnected', 'restoring'] as const) {
   test(`an early Mint with a ${status} wallet waits for actual configuration and availability`, async t => {
     const view = await delayedMintPage(t, status);
     const kind = status === 'disconnected' ? 'warehouse' : 'crate';
-    if (kind !== 'crate') fireEvent.click(view.getByRole('radio', { name: kind === 'warehouse' ? 'Warehouse' : 'Monument' }));
+    if (kind !== 'crate') fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
     const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
     assert.equal(quantity.disabled, false);
     assert.equal(quantity.max, '15');
@@ -837,7 +837,7 @@ for (const status of ['connected', 'disconnected', 'restoring'] as const) {
     }
     await waitFor(() => assert.equal(view.transactions.length, 1));
     assert.equal(view.transactions[0].to, contract);
-    assert.equal(view.transactions[0].data, encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses, monument: ETHEREUM_FUNCTIONS.mintMonuments }[kind], ['uint256'], [3]));
+    assert.equal(view.transactions[0].data, encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses }[kind], ['uint256'], [3]));
     assert.equal(view.transactions[0].value, `0x${(BigInt(unitPriceWei) * 3n).toString(16)}`);
     await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
     assert.equal(view.transactions.length, 1);
@@ -1419,16 +1419,16 @@ test('Ethereum and Solana appear in one inventory while selection dispatch stays
 for (const selection of [
   { name: 'crate', tokens: [item()], expected: '111112' },
   { name: 'artwork', tokens: [{ ...item('332', 'artwork'), displayId: 332, name: 'Artwork #332' }], expected: '332' },
-  { name: 'monument', tokens: [{ ...item('117189', 'monument'), displayId: 18, name: 'Monument #18' }], expected: '117189' },
+  { name: 'relic', tokens: [{ ...item('117189', 'relic'), displayId: 18, name: 'Relic #18' }], expected: '117189' },
   { name: 'mixed crate and artwork', tokens: [
     { ...item('111113'), displayId: 2, name: 'Crate #2' },
     { ...item('553', 'artwork'), displayId: 553, name: 'Artwork #553' },
     item(),
   ], expected: '553,111112,111113' },
-  { name: 'mixed monuments, crate and artwork', tokens: [
-    { ...item('117189', 'monument'), displayId: 18, name: 'Monument #18' }, item(),
+  { name: 'mixed relics, crate and artwork', tokens: [
+    { ...item('117189', 'relic'), displayId: 18, name: 'Relic #18' }, item(),
     { ...item('332', 'artwork'), displayId: 332, name: 'Artwork #332' },
-    { ...item('117172', 'monument'), name: 'Monument #1' },
+    { ...item('117172', 'relic'), name: 'Relic #1' },
   ], expected: '332,111112,117172,117189' },
 ]) {
   test(`sending a ${selection.name} selection opens checkout with onchain token IDs and no transaction`, async t => {
@@ -1735,71 +1735,62 @@ test('completing a transaction clears recovery state before the next transaction
   assert.equal(Boolean(view.queryByRole('button', { name: 'Stop tracking this transaction' })), false);
 });
 
-test('monument minting uses its preview and clips quantity to the available capped supply', async t => {
-  t.mock.method(ethereumApi, 'stats', async () => stats({ monumentsMinted: 16, remainingMonuments: 2 }));
+test('public mint only offers crates and warehouses even when relic claims remain', async t => {
+  t.mock.method(ethereumApi, 'stats', async () => stats({ relicsAllocated: 18, relicsMinted: 16, remainingRelics: 2,
+    allocatedCrates: 1998, remainingCrates: 3557, remainingWarehouses: 323 }));
   const view = page();
-  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Monument' })));
-  fireEvent.click(view.getByRole('radio', { name: 'Monument' }));
-  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /2\s*\/\s*18 left/));
-  const preview = view.getByRole('img', { name: '111K monument' });
-  assert.equal(preview.getAttribute('src'), 'https://wip.lil.org/111k/monuments/1.webp');
-  assert.equal(preview.getAttribute('width'), '1400');
-  assert.equal(preview.getAttribute('height'), '1400');
-  fireEvent.change(view.getByRole('slider', { name: 'Mint quantity' }), { target: { value: '2' } });
-  assert.ok(view.getByRole('button', { name: /Mint\s*2 monuments.*0.0176 ETH/ }));
-  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], stats({ monumentsMinted: 17, remainingMonuments: 1 })));
-  await waitFor(() => assert.ok(view.getByRole('button', { name: /Mint.*0.0088 ETH/ })));
-  assert.equal(view.queryByRole('slider', { name: 'Mint quantity' }), null);
-  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], stats({ monumentsMinted: 18, remainingMonuments: 0 })));
-  await waitFor(() => assert.equal((view.getByRole('button', { name: /Mint.*0.0088 ETH/ }) as HTMLButtonElement).disabled, true));
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Crate' })));
+  assert.deepEqual(view.getAllByRole('radio').map(input => input.getAttribute('aria-label')), ['Crate', 'Warehouse']);
+  assert.equal(view.queryByRole('radio', { name: 'Relic' }), null);
+  assert.equal(view.queryByRole('button', { name: /Mint.*relic/i }), null);
 });
 
-test('monuments preserve their numbered images and allow delivery together or opening individually', async t => {
-  const monument = { ...item('117189', 'monument'), displayId: 18, name: 'Monument #18', image: 'https://wip.lil.org/111k/monuments/18.webp' };
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [monument, item()], nextCursor: null, observedBlock: 10 }));
+test('relics preserve their numbered images and allow delivery together or opening individually', async t => {
+  const relic = { ...item('117189', 'relic'), displayId: 18, name: 'Relic #18', image: 'https://wip.lil.org/111k/monuments/18.webp' };
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [relic, item()], nextCursor: null, observedBlock: 10 }));
   const view = page();
-  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${monument.id}"]`)));
-  assert.equal(view.container.querySelector(`[data-inventory-id="${monument.id}"] img`)!.getAttribute('src'), monument.image);
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${relic.id}"]`)));
+  assert.equal(view.container.querySelector(`[data-inventory-id="${relic.id}"] img`)!.getAttribute('src'), relic.image);
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${item().id}"]`)!);
-  fireEvent.click(view.container.querySelector(`[data-inventory-id="${monument.id}"]`)!);
+  fireEvent.click(view.container.querySelector(`[data-inventory-id="${relic.id}"]`)!);
   assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 2);
-  assert.equal(view.queryByRole('button', { name: 'Open monument' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Open relic' }), null);
   assert.ok(view.getByRole('button', { name: 'Send' }));
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${item().id}"]`)!);
   assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 1);
-  assert.ok(view.getByRole('button', { name: 'Open monument' }));
+  assert.ok(view.getByRole('button', { name: 'Open relic' }));
   assert.ok(view.getByRole('button', { name: 'Send' }));
 });
 
-test('monument receipts preserve the matching image and offer transfer without further claims or delivery', async t => {
-  const receipt = { ...item('3000018', 'monument_receipt'), displayId: 18, name: 'Monument Receipt #18',
+test('relic receipts preserve the matching image and offer transfer without further claims or delivery', async t => {
+  const receipt = { ...item('3000018', 'relic_receipt'), displayId: 18, name: 'Relic Receipt #18',
     image: 'https://wip.lil.org/111k/monuments/18.webp' };
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [receipt], nextCursor: null, observedBlock: 10 }));
   const view = page();
-  await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Monument Receipt #18' })));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Relic Receipt #18' })));
   const tile = view.container.querySelector(`[data-inventory-id="${receipt.id}"]`)!;
   assert.equal(tile.querySelector('img')!.getAttribute('src'), receipt.image);
   fireEvent.click(tile);
   assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 0);
   assert.ok(view.getByRole('button', { name: 'Transfer receipt' }));
   assert.equal(view.queryByRole('button', { name: 'Claim crate contents' }), null);
-  assert.equal(view.queryByRole('button', { name: /Open monument/ }), null);
+  assert.equal(view.queryByRole('button', { name: /Open relic/ }), null);
   assert.equal(view.queryByRole('button', { name: 'Send' }), null);
   fireEvent.click(view.getByRole('button', { name: 'Transfer receipt' }));
   assert.ok(view.getByLabelText('Recipient Ethereum address'));
   assert.equal(view.queryByLabelText('Crate claim code'), null);
 });
 
-test('an unresolved monument redemption blocks opening until checkout releases its reservation', async t => {
-  const monument = { ...item('117172', 'monument'), name: 'Monument #1' };
-  const pending = returnedCheckout({ tokenIds: [monument.tokenId], items: [monument] });
+test('an unresolved relic redemption blocks opening until checkout releases its reservation', async t => {
+  const relic = { ...item('117172', 'relic'), name: 'Relic #1' };
+  const pending = returnedCheckout({ tokenIds: [relic.tokenId], items: [relic] });
   rememberCheckoutReservation(pending);
   t.mock.method(checkoutApi, 'status', async () => pending);
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [monument], nextCursor: null, observedBlock: 10 }));
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [relic], nextCursor: null, observedBlock: 10 }));
   const view = page();
-  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${monument.id}"]`)));
-  fireEvent.click(view.container.querySelector(`[data-inventory-id="${monument.id}"]`)!);
-  assert.equal((view.getByRole('button', { name: 'Open monument' }) as HTMLButtonElement).disabled, true);
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${relic.id}"]`)));
+  fireEvent.click(view.container.querySelector(`[data-inventory-id="${relic.id}"]`)!);
+  assert.equal((view.getByRole('button', { name: 'Open relic' }) as HTMLButtonElement).disabled, true);
   act(() => { observeCheckoutReservation(returnedCheckoutId)({ ...pending, status: 'failed' }); });
-  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Open monument' }) as HTMLButtonElement).disabled, false));
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Open relic' }) as HTMLButtonElement).disabled, false));
 });

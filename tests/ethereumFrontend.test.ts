@@ -268,7 +268,7 @@ test('Ethereum inventory and confirmations preserve metadata while container pre
   assert.deepEqual((await ethereumApi.inventory(config, owner, null)).items, [artwork]);
   assert.deepEqual((await ethereumApi.confirm(hash, config, owner)).items, [artwork]);
   assert.deepEqual(ethereumInventoryView(artwork).attributes, artwork.attributes);
-  for (const kind of ['artwork', 'artwork_receipt', 'crate_receipt', 'monument', 'monument_receipt'] as const) {
+  for (const kind of ['artwork', 'artwork_receipt', 'crate_receipt', 'relic', 'relic_receipt'] as const) {
     const view = ethereumInventoryView({ ...artwork, kind });
     assert.equal(view.image, artwork.image);
     assert.equal(view.imageDimensions, undefined);
@@ -318,7 +318,7 @@ test('Ethereum inventory reads all live and rollback IDs in two parallel bounded
   assert.ok(requests.every(entry => entry.signal.aborted));
 });
 
-test('a monument opening recovers all 111 crates across the inventory request boundary', async t => {
+test('a relic opening recovers all 111 crates across the inventory request boundary', async t => {
   const crates = Array.from({ length: 111 }, (_, index) => ({
     ...item(String(111112 + index), 'crate'), displayId: index + 1, name: `Crate #${index + 1}`,
   }));
@@ -413,17 +413,17 @@ test('Ethereum selection caps delivery at 50 and keeps warehouses separate from 
   assert.equal(toggleEthereumSelection(selected, receipt, index, 50).size, 50);
 });
 
-test('monuments join artwork and crate selections while their receipts remain unselectable', () => {
+test('relics join artwork and crate selections while their receipts remain unselectable', () => {
   const artwork = item('1');
   const crate = item('111112', 'crate');
-  const monuments = [item('117172', 'monument'), item('117173', 'monument')];
-  const receipt = item('3000001', 'monument_receipt');
-  const index = new Map([artwork, crate, ...monuments, receipt].map(row => [row.id, row]));
+  const relics = [item('117172', 'relic'), item('117173', 'relic')];
+  const receipt = item('3000001', 'relic_receipt');
+  const index = new Map([artwork, crate, ...relics, receipt].map(row => [row.id, row]));
   let selected = new Set([artwork.id, crate.id]);
-  for (const monument of monuments) selected = toggleEthereumSelection(selected, monument, index, 50);
-  assert.deepEqual([...selected], [artwork.id, crate.id, ...monuments.map(row => row.id)]);
+  for (const relic of relics) selected = toggleEthereumSelection(selected, relic, index, 50);
+  assert.deepEqual([...selected], [artwork.id, crate.id, ...relics.map(row => row.id)]);
   assert.deepEqual(toggleEthereumSelection(selected, receipt, index, 50), selected);
-  assert.equal(toggleEthereumSelection(new Set([monuments[0].id]), monuments[1], index, 1).size, 1);
+  assert.equal(toggleEthereumSelection(new Set([relics[0].id]), relics[1], index, 1).size, 1);
 });
 
 test('delivery authorization bytes must match the selected IDs, wallet, order, signature and exact fee', async () => {

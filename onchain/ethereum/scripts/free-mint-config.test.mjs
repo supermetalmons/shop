@@ -8,16 +8,16 @@ import { parseFreeMintConfig, parseFreeMintConfigJson, freeMintOwnerCalls } from
 
 const address = value => `0x${value.toString(16).padStart(40, '0')}`;
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/free-mints.json', import.meta.url), 'utf8'));
-const group = (wallets = [], limits = {}) => ({ name: 'A', crates: 100, warehouses: 1, monuments: 0, wallets, ...limits });
+const group = (wallets = [], limits = {}) => ({ name: 'A', crates: 100, warehouses: 1, relics: 0, wallets, ...limits });
 
 test('flattens the shared A/B/C fixture in input order without mutating it', () => {
   const original = structuredClone(fixture);
   const result = parseFreeMintConfig(fixture);
   assert.deepEqual(result.allocations, [
-    { wallet: address(0xa110), crateLimit: 100, warehouseLimit: 1, monumentLimit: 0 },
-    { wallet: address(0xca10), crateLimit: 100, warehouseLimit: 1, monumentLimit: 0 },
-    { wallet: address(0xb0b), crateLimit: 5, warehouseLimit: 0, monumentLimit: 0 },
-    { wallet: address(0xd00d), crateLimit: 0, warehouseLimit: 0, monumentLimit: 1 },
+    { wallet: address(0xa110), crateLimit: 100, warehouseLimit: 1, relicLimit: 0 },
+    { wallet: address(0xca10), crateLimit: 100, warehouseLimit: 1, relicLimit: 0 },
+    { wallet: address(0xb0b), crateLimit: 5, warehouseLimit: 0, relicLimit: 0 },
+    { wallet: address(0xd00d), crateLimit: 0, warehouseLimit: 0, relicLimit: 1 },
   ]);
   assert.deepEqual(fixture, original);
   assert.deepEqual(parseFreeMintConfig({ groups: result.groups }), result);
@@ -28,8 +28,8 @@ test('accepts empty templates, zero limits and 32 wallets without reserving supp
   const defaults = { groups: ['A', 'B', 'C'].map(name => group([], { name, crates: 0, warehouses: 0 })) };
   assert.deepEqual(parseFreeMintConfig(defaults).allocations, []);
   const wallets = Array.from({ length: 32 }, (_, index) => address(index + 1));
-  assert.equal(parseFreeMintConfig({ groups: [group(wallets, { crates: 5555, warehouses: 505, monuments: 18 })] }).allocations.length, 32);
-  assert.equal(parseFreeMintConfig({ groups: [group(wallets, { crates: 0, warehouses: 0, monuments: 0 })] }).allocations.length, 32);
+  assert.equal(parseFreeMintConfig({ groups: [group(wallets, { crates: 5555, warehouses: 505, relics: 18 })] }).allocations.length, 32);
+  assert.equal(parseFreeMintConfig({ groups: [group(wallets, { crates: 0, warehouses: 0, relics: 0 })] }).allocations.length, 32);
   assert.throws(() => parseFreeMintConfig({ groups: [group([...wallets, address(33)])] }), /at most 32 wallets/);
 });
 
@@ -65,7 +65,7 @@ test('rejects malformed groups and invalid per-item limits', () => {
     assert.throws(() => parseFreeMintConfig({ groups: [invalid] }), /group/);
   }
   assert.throws(() => parseFreeMintConfig({ groups: [group(), group()] }), /group/);
-  for (const [kind, maximum] of [['crates', 5555], ['warehouses', 505], ['monuments', 18]]) {
+  for (const [kind, maximum] of [['crates', 5555], ['warehouses', 505], ['relics', 18]]) {
     for (const invalid of [-1, 1.5, maximum + 1, '1', true, null]) {
       assert.throws(() => parseFreeMintConfig({ groups: [group([], { [kind]: invalid })] }), /limit/);
     }
@@ -77,14 +77,14 @@ test('hexadecimal-looking group names remain string labels', () => {
     const configuration = { groups: [group([address(2)], { name })] };
     const parsed = parseFreeMintConfigJson(JSON.stringify(configuration));
     assert.equal(parsed.groups[0].name, name);
-    assert.deepEqual(parsed.allocations, [{ wallet: address(2), crateLimit: 100, warehouseLimit: 1, monumentLimit: 0 }]);
+    assert.deepEqual(parsed.allocations, [{ wallet: address(2), crateLimit: 100, warehouseLimit: 1, relicLimit: 0 }]);
   }
 });
 
 test('owner calls preserve per-group zero-limit revocations and skip only empty groups', () => {
   const collection = address(0x123456);
   const calls = freeMintOwnerCalls({ groups: [group([address(1)]),
-    group([address(2)], { name: 'B', crates: 0, warehouses: 0, monuments: 0 }), group([], { name: 'C' })] }, collection);
+    group([address(2)], { name: 'B', crates: 0, warehouses: 0, relics: 0 }), group([], { name: 'C' })] }, collection);
   assert.equal(calls.length, 2);
   for (let index = 0; index < calls.length; index++) {
     assert.equal(calls[index].to, collection);

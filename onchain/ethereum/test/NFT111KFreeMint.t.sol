@@ -13,7 +13,6 @@ contract FreeMintReceiver {
     uint256 public observedAllocated;
     uint256 public observedMintReceived;
     uint256 public observedWarehouses;
-    uint256 public observedMonuments;
     uint256 public observedFirstCrate;
 
     error ReceiverRejected();
@@ -32,19 +31,13 @@ contract FreeMintReceiver {
     function onERC721Received(address, address, uint256 tokenId, bytes calldata) external returns (bytes4) {
         require(msg.sender == address(token));
         ++callbacks;
-        (,,, uint16 cratesUsed, uint16 warehousesUsed, uint16 monumentsUsed) = token.freeMintAllowances(address(this));
-        observedUsed = kind == NFT111K.ItemKind.Crate
-            ? cratesUsed
-            : kind == NFT111K.ItemKind.Warehouse ? warehousesUsed : monumentsUsed;
+        (,,, uint16 cratesUsed, uint16 warehousesUsed,) = token.freeMintAllowances(address(this));
+        observedUsed = kind == NFT111K.ItemKind.Crate ? cratesUsed : warehousesUsed;
         observedAllocated = token.allocatedCrates();
         observedMintReceived = token.totalMintReceived();
         observedWarehouses = token.warehousesMinted();
-        observedMonuments = token.monumentsMinted();
         if (kind == NFT111K.ItemKind.Warehouse) {
             observedFirstCrate = token.warehouseFirstCrate(tokenId - token.WAREHOUSE_TOKEN_START() + 1);
-            require(observedFirstCrate != 0);
-        } else if (kind == NFT111K.ItemKind.Monument) {
-            observedFirstCrate = token.monumentFirstCrate(tokenId - token.MONUMENT_TOKEN_START() + 1);
             require(observedFirstCrate != 0);
         }
         (bool success, bytes memory reason) = address(token).call(abi.encodeCall(token.mintFree, (kind, 1)));
@@ -89,10 +82,10 @@ contract NFT111KFreeMintTest is TestSupport {
             allocations[i] = NFT111K.FreeMintAllocation(address(uint160(0xD000 + i)), 5555, 505, 18);
         }
         NFT111K maximum = _deploy(allocations);
-        (uint16 crates, uint16 warehouses, uint16 monuments,,,) = maximum.freeMintAllowances(address(0xD01F));
+        (uint16 crates, uint16 warehouses, uint16 relics,,,) = maximum.freeMintAllowances(address(0xD01F));
         assertEq(crates, 5555);
         assertEq(warehouses, 505);
-        assertEq(monuments, 18);
+        assertEq(relics, 18);
         assertEq(maximum.allocatedCrates(), 0);
     }
 
@@ -123,8 +116,7 @@ contract NFT111KFreeMintTest is TestSupport {
     }
 
     function testFreeMintsUseSharedSaleGateAndRejectPayment() public {
-        NFT111K.ItemKind[3] memory kinds =
-            [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse, NFT111K.ItemKind.Monument];
+        NFT111K.ItemKind[2] memory kinds = [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse];
         token.setFreeMintAllowances(_wallet(ALICE), 1, 1, 1);
         for (uint256 i; i < kinds.length; ++i) {
             vm.prank(ALICE);
@@ -144,7 +136,7 @@ contract NFT111KFreeMintTest is TestSupport {
     function testRejectsUnsupportedKindsAndInvalidQuantities() public {
         token.setSaleActive(true);
         for (uint8 kind; kind < 8; ++kind) {
-            if (kind == 2 || kind == 3 || kind == 6) continue;
+            if (kind == 2 || kind == 3) continue;
             vm.prank(ALICE);
             vm.expectRevert(NFT111K.WrongItemKind.selector);
             token.mintFree(NFT111K.ItemKind(kind), 1);
@@ -168,16 +160,12 @@ contract NFT111KFreeMintTest is TestSupport {
         _mint(ALICE, NFT111K.ItemKind.Crate, 10);
         _mint(ALICE, NFT111K.ItemKind.Warehouse, 1);
         _mint(BOB, NFT111K.ItemKind.Crate, 5);
-        _mint(CAROL, NFT111K.ItemKind.Monument, 2);
         _allowance(ALICE, [uint16(100), 1, 0, 100, 1, 0]);
         _allowance(BOB, [uint16(5), 0, 0, 5, 0, 0]);
-        _allowance(CAROL, [uint16(0), 0, 2, 0, 0, 2]);
-        assertEq(token.allocatedCrates(), 338);
+        _allowance(CAROL, [uint16(0), 0, 2, 0, 0, 0]);
+        assertEq(token.allocatedCrates(), 116);
         assertEq(token.warehouseFirstCrate(1), 101);
-        assertEq(token.monumentFirstCrate(1), 117);
-        assertEq(token.monumentFirstCrate(2), 228);
         assertEq(token.ownerOf(116667), ALICE);
-        assertEq(token.ownerOf(117172), CAROL);
         assertEq(token.totalMintReceived(), 0);
         assertEq(DeliveryAccounting.received(token), 0);
         assertEq(address(token).balance, 0);
@@ -194,10 +182,6 @@ contract NFT111KFreeMintTest is TestSupport {
         _claimMaximumAllowance(NFT111K.ItemKind.Warehouse, 1, 505, 11, 116667);
     }
 
-    function testMaximumFreeMonumentUsageSurvivesRevocationAndRestoration() public {
-        _claimMaximumAllowance(NFT111K.ItemKind.Monument, 2, 18, 111, 117172);
-    }
-
     function testLifetimeUsageSurvivesLimitChangesRevocationAndRestoration() public {
         token.setSaleActive(true);
         _mint(ALICE, NFT111K.ItemKind.Crate, 5);
@@ -210,11 +194,10 @@ contract NFT111KFreeMintTest is TestSupport {
         _allowance(ALICE, [uint16(0), 0, 0, 5, 1, 0]);
         token.setFreeMintAllowances(_wallet(ALICE), 7, 1, 1);
         _mint(ALICE, NFT111K.ItemKind.Crate, 2);
-        _mint(ALICE, NFT111K.ItemKind.Monument, 1);
         vm.prank(ALICE);
         vm.expectRevert(NFT111K.FreeMintAllowanceExceeded.selector);
         token.mintFree(NFT111K.ItemKind.Warehouse, 1);
-        _allowance(ALICE, [uint16(7), 1, 1, 7, 1, 1]);
+        _allowance(ALICE, [uint16(7), 1, 1, 7, 1, 0]);
     }
 
     function testSetterIsOwnerOnlyAndInvalidBatchRollsBack() public {
@@ -256,36 +239,32 @@ contract NFT111KFreeMintTest is TestSupport {
         vm.startPrank(ALICE);
         token.mintCrates{value: 0.0001 ether}(1);
         token.mintWarehouses{value: 0.0011 ether}(1);
-        token.mintMonuments{value: 0.0088 ether}(1);
         token.mintCratesDiscounted{value: 0.00005 ether}(1, new bytes32[](0));
         vm.stopPrank();
         _allowance(ALICE, [uint16(100), 1, 0, 0, 0, 0]);
         _mint(ALICE, NFT111K.ItemKind.Crate, 1);
         _mint(ALICE, NFT111K.ItemKind.Warehouse, 1);
         assertEq(token.discountUsed(ALICE), 1);
-        assertEq(token.totalMintReceived(), 0.01005 ether);
-        assertEq(token.allocatedCrates(), 136);
+        assertEq(token.totalMintReceived(), 0.00125 ether);
+        assertEq(token.allocatedCrates(), 25);
     }
 
     function testTransferAndOpeningDoNotConsumeOrRestoreEntitlements() public {
         token.setSaleActive(true);
         _mint(ALICE, NFT111K.ItemKind.Crate, 1);
         _mint(ALICE, NFT111K.ItemKind.Warehouse, 1);
-        _mint(CAROL, NFT111K.ItemKind.Monument, 1);
         vm.prank(ALICE);
         token.transferFrom(ALICE, BOB, 111112);
         vm.prank(ALICE);
         token.unboxWarehouse(116667);
         vm.prank(BOB);
         token.unboxCrate(111112);
-        vm.prank(CAROL);
-        token.unboxMonument(117172);
         _allowance(ALICE, [uint16(100), 1, 0, 1, 1, 0]);
         _allowance(BOB, [uint16(5), 0, 0, 0, 0, 0]);
-        _allowance(CAROL, [uint16(0), 0, 2, 0, 0, 1]);
-        assertEq(token.allocatedCrates(), 123);
+        _allowance(CAROL, [uint16(0), 0, 2, 0, 0, 0]);
+        assertEq(token.allocatedCrates(), 12);
         assertEq(token.warehousesMinted(), 1);
-        assertEq(token.monumentsMinted(), 1);
+        assertEq(token.relicsMinted(), 0);
     }
 
     function testFreeEntitlementsDoNotReserveSupplyAndSoldOutClaimsKeepUsage() public {
@@ -304,39 +283,20 @@ contract NFT111KFreeMintTest is TestSupport {
         vm.expectRevert(NFT111K.SoldOut.selector);
         token.mintFree(NFT111K.ItemKind.Warehouse, 1);
         vm.prank(CAROL);
-        vm.expectRevert(NFT111K.SoldOut.selector);
-        token.mintFree(NFT111K.ItemKind.Monument, 1);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
+        token.mintFree(NFT111K.ItemKind.Relic, 1);
         _allowance(ALICE, [uint16(100), 1, 0, 0, 0, 0]);
         _allowance(CAROL, [uint16(0), 0, 2, 0, 0, 0]);
     }
 
-    function testPaidAndFreeMonumentsShareLifetimeCapAfterOpening() public {
-        token.setSaleActive(true);
-        vm.prank(BOB);
-        token.mintMonuments{value: 15 * 0.0088 ether}(15);
-        _mint(CAROL, NFT111K.ItemKind.Monument, 2);
-        vm.prank(BOB);
-        token.mintMonuments{value: 0.0088 ether}(1);
-        vm.prank(CAROL);
-        token.unboxMonument(117187);
-        token.setFreeMintAllowances(_wallet(CAROL), 0, 0, 3);
-        vm.prank(CAROL);
-        vm.expectRevert(NFT111K.SoldOut.selector);
-        token.mintFree(NFT111K.ItemKind.Monument, 1);
-        _allowance(CAROL, [uint16(0), 0, 3, 0, 0, 2]);
-        assertEq(token.monumentsMinted(), 18);
-    }
-
     function testEventsKeepPurchaseCompatibilityAndIdentifyFreeClaims() public {
         token.setSaleActive(true);
-        NFT111K.ItemKind[3] memory kinds =
-            [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse, NFT111K.ItemKind.Monument];
-        bytes32[3] memory topics = [
+        NFT111K.ItemKind[2] memory kinds = [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse];
+        bytes32[2] memory topics = [
             keccak256("CratesPurchased(address,uint256,uint256,uint256)"),
-            keccak256("WarehousesPurchased(address,uint256,uint256,uint256)"),
-            keccak256("MonumentsPurchased(address,uint256,uint256,uint256)")
+            keccak256("WarehousesPurchased(address,uint256,uint256,uint256)")
         ];
-        uint256[3] memory firstTokens = [uint256(111112), 116667, 117172];
+        uint256[2] memory firstTokens = [uint256(111112), 116667];
         token.setFreeMintAllowances(_wallet(ALICE), 1, 1, 1);
         for (uint256 i; i < kinds.length; ++i) {
             vm.recordLogs();
@@ -359,10 +319,9 @@ contract NFT111KFreeMintTest is TestSupport {
 
     function testCallbacksObserveFinalUsageAndRejectReentryForEveryKind() public {
         token.setSaleActive(true);
-        NFT111K.ItemKind[3] memory kinds =
-            [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse, NFT111K.ItemKind.Monument];
-        uint256[3] memory allocated = [uint256(3), 36, 369];
-        uint256[3] memory firstCrates = [uint256(0), 26, 259];
+        NFT111K.ItemKind[2] memory kinds = [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse];
+        uint256[2] memory allocated = [uint256(3), 36];
+        uint256[2] memory firstCrates = [uint256(0), 26];
         for (uint256 i; i < kinds.length; ++i) {
             FreeMintReceiver receiver = new FreeMintReceiver(token);
             token.setFreeMintAllowances(_wallet(address(receiver)), 3, 3, 3);
@@ -372,15 +331,13 @@ contract NFT111KFreeMintTest is TestSupport {
             assertEq(receiver.observedAllocated(), allocated[i]);
             assertEq(receiver.observedMintReceived(), 0);
             assertEq(receiver.observedWarehouses(), i == 0 ? 0 : 3);
-            assertEq(receiver.observedMonuments(), i == 2 ? 3 : 0);
             assertEq(receiver.observedFirstCrate(), firstCrates[i]);
         }
     }
 
     function testRejectedCallbacksRollBackUsageSupplyAndContainersForEveryKind() public {
         token.setSaleActive(true);
-        NFT111K.ItemKind[3] memory kinds =
-            [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse, NFT111K.ItemKind.Monument];
+        NFT111K.ItemKind[2] memory kinds = [NFT111K.ItemKind.Crate, NFT111K.ItemKind.Warehouse];
         for (uint256 i; i < kinds.length; ++i) {
             FreeMintReceiver receiver = new FreeMintReceiver(token);
             token.setFreeMintAllowances(_wallet(address(receiver)), 3, 3, 3);
@@ -390,9 +347,9 @@ contract NFT111KFreeMintTest is TestSupport {
             assertEq(token.allocatedCrates(), 0);
             assertEq(token.totalSupply(), 0);
             assertEq(token.warehousesMinted(), 0);
-            assertEq(token.monumentsMinted(), 0);
+            assertEq(token.relicsMinted(), 0);
             assertEq(token.warehouseFirstCrate(1), 0);
-            assertEq(token.monumentFirstCrate(1), 0);
+            assertEq(token.relicFirstCrate(1), 0);
             assertEq(token.totalMintReceived(), 0);
         }
     }
@@ -400,16 +357,14 @@ contract NFT111KFreeMintTest is TestSupport {
     function testFuzzAllowanceCannotBeExceeded(uint8 quantitySeed, uint8 limitSeed, uint8 kindSeed) public {
         uint16 limit = uint16(limitSeed % 18);
         uint256 quantity = uint256(quantitySeed % 15) + 1;
-        NFT111K.ItemKind kind = kindSeed % 3 == 0
-            ? NFT111K.ItemKind.Crate
-            : kindSeed % 3 == 1 ? NFT111K.ItemKind.Warehouse : NFT111K.ItemKind.Monument;
+        NFT111K.ItemKind kind = kindSeed % 2 == 0 ? NFT111K.ItemKind.Crate : NFT111K.ItemKind.Warehouse;
         token.setSaleActive(true);
         token.setFreeMintAllowances(_wallet(ALICE), limit, limit, limit);
         vm.prank(ALICE);
         if (quantity > limit) vm.expectRevert(NFT111K.FreeMintAllowanceExceeded.selector);
         token.mintFree(kind, quantity);
-        (,,, uint16 crates, uint16 warehouses, uint16 monuments) = token.freeMintAllowances(ALICE);
-        assertEq(uint256(crates) + warehouses + monuments, quantity > limit ? 0 : quantity);
+        (,,, uint16 crates, uint16 warehouses, uint16 relics) = token.freeMintAllowances(ALICE);
+        assertEq(uint256(crates) + warehouses + relics, quantity > limit ? 0 : quantity);
     }
 
     function _claimMaximumAllowance(
@@ -436,7 +391,7 @@ contract NFT111KFreeMintTest is TestSupport {
         assertEq(token.allocatedCrates(), uint256(limit) * units);
         assertEq(token.remainingCrates(), 5555 - uint256(limit) * units);
         assertEq(token.warehousesMinted(), index == 1 ? limit : 0);
-        assertEq(token.monumentsMinted(), index == 2 ? limit : 0);
+        assertEq(token.relicsMinted(), 0);
         assertEq(token.totalSupply(), limit);
         assertEq(token.balanceOf(ALICE), limit);
         assertEq(token.ownerOf(firstToken), ALICE);
@@ -456,7 +411,7 @@ contract NFT111KFreeMintTest is TestSupport {
         expected[2] = 18;
         _allowance(ALICE, expected);
         vm.prank(ALICE);
-        vm.expectRevert(index == 2 ? NFT111K.FreeMintAllowanceExceeded.selector : NFT111K.SoldOut.selector);
+        vm.expectRevert(NFT111K.SoldOut.selector);
         token.mintFree(kind, 1);
         _allowance(ALICE, expected);
     }
@@ -485,15 +440,9 @@ contract NFT111KFreeMintTest is TestSupport {
     }
 
     function _allowance(address wallet, uint16[6] memory expected) private view {
-        (
-            uint16 crates,
-            uint16 warehouses,
-            uint16 monuments,
-            uint16 cratesUsed,
-            uint16 warehousesUsed,
-            uint16 monumentsUsed
-        ) = token.freeMintAllowances(wallet);
-        uint16[6] memory actual = [crates, warehouses, monuments, cratesUsed, warehousesUsed, monumentsUsed];
+        (uint16 crates, uint16 warehouses, uint16 relics, uint16 cratesUsed, uint16 warehousesUsed, uint16 relicsUsed) =
+            token.freeMintAllowances(wallet);
+        uint16[6] memory actual = [crates, warehouses, relics, cratesUsed, warehousesUsed, relicsUsed];
         for (uint256 i; i < actual.length; ++i) {
             assertEq(actual[i], expected[i]);
         }

@@ -819,7 +819,7 @@ contract NFT111KProceedsTest is TestSupport {
     }
 
     function _buyAt(uint256 amount) private {
-        token.setPrices(amount, amount, amount, 0.0088 ether);
+        token.setPrices(amount, amount, amount);
         vm.prank(BUYER);
         token.mintCrates{value: amount}(1);
     }

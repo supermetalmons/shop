@@ -139,7 +139,7 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   body: { tokenIds: string[]; addressId: string; requestId: string },
   checkout?: { checkoutId: string; items: readonly Pick<EthereumTokenInfo, 'tokenId' | 'kind' | 'displayId'>[] }): Promise<EthereumDeliveryPrepareResponse> {
   const ids = body.tokenIds.map(normalizeEthereumTokenId);
-  if (ids.some((id) => id === null) || new Set(ids).size !== ids.length) throw new EthereumApiError('invalid-argument', 'Choose distinct owned artworks, crates or monuments.');
+  if (ids.some((id) => id === null) || new Set(ids).size !== ids.length) throw new EthereumApiError('invalid-argument', 'Choose distinct owned artworks, crates or relics.');
   const tokenIds = ids as string[];
   const contractAddress = requireEthereumContract(context);
   const secret = await signerSecret(context);
@@ -179,7 +179,7 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   if (used) throw new EthereumApiError('failed-precondition', 'This delivery is already onchain. Wait for its confirmation.');
   const items = await ethereumTokenInfos(context, tokenIds);
   if (items.length !== tokenIds.length || items.some((item) => item.owner !== wallet || !isEthereumDeliveryKind(item.kind))) {
-    throw new EthereumApiError('permission-denied', 'Only owned artworks, crates and monuments can be delivered.');
+    throw new EthereumApiError('permission-denied', 'Only owned artworks, crates and relics can be delivered.');
   }
   if (checkout && (checkout.items.length !== items.length || checkout.items.some((item, index) =>
     item.tokenId !== items[index].tokenId || item.kind !== items[index].kind || item.displayId !== items[index].displayId))) {
@@ -345,7 +345,7 @@ async function publishEthereumOrder(context: EthereumContext, row: EthereumDeliv
       status: 'ready_to_ship', addressId: row.address_id, addressSnapshot: JSON.parse(row.address_json),
       itemIds: items.map((item) => ethereumAssetId(row.chain_id, row.contract_address, item.tokenId)),
       items: items.map((item) => ({ assetId: ethereumAssetId(row.chain_id, row.contract_address, item.tokenId),
-        tokenId: item.tokenId, kind: item.kind === 'crate' ? 'box' : item.kind === 'monument' ? 'monument' : 'dude', refId: item.displayId })),
+        tokenId: item.tokenId, kind: item.kind === 'crate' ? 'box' : item.kind === 'relic' ? 'relic' : 'dude', refId: item.displayId })),
       deliveryFeeWei: row.fee_wei, deliverySignature: row.transaction_hash,
       receiptsMinted: receiptIds.length, receiptTxs: row.transaction_hash ? [row.transaction_hash] : [], receiptTokenIds: receiptIds,
       irlClaims,

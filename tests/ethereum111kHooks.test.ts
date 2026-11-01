@@ -29,8 +29,8 @@ const other = '0x2222222222222222222222222222222222222222';
 const contract = '0x3333333333333333333333333333333333333333';
 const hash = `0x${'ab'.repeat(32)}`;
 const config = resolveEthereum111kConfig({ contractAddress: contract });
-const statistics = { chainId: config.chainId, contractAddress: contract, owner, allocatedCrates: 0, warehousesMinted: 0, monumentsMinted: 0, artworksMinted: 0,
-  cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, monumentPriceWei: config.monumentPriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingMonuments: 18,
+const statistics = { chainId: config.chainId, contractAddress: contract, owner, allocatedCrates: 0, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 0,
+  cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingRelics: 0,
   discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT, discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0 };
 const clients: InstanceType<typeof QueryClient>[] = [];
 
@@ -224,7 +224,7 @@ for (const change of [
   });
 }
 
-test('discount usage refreshes after confirmation and never changes warehouse or monument pricing', async t => {
+test('discount usage refreshes after confirmation and never changes warehouse pricing', async t => {
   let used = 0;
   let confirmed = false;
   t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}`, discountUsed: used }));
@@ -235,7 +235,6 @@ test('discount usage refreshes after confirmation and never changes warehouse or
   const view = harness(connected);
   await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
   assert.equal(view.result.current.mintQuote('warehouse', 1)?.discounted, false);
-  assert.equal(view.result.current.mintQuote('monument', 1)?.discounted, false);
   await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
   const sent = (connected.sent[0] as [{ data: string; value: string }])[0];
   assert.equal(sent.data, encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, []]));
@@ -247,7 +246,6 @@ test('discount usage refreshes after confirmation and never changes warehouse or
   await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false));
   assert.equal(view.result.current.stats.data?.discountUsed, 1);
   assert.equal(view.result.current.mintQuote('warehouse', 1)?.unitPriceWei, config.warehousePriceWei);
-  assert.equal(view.result.current.mintQuote('monument', 1)?.unitPriceWei, config.monumentPriceWei);
 });
 
 test('late discount data from another wallet cannot change the current wallet quote or usage', async t => {
@@ -447,7 +445,7 @@ for (const differentArtworkOrder of [false, true]) test(`delivery sorts a copy o
   t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
   t.mock.method(ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'saved-ethereum-address' } }));
   const selected: EthereumInventoryItem[] = [
-    { ...token(owner, '117189'), kind: 'monument', displayId: 18, name: 'Monument #18' },
+    { ...token(owner, '117189'), kind: 'relic', displayId: 18, name: 'Relic #18' },
     token(),
     { ...token(owner, '10'), kind: 'artwork', displayId: 850, name: 'Artwork #850' },
     { ...token(owner, '2'), kind: 'artwork', displayId: 842, name: 'Artwork #842' },
@@ -786,7 +784,7 @@ for (const count of [1, 15, 16, 50]) {
   });
 }
 
-for (const kind of ['warehouse', 'monument'] as const) test(`opening rejects duplicate, mixed, foreign and multiple ${kind} selections`, async () => {
+for (const kind of ['warehouse', 'relic'] as const) test(`opening rejects duplicate, mixed, foreign and multiple ${kind} selections`, async () => {
   const connected = wallet();
   const view = harness(connected);
   await waitFor(() => assert.ok(view.result.current.scope));
@@ -800,11 +798,11 @@ for (const kind of ['warehouse', 'monument'] as const) test(`opening rejects dup
   assert.equal(connected.sent.length, 0);
   await act(async () => { assert.equal(await view.result.current.unbox([warehouse]), true); });
   assert.equal(connected.sent.length, 1);
-  assert.equal((connected.sent[0] as [{ data: string }])[0].data, encodeCall(kind === 'warehouse' ? ETHEREUM_FUNCTIONS.unboxWarehouse : ETHEREUM_FUNCTIONS.unboxMonument, ['uint256'], [firstId]));
+  assert.equal((connected.sent[0] as [{ data: string }])[0].data, encodeCall(kind === 'warehouse' ? ETHEREUM_FUNCTIONS.unboxWarehouse : ETHEREUM_FUNCTIONS.unboxRelic, ['uint256'], [firstId]));
 });
 
-test('monument receipts reject opening, delivery and claims while remaining transferable', async t => {
-  const receipt: EthereumInventoryItem = { ...token(owner, '3000018'), kind: 'monument_receipt', displayId: 18, name: 'Monument Receipt #18' };
+test('relic receipts reject opening, delivery and claims while remaining transferable', async t => {
+  const receipt: EthereumInventoryItem = { ...token(owner, '3000018'), kind: 'relic_receipt', displayId: 18, name: 'Relic Receipt #18' };
   const prepareClaim = t.mock.method(ethereumApi, 'prepareClaim');
   const prepareDelivery = t.mock.method(ethereumApi, 'prepareDelivery');
   const connected = wallet();
@@ -2709,39 +2707,32 @@ test('a known contract-wallet unbox recovers a new relayer transaction and unblo
 });
 
 
-test('monument mint rechecks availability and price before requesting a transaction', async t => {
-  let current = { ...statistics };
-  t.mock.method(ethereumApi, 'stats', async () => current);
+test('relics have no public mint quote or transaction path', async () => {
   const connected = wallet();
   const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.mintQuote('monument', 1)));
-  const quote = view.result.current.mintQuote('monument', 1)!;
-  current = { ...current, monumentPriceWei: '9000000000000000' };
-  await act(async () => { assert.equal(await view.result.current.mint('monument', 1, quote), false); });
-  assert.match(view.result.current.error ?? '', /terms changed/);
-  current = { ...statistics, remainingMonuments: 0, monumentsMinted: 18 };
-  await act(async () => { assert.equal(await view.result.current.mint('monument', 1, quote), false); });
-  assert.match(view.result.current.error ?? '', /no longer available/);
+  await waitFor(() => assert.ok(view.result.current.mintQuote('crate', 1)));
+  assert.equal(Reflect.apply(view.result.current.mintQuote, undefined, ['relic', 1]), null);
+  await act(async () => { assert.equal(await Reflect.apply(view.result.current.mint, undefined, ['relic', 1]), false); });
+  assert.match(view.result.current.error ?? '', /cannot be publicly minted/);
   assert.equal(connected.sent.length, 0);
 });
 
-
-test('a monument opening retains all 111 crates through stale indexing and reload', async t => {
-  const monument: EthereumInventoryItem = { ...token(owner, '117172'), kind: 'monument', name: 'Monument #1' };
+test('a relic opening retains all 111 crates through stale indexing and reload', async t => {
+  const relic: EthereumInventoryItem = { ...token(owner, '117172'), kind: 'relic', name: 'Relic #1' };
   const crates = Array.from({ length: 111 }, (_, index) => ({ ...token(owner, String(111112 + index)),
     displayId: index + 1, name: `Crate #${index + 1}` }));
   const scope = ethereumInventoryScope(config, owner)!;
   let included = false;
   t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-    items: included ? crates.filter(crate => expected.includes(crate.tokenId)) : [monument],
+    items: included ? crates.filter(crate => expected.includes(crate.tokenId)) : [relic],
     nextCursor: null, observedBlock: 10,
   }));
   t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-    items: included ? crates : [], burnedTokenIds: included ? [monument.tokenId] : [] }));
+    items: included ? crates : [], burnedTokenIds: included ? [relic.tokenId] : [] }));
   const connected = wallet();
   let view = harness(connected);
   await waitFor(() => assert.equal(view.result.current.items.length, 1));
-  await act(async () => { assert.equal(await view.result.current.unbox(monument), true); });
+  await act(async () => { assert.equal(await view.result.current.unbox(relic), true); });
   included = true;
   await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
   await waitFor(() => assert.equal(view.result.current.revealed?.length, 111));

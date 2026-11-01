@@ -64,15 +64,15 @@ const constructor = run('cast', [
   'abi-encode', 'constructor(address,address,address,string,bytes32,address[],uint256[],(address,uint16,uint16,uint16)[])',
   owner, signer, initialDeliveryReceiver, metadataBaseURI, discountRoot,
   `[${mintRecipients.join(',')}]`, `[${mintSharesBps.join(',')}]`,
-  `[${freeMintAllocations.map(({ wallet, crateLimit, warehouseLimit, monumentLimit }) =>
-    `(${wallet},${crateLimit},${warehouseLimit},${monumentLimit})`).join(',')}]`,
+  `[${freeMintAllocations.map(({ wallet, crateLimit, warehouseLimit, relicLimit }) =>
+    `(${wallet},${crateLimit},${warehouseLimit},${relicLimit})`).join(',')}]`,
 ]);
 const collection = send((await artifact('NFT111K')).bytecode.object + constructor.slice(2));
 if (!collection.contractAddress || Number(collection.status) !== 1) throw new Error('Collection deployment failed.');
 if (collection.contractAddress.toLowerCase() !== predictedCollection.toLowerCase()) throw new Error('Unexpected collection deployment address.');
 
 const result = {
-  protocolVersion: 13,
+  protocolVersion: 14,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, initialDeliveryReceiver, deliveryConfigId: 1, mintRecipients, mintSharesBps, discountRoot, freeMintAllocations,

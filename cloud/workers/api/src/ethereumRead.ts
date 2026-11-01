@@ -3,7 +3,7 @@ import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.js';
 import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUri.js';
 import {
-  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_MONUMENTS, ETHEREUM_CRATES_PER_MONUMENT,
+  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_CRATES_PER_RELIC,
   ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
   ethereumItemDisplayIdMaximum, ethereumMetadataTokenId, normalizeEthereumTokenId,
 } from '../../../../shared/ethereum/protocol.js';
@@ -12,8 +12,7 @@ import { EthereumApiError } from './ethereumError.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import {
   ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
-  verifyEthereumBlockSnapshot,
-  type EthereumContext,
+  verifyEthereumBlockSnapshot, ethereumRelicInterfaceAvailable, type EthereumContext,
 } from './ethereumRuntime.js';
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -207,27 +206,40 @@ async function localOwnerInfos(context: EthereumContext, wallet: string, head: n
 }
 
 export async function ethereumPublicRead(request: Request, context: EthereumContext, path: string): Promise<unknown> {
-  if (path.endsWith('/config')) return {
-    ...context.config,
-    enabled: context.config.enabled && await ethereum111kWritesAllowed(context.env.COMMERCE_DB, context.config, context.signal),
-  };
+  if (path.endsWith('/config')) {
+    let enabled = context.config.enabled && await ethereum111kWritesAllowed(context.env.COMMERCE_DB, context.config, context.signal);
+    if (enabled) {
+      try { enabled = await ethereumRelicInterfaceAvailable(context); }
+      catch { context.signal.throwIfAborted(); enabled = false; }
+    }
+    return { ...context.config, enabled };
+  }
   requireEthereumContract(context);
   const url = new URL(request.url);
   if (path.endsWith('/stats')) {
     const owner = url.searchParams.has('owner') ? ethereumAddress(url.searchParams.get('owner')) : null;
+    if (!await ethereumRelicInterfaceAvailable(context)) {
+      throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
+    }
     const values = decodeReturn(
       ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
       await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? `0x${'0'.repeat(40)}`])),
     );
     const allocatedCrates = Number(values[0]);
+    const relicsAllocated = Number(values[10]);
+    const relicsMinted = Number(values[11]);
+    if (!Number.isSafeInteger(relicsAllocated) || relicsAllocated < 0 || relicsAllocated > ETHEREUM_MAX_RELICS ||
+      !Number.isSafeInteger(relicsMinted) || relicsMinted < 0 || relicsMinted > relicsAllocated ||
+      allocatedCrates < relicsAllocated * ETHEREUM_CRATES_PER_RELIC) {
+      throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic supply.');
+    }
     return { chainId: context.config.chainId, contractAddress: requireEthereumContract(context), owner,
       allocatedCrates, warehousesMinted: Number(values[1]), artworksMinted: Number(values[2]),
       cratePriceWei: String(values[3]), warehousePriceWei: String(values[4]), saleActive: values[5],
       remainingCrates: 5555 - allocatedCrates, remainingWarehouses: Math.floor((5555 - allocatedCrates) / 11),
       discountMerkleRoot: values[6], discountCratePriceWei: String(values[7]),
       discountAllowance: Number(values[8]), discountUsed: Number(values[9]),
-      monumentsMinted: Number(values[10]), monumentPriceWei: String(values[11]),
-      remainingMonuments: Math.min(ETHEREUM_MAX_MONUMENTS - Number(values[10]), Math.floor((5555 - allocatedCrates) / ETHEREUM_CRATES_PER_MONUMENT)) };
+      relicsAllocated, relicsMinted, remainingRelics: relicsAllocated - relicsMinted };
   }
   if (path.endsWith('/metadata')) {
     const kind = url.searchParams.get('kind') as EthereumItemKind;

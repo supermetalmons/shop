@@ -8,7 +8,7 @@ import {
   type EthereumDeliveryPrepareRequest, type EthereumDeliveryConfirmRequest,
   type EthereumClaimPrepareRequest, type EthereumClaimConfirmRequest,
 } from '../../shared/ethereum/api';
-import { ethereumAssetId, ethereumItemDisplayIdMaximum, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
+import { ethereumAssetId, ethereumItemDisplayIdMaximum, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import { requestEthereumJson, type EthereumRequestOptions } from './request';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
@@ -46,7 +46,7 @@ export function parseEthereumConfig(value: unknown): Ethereum111kConfig {
     typeof value.chainName !== 'string' || typeof value.enabled !== 'boolean' || value.testnet !== true || typeof value.metadataBaseUri !== 'string' ||
     (value.contractAddress !== null && !normalizeEthereumAddress(value.contractAddress)) || (value.enabled && value.contractAddress === null) ||
     typeof value.walletRpcUrl !== 'string' || typeof value.explorerUrl !== 'string' ||
-    !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.monumentPriceWei) || !amount(value.deliveryFeeWei) ||
+    !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.deliveryFeeWei) ||
     !Number.isSafeInteger(value.maxMintQuantity) || Number(value.maxMintQuantity) < 1 || Number(value.maxMintQuantity) > 15 ||
     !Number.isSafeInteger(value.maxUnboxQuantity) || Number(value.maxUnboxQuantity) < 1 || Number(value.maxUnboxQuantity) > ETHEREUM_MAX_UNBOX_QUANTITY ||
     !Number.isSafeInteger(value.maxDeliveryItems) || Number(value.maxDeliveryItems) < 1 || Number(value.maxDeliveryItems) > 50 ||
@@ -81,12 +81,14 @@ export const ethereumApi = {
     const address = owner === null ? null : normalizeEthereumAddress(owner);
     if (owner !== null && (!address || /^0x0{40}$/.test(address))) return invalid();
     const value = await request(`${ETHEREUM_API_PATHS.stats}${address ? `?${new URLSearchParams({ owner: address })}` : ''}`, { signal });
-    if (!record(value) || !['allocatedCrates', 'warehousesMinted', 'artworksMinted', 'remainingCrates', 'remainingWarehouses', 'monumentsMinted', 'remainingMonuments'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) ||
+    if (!record(value) || !['allocatedCrates', 'warehousesMinted', 'artworksMinted', 'remainingCrates', 'remainingWarehouses', 'relicsAllocated', 'relicsMinted', 'remainingRelics'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) ||
       value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
       (address === null ? value.owner !== null : normalizeEthereumAddress(value.owner) !== address) ||
-      !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.monumentPriceWei) || !amount(value.discountCratePriceWei) ||
+      !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.discountCratePriceWei) ||
       typeof value.discountMerkleRoot !== 'string' || !/^0x[0-9a-f]{64}$/.test(value.discountMerkleRoot) ||
       !['discountAllowance', 'discountUsed'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 10) ||
+      Number(value.relicsAllocated) > ETHEREUM_MAX_RELICS || Number(value.relicsMinted) > Number(value.relicsAllocated) ||
+      Number(value.remainingRelics) !== Number(value.relicsAllocated) - Number(value.relicsMinted) ||
       typeof value.saleActive !== 'boolean') return invalid();
     return value as EthereumStats;
   },

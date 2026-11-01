@@ -65,7 +65,7 @@ export type SaveProfileAddressRequest = Omit<ProfileAddress, 'id' | 'countryName
 };
 
 export type DeliveryOrderItemSummary = {
-  kind: 'box' | 'dude' | 'monument';
+  kind: 'box' | 'dude' | 'relic';
   refId: number;
 };
 
@@ -314,7 +314,7 @@ export type FulfillmentOrder = {
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
-  monuments: number[];
+  relics: number[];
   cardClaims: FulfillmentOrderCardClaim[];
 };
 

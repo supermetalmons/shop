@@ -3,8 +3,8 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 
 export const MAX_FREE_MINT_WALLETS = 32;
-const limits = { crates: 5555, warehouses: 505, monuments: 18 };
-const fields = ['crates', 'monuments', 'name', 'wallets', 'warehouses'];
+const limits = { crates: 5555, warehouses: 505, relics: 18 };
+const fields = ['crates', 'name', 'relics', 'wallets', 'warehouses'];
 
 function requireAddress(value, collectionAddress) {
   if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(value) || /^0x0{40}$/.test(value) ||
@@ -34,10 +34,10 @@ export function parseFreeMintConfig(value, collectionAddress) {
       if (wallets.has(address)) throw new Error('Free mint wallets must be distinct across all groups.');
       wallets.add(address);
       if (wallets.size > MAX_FREE_MINT_WALLETS) throw new Error('Free mint configuration supports at most 32 wallets.');
-      allocations.push({ wallet: address, crateLimit: group.crates, warehouseLimit: group.warehouses, monumentLimit: group.monuments });
+      allocations.push({ wallet: address, crateLimit: group.crates, warehouseLimit: group.warehouses, relicLimit: group.relics });
       return address;
     });
-    return { name: group.name, crates: group.crates, warehouses: group.warehouses, monuments: group.monuments, wallets: addresses };
+    return { name: group.name, crates: group.crates, warehouses: group.warehouses, relics: group.relics, wallets: addresses };
   });
   return { groups, allocations };
 }
@@ -60,7 +60,7 @@ export function freeMintOwnerCalls(value, collectionAddress) {
     group: group.name,
     to,
     data: `0x${selector}${bytesToHex(encode(['address[]', 'uint16', 'uint16', 'uint16'],
-      [group.wallets, group.crates, group.warehouses, group.monuments]))}`,
+      [group.wallets, group.crates, group.warehouses, group.relics]))}`,
     value: '0',
   }));
 }

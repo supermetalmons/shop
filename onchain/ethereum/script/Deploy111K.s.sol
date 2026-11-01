@@ -9,8 +9,8 @@ contract Deploy111K {
 
     struct FreeMintGroup {
         uint256 crates;
-        uint256 monuments;
         string name;
+        uint256 relics;
         address[] wallets;
         uint256 warehouses;
     }
@@ -60,7 +60,7 @@ contract Deploy111K {
             vm.parseJsonTypeArray(
                 json,
                 ".groups",
-                "FreeMintGroup(uint256 crates,uint256 monuments,string name,address[] wallets,uint256 warehouses)"
+                "FreeMintGroup(uint256 crates,string name,uint256 relics,address[] wallets,uint256 warehouses)"
             ),
             (FreeMintGroup[])
         );
@@ -74,13 +74,13 @@ contract Deploy111K {
             for (uint256 j; j < keys.length; ++j) {
                 bytes32 key = keccak256(bytes(keys[j]));
                 if (
-                    key != keccak256("crates") && key != keccak256("monuments") && key != keccak256("name")
+                    key != keccak256("crates") && key != keccak256("relics") && key != keccak256("name")
                         && key != keccak256("wallets") && key != keccak256("warehouses")
                 ) revert NFT111K.InvalidFreeMintConfig();
             }
             group.crates = _freeMintLimit(json, string.concat(path, ".crates"), 5555);
             group.warehouses = _freeMintLimit(json, string.concat(path, ".warehouses"), 505);
-            group.monuments = _freeMintLimit(json, string.concat(path, ".monuments"), 18);
+            group.relics = _freeMintLimit(json, string.concat(path, ".relics"), 18);
             for (uint256 j; j < group.wallets.length; ++j) {
                 group.wallets[j] = _freeMintWallet(json, string.concat(path, ".wallets[", Strings.toString(j), "]"));
             }
@@ -103,7 +103,7 @@ contract Deploy111K {
                     if (allocations[k].wallet == wallet) revert NFT111K.InvalidFreeMintConfig();
                 }
                 allocations[index++] = NFT111K.FreeMintAllocation(
-                    wallet, uint16(group.crates), uint16(group.warehouses), uint16(group.monuments)
+                    wallet, uint16(group.crates), uint16(group.warehouses), uint16(group.relics)
                 );
             }
         }

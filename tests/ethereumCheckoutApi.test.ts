@@ -70,17 +70,17 @@ for (const operation of ['create', 'status'] as const) {
     await assert.rejects(request(), /invalid response/);
   });
 
-  test(`checkout ${operation} accepts monuments but rejects monument receipts`, async context => {
+  test(`checkout ${operation} accepts relics but rejects relic receipts`, async context => {
     const response = snapshot('');
     response.tokenIds = ['117189'];
     Object.assign(response.items[0], { id: ethereumAssetId(config.chainId, config.contractAddress!, '117189'),
-      tokenId: '117189', kind: 'monument', displayId: 18, name: 'Monument #18',
+      tokenId: '117189', kind: 'relic', displayId: 18, name: 'Relic #18',
       image: 'https://wip.lil.org/111k/monuments/18.webp' });
     context.mock.method(globalThis, 'fetch', async () => Response.json(response));
     assert.deepEqual((await request()).items, response.items);
     response.tokenIds = ['3000018'];
     Object.assign(response.items[0], { id: ethereumAssetId(config.chainId, config.contractAddress!, '3000018'),
-      tokenId: '3000018', kind: 'monument_receipt', name: 'Monument Receipt #18' });
+      tokenId: '3000018', kind: 'relic_receipt', name: 'Relic Receipt #18' });
     await assert.rejects(request(), /invalid response/);
   });
 

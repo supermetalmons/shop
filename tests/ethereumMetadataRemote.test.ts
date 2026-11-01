@@ -323,8 +323,8 @@ test('S3 ranged listing stops above a missing boundary and rejects repeated cont
 
 test('selected inventory reads only requested token IDs without listing the collection', async () => {
   const storage = new MemoryStorage();
-  storage.values.set(prefix + '117172.json', Buffer.from('first monument'));
-  storage.values.set(prefix + '117189.json', Buffer.from('last monument'));
+  storage.values.set(prefix + '117172.json', Buffer.from('first relic'));
+  storage.values.set(prefix + '117189.json', Buffer.from('last relic'));
   storage.list = async function* () { throw new Error('A sample must not list the full collection'); };
   const inventory = await selectedInventory(storage, 'sepolia', new Set(['1', '3', '117172', '117189']), 2);
   assert.deepEqual(storage.reads.sort(), [prefix + '1.json', prefix + '117172.json', prefix + '117189.json', prefix + '3.json']);
@@ -544,8 +544,8 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
   const digest = { bytes: body.length, md5: metadataMd5(body), sha256: sha256(body), body: body.toString('base64') };
   const allFiles = Array.from(metadataIdentities(), identity => identity.file);
   assert.equal(allFiles.length, 344984);
-  const monumentFiles = Array.from({ length: 18 }, (_, index) => `${117172 + index}.json`);
-  assert.ok(monumentFiles.every(file => allFiles.includes(file)));
+  const relicFiles = Array.from({ length: 18 }, (_, index) => `${117172 + index}.json`);
+  assert.ok(relicFiles.every(file => allFiles.includes(file)));
   assert.ok(Array.from({ length: 18 }, (_, index) => `${3000001 + index}.json`).every(file => allFiles.includes(file)));
   const archive = gzipSync(allFiles.map(file => `${JSON.stringify({ file, ...digest })}\n`).join(''));
   const keys = allFiles.map(file => prefix + file).sort();
@@ -601,7 +601,7 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
     assert.equal(report.skipped, 0);
     assert.equal(damaged.size, 0);
     assert.equal(writes.size, allFiles.length);
-    assert.ok(monumentFiles.every(file => writes.has(prefix + file)));
+    assert.ok(relicFiles.every(file => writes.has(prefix + file)));
     assert.deepEqual(headers, { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' });
     assert.equal(await readFile(join(directory, 'manifest.json'), 'utf8'), manifestBody);
     assert.deepEqual(await readFile(join(directory, manifest.archive)), archive);

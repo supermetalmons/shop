@@ -24,7 +24,7 @@ export function checkedEthereumDelivery(prepared: EthereumDeliveryPrepareRespons
     throw new Error('The delivery quote does not match your wallet or fee. Please try again.');
   }
   const receiptIdsHash = ethereumReceiptIdsHash(selected.map(item => {
-    if (!isEthereumDeliveryKind(item.kind)) throw new Error('Select artworks, crates or monuments for delivery.');
+    if (!isEthereumDeliveryKind(item.kind)) throw new Error('Select artworks, crates or relics for delivery.');
     return ethereumReceiptTokenId(item.kind, item.displayId);
   }));
   if (typeof quote.receiptIdsHash !== 'string' || quote.receiptIdsHash.toLowerCase() !== receiptIdsHash) {

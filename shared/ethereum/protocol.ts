@@ -4,12 +4,12 @@ export const ETHEREUM_111K_DROP_ID = '111k_devnet' as const;
 const ARTWORK_COUNT = 111_111;
 const CRATE_COUNT = 5_555;
 const WAREHOUSE_COUNT = 505;
-export const ETHEREUM_MAX_MONUMENTS = 18;
-export const ETHEREUM_CRATES_PER_MONUMENT = 111;
+export const ETHEREUM_MAX_RELICS = 18;
+export const ETHEREUM_CRATES_PER_RELIC = 111;
 const ARTWORK_RECEIPT_COUNT = 2 * ARTWORK_COUNT;
 const ARTWORK_RECEIPT_OFFSET = 1_000_000n;
 const CRATE_RECEIPT_OFFSET = 2_000_000n;
-const MONUMENT_RECEIPT_OFFSET = 3_000_000n;
+const RELIC_RECEIPT_OFFSET = 3_000_000n;
 export const ETHEREUM_MAX_MINT_QUANTITY = 15;
 export const ETHEREUM_MAX_UNBOX_QUANTITY = 15;
 export const ETHEREUM_MAX_DELIVERY_ITEMS = 50;
@@ -21,16 +21,17 @@ export const ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE = 100;
 export const ETHEREUM_AUTHORIZATION_TTL_SECONDS = 600;
 
 export type Hex = `0x${string}`;
-export const ETHEREUM_MINT_KINDS = ['crate', 'warehouse', 'monument'] as const;
+export const ETHEREUM_MINT_KINDS = ['crate', 'warehouse'] as const;
 export type EthereumMintKind = typeof ETHEREUM_MINT_KINDS[number];
-export type EthereumItemKind = 'artwork' | EthereumMintKind | 'artwork_receipt' | 'crate_receipt' | 'monument_receipt';
-export type EthereumDeliveryKind = 'artwork' | 'crate' | 'monument';
+export type EthereumContainerKind = EthereumMintKind | 'relic';
+export type EthereumItemKind = 'artwork' | EthereumContainerKind | 'artwork_receipt' | 'crate_receipt' | 'relic_receipt';
+export type EthereumDeliveryKind = 'artwork' | 'crate' | 'relic';
 export const ETHEREUM_ITEM_KINDS: readonly EthereumItemKind[] = [
-  'artwork', 'crate', 'warehouse', 'artwork_receipt', 'crate_receipt', 'monument', 'monument_receipt',
+  'artwork', 'crate', 'warehouse', 'artwork_receipt', 'crate_receipt', 'relic', 'relic_receipt',
 ];
 
 export function isEthereumDeliveryKind(kind: EthereumItemKind): kind is EthereumDeliveryKind {
-  return kind === 'artwork' || kind === 'crate' || kind === 'monument';
+  return kind === 'artwork' || kind === 'crate' || kind === 'relic';
 }
 
 export function ethereumItemKind(value: number): EthereumItemKind | null {
@@ -39,7 +40,7 @@ export function ethereumItemKind(value: number): EthereumItemKind | null {
 
 export function ethereumItemDisplayIdMaximum(kind: EthereumItemKind): number {
   if (kind === 'warehouse') return WAREHOUSE_COUNT;
-  if (kind === 'monument' || kind === 'monument_receipt') return ETHEREUM_MAX_MONUMENTS;
+  if (kind === 'relic' || kind === 'relic_receipt') return ETHEREUM_MAX_RELICS;
   if (kind === 'crate' || kind === 'crate_receipt') return CRATE_COUNT;
   return kind === 'artwork_receipt' ? ARTWORK_RECEIPT_COUNT : ARTWORK_COUNT;
 }
@@ -50,8 +51,8 @@ export function ethereumMetadataTokenId(kind: EthereumItemKind, displayId: numbe
   if (kind === 'artwork') return String(displayId);
   if (kind === 'crate') return String(ARTWORK_COUNT + displayId);
   if (kind === 'warehouse') return String(ARTWORK_COUNT + CRATE_COUNT + displayId);
-  if (kind === 'monument') return String(ARTWORK_COUNT + CRATE_COUNT + WAREHOUSE_COUNT + displayId);
-  if (kind === 'monument_receipt') return (MONUMENT_RECEIPT_OFFSET + BigInt(displayId)).toString();
+  if (kind === 'relic') return String(ARTWORK_COUNT + CRATE_COUNT + WAREHOUSE_COUNT + displayId);
+  if (kind === 'relic_receipt') return (RELIC_RECEIPT_OFFSET + BigInt(displayId)).toString();
   return ((kind === 'artwork_receipt' ? ARTWORK_RECEIPT_OFFSET : CRATE_RECEIPT_OFFSET) + BigInt(displayId)).toString();
 }
 
@@ -93,7 +94,7 @@ export function physicalCrateArtworkIds(crateId: number): number[] {
 export function ethereumReceiptTokenId(kind: EthereumDeliveryKind, displayId: number): string {
   const maximum = ethereumItemDisplayIdMaximum(kind);
   if (!Number.isInteger(displayId) || displayId < 1 || displayId > maximum) throw new Error('Invalid item number');
-  const offset = kind === 'artwork' ? ARTWORK_RECEIPT_OFFSET : kind === 'crate' ? CRATE_RECEIPT_OFFSET : MONUMENT_RECEIPT_OFFSET;
+  const offset = kind === 'artwork' ? ARTWORK_RECEIPT_OFFSET : kind === 'crate' ? CRATE_RECEIPT_OFFSET : RELIC_RECEIPT_OFFSET;
   return (offset + BigInt(displayId)).toString();
 }
 
@@ -145,14 +146,15 @@ export const ETHEREUM_FUNCTIONS = {
   mintCrates: 'mintCrates(uint256)',
   mintCratesDiscounted: 'mintCratesDiscounted(uint256,bytes32[])',
   mintWarehouses: 'mintWarehouses(uint256)',
-  mintMonuments: 'mintMonuments(uint256)',
+  allocateRelics: 'allocateRelics(uint256)',
+  claimRelic: 'claimRelic(uint256)',
   mintFree: 'mintFree(uint8,uint256)',
   freeMintAllowances: 'freeMintAllowances(address)',
   setFreeMintAllowances: 'setFreeMintAllowances(address[],uint16,uint16,uint16)',
   unboxCrate: 'unboxCrate(uint256)',
   unboxCrates: 'unboxCrates(uint256[])',
   unboxWarehouse: 'unboxWarehouse(uint256)',
-  unboxMonument: 'unboxMonument(uint256)',
+  unboxRelic: 'unboxRelic(uint256)',
   transfer: 'safeTransferFrom(address,address,uint256)',
   redeemForDelivery: 'redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)',
   claimCrateReceipt: 'claimCrateReceipt(uint256,bytes32,uint256,bytes)',

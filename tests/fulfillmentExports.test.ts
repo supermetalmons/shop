@@ -61,7 +61,7 @@ function cardOrder(overrides?: Partial<FulfillmentOrder>): FulfillmentOrder {
       },
     ],
     looseDudes: [42],
-    monuments: [],
+    relics: [],
     cardClaims: [],
     ...overrides,
   };
@@ -122,10 +122,10 @@ test('Ethereum fulfillment exports preserve fixed artwork numbers and link codes
   }
 });
 
-test('Ethereum monument exports retain monument numbers without generating contents or secret codes', () => {
-  const order = cardOrder({ dropId: '111k_devnet', source: 'ethereum', boxes: [], looseDudes: [], monuments: [1, 18] });
+test('Ethereum relic exports retain relic numbers without generating contents or secret codes', () => {
+  const order = cardOrder({ dropId: '111k_devnet', source: 'ethereum', boxes: [], looseDudes: [], relics: [1, 18] });
   assert.deepEqual(buildFulfillmentOrdersExport([order], { dropById }), [{
-    orderId: '111k_devnet:7', country: 'United States', monuments: [1, 18],
+    orderId: '111k_devnet:7', country: 'United States', relics: [1, 18],
   }]);
   assert.deepEqual(buildFulfillmentSecretCodeExportEntries([order], { dropById }), []);
   assert.equal(countFulfillmentSecretCodeExportEntries([order]), 0);

@@ -348,7 +348,7 @@ contract NFT111KRegisteredDeliveryTest {
         RegisteredReceiver expensive = new RegisteredReceiver();
         token = _deploy(address(expensive), FIRST);
         expensive.configure(token, 3);
-        token.setPrices(100, 100, 100, 100);
+        token.setPrices(100, 100, 100);
         uint256 configId = token.registerDeliveryConfig(FIRST, SECOND, 2500);
         _redeem(configId, 40);
         token.releaseDelivery();
@@ -436,7 +436,7 @@ contract NFT111KRegisteredDeliveryTest {
             new NFT111K.FreeMintAllocation[](0)
         );
         deployed.setSaleActive(true);
-        deployed.setPrices(0, 0, 0, 0);
+        deployed.setPrices(0, 0, 0);
     }
 
     function _mintCrate(uint256 fee) private returns (uint256 id) {

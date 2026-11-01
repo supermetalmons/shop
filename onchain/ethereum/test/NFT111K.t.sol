@@ -108,6 +108,25 @@ contract NFT111KTest is TestSupport {
         token.setSaleActive(true);
     }
 
+    function _prepareRelics(uint256 quantity) private {
+        token = new NFT111K(
+            address(this),
+            vm.addr(SIGNER_KEY),
+            deliveryReceiver,
+            "https://cdn.mons.shop/111k-sepolia/",
+            bytes32(0),
+            _proceedsRecipients(),
+            _proceedsSharesBps(),
+            new NFT111K.FreeMintAllocation[](0)
+        );
+        token.allocateRelics{value: quantity * 0.0088 ether}(quantity);
+        address[] memory wallets = new address[](2);
+        wallets[0] = alice;
+        wallets[1] = bob;
+        token.setFreeMintAllowances(wallets, 0, 0, 18);
+        token.setSaleActive(true);
+    }
+
     function testCollectionNameSymbolAndSigningDomain() public view {
         assertEq(token.name(), "111K");
         assertEq(token.symbol(), "111K");
@@ -164,7 +183,7 @@ contract NFT111KTest is TestSupport {
         vm.prank(alice);
         token.unboxCrate(111112);
         assertEq(token.balanceOf(alice), 20);
-        token.setPrices(1 wei, 11 wei, 0, 0.0088 ether);
+        token.setPrices(1 wei, 11 wei, 0);
         token.setSaleActive(true);
         vm.prank(bob);
         token.mintWarehouses{value: 11 wei}(1);
@@ -373,9 +392,10 @@ contract NFT111KTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(receipt, quote, signature);
     }
 
-    function testMonumentDeliveryMintsTerminalReceiptAndRetainsAllocations() public {
+    function testRelicDeliveryMintsTerminalReceiptAndRetainsAllocations() public {
+        _prepareRelics(1);
         vm.prank(alice);
-        token.mintMonuments{value: 0.0088 ether}(1);
+        token.claimRelic(1);
         uint256[] memory ids = _one(117172);
         NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
         bytes memory signature = _deliverySignature(ids, quote);
@@ -397,7 +417,7 @@ contract NFT111KTest is TestSupport {
         assertTrue(token.usedDeliveryOrders(1));
         assertEq(token.allocatedCrates(), 111);
         assertEq(token.remainingCrates(), 5444);
-        assertEq(token.monumentsMinted(), 1);
+        assertEq(token.relicsMinted(), 1);
         assertEq(token.totalSupply(), 1);
         assertEq(DeliveryAccounting.received(token), quote.fee);
         for (uint256 id = 111112; id < 111223; ++id) {
@@ -411,7 +431,7 @@ contract NFT111KTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         vm.prank(alice);
         vm.expectRevert(NFT111K.WrongOwner.selector);
-        token.unboxMonument(117172);
+        token.unboxRelic(117172);
         vm.prank(alice);
         token.transferFrom(alice, bob, 3000001);
         _info(3000001, 7, 1, bob);
@@ -420,7 +440,7 @@ contract NFT111KTest is TestSupport {
         token.claimCrateReceipt(3000001, keccak256("terminal"), block.timestamp + 300, bytes(""));
         vm.prank(bob);
         vm.expectRevert(NFT111K.WrongItemKind.selector);
-        token.unboxMonument(3000001);
+        token.unboxRelic(3000001);
         ids = _one(3000001);
         quote = _quote(bob, 2, ids);
         signature = _deliverySignature(ids, quote);
@@ -433,9 +453,34 @@ contract NFT111KTest is TestSupport {
         assertEq(token.allocatedCrates(), 112);
     }
 
-    function testMonumentDeliveryValidatesReceiptIdentityAndPauseBeforeRetry() public {
+    function testDeliveredRelicIdCannotBeClaimedAgainWithRemainingQuota() public {
+        _prepareRelics(2);
         vm.prank(alice);
-        token.mintMonuments{value: 0.0088 ether}(1);
+        token.claimRelic(18);
+        _redeem(alice, _one(117189), 1);
+        vm.prank(bob);
+        vm.expectRevert(NFT111K.TokenAlreadyIssued.selector);
+        token.claimRelic(18);
+        (,,,,, uint16 used) = token.freeMintAllowances(bob);
+        assertEq(used, 0);
+        assertEq(token.relicsMinted(), 1);
+        assertEq(token.relicFirstCrate(18), 1);
+        assertEq(token.allocatedCrates(), 222);
+        assertEq(token.totalMintReceived(), 0.0176 ether);
+        assertEq(DeliveryAccounting.received(token), 0.0001 ether);
+        token.releaseAllMint();
+        assertEq(token.totalMintReleased(), 0.0176 ether);
+        assertEq(address(token).balance, 0.0001 ether);
+        vm.prank(bob);
+        token.claimRelic(4);
+        assertEq(token.relicFirstCrate(4), 112);
+        _info(3000018, 7, 18, alice);
+    }
+
+    function testRelicDeliveryValidatesReceiptIdentityAndPauseBeforeRetry() public {
+        _prepareRelics(1);
+        vm.prank(alice);
+        token.claimRelic(1);
         uint256[] memory ids = _one(117172);
         NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
         quote.receiptIdsHash = keccak256(abi.encode(_one(3000002)));
@@ -457,11 +502,15 @@ contract NFT111KTest is TestSupport {
         _info(3000001, 7, 1, alice);
     }
 
-    function testMonumentReceiptReceiverRejectionRollsBackAndCanTransferOnRetry() public {
+    function testRelicReceiptReceiverRejectionRollsBackAndCanTransferOnRetry() public {
+        _prepareRelics(1);
         ContractBuyer buyer = new ContractBuyer(token);
         vm.deal(address(buyer), 1 ether);
+        address[] memory wallets = new address[](1);
+        wallets[0] = address(buyer);
+        token.setFreeMintAllowances(wallets, 0, 0, 1);
         vm.prank(address(buyer));
-        token.mintMonuments{value: 0.0088 ether}(1);
+        token.claimRelic(1);
         uint256[] memory ids = _one(117172);
         NFT111K.DeliveryQuote memory quote = _quote(address(buyer), 1, ids);
         bytes memory signature = _deliverySignature(ids, quote);
@@ -480,19 +529,21 @@ contract NFT111KTest is TestSupport {
         assertTrue(token.usedDeliveryOrders(1));
     }
 
-    function testFinalMonumentCanBeRedeemedWithoutReleasingItsLifetimeSlot() public {
+    function testFinalRelicCanBeRedeemedWithoutReleasingItsLifetimeSlot() public {
+        _prepareRelics(18);
         vm.startPrank(alice);
-        token.mintMonuments{value: 0.132 ether}(15);
-        token.mintMonuments{value: 0.0264 ether}(3);
+        for (uint256 id = 1; id <= 18; ++id) {
+            token.claimRelic(id);
+        }
         vm.stopPrank();
         _redeem(alice, _one(117189), 1);
         _info(3000018, 7, 18, alice);
-        assertEq(token.monumentsMinted(), 18);
+        assertEq(token.relicsMinted(), 18);
         assertEq(token.allocatedCrates(), 1998);
         assertEq(token.remainingCrates(), 3557);
         vm.prank(alice);
         vm.expectRevert(NFT111K.SoldOut.selector);
-        token.mintMonuments{value: 0.0088 ether}(1);
+        token.claimRelic(1);
     }
 
     function testSignaturesBindWalletItemsFeeOrderAndDomain() public {

@@ -12,26 +12,26 @@ const fields = {
 };
 const options = { canViewSensitiveAddress: false, decryptAddress: () => null, dropId: '111k_devnet' };
 
-test('monument delivery identities survive fulfillment and profile adapters without crate claims', async () => {
-  const items = [{ kind: 'monument', refId: 18 }, { kind: 'dude', refId: 7 }, { kind: 'monument', refId: 1 }];
+test('relic delivery identities survive fulfillment and profile adapters without crate claims', async () => {
+  const items = [{ kind: 'relic', refId: 18 }, { kind: 'dude', refId: 7 }, { kind: 'relic', refId: 1 }];
   const order = fulfillmentOrderFromRecord('42', { ...fields, items }, options)!;
-  assert.deepEqual(order.monuments, [1, 18]);
+  assert.deepEqual(order.relics, [1, 18]);
   assert.deepEqual(order.boxes, []);
   assert.deepEqual(order.looseDudes, [7]);
   assert.deepEqual(order.cardClaims, []);
   const api = createFulfillmentApiClient(async () => ({ orders: [order] }));
-  assert.deepEqual((await api.listFulfillmentOrders({ dropId: options.dropId })).orders[0].monuments, [1, 18]);
+  assert.deepEqual((await api.listFulfillmentOrders({ dropId: options.dropId })).orders[0].relics, [1, 18]);
   assert.deepEqual(parseDeliveryOrderSummary({ ...fields, dropId: options.dropId, deliveryId: 42, items })?.items, items);
 });
 
-test('fulfillment API defaults legacy monument lists and rejects malformed lists', async () => {
+test('fulfillment API defaults legacy relic lists and rejects malformed lists', async () => {
   const order = fulfillmentOrderFromRecord('42', fields, options)!;
-  assert.deepEqual(order.monuments, []);
-  const legacy = { ...order, monuments: undefined };
+  assert.deepEqual(order.relics, []);
+  const legacy = { ...order, relics: undefined };
   const api = createFulfillmentApiClient(async () => ({ orders: [legacy] }));
-  assert.deepEqual((await api.listFulfillmentOrders({ dropId: options.dropId })).orders[0].monuments, []);
-  for (const monuments of [null, {}, '1', [0], [-1], [1.5], ['1'], [NaN]]) {
-    const invalid = createFulfillmentApiClient(async () => ({ orders: [{ ...order, monuments }] }));
+  assert.deepEqual((await api.listFulfillmentOrders({ dropId: options.dropId })).orders[0].relics, []);
+  for (const relics of [null, {}, '1', [0], [-1], [1.5], ['1'], [NaN]]) {
+    const invalid = createFulfillmentApiClient(async () => ({ orders: [{ ...order, relics }] }));
     await assert.rejects(invalid.listFulfillmentOrders({ dropId: options.dropId }), /Invalid fulfillment orders response/);
   }
 });
