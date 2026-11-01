@@ -844,6 +844,22 @@ contract NFT111KGasTest is TestSupport {
         _absentTokenInfo(111112, "getTokenInfoBurnedSpot");
     }
 
+    function testGasSetBaseURI40() public {
+        _setBaseURI(40, "setBaseURI40");
+    }
+
+    function testGasSetBaseURI100() public {
+        _setBaseURI(100, "setBaseURI100");
+    }
+
+    function testGasSetBaseURI256() public {
+        _setBaseURI(256, "setBaseURI256");
+    }
+
+    function testGasSetBaseURI1024() public {
+        _setBaseURI(1024, "setBaseURI1024");
+    }
+
     function testGasStats() public {
         _buyCrates(alice, 1);
         _buyWarehouses(alice, 1);
@@ -878,6 +894,23 @@ contract NFT111KGasTest is TestSupport {
         uint256 warehouses = token.warehousesMinted();
         vm.snapshotGasLastCall("warehousesMinted");
         assertEq(warehouses, 1);
+    }
+
+    function _setBaseURI(uint256 length, string memory name) internal {
+        bytes memory prefix = bytes("https://cdn.mons.shop/111k-sepolia/");
+        bytes memory value = new bytes(length);
+        for (uint256 i; i < prefix.length; ++i) {
+            value[i] = prefix[i];
+        }
+        for (uint256 i = prefix.length; i < length - 1; ++i) {
+            value[i] = "a";
+        }
+        value[length - 1] = "/";
+        string memory uri = string(value);
+        token.setBaseURI(uri);
+        vm.snapshotGasLastCall(name);
+        assertEq(token.baseURI(), uri);
+        assertEq(token.previewTokenURI(1, 42), string.concat(uri, "42.json"));
     }
 
     function _absentTokenInfo(uint256 tokenId, string memory name) internal {

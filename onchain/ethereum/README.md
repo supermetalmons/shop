@@ -216,16 +216,36 @@ The owner can change the metadata prefix with `setBaseURI(string)`. The construc
 
 ## Gas comparison
 
+### 500-run build (2026-11-01)
+
+The [fixed-reference report](benchmarks/optimizer-500-comparison.json) compares the original source at commit `32841d396ca81eb25c77ccd30e3a5546d0bc91fd`, compiled at 1,000 runs, against the current 500-run build with URI character caching. The ABI and storage layout must remain identical. This applies to future deployments; existing collections retain their bytecode.
+
+Run the comparison from the repository root:
+
+```sh
+npm --prefix onchain/ethereum run gas:regression
+```
+
+The reference commit must be available in local Git history; the command does not fetch it. Remove `FOUNDRY_` and `DAPP_` environment overrides before running. The command builds both contracts in temporary directories with the same pinned dependencies. It repeats 141 isolated gas benchmarks using one fixed harness and receiver, then repeats 106 actual-receipt operations on a local Prague Anvil chain. The receipt cases include owner updates, approvals, transfers, warm contract-wallet calls, and malformed URI reverts. Addresses, calldata, timestamps, outcomes, and application state must match. Every measured operation must satisfy `candidateGas * 100 < referenceGas * 101`; exactly 1% fails. The report records per-operation gas and source, harness, dependency, compiler, and bytecode hashes. An optional output path selects another report destination.
+
+The recorded comparison passed all cases. Maximum increases were **0.0153% / 306 gas** for successful transaction receipts, **0.0228% / 6 gas** for failed URI-update receipts, and **0.214% / 180 gas** for read-call execution. Each build runs the 106 receipt operations twice, producing 424 measured receipts in total. These are measured gas units, independent of the ETH gas price.
+
+Normal gas snapshots compile the harness at the configured 500 runs; the fixed-reference comparison keeps the harness unchanged to isolate contract costs. After intentionally updating snapshots with `npm --prefix onchain/ethereum run gas:update`, verify them with `gas:check`. Historical compiler reports remain unchanged. The percentage gate covers measured scenarios under Prague rules, not every possible future input, receiver, or fork.
+
 ### Mint payout batches (2026-10-31)
 
-The current collection runtime is 24,566 bytes, leaving 10 bytes below the EIP-170 limit. Runtime and maximum constructor payload sizes are enforced by tests. The isolated Prague benchmarks use 32 fixed recipients with positive basis points totaling 10,000. First payouts to ordinary wallets include creation of previously empty accounts; repeat payouts follow another purchase. Failure benchmarks exhaust the callback gas allowance for every receiver and verify all entitlements remain unpaid.
+The current collection runtime is 23,438 bytes, leaving 1,138 bytes below the EIP-170 limit. Runtime and maximum constructor payload sizes are enforced by tests. The isolated Prague benchmarks use 32 fixed recipients with positive basis points totaling 10,000. First payouts to ordinary wallets include creation of previously empty accounts; repeat payouts follow another purchase. Failure benchmarks exhaust the callback gas allowance for every receiver and verify all entitlements remain unpaid.
 
 | Operation | Gas used |
 | --- | ---: |
 | Mint one crate, 8 or 32 recipients | 143,078 |
 | Mint one free crate, first claim | 128,758 |
 | Mint one free warehouse, first claim | 173,269 |
-| Mint one free monument, first claim | 173,508 |
+| Mint one free monument, first claim | 173,520 |
+| Update base URI, 40 bytes | 59,787 |
+| Update base URI, 100 bytes | 130,749 |
+| Update base URI, 256 bytes | 288,195 |
+| Update base URI, 1,024 bytes | 1,160,388 |
 | Configure 32 free mint wallets, first assignment | 1,081,475 |
 | Configure 32 free mint wallets after usage | 534,287 |
 | Release all, 4 recipients, first payout | 304,385 |
@@ -239,18 +259,18 @@ These are measured gas usage, including transaction overhead and refunds, not tr
 
 ### Batch operations (2026-10-27)
 
-The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the collection before monument support. That revision had 113 gas measurements and a 21,780-byte runtime, leaving 2,796 bytes below the EIP-170 limit. The current 137 measurements are checked in `snapshots/NFT111KGasTest.json`; the following table uses those current measurements.
+The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the collection before monument support. That revision had 113 gas measurements and a 21,780-byte runtime, leaving 2,796 bytes below the EIP-170 limit. The current 141 measurements are checked in `snapshots/NFT111KGasTest.json`; the following table uses those current measurements.
 
 | Opening | One batch | Fifteen separate transactions | Gas saved |
 | --- | ---: | ---: | ---: |
-| 15 ordinary crates, EOA | 1,194,670 | 1,694,715 | 500,045 (29.51%) |
-| 15 crates including #5555, EOA | 1,215,857 | 1,715,902 | 500,045 (29.14%) |
-| 15 ordinary crates, minimal receiver | 1,651,591 | 2,151,465 | 499,874 (23.23%) |
-| 15 crates including #5555, minimal receiver | 1,689,409 | 2,189,264 | 499,855 (22.83%) |
+| 15 ordinary crates, EOA | 1,194,760 | 1,694,805 | 500,045 (29.50%) |
+| 15 crates including #5555, EOA | 1,215,947 | 1,715,992 | 500,045 (29.14%) |
+| 15 ordinary crates, minimal receiver | 1,653,481 | 2,153,355 | 499,874 (23.21%) |
+| 15 crates including #5555, minimal receiver | 1,691,365 | 2,191,220 | 499,855 (22.81%) |
 
 These isolated write measurements include intrinsic/calldata gas and refunds, with identical initial state and input order for each comparison. Setup and arbitrary contract-wallet callback work are excluded. The Anvil API lifecycle separately checks that batch opening saves gas using real transaction receipts.
 
-The 150-entry sparse artwork-info benchmark costs 6,916,021 gas. A 30-entry artwork-receipt metadata URL read costs 95,130 gas and returns 3,904 ABI bytes (7,810 bytes of hex, excluding the RPC envelope). Tests enforce a 25-million-gas call budget and 512 KiB hex-response budget for that metadata scenario. These are read simulations; inventory users do not submit a paid transaction for them.
+The 150-entry sparse artwork-info benchmark costs 6,916,021 gas. A 30-entry artwork-receipt metadata URL read costs 95,310 gas and returns 3,904 ABI bytes (7,810 bytes of hex, excluding the RPC envelope). Tests enforce a 25-million-gas call budget and 512 KiB hex-response budget for that metadata scenario. These are read simulations; inventory users do not submit a paid transaction for them.
 
 Regenerate the report after reviewing updated gas snapshots:
 
@@ -260,14 +280,14 @@ node scripts/benchmark-batch.mjs
 
 ### Compiler settings (2026-10-18)
 
-The build uses Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), with `optimizer_runs = 1000`. The preserved [compiler comparison](benchmarks/compiler-settings.json) measures the renamed sources before batch operations were added, at legacy/200 and legacy/1000. Its 89 benchmarks, source/toolchain hashes, ABI comparisons, code sizes and deployment receipts describe that earlier revision, not the current batch implementation.
+The build uses Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), with `optimizer_runs = 500`. URI validation caches each character before applying its existing checks. The preserved [compiler comparison](benchmarks/compiler-settings.json) measures the renamed sources before batch operations were added, at legacy/200 and legacy/1000. Its 89 benchmarks, source/toolchain hashes, ABI comparisons, code sizes and deployment receipts describe that earlier revision, not the current batch implementation.
 
 In that recorded comparison, all 77 write measurements and eight reads improve at 1000 runs; four reads are unchanged and none regress.
 
 | Pipeline | Optimizer runs | Writes improved / regressed | Collection bytes | Renderer bytes | Combined deployment gas change |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Legacy | 200 (baseline) | 0 / 0 | 14,358 | 10,333 | 0 |
-| **Legacy** | **1000 (selected)** | **77 / 0** | **15,476** | **11,775** | **+522,777** |
+| **Legacy** | **1000 (selected in that revision)** | **77 / 0** | **15,476** | **11,775** | **+522,777** |
 
 | Operation | Legacy/200 gas | Legacy/1000 gas | Saved |
 | --- | ---: | ---: | ---: |
@@ -285,7 +305,7 @@ At that revision, collection deployment costs 3,619,228 gas (+230,924); renderer
 
 Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [historical legacy/200 baseline](benchmarks/compiler-legacy-200.json) records the source, harness, dependency and compiler provenance for those 89 measurements. The [CDN legacy/200 baseline](benchmarks/compiler-legacy-200-cdn.json) preserves the former two-contract implementation. Current tooling uses the [single-contract legacy/200 baseline](benchmarks/compiler-legacy-200-single-contract.json) and [single-contract comparison](benchmarks/compiler-single-contract.json). Normal runs reject changed provenance or measurements; they never silently replace the active baseline. In these records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
 
-The source before monument support had 113 benchmarks and used the single-contract baseline. The selected legacy/1000 collection deploys in 5,338,642 gas on Prague Anvil; its creation bytecode is 25,616 bytes plus 640 constructor bytes for four recipients (896 for eight). Sepolia deployment gas must be estimated against the live chain. Reproduce the earlier comparison from its recorded source revision. To compare current sources against the active baseline, run:
+The source before monument support had 113 benchmarks and used the single-contract baseline. That revision’s selected legacy/1000 collection deploys in 5,338,642 gas on Prague Anvil; its creation bytecode is 25,616 bytes plus 640 constructor bytes for four recipients (896 for eight). Sepolia deployment gas must be estimated against the live chain. Reproduce the earlier comparison from its recorded source revision. To compare current sources against the active baseline, run:
 
 ```sh
 node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 1000

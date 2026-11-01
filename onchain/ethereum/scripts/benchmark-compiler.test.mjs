@@ -29,7 +29,7 @@ test('compiler benchmarks regenerate and reproduce supported recipient configura
     const gitDirectory = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
     symlinkSync(gitDirectory, join(directory, '.git'), 'dir');
     const run = (output, update) => {
-      const result = spawnSync(process.execPath, ['scripts/benchmark-compiler.mjs', output, 'legacy', '200', '1000',
+      const result = spawnSync(process.execPath, ['scripts/benchmark-compiler.mjs', output, 'legacy', '200', '500', '1000',
         ...(update ? ['--update-baseline'] : [])], {
         cwd: directory, encoding: 'utf8', timeout: 180_000, maxBuffer: 16 * 1024 * 1024,
       });
@@ -39,13 +39,13 @@ test('compiler benchmarks regenerate and reproduce supported recipient configura
       assert.equal(report.status, 'complete');
       assert.equal(report.reproduction.maximumCollectionArgumentBytes, 6656);
       assert.equal(report.writeBenchmarkCount,
-        Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release|setFreeMintAllowances)/.test(name)).length);
+        Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release|setFreeMintAllowances|setBaseURI)/.test(name)).length);
       for (const variant of report.variants) {
         assert.equal(variant.status, 'measured');
         for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'mintCrates1ThirtyTwoRecipients',
           'releaseMint', 'releaseMintEightRecipients', 'releaseAllMintThirtyTwoRecipients',
           'releaseAllMintThirtyTwoGasBurningRecipients', 'mintFreeCrates1', 'mintFreeWarehouses1',
-          'mintFreeMonuments1', 'setFreeMintAllowancesThirtyTwo']) {
+          'mintFreeMonuments1', 'setFreeMintAllowancesThirtyTwo', 'setBaseURI40', 'setBaseURI1024']) {
           assert.ok(variant.gas[name] > 0, `${variant.label}: missing ${name}`);
         }
         assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);
@@ -54,7 +54,7 @@ test('compiler benchmarks regenerate and reproduce supported recipient configura
         assert.ok(variant.deploymentTransactions.collection.gasUsed > 0);
         assert.equal(variant.comparison.withinDeploymentSizeLimits, true);
       }
-      assert.deepEqual(report.variants.map(variant => variant.label), ['legacy-200', 'legacy-1000']);
+      assert.deepEqual(report.variants.map(variant => variant.label), ['legacy-200', 'legacy-500', 'legacy-1000']);
       const [baselineVariant, optimizedVariant] = report.variants;
       assert.notDeepEqual(
         [optimizedVariant.gas.mintCrates1EightRecipients, optimizedVariant.gas.releaseMintEightRecipients],

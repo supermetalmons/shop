@@ -1,0 +1,2479 @@
+{
+  "schemaVersion": 1,
+  "referenceCommit": "32841d396ca81eb25c77ccd30e3a5546d0bc91fd",
+  "candidateBaseCommit": "32841d396ca81eb25c77ccd30e3a5546d0bc91fd",
+  "sourceSha256": {
+    "reference": "52426b79003a3beda1c4e751cb09369bd2269700e237b67c6777db019cf818c5",
+    "candidate": "2ef2e621c4a481499823527b6e1838ddf3e4abdbd468ba31ba09be4b3c594b9f"
+  },
+  "threshold": {
+    "percent": 1,
+    "comparison": "candidateGas * 100 < referenceGas * 101"
+  },
+  "settings": {
+    "solc": "0.8.30",
+    "evm": "prague",
+    "viaIR": false,
+    "optimizer": true,
+    "referenceRuns": 1000,
+    "candidateRuns": 500,
+    "harnessRuns": 200,
+    "walletRuns": 1000,
+    "bytecodeHash": "none"
+  },
+  "provenance": {
+    "foundryConfigSha256": "7c5249ba9348f9a67c44d02efedb8c4d0f629d91f209bbe3f6ffcd8fe106b5c1",
+    "packageLockSha256": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b",
+    "gasTestSha256": "9bad38ed722a11a2825dcb7722a328895a49c3663075b0b4524ca11c970950fd",
+    "testSupportSha256": "5af23d50b3254832806269877b2cc5cd97ce83b13c60509a862e581aa1b4723d",
+    "discountProofSha256": "92d4c940f6c0783f27889915f44d7048007b10960542887fff1379d486eb21ee",
+    "scriptSha256": {
+      "compare-gas.mjs": "44accc9edfeb93cad193740d5566ac1146c8b32c7c2e21f7cfc1372eb83b4bb2",
+      "gas-comparison.mjs": "7b3bf0cdf86733da453caff666e5354377c5d3134632cfc24b71ba33daaf59fd",
+      "gas-receipts.mjs": "869a6e8e622b41c9bd75d6f503a45a17bfddc69998655aff58d6023a71449169"
+    },
+    "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+    "anvil": "anvil Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+    "node": "v26.5.0",
+    "harnessSha256": "939f13b2c8134d9697e3af7242c4675c982dce0ac00a4b72b045be063d1391a4",
+    "walletRuntimeSha256": "39d9356ea773821a2f780d15c4445a5bba2b093bf475149ff8c8b753144457c7"
+  },
+  "method": "Two measurements per variant with one fixed legacy/200 harness and receiver. Reference source is read from the pinned commit and compiled at 1000 runs; the working source is compiled at 500. Forge uses --isolate with identical deployment addresses and signed calldata. Independent Anvil receipts use identical inputs, timestamps, starting state and fixed wallet bytecode. Read-call execution gas is compared separately from successful and reverted transaction receipts.",
+  "artifacts": {
+    "reference": {
+      "optimizerRuns": 1000,
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "runtimeBytes": 24566,
+      "headroomBytes": 10,
+      "creationBytes": 29178,
+      "maximumConstructorArgumentBytes": 6656,
+      "creationSha256": "211283785ec057074ad4ee55e31f8743082224ddec57fb1b13f8fc0950cdeada",
+      "runtimeTemplateSha256": "d7943422c958873f0c3c11db0e0a8d45b76b77730eae3b5cb9c8556e430c0d70",
+      "abiSha256": "54dc73612ba8cc00819d35a1eb7c0d8c05a6d32003594d989ecfa8dc772204a5",
+      "storageLayoutSha256": "62579bd6ee2476d71f7834dac821380fb8b26e8957b4428b362395db44b2d100"
+    },
+    "candidate": {
+      "optimizerRuns": 500,
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "runtimeBytes": 23438,
+      "headroomBytes": 1138,
+      "creationBytes": 27952,
+      "maximumConstructorArgumentBytes": 6656,
+      "creationSha256": "0e26907a599a6e3f230aea8572cf3fa4cbda2274a417192675b4b7523d2846b8",
+      "runtimeTemplateSha256": "6f9b5ad669b6a96f95f0cce599203c400a34780afd59e7a334a900217713056a",
+      "abiSha256": "54dc73612ba8cc00819d35a1eb7c0d8c05a6d32003594d989ecfa8dc772204a5",
+      "storageLayoutSha256": "62579bd6ee2476d71f7834dac821380fb8b26e8957b4428b362395db44b2d100"
+    }
+  },
+  "benchmarks": {
+    "count": 141,
+    "repetitions": 2,
+    "identicalRepeats": true,
+    "writes": {
+      "count": 122,
+      "worstPercentage": {
+        "name": "deliverInitializedArtworks50Ascending",
+        "reference": 2000769,
+        "candidate": 2001075,
+        "delta": 306,
+        "percent": 0.015294119411086438
+      },
+      "worstAbsolute": {
+        "name": "deliverArtworks50",
+        "reference": 2939729,
+        "candidate": 2940035,
+        "delta": 306,
+        "percent": 0.010409122745668053
+      }
+    },
+    "reads": {
+      "count": 19,
+      "worstPercentage": {
+        "name": "previewTokenURIs30Artworks",
+        "reference": 84206,
+        "candidate": 84386,
+        "delta": 180,
+        "percent": 0.2137614896800703
+      },
+      "worstAbsolute": {
+        "name": "previewTokenURIs30ArtworkReceipts",
+        "reference": 95130,
+        "candidate": 95310,
+        "delta": 180,
+        "percent": 0.1892147587511826
+      }
+    },
+    "rows": [
+      {
+        "name": "allocatedCrates",
+        "reference": 2407,
+        "candidate": 2407,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "claim20",
+        "reference": 603147,
+        "candidate": 603159,
+        "delta": 12,
+        "percent": 0.001989564732975543
+      },
+      {
+        "name": "claim20Crate10",
+        "reference": 603159,
+        "candidate": 603171,
+        "delta": 12,
+        "percent": 0.0019895251500848033
+      },
+      {
+        "name": "claim20Receiver",
+        "reference": 638066,
+        "candidate": 638078,
+        "delta": 12,
+        "percent": 0.0018806831895133106
+      },
+      {
+        "name": "claim31",
+        "reference": 889194,
+        "candidate": 889206,
+        "delta": 12,
+        "percent": 0.0013495367715031816
+      },
+      {
+        "name": "claim31Receiver",
+        "reference": 943305,
+        "candidate": 943317,
+        "delta": 12,
+        "percent": 0.0012721230142954823
+      },
+      {
+        "name": "deliverArtwork1",
+        "reference": 158209,
+        "candidate": 158221,
+        "delta": 12,
+        "percent": 0.007584903513706553
+      },
+      {
+        "name": "deliverArtwork1Receiver",
+        "reference": 160194,
+        "candidate": 160206,
+        "delta": 12,
+        "percent": 0.007490917262818832
+      },
+      {
+        "name": "deliverArtworks20Ascending",
+        "reference": 1235125,
+        "candidate": 1235251,
+        "delta": 126,
+        "percent": 0.010201396619775326
+      },
+      {
+        "name": "deliverArtworks20AscendingReceiver",
+        "reference": 1270272,
+        "candidate": 1270398,
+        "delta": 126,
+        "percent": 0.009919135429262394
+      },
+      {
+        "name": "deliverArtworks20Descending",
+        "reference": 1269427,
+        "candidate": 1269553,
+        "delta": 126,
+        "percent": 0.009925738147999057
+      },
+      {
+        "name": "deliverArtworks20DescendingReceiver",
+        "reference": 1304586,
+        "candidate": 1304712,
+        "delta": 126,
+        "percent": 0.009658236406032259
+      },
+      {
+        "name": "deliverArtworks20Shuffled",
+        "reference": 1240081,
+        "candidate": 1240207,
+        "delta": 126,
+        "percent": 0.010160626604229886
+      },
+      {
+        "name": "deliverArtworks20ShuffledReceiver",
+        "reference": 1275228,
+        "candidate": 1275354,
+        "delta": 126,
+        "percent": 0.009880586059904582
+      },
+      {
+        "name": "deliverArtworks31Ascending",
+        "reference": 1905069,
+        "candidate": 1905261,
+        "delta": 192,
+        "percent": 0.01007837511397225
+      },
+      {
+        "name": "deliverArtworks31AscendingReceiver",
+        "reference": 1959453,
+        "candidate": 1959645,
+        "delta": 192,
+        "percent": 0.009798652991421585
+      },
+      {
+        "name": "deliverArtworks31Descending",
+        "reference": 1991907,
+        "candidate": 1992099,
+        "delta": 192,
+        "percent": 0.0096390042306192
+      },
+      {
+        "name": "deliverArtworks31DescendingReceiver",
+        "reference": 2046303,
+        "candidate": 2046495,
+        "delta": 192,
+        "percent": 0.009382774691724539
+      },
+      {
+        "name": "deliverArtworks31Shuffled",
+        "reference": 1912743,
+        "candidate": 1912935,
+        "delta": 192,
+        "percent": 0.010037940277392205
+      },
+      {
+        "name": "deliverArtworks31ShuffledReceiver",
+        "reference": 1967139,
+        "candidate": 1967331,
+        "delta": 192,
+        "percent": 0.009760367721853921
+      },
+      {
+        "name": "deliverArtworks50",
+        "reference": 2939729,
+        "candidate": 2940035,
+        "delta": 306,
+        "percent": 0.010409122745668053
+      },
+      {
+        "name": "deliverArtworks50Descending",
+        "reference": 3015713,
+        "candidate": 3016019,
+        "delta": 306,
+        "percent": 0.010146854160193626
+      },
+      {
+        "name": "deliverArtworks50DescendingReceiver",
+        "reference": 3103364,
+        "candidate": 3103670,
+        "delta": 306,
+        "percent": 0.009860267761048978
+      },
+      {
+        "name": "deliverArtworks50Receiver",
+        "reference": 3027392,
+        "candidate": 3027698,
+        "delta": 306,
+        "percent": 0.01010770987040991
+      },
+      {
+        "name": "deliverArtworks50Shuffled",
+        "reference": 2952347,
+        "candidate": 2952653,
+        "delta": 306,
+        "percent": 0.010364635322338465
+      },
+      {
+        "name": "deliverArtworks50ShuffledReceiver",
+        "reference": 3039998,
+        "candidate": 3040304,
+        "delta": 306,
+        "percent": 0.010065796095918483
+      },
+      {
+        "name": "deliverCrate1",
+        "reference": 150812,
+        "candidate": 150824,
+        "delta": 12,
+        "percent": 0.007956926504522186
+      },
+      {
+        "name": "deliverCrate1Receiver",
+        "reference": 152774,
+        "candidate": 152786,
+        "delta": 12,
+        "percent": 0.007854739680835745
+      },
+      {
+        "name": "deliverCrates50",
+        "reference": 2008936,
+        "candidate": 2009242,
+        "delta": 306,
+        "percent": 0.015231943675657163
+      },
+      {
+        "name": "deliverCrates50Descending",
+        "reference": 2008936,
+        "candidate": 2009242,
+        "delta": 306,
+        "percent": 0.015231943675657163
+      },
+      {
+        "name": "deliverCrates50DescendingReceiver",
+        "reference": 2096549,
+        "candidate": 2096855,
+        "delta": 306,
+        "percent": 0.014595413701277671
+      },
+      {
+        "name": "deliverCrates50Receiver",
+        "reference": 2096549,
+        "candidate": 2096855,
+        "delta": 306,
+        "percent": 0.014595413701277671
+      },
+      {
+        "name": "deliverCrates50Shuffled",
+        "reference": 2008936,
+        "candidate": 2009242,
+        "delta": 306,
+        "percent": 0.015231943675657163
+      },
+      {
+        "name": "deliverCrates50ShuffledReceiver",
+        "reference": 2096549,
+        "candidate": 2096855,
+        "delta": 306,
+        "percent": 0.014595413701277671
+      },
+      {
+        "name": "deliverFragmentedArtworks50Ascending",
+        "reference": 2543179,
+        "candidate": 2543485,
+        "delta": 306,
+        "percent": 0.01203218491502171
+      },
+      {
+        "name": "deliverFragmentedArtworks50AscendingReceiver",
+        "reference": 2630842,
+        "candidate": 2631148,
+        "delta": 306,
+        "percent": 0.011631257217271125
+      },
+      {
+        "name": "deliverFragmentedArtworks50Descending",
+        "reference": 2549851,
+        "candidate": 2550157,
+        "delta": 306,
+        "percent": 0.012000701217443685
+      },
+      {
+        "name": "deliverFragmentedArtworks50DescendingReceiver",
+        "reference": 2637502,
+        "candidate": 2637808,
+        "delta": 306,
+        "percent": 0.011601886936957772
+      },
+      {
+        "name": "deliverFragmentedArtworks50Shuffled",
+        "reference": 2545753,
+        "candidate": 2546059,
+        "delta": 306,
+        "percent": 0.012020019224174536
+      },
+      {
+        "name": "deliverFragmentedArtworks50ShuffledReceiver",
+        "reference": 2633404,
+        "candidate": 2633710,
+        "delta": 306,
+        "percent": 0.011619941338283073
+      },
+      {
+        "name": "deliverInitializedArtworks50Ascending",
+        "reference": 2000769,
+        "candidate": 2001075,
+        "delta": 306,
+        "percent": 0.015294119411086438
+      },
+      {
+        "name": "deliverInitializedArtworks50AscendingReceiver",
+        "reference": 2088432,
+        "candidate": 2088738,
+        "delta": 306,
+        "percent": 0.014652140936357996
+      },
+      {
+        "name": "deliverInitializedArtworks50Descending",
+        "reference": 2000781,
+        "candidate": 2001087,
+        "delta": 306,
+        "percent": 0.015294027682190105
+      },
+      {
+        "name": "deliverInitializedArtworks50DescendingReceiver",
+        "reference": 2088432,
+        "candidate": 2088738,
+        "delta": 306,
+        "percent": 0.014652140936357996
+      },
+      {
+        "name": "deliverInitializedArtworks50Shuffled",
+        "reference": 2000781,
+        "candidate": 2001087,
+        "delta": 306,
+        "percent": 0.015294027682190105
+      },
+      {
+        "name": "deliverInitializedArtworks50ShuffledReceiver",
+        "reference": 2088432,
+        "candidate": 2088738,
+        "delta": 306,
+        "percent": 0.014652140936357996
+      },
+      {
+        "name": "deliverMixed50",
+        "reference": 2466544,
+        "candidate": 2466850,
+        "delta": 306,
+        "percent": 0.012406022353544068
+      },
+      {
+        "name": "deliverMixed50Descending",
+        "reference": 2502130,
+        "candidate": 2502436,
+        "delta": 306,
+        "percent": 0.012229580397501329
+      },
+      {
+        "name": "deliverMixed50DescendingReceiver",
+        "reference": 2589774,
+        "candidate": 2590080,
+        "delta": 306,
+        "percent": 0.011815702837390444
+      },
+      {
+        "name": "deliverMixed50Receiver",
+        "reference": 2554176,
+        "candidate": 2554482,
+        "delta": 306,
+        "percent": 0.011980380365331129
+      },
+      {
+        "name": "deliverMixed50Shuffled",
+        "reference": 2472352,
+        "candidate": 2472658,
+        "delta": 306,
+        "percent": 0.012376878373306066
+      },
+      {
+        "name": "deliverMixed50ShuffledReceiver",
+        "reference": 2559972,
+        "candidate": 2560278,
+        "delta": 306,
+        "percent": 0.011953255738734642
+      },
+      {
+        "name": "deliverMonument1",
+        "reference": 151108,
+        "candidate": 151120,
+        "delta": 12,
+        "percent": 0.007941339968764062
+      },
+      {
+        "name": "deliverMonument1Receiver",
+        "reference": 153070,
+        "candidate": 153082,
+        "delta": 12,
+        "percent": 0.007839550532436141
+      },
+      {
+        "name": "deliverSparseArtworks50Ascending",
+        "reference": 3998824,
+        "candidate": 3999130,
+        "delta": 306,
+        "percent": 0.00765224976142986
+      },
+      {
+        "name": "deliverSparseArtworks50AscendingReceiver",
+        "reference": 4086487,
+        "candidate": 4086793,
+        "delta": 306,
+        "percent": 0.007488094297131008
+      },
+      {
+        "name": "deliverSparseArtworks50Descending",
+        "reference": 4079026,
+        "candidate": 4079332,
+        "delta": 306,
+        "percent": 0.007501790868702479
+      },
+      {
+        "name": "deliverSparseArtworks50DescendingReceiver",
+        "reference": 4166677,
+        "candidate": 4166983,
+        "delta": 306,
+        "percent": 0.0073439817869251686
+      },
+      {
+        "name": "deliverSparseArtworks50Shuffled",
+        "reference": 4021804,
+        "candidate": 4022110,
+        "delta": 306,
+        "percent": 0.007608525925181834
+      },
+      {
+        "name": "deliverSparseArtworks50ShuffledReceiver",
+        "reference": 4109455,
+        "candidate": 4109761,
+        "delta": 306,
+        "percent": 0.0074462428716216625
+      },
+      {
+        "name": "getTokenInfoAbsentSequential",
+        "reference": 3024,
+        "candidate": 3024,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoAbsentSpot",
+        "reference": 3130,
+        "candidate": 3130,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoBurnedSequential",
+        "reference": 5609,
+        "candidate": 5609,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoBurnedSpot",
+        "reference": 3144,
+        "candidate": 3144,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoFragmented",
+        "reference": 14473,
+        "candidate": 14473,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoFresh",
+        "reference": 47623,
+        "candidate": 47623,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoFresh31",
+        "reference": 71933,
+        "candidate": 71933,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoInitialized",
+        "reference": 5633,
+        "candidate": 5633,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfoSpot",
+        "reference": 3452,
+        "candidate": 3452,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfos150Fresh",
+        "reference": 6916021,
+        "candidate": 6916021,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfos150Missing",
+        "reference": 509768,
+        "candidate": 509768,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "getTokenInfos150Spot",
+        "reference": 558068,
+        "candidate": 558068,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates1",
+        "reference": 143078,
+        "candidate": 143078,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates15",
+        "reference": 499140,
+        "candidate": 499140,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates15After1",
+        "reference": 430740,
+        "candidate": 430740,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates15After240",
+        "reference": 430740,
+        "candidate": 430740,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates15AfterWarehouse",
+        "reference": 430740,
+        "candidate": 430740,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates15Receiver",
+        "reference": 525327,
+        "candidate": 525327,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates1AfterWarehouse",
+        "reference": 74678,
+        "candidate": 74678,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates1EightRecipients",
+        "reference": 143078,
+        "candidate": 143078,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCrates1ThirtyTwoRecipients",
+        "reference": 143078,
+        "candidate": 143078,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCratesDiscounted1",
+        "reference": 176698,
+        "candidate": 176698,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCratesDiscounted1After1",
+        "reference": 91198,
+        "candidate": 91198,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintCratesDiscounted3",
+        "reference": 227564,
+        "candidate": 227564,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintFreeCrates1",
+        "reference": 128758,
+        "candidate": 128758,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintFreeCrates15",
+        "reference": 484820,
+        "candidate": 484820,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintFreeCrates15Receiver",
+        "reference": 511007,
+        "candidate": 511007,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintFreeCrates1After1",
+        "reference": 77458,
+        "candidate": 77458,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintFreeMonuments1",
+        "reference": 173508,
+        "candidate": 173520,
+        "delta": 12,
+        "percent": 0.006916107614634483
+      },
+      {
+        "name": "mintFreeMonuments1After1",
+        "reference": 105108,
+        "candidate": 105120,
+        "delta": 12,
+        "percent": 0.011416828405069072
+      },
+      {
+        "name": "mintFreeWarehouses1",
+        "reference": 173269,
+        "candidate": 173269,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintFreeWarehouses1After1",
+        "reference": 104869,
+        "candidate": 104869,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintMonuments1",
+        "reference": 187746,
+        "candidate": 187746,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintMonuments15",
+        "reference": 854608,
+        "candidate": 854608,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintMonuments15Receiver",
+        "reference": 880795,
+        "candidate": 880795,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintWarehouses1",
+        "reference": 187567,
+        "candidate": 187567,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintWarehouses15",
+        "reference": 854429,
+        "candidate": 854429,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintWarehouses15AfterCrate",
+        "reference": 786029,
+        "candidate": 786029,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintWarehouses15AfterWarehouse",
+        "reference": 768929,
+        "candidate": 768929,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintWarehouses15Receiver",
+        "reference": 880616,
+        "candidate": 880616,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintWarehouses1AfterCrate",
+        "reference": 119167,
+        "candidate": 119167,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "mintWarehouses1AfterWarehouse",
+        "reference": 102067,
+        "candidate": 102067,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "previewTokenURIs1ArtworkReceipt",
+        "reference": 10155,
+        "candidate": 10161,
+        "delta": 6,
+        "percent": 0.059084194977843424
+      },
+      {
+        "name": "previewTokenURIs30ArtworkReceipts",
+        "reference": 95130,
+        "candidate": 95310,
+        "delta": 180,
+        "percent": 0.1892147587511826
+      },
+      {
+        "name": "previewTokenURIs30Artworks",
+        "reference": 84206,
+        "candidate": 84386,
+        "delta": 180,
+        "percent": 0.2137614896800703
+      },
+      {
+        "name": "previewTokenURIs30Mixed",
+        "reference": 92487,
+        "candidate": 92667,
+        "delta": 180,
+        "percent": 0.1946219468682085
+      },
+      {
+        "name": "releaseAllMintFourRecipients",
+        "reference": 304385,
+        "candidate": 304385,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseAllMintFourRecipientsAfterRelease",
+        "reference": 118885,
+        "candidate": 118885,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseAllMintThirtyTwoGasBurningRecipients",
+        "reference": 4169819,
+        "candidate": 4169819,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseAllMintThirtyTwoRecipients",
+        "reference": 2099437,
+        "candidate": 2099437,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseAllMintThirtyTwoRecipientsAfterRelease",
+        "reference": 735137,
+        "candidate": 735137,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseAllMintThirtyTwoRecipientsEmpty",
+        "reference": 268571,
+        "candidate": 268571,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseDelivery",
+        "reference": 84450,
+        "candidate": 84450,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseMint",
+        "reference": 108071,
+        "candidate": 108071,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseMintAfterRelease",
+        "reference": 48871,
+        "candidate": 48871,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "releaseMintEightRecipients",
+        "reference": 108071,
+        "candidate": 108071,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "setBaseURI100",
+        "reference": 146143,
+        "candidate": 130749,
+        "delta": -15394,
+        "percent": -10.533518540060077
+      },
+      {
+        "name": "setBaseURI1024",
+        "reference": 1318078,
+        "candidate": 1160388,
+        "delta": -157690,
+        "percent": -11.96363189431885
+      },
+      {
+        "name": "setBaseURI256",
+        "reference": 327613,
+        "candidate": 288195,
+        "delta": -39418,
+        "percent": -12.03187907683761
+      },
+      {
+        "name": "setBaseURI40",
+        "reference": 65941,
+        "candidate": 59787,
+        "delta": -6154,
+        "percent": -9.332585189790874
+      },
+      {
+        "name": "setFreeMintAllowancesThirtyTwo",
+        "reference": 1081475,
+        "candidate": 1081475,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "setFreeMintAllowancesThirtyTwoAfterUse",
+        "reference": 534287,
+        "candidate": 534287,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "stats",
+        "reference": 26268,
+        "candidate": 26268,
+        "delta": 0,
+        "percent": 0
+      },
+      {
+        "name": "unboxCrate20",
+        "reference": 128941,
+        "candidate": 128947,
+        "delta": 6,
+        "percent": 0.0046532910400881025
+      },
+      {
+        "name": "unboxCrate20Receiver",
+        "reference": 160291,
+        "candidate": 160297,
+        "delta": 6,
+        "percent": 0.0037431920694237356
+      },
+      {
+        "name": "unboxCrate31",
+        "reference": 133028,
+        "candidate": 133034,
+        "delta": 6,
+        "percent": 0.004510328652614487
+      },
+      {
+        "name": "unboxCrate31Receiver",
+        "reference": 181485,
+        "candidate": 181491,
+        "delta": 6,
+        "percent": 0.0033060583519299116
+      },
+      {
+        "name": "unboxCrates1",
+        "reference": 132823,
+        "candidate": 132829,
+        "delta": 6,
+        "percent": 0.004517289927196344
+      },
+      {
+        "name": "unboxCrates15",
+        "reference": 1194670,
+        "candidate": 1194760,
+        "delta": 90,
+        "percent": 0.007533461123155349
+      },
+      {
+        "name": "unboxCrates15Bonus",
+        "reference": 1215857,
+        "candidate": 1215947,
+        "delta": 90,
+        "percent": 0.007402186276840122
+      },
+      {
+        "name": "unboxCrates15BonusReceiver",
+        "reference": 1703404,
+        "candidate": 1703494,
+        "delta": 90,
+        "percent": 0.005283538138926526
+      },
+      {
+        "name": "unboxCrates15BonusSeparate",
+        "reference": 1715902,
+        "candidate": 1715992,
+        "delta": 90,
+        "percent": 0.005245054787511175
+      },
+      {
+        "name": "unboxCrates15BonusSeparateReceiver",
+        "reference": 2203259,
+        "candidate": 2203349,
+        "delta": 90,
+        "percent": 0.004084857930910528
+      },
+      {
+        "name": "unboxCrates15Receiver",
+        "reference": 1665091,
+        "candidate": 1665181,
+        "delta": 90,
+        "percent": 0.005405109990985478
+      },
+      {
+        "name": "unboxCrates15Separate",
+        "reference": 1694715,
+        "candidate": 1694805,
+        "delta": 90,
+        "percent": 0.005310627450633292
+      },
+      {
+        "name": "unboxCrates15SeparateReceiver",
+        "reference": 2164965,
+        "candidate": 2165055,
+        "delta": 90,
+        "percent": 0.004157111084936708
+      },
+      {
+        "name": "unboxMonument",
+        "reference": 2896229,
+        "candidate": 2896235,
+        "delta": 6,
+        "percent": 0.00020716593888121416
+      },
+      {
+        "name": "unboxMonumentReceiver",
+        "reference": 3090018,
+        "candidate": 3090024,
+        "delta": 6,
+        "percent": 0.0001941736261730514
+      },
+      {
+        "name": "unboxWarehouse",
+        "reference": 349636,
+        "candidate": 349642,
+        "delta": 6,
+        "percent": 0.0017160704275303459
+      },
+      {
+        "name": "unboxWarehouseReceiver",
+        "reference": 368845,
+        "candidate": 368851,
+        "delta": 6,
+        "percent": 0.0016266995621467013
+      },
+      {
+        "name": "warehousesMinted",
+        "reference": 2384,
+        "candidate": 2384,
+        "delta": 0,
+        "percent": 0
+      }
+    ]
+  },
+  "receipts": {
+    "method": "Actual Prague transaction receipts with a fixed 16M gas limit and 2 gwei gas price, without estimates. Identical addresses, calldata, timestamps, signatures and application state across variants. Each scenario resets to its starting snapshot; complete input/event traces and final state match. Sender ETH balances are excluded because gas costs intentionally differ.",
+    "caseCount": 39,
+    "operationCount": 106,
+    "repetitions": 2,
+    "identicalRepeats": true,
+    "measuredReceiptCount": 424,
+    "collection": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+    "helper": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+    "variants": [
+      {
+        "name": "reference",
+        "deploymentGas": [
+          5965910,
+          5965910
+        ],
+        "cases": [
+          {
+            "name": "mint-crates-1",
+            "transactions": 4,
+            "traceSha256": "a857ce5c9f521da7745d4828ac2d5a57f4eb2874134653dac89b7a5a2d79694c",
+            "stateSha256": "298b57411402aa19e947ee875cbc138d91e25d4b35f688fb3a62b865f90630e3"
+          },
+          {
+            "name": "mint-crates-2",
+            "transactions": 4,
+            "traceSha256": "1a2e36f7c34cd0ca5c8d45f83589dfbe9196a0af6b00ec4fa52a41501bfc1575",
+            "stateSha256": "58ddd2da738c95ae046cbfc149589c51ee4523e2e7c0ffe1dd7ff0851b6b3632"
+          },
+          {
+            "name": "mint-crates-5",
+            "transactions": 4,
+            "traceSha256": "43190a74eaddfd6cecbc04180f3d05fa2a440239008cba78953b88d2d43119fe",
+            "stateSha256": "7811cdf2c17fc7d4b41bf856cf108d1554427f883f4a8cd65ec123667f3f764a"
+          },
+          {
+            "name": "mint-crates-10",
+            "transactions": 4,
+            "traceSha256": "3683571d943333775c89a85f2289e877bb02fb20e5d5799370cb72c96fefba1b",
+            "stateSha256": "0a04a2ab34ff1048890a6bdf75ea5df0fcab4887932a2c1879c130d9ba396269"
+          },
+          {
+            "name": "mint-crates-15",
+            "transactions": 4,
+            "traceSha256": "3c4133418c2b7b9bff20dd5d79d1b12f7ac333c85f511f1c356b4e0a67116286",
+            "stateSha256": "62451d7c2296bc5f5035c9e0fbaadc11118f1310e5e8e9674b4dadec7b6dee8b"
+          },
+          {
+            "name": "mint-warehouses-1",
+            "transactions": 4,
+            "traceSha256": "8e72a043d0dac59349acd22643f9305c2e6f2890184ef905932c3d0c7cea1f96",
+            "stateSha256": "f9f0259bfe6de2edd335ee1c96a8aaa8f705c33a0e1a52475b0efc5c08ffaf6d"
+          },
+          {
+            "name": "mint-monuments-1",
+            "transactions": 2,
+            "traceSha256": "7d0e1d07ee7c3fcc690d16e94c5e812f59943e7bcc04f1175bf930bd24994690",
+            "stateSha256": "10110776c26cf3525d9973e57c7ed9a8e7cd125217e0fdbd58b2d232a022afb8"
+          },
+          {
+            "name": "mint-warehouses-5",
+            "transactions": 4,
+            "traceSha256": "443c7858ef668ade0888699dd3fba81d0f6c87d3ef5025d4ee812c32253e6ba9",
+            "stateSha256": "3a5cda24c231ab917b4542e57ec3c45cfe4efcaa8bb5a26fa8cf99e34a02053b"
+          },
+          {
+            "name": "mint-monuments-5",
+            "transactions": 2,
+            "traceSha256": "142b9c4bfae28142cb8c13d04db20696c99a4421ebbe33bda6445488925e6367",
+            "stateSha256": "8eefd88648fe778a4c491573ed728d5e6bc27dc7075ee6b9363ef74015e8c1dd"
+          },
+          {
+            "name": "mint-warehouses-15",
+            "transactions": 4,
+            "traceSha256": "24f16abbf852646834b4b7435259560f1ecf3a2cee3fa007e9cba3569a96b554",
+            "stateSha256": "1ebca369382c0446930ee974813dd930f78c937c20f9973f933e6176552ef3b5"
+          },
+          {
+            "name": "mint-monuments-15",
+            "transactions": 2,
+            "traceSha256": "0342afeb0110ae3e1fd02268ed88bd78278fd5999653d20f97fc4884f84a9222",
+            "stateSha256": "9f9c02a530f1354633009a7f7d41758a483ee99ca19c9942bce1f615a1635b48"
+          },
+          {
+            "name": "discount-1",
+            "transactions": 1,
+            "traceSha256": "7a89ef4b63886c48c0930e8e447634decea72f158f80150bea7b92723bee7fbc",
+            "stateSha256": "2ea647dd18314f695c3ca818181c773bc837917e82468489c8166824fda89dcb"
+          },
+          {
+            "name": "discount-10",
+            "transactions": 1,
+            "traceSha256": "0c7732290c3f0c19dc9aec727be404ee9424959092b4706897dc51f849e9235b",
+            "stateSha256": "1a0505bbea8a66402a8bca6c1963fa06567bcd97e0da05ecf083ae9086c9a4aa"
+          },
+          {
+            "name": "free-crate-1",
+            "transactions": 2,
+            "traceSha256": "f1273da0a9a2d13ea30ad3d7d867b064f8e2aaa08efec2c0f899aa24667ab2a9",
+            "stateSha256": "9420895ff4829322fd52955638b62637ccb7ce414212ed527d842502d7cb300c"
+          },
+          {
+            "name": "free-crate-15",
+            "transactions": 2,
+            "traceSha256": "ed6b8ac3072960e48eec818ba9daea27555899f61c44ce8de442d32e15bbc06b",
+            "stateSha256": "44f8f6cef110edf23bba49f9e140255b3776cfc4b9ab0a3dbc093e628abc1cd6"
+          },
+          {
+            "name": "free-warehouse-1",
+            "transactions": 2,
+            "traceSha256": "cf06000ccb73517ddf11b409e8d7363c9b83209b87e806bbddeb5db7920f05f0",
+            "stateSha256": "bff93265281b2409731e259621675421d543a8bedcedff8ae36c7e7743d0cd01"
+          },
+          {
+            "name": "free-warehouse-15",
+            "transactions": 2,
+            "traceSha256": "81b11385afb9d9ece16751897d6a22d3fadc48b20b215f991d8c07c1d8143dbc",
+            "stateSha256": "27220783e7b116f4c6f270561a495682185d60212b14dddf87c554c8a1a895c5"
+          },
+          {
+            "name": "free-monument-1",
+            "transactions": 2,
+            "traceSha256": "f480bf560b8968e97cedf366b19f357eb3462f3e821399709204990369e10d89",
+            "stateSha256": "31f234ec56a237a93a0a66787b8127605fcaed7c7d3a357c5c44574b7e963720"
+          },
+          {
+            "name": "free-monument-15",
+            "transactions": 2,
+            "traceSha256": "653a17239e501795223001f021f809970891cd7e6f69a28ee85d1e891e254880",
+            "stateSha256": "58154e991d3e85dc499735e5c596bf3f39d853cca304fcc6e635673734433921"
+          },
+          {
+            "name": "unbox-ordinary",
+            "transactions": 3,
+            "traceSha256": "8d3c565ea8a33ee5ef914cd4a15f351bb1c98d047b57c6c60652b28a4f6c6a4d",
+            "stateSha256": "da1e05f5a42fcddb4a56ff344581077c71b38f939ed10cb194aa4f318b338723"
+          },
+          {
+            "name": "unbox-batch15",
+            "transactions": 2,
+            "traceSha256": "3e92dfc675b83f31375d50bc83e5e1a8323eaa5709a618f821d5affbf6bce8ca",
+            "stateSha256": "76ea8153ef57caca320cda82dd49814eaeed8a3928de7e01601436e35bda8c37"
+          },
+          {
+            "name": "unbox-warehouse",
+            "transactions": 2,
+            "traceSha256": "3973e63ce95370339c9997e88342f6a008fc066a9cee2345015e63e34b8a1e1e",
+            "stateSha256": "c5ed572b74e49e38bfd111112a1485c374186150342d6b3083e61cef4c942abd"
+          },
+          {
+            "name": "unbox-monument",
+            "transactions": 2,
+            "traceSha256": "918639a1ec5234a90f743c1c2ff01acf4043bcd22dc7ef2023a10d968c7ca3aa",
+            "stateSha256": "2eaa0d21aaaf35bbca88c0ca17ec15653ad6d15ba1a71520621f01c70eb28f07"
+          },
+          {
+            "name": "unbox-bonus31",
+            "transactions": 36,
+            "traceSha256": "5e141f9a3c5fe0d496cedcdbe0d3934f9f0031696a8657688c6b945e9ffdb974",
+            "stateSha256": "86afcff2e590cb26f222159877af616e56f4deb6f360567adc4bd87728f0ba57"
+          },
+          {
+            "name": "unbox-bonus-batch15",
+            "transactions": 37,
+            "traceSha256": "1c7db9aa661977b045dd8500c8e33c53eee56742575df1413945d5fb347e3538",
+            "stateSha256": "a33fcce9168d07b305d44fc4b6a9014c143929dec2fb5f5f008e53fc5681f023"
+          },
+          {
+            "name": "delivery50-art-ascending",
+            "transactions": 5,
+            "traceSha256": "5b09095a681935f63bc480877081644cada435502983652a3ab28f0bb4d9a102",
+            "stateSha256": "9120a4a870c2dae661499af65c016317d856db9ff988a2162a15a801fa13ad61"
+          },
+          {
+            "name": "delivery50-art-descending",
+            "transactions": 5,
+            "traceSha256": "9586d2a68ad90a7157200fe95f13694b54351c66c51114c7dd6bb27d64cb00df",
+            "stateSha256": "9120a4a870c2dae661499af65c016317d856db9ff988a2162a15a801fa13ad61"
+          },
+          {
+            "name": "delivery50-crates",
+            "transactions": 5,
+            "traceSha256": "f0a703f8bc24cdd95e25fd78ced6e78de47c62f6ec01d7b018258a74fe42957d",
+            "stateSha256": "08d55123fd4e39c889f2a6b43f589421b3fc20baf8c86e6add22e20cafb2f5b6"
+          },
+          {
+            "name": "delivery50-mixed",
+            "transactions": 5,
+            "traceSha256": "2947543e22b7c1c49711773263ad09654ed233b56115bb21c297512c4445f8a7",
+            "stateSha256": "5a284ac405e58b5f989e5fdebf3cdd73767f2ff2ddf24e51d1efcdbac555fad7"
+          },
+          {
+            "name": "delivery-monument",
+            "transactions": 2,
+            "traceSha256": "47776da9a587022d899be0f8086c8d97a00a64f92b627b43f74f794d1a02cfa8",
+            "stateSha256": "25b0c94e16d1b4a5226d5a17a9d730bd83e49244dd53498164729363ae00bf2a"
+          },
+          {
+            "name": "claim20",
+            "transactions": 3,
+            "traceSha256": "7b7f4ea8c1c1906a2fcfc9594fb174720b7071e36fc940345177913260f1e813",
+            "stateSha256": "ca25120af22de784e47621503cfddb38ba41150a62e5517065d32ae18a841079"
+          },
+          {
+            "name": "claim31",
+            "transactions": 37,
+            "traceSha256": "eee95db72baa191502a8aafbea4eb3e3ac0b74b75d058bcda5c45fa1ca024cd4",
+            "stateSha256": "7858e3b9cacf32e3c600d730258f89c2f1b7682b051aa2d5a6678070b0cac2d7"
+          },
+          {
+            "name": "approvals-transfers",
+            "transactions": 7,
+            "traceSha256": "8d77feb0b631ca1f293b5ad576254552c8f080dc70cf001cdfff4245df9e9b9b",
+            "stateSha256": "d2ddd00340d2c5ddeb5abde6ae64014db9d85116070cdeed8a3c2bb48a530102"
+          },
+          {
+            "name": "admin",
+            "transactions": 19,
+            "traceSha256": "02623f8daedabc8f552e263afda5ee7a301d6c2d4fb1df06282977c45b1cc2af",
+            "stateSha256": "f206003d6f363621b5babb7d8523eb3df319fea86e246986490c75799c45acdd"
+          },
+          {
+            "name": "payouts",
+            "transactions": 8,
+            "traceSha256": "34160982d45107a5bddd625e5b856dcaa02366b9ca07b57572bba9881cd8cde2",
+            "stateSha256": "1b79561dd053ddff8ec7577738ef1220ff778334906548fee47f5f599b22f088"
+          },
+          {
+            "name": "wallet-warm-mints",
+            "transactions": 2,
+            "traceSha256": "f54f5f970a6f40b46a4ec38fdf816ef37c0341d97e10a3cc995407c2044ddfcc",
+            "stateSha256": "ef319b4c91bd32bedef8896d97aab71b84fbac1e05d36079d086de581a61b009"
+          },
+          {
+            "name": "wallet-unbox-batch15",
+            "transactions": 2,
+            "traceSha256": "7dc9c9256d73179cfcc27d0856a3c0067fcd28419480e788a2be15025364514e",
+            "stateSha256": "6e6cb6b8eed21d4e53625552098174edc7e4ff01028c334beae2d9abe7d15dc6"
+          },
+          {
+            "name": "admin-canonical",
+            "transactions": 4,
+            "traceSha256": "c3b030ba423726085c4e951b15f80e5dd95775589a645303049e434846c4919e",
+            "stateSha256": "6f22d29af12cac22e8d02d7e0494af6dad06129eca33d381b8c34989c8f7d9cb"
+          },
+          {
+            "name": "invalid-uris",
+            "transactions": 12,
+            "traceSha256": "973197d0923ef0cc0793eeafae58324aa8c442b396ca5c2461a743b8bce0bee2",
+            "stateSha256": "d7e37154a5497a37adc953d71a97ec5eedc4128a052afb554634695141b9a0e4"
+          }
+        ]
+      },
+      {
+        "name": "candidate",
+        "deploymentGas": [
+          5725135,
+          5725135
+        ],
+        "cases": [
+          {
+            "name": "mint-crates-1",
+            "transactions": 4,
+            "traceSha256": "a857ce5c9f521da7745d4828ac2d5a57f4eb2874134653dac89b7a5a2d79694c",
+            "stateSha256": "298b57411402aa19e947ee875cbc138d91e25d4b35f688fb3a62b865f90630e3"
+          },
+          {
+            "name": "mint-crates-2",
+            "transactions": 4,
+            "traceSha256": "1a2e36f7c34cd0ca5c8d45f83589dfbe9196a0af6b00ec4fa52a41501bfc1575",
+            "stateSha256": "58ddd2da738c95ae046cbfc149589c51ee4523e2e7c0ffe1dd7ff0851b6b3632"
+          },
+          {
+            "name": "mint-crates-5",
+            "transactions": 4,
+            "traceSha256": "43190a74eaddfd6cecbc04180f3d05fa2a440239008cba78953b88d2d43119fe",
+            "stateSha256": "7811cdf2c17fc7d4b41bf856cf108d1554427f883f4a8cd65ec123667f3f764a"
+          },
+          {
+            "name": "mint-crates-10",
+            "transactions": 4,
+            "traceSha256": "3683571d943333775c89a85f2289e877bb02fb20e5d5799370cb72c96fefba1b",
+            "stateSha256": "0a04a2ab34ff1048890a6bdf75ea5df0fcab4887932a2c1879c130d9ba396269"
+          },
+          {
+            "name": "mint-crates-15",
+            "transactions": 4,
+            "traceSha256": "3c4133418c2b7b9bff20dd5d79d1b12f7ac333c85f511f1c356b4e0a67116286",
+            "stateSha256": "62451d7c2296bc5f5035c9e0fbaadc11118f1310e5e8e9674b4dadec7b6dee8b"
+          },
+          {
+            "name": "mint-warehouses-1",
+            "transactions": 4,
+            "traceSha256": "8e72a043d0dac59349acd22643f9305c2e6f2890184ef905932c3d0c7cea1f96",
+            "stateSha256": "f9f0259bfe6de2edd335ee1c96a8aaa8f705c33a0e1a52475b0efc5c08ffaf6d"
+          },
+          {
+            "name": "mint-monuments-1",
+            "transactions": 2,
+            "traceSha256": "7d0e1d07ee7c3fcc690d16e94c5e812f59943e7bcc04f1175bf930bd24994690",
+            "stateSha256": "10110776c26cf3525d9973e57c7ed9a8e7cd125217e0fdbd58b2d232a022afb8"
+          },
+          {
+            "name": "mint-warehouses-5",
+            "transactions": 4,
+            "traceSha256": "443c7858ef668ade0888699dd3fba81d0f6c87d3ef5025d4ee812c32253e6ba9",
+            "stateSha256": "3a5cda24c231ab917b4542e57ec3c45cfe4efcaa8bb5a26fa8cf99e34a02053b"
+          },
+          {
+            "name": "mint-monuments-5",
+            "transactions": 2,
+            "traceSha256": "142b9c4bfae28142cb8c13d04db20696c99a4421ebbe33bda6445488925e6367",
+            "stateSha256": "8eefd88648fe778a4c491573ed728d5e6bc27dc7075ee6b9363ef74015e8c1dd"
+          },
+          {
+            "name": "mint-warehouses-15",
+            "transactions": 4,
+            "traceSha256": "24f16abbf852646834b4b7435259560f1ecf3a2cee3fa007e9cba3569a96b554",
+            "stateSha256": "1ebca369382c0446930ee974813dd930f78c937c20f9973f933e6176552ef3b5"
+          },
+          {
+            "name": "mint-monuments-15",
+            "transactions": 2,
+            "traceSha256": "0342afeb0110ae3e1fd02268ed88bd78278fd5999653d20f97fc4884f84a9222",
+            "stateSha256": "9f9c02a530f1354633009a7f7d41758a483ee99ca19c9942bce1f615a1635b48"
+          },
+          {
+            "name": "discount-1",
+            "transactions": 1,
+            "traceSha256": "7a89ef4b63886c48c0930e8e447634decea72f158f80150bea7b92723bee7fbc",
+            "stateSha256": "2ea647dd18314f695c3ca818181c773bc837917e82468489c8166824fda89dcb"
+          },
+          {
+            "name": "discount-10",
+            "transactions": 1,
+            "traceSha256": "0c7732290c3f0c19dc9aec727be404ee9424959092b4706897dc51f849e9235b",
+            "stateSha256": "1a0505bbea8a66402a8bca6c1963fa06567bcd97e0da05ecf083ae9086c9a4aa"
+          },
+          {
+            "name": "free-crate-1",
+            "transactions": 2,
+            "traceSha256": "f1273da0a9a2d13ea30ad3d7d867b064f8e2aaa08efec2c0f899aa24667ab2a9",
+            "stateSha256": "9420895ff4829322fd52955638b62637ccb7ce414212ed527d842502d7cb300c"
+          },
+          {
+            "name": "free-crate-15",
+            "transactions": 2,
+            "traceSha256": "ed6b8ac3072960e48eec818ba9daea27555899f61c44ce8de442d32e15bbc06b",
+            "stateSha256": "44f8f6cef110edf23bba49f9e140255b3776cfc4b9ab0a3dbc093e628abc1cd6"
+          },
+          {
+            "name": "free-warehouse-1",
+            "transactions": 2,
+            "traceSha256": "cf06000ccb73517ddf11b409e8d7363c9b83209b87e806bbddeb5db7920f05f0",
+            "stateSha256": "bff93265281b2409731e259621675421d543a8bedcedff8ae36c7e7743d0cd01"
+          },
+          {
+            "name": "free-warehouse-15",
+            "transactions": 2,
+            "traceSha256": "81b11385afb9d9ece16751897d6a22d3fadc48b20b215f991d8c07c1d8143dbc",
+            "stateSha256": "27220783e7b116f4c6f270561a495682185d60212b14dddf87c554c8a1a895c5"
+          },
+          {
+            "name": "free-monument-1",
+            "transactions": 2,
+            "traceSha256": "f480bf560b8968e97cedf366b19f357eb3462f3e821399709204990369e10d89",
+            "stateSha256": "31f234ec56a237a93a0a66787b8127605fcaed7c7d3a357c5c44574b7e963720"
+          },
+          {
+            "name": "free-monument-15",
+            "transactions": 2,
+            "traceSha256": "653a17239e501795223001f021f809970891cd7e6f69a28ee85d1e891e254880",
+            "stateSha256": "58154e991d3e85dc499735e5c596bf3f39d853cca304fcc6e635673734433921"
+          },
+          {
+            "name": "unbox-ordinary",
+            "transactions": 3,
+            "traceSha256": "8d3c565ea8a33ee5ef914cd4a15f351bb1c98d047b57c6c60652b28a4f6c6a4d",
+            "stateSha256": "da1e05f5a42fcddb4a56ff344581077c71b38f939ed10cb194aa4f318b338723"
+          },
+          {
+            "name": "unbox-batch15",
+            "transactions": 2,
+            "traceSha256": "3e92dfc675b83f31375d50bc83e5e1a8323eaa5709a618f821d5affbf6bce8ca",
+            "stateSha256": "76ea8153ef57caca320cda82dd49814eaeed8a3928de7e01601436e35bda8c37"
+          },
+          {
+            "name": "unbox-warehouse",
+            "transactions": 2,
+            "traceSha256": "3973e63ce95370339c9997e88342f6a008fc066a9cee2345015e63e34b8a1e1e",
+            "stateSha256": "c5ed572b74e49e38bfd111112a1485c374186150342d6b3083e61cef4c942abd"
+          },
+          {
+            "name": "unbox-monument",
+            "transactions": 2,
+            "traceSha256": "918639a1ec5234a90f743c1c2ff01acf4043bcd22dc7ef2023a10d968c7ca3aa",
+            "stateSha256": "2eaa0d21aaaf35bbca88c0ca17ec15653ad6d15ba1a71520621f01c70eb28f07"
+          },
+          {
+            "name": "unbox-bonus31",
+            "transactions": 36,
+            "traceSha256": "5e141f9a3c5fe0d496cedcdbe0d3934f9f0031696a8657688c6b945e9ffdb974",
+            "stateSha256": "86afcff2e590cb26f222159877af616e56f4deb6f360567adc4bd87728f0ba57"
+          },
+          {
+            "name": "unbox-bonus-batch15",
+            "transactions": 37,
+            "traceSha256": "1c7db9aa661977b045dd8500c8e33c53eee56742575df1413945d5fb347e3538",
+            "stateSha256": "a33fcce9168d07b305d44fc4b6a9014c143929dec2fb5f5f008e53fc5681f023"
+          },
+          {
+            "name": "delivery50-art-ascending",
+            "transactions": 5,
+            "traceSha256": "5b09095a681935f63bc480877081644cada435502983652a3ab28f0bb4d9a102",
+            "stateSha256": "9120a4a870c2dae661499af65c016317d856db9ff988a2162a15a801fa13ad61"
+          },
+          {
+            "name": "delivery50-art-descending",
+            "transactions": 5,
+            "traceSha256": "9586d2a68ad90a7157200fe95f13694b54351c66c51114c7dd6bb27d64cb00df",
+            "stateSha256": "9120a4a870c2dae661499af65c016317d856db9ff988a2162a15a801fa13ad61"
+          },
+          {
+            "name": "delivery50-crates",
+            "transactions": 5,
+            "traceSha256": "f0a703f8bc24cdd95e25fd78ced6e78de47c62f6ec01d7b018258a74fe42957d",
+            "stateSha256": "08d55123fd4e39c889f2a6b43f589421b3fc20baf8c86e6add22e20cafb2f5b6"
+          },
+          {
+            "name": "delivery50-mixed",
+            "transactions": 5,
+            "traceSha256": "2947543e22b7c1c49711773263ad09654ed233b56115bb21c297512c4445f8a7",
+            "stateSha256": "5a284ac405e58b5f989e5fdebf3cdd73767f2ff2ddf24e51d1efcdbac555fad7"
+          },
+          {
+            "name": "delivery-monument",
+            "transactions": 2,
+            "traceSha256": "47776da9a587022d899be0f8086c8d97a00a64f92b627b43f74f794d1a02cfa8",
+            "stateSha256": "25b0c94e16d1b4a5226d5a17a9d730bd83e49244dd53498164729363ae00bf2a"
+          },
+          {
+            "name": "claim20",
+            "transactions": 3,
+            "traceSha256": "7b7f4ea8c1c1906a2fcfc9594fb174720b7071e36fc940345177913260f1e813",
+            "stateSha256": "ca25120af22de784e47621503cfddb38ba41150a62e5517065d32ae18a841079"
+          },
+          {
+            "name": "claim31",
+            "transactions": 37,
+            "traceSha256": "eee95db72baa191502a8aafbea4eb3e3ac0b74b75d058bcda5c45fa1ca024cd4",
+            "stateSha256": "7858e3b9cacf32e3c600d730258f89c2f1b7682b051aa2d5a6678070b0cac2d7"
+          },
+          {
+            "name": "approvals-transfers",
+            "transactions": 7,
+            "traceSha256": "8d77feb0b631ca1f293b5ad576254552c8f080dc70cf001cdfff4245df9e9b9b",
+            "stateSha256": "d2ddd00340d2c5ddeb5abde6ae64014db9d85116070cdeed8a3c2bb48a530102"
+          },
+          {
+            "name": "admin",
+            "transactions": 19,
+            "traceSha256": "02623f8daedabc8f552e263afda5ee7a301d6c2d4fb1df06282977c45b1cc2af",
+            "stateSha256": "f206003d6f363621b5babb7d8523eb3df319fea86e246986490c75799c45acdd"
+          },
+          {
+            "name": "payouts",
+            "transactions": 8,
+            "traceSha256": "34160982d45107a5bddd625e5b856dcaa02366b9ca07b57572bba9881cd8cde2",
+            "stateSha256": "1b79561dd053ddff8ec7577738ef1220ff778334906548fee47f5f599b22f088"
+          },
+          {
+            "name": "wallet-warm-mints",
+            "transactions": 2,
+            "traceSha256": "f54f5f970a6f40b46a4ec38fdf816ef37c0341d97e10a3cc995407c2044ddfcc",
+            "stateSha256": "ef319b4c91bd32bedef8896d97aab71b84fbac1e05d36079d086de581a61b009"
+          },
+          {
+            "name": "wallet-unbox-batch15",
+            "transactions": 2,
+            "traceSha256": "7dc9c9256d73179cfcc27d0856a3c0067fcd28419480e788a2be15025364514e",
+            "stateSha256": "6e6cb6b8eed21d4e53625552098174edc7e4ff01028c334beae2d9abe7d15dc6"
+          },
+          {
+            "name": "admin-canonical",
+            "transactions": 4,
+            "traceSha256": "c3b030ba423726085c4e951b15f80e5dd95775589a645303049e434846c4919e",
+            "stateSha256": "6f22d29af12cac22e8d02d7e0494af6dad06129eca33d381b8c34989c8f7d9cb"
+          },
+          {
+            "name": "invalid-uris",
+            "transactions": 12,
+            "traceSha256": "973197d0923ef0cc0793eeafae58324aa8c442b396ca5c2461a743b8bce0bee2",
+            "stateSha256": "d7e37154a5497a37adc953d71a97ec5eedc4128a052afb554634695141b9a0e4"
+          }
+        ]
+      }
+    ],
+    "successful": {
+      "count": 94,
+      "worstPercentage": {
+        "name": "delivery50-crates/delivery50",
+        "reference": 2009152,
+        "candidate": 2009458,
+        "delta": 306,
+        "percent": 0.015230306119198548
+      },
+      "worstAbsolute": {
+        "name": "delivery50-art-ascending/delivery50",
+        "reference": 2939957,
+        "candidate": 2940263,
+        "delta": 306,
+        "percent": 0.010408315495770856
+      }
+    },
+    "reverted": {
+      "count": 12,
+      "worstPercentage": {
+        "name": "invalid-uris/empty-host",
+        "reference": 26285,
+        "candidate": 26291,
+        "delta": 6,
+        "percent": 0.022826707247479552
+      },
+      "worstAbsolute": {
+        "name": "invalid-uris/empty-host",
+        "reference": 26285,
+        "candidate": 26291,
+        "delta": 6,
+        "percent": 0.022826707247479552
+      }
+    },
+    "rows": [
+      {
+        "name": "admin-canonical/base-uri-100",
+        "reference": 146143,
+        "candidate": 130749,
+        "delta": -15394,
+        "percent": -10.533518540060077,
+        "status": "0x1"
+      },
+      {
+        "name": "admin-canonical/base-uri-1024",
+        "reference": 1198678,
+        "candidate": 1040988,
+        "delta": -157690,
+        "percent": -13.15532611760623,
+        "status": "0x1"
+      },
+      {
+        "name": "admin-canonical/base-uri-256",
+        "reference": 287813,
+        "candidate": 248395,
+        "delta": -39418,
+        "percent": -13.695698248515528,
+        "status": "0x1"
+      },
+      {
+        "name": "admin-canonical/base-uri-40",
+        "reference": 65941,
+        "candidate": 59787,
+        "delta": -6154,
+        "percent": -9.332585189790874,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/accept-ownership",
+        "reference": 28401,
+        "candidate": 28401,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/base-uri-100",
+        "reference": 148943,
+        "candidate": 133549,
+        "delta": -15394,
+        "percent": -10.335497472187347,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/base-uri-1024",
+        "reference": 1198678,
+        "candidate": 1040988,
+        "delta": -157690,
+        "percent": -13.15532611760623,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/base-uri-256",
+        "reference": 287813,
+        "candidate": 248395,
+        "delta": -39418,
+        "percent": -13.695698248515528,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/base-uri-short",
+        "reference": 181284,
+        "candidate": 175006,
+        "delta": -6278,
+        "percent": -3.463074512918956,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/delivery-receiver",
+        "reference": 32322,
+        "candidate": 32322,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/discount-disable",
+        "reference": 27691,
+        "candidate": 27691,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/discount-enable",
+        "reference": 49975,
+        "candidate": 49975,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/free-config32-first",
+        "reference": 1081475,
+        "candidate": 1081475,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/free-config32-revoke",
+        "reference": 427392,
+        "candidate": 427392,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/free-config32-update",
+        "reference": 534275,
+        "candidate": 534275,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/pause-redemptions",
+        "reference": 29875,
+        "candidate": 29875,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/pause-sale",
+        "reference": 29845,
+        "candidate": 29845,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/prices",
+        "reference": 43519,
+        "candidate": 43519,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/prices-zero",
+        "reference": 36854,
+        "candidate": 36854,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/quote-signer",
+        "reference": 30235,
+        "candidate": 30238,
+        "delta": 3,
+        "percent": 0.00992227550851662,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/resume-redemptions",
+        "reference": 29863,
+        "candidate": 29863,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/resume-sale",
+        "reference": 29857,
+        "candidate": 29857,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "admin/transfer-ownership",
+        "reference": 47815,
+        "candidate": 47815,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "approvals-transfers/approval-for-all-first",
+        "reference": 46255,
+        "candidate": 46255,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "approvals-transfers/approval-for-all-revoke",
+        "reference": 24343,
+        "candidate": 24343,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "approvals-transfers/approve-first",
+        "reference": 48651,
+        "candidate": 48651,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "approvals-transfers/approved-transfer",
+        "reference": 57534,
+        "candidate": 57534,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "approvals-transfers/operator-safe-transfer",
+        "reference": 44969,
+        "candidate": 44969,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "approvals-transfers/owner-safe-transfer",
+        "reference": 45064,
+        "candidate": 45064,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "claim20/claim20",
+        "reference": 603159,
+        "candidate": 603171,
+        "delta": 12,
+        "percent": 0.0019895251500848033,
+        "status": "0x1"
+      },
+      {
+        "name": "claim31/claim31",
+        "reference": 889194,
+        "candidate": 889206,
+        "delta": 12,
+        "percent": 0.0013495367715031816,
+        "status": "0x1"
+      },
+      {
+        "name": "delivery-monument/delivery1",
+        "reference": 151324,
+        "candidate": 151336,
+        "delta": 12,
+        "percent": 0.007930004493669212,
+        "status": "0x1"
+      },
+      {
+        "name": "delivery50-art-ascending/delivery50",
+        "reference": 2939957,
+        "candidate": 2940263,
+        "delta": 306,
+        "percent": 0.010408315495770856,
+        "status": "0x1"
+      },
+      {
+        "name": "delivery50-art-descending/delivery50",
+        "reference": 3015929,
+        "candidate": 3016235,
+        "delta": 306,
+        "percent": 0.010146127445307896,
+        "status": "0x1"
+      },
+      {
+        "name": "delivery50-crates/delivery50",
+        "reference": 2009152,
+        "candidate": 2009458,
+        "delta": 306,
+        "percent": 0.015230306119198548,
+        "status": "0x1"
+      },
+      {
+        "name": "delivery50-mixed/delivery50",
+        "reference": 2485543,
+        "candidate": 2485849,
+        "delta": 306,
+        "percent": 0.012311193167851049,
+        "status": "0x1"
+      },
+      {
+        "name": "discount-1/claim",
+        "reference": 170649,
+        "candidate": 170649,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "discount-10/claim",
+        "reference": 399546,
+        "candidate": 399546,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-crate-1/first",
+        "reference": 128758,
+        "candidate": 128758,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-crate-1/repeat",
+        "reference": 77458,
+        "candidate": 77458,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-crate-15/first",
+        "reference": 484820,
+        "candidate": 484820,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-crate-15/repeat",
+        "reference": 433520,
+        "candidate": 433520,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-monument-1/first",
+        "reference": 173508,
+        "candidate": 173520,
+        "delta": 12,
+        "percent": 0.006916107614634483,
+        "status": "0x1"
+      },
+      {
+        "name": "free-monument-1/repeat",
+        "reference": 105108,
+        "candidate": 105120,
+        "delta": 12,
+        "percent": 0.011416828405069072,
+        "status": "0x1"
+      },
+      {
+        "name": "free-monument-15/first",
+        "reference": 840370,
+        "candidate": 840382,
+        "delta": 12,
+        "percent": 0.0014279424539191071,
+        "status": "0x1"
+      },
+      {
+        "name": "free-monument-15/repeat",
+        "reference": 200374,
+        "candidate": 200386,
+        "delta": 12,
+        "percent": 0.005988800942238015,
+        "status": "0x1"
+      },
+      {
+        "name": "free-warehouse-1/first",
+        "reference": 173269,
+        "candidate": 173269,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-warehouse-1/repeat",
+        "reference": 104869,
+        "candidate": 104869,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-warehouse-15/first",
+        "reference": 840131,
+        "candidate": 840131,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "free-warehouse-15/repeat",
+        "reference": 771731,
+        "candidate": 771731,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "invalid-uris/at-sign",
+        "reference": 32574,
+        "candidate": 30884,
+        "delta": -1690,
+        "percent": -5.188186897525634,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/backslash",
+        "reference": 32498,
+        "candidate": 30846,
+        "delta": -1652,
+        "percent": -5.083389747061358,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/control",
+        "reference": 32209,
+        "candidate": 30709,
+        "delta": -1500,
+        "percent": -4.657083423887733,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/empty",
+        "reference": 24317,
+        "candidate": 24317,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/empty-host",
+        "reference": 26285,
+        "candidate": 26291,
+        "delta": 6,
+        "percent": 0.022826707247479552,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/fragment",
+        "reference": 32422,
+        "candidate": 30808,
+        "delta": -1614,
+        "percent": -4.978101289248041,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/long-query",
+        "reference": 634664,
+        "candidate": 475392,
+        "delta": -159272,
+        "percent": -25.095483594468885,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/missing-slash",
+        "reference": 24737,
+        "candidate": 24737,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/non-http",
+        "reference": 25387,
+        "candidate": 25387,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/nonascii",
+        "reference": 32282,
+        "candidate": 30744,
+        "delta": -1538,
+        "percent": -4.764264915432749,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/query",
+        "reference": 32346,
+        "candidate": 30770,
+        "delta": -1576,
+        "percent": -4.872318060965807,
+        "status": "0x0"
+      },
+      {
+        "name": "invalid-uris/space",
+        "reference": 32209,
+        "candidate": 30709,
+        "delta": -1500,
+        "percent": -4.657083423887733,
+        "status": "0x0"
+      },
+      {
+        "name": "mint-crates-1/after-warehouse",
+        "reference": 74678,
+        "candidate": 74678,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-1/first",
+        "reference": 143078,
+        "candidate": 143078,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-1/repeat",
+        "reference": 74678,
+        "candidate": 74678,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-10/after-warehouse",
+        "reference": 303575,
+        "candidate": 303575,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-10/first",
+        "reference": 371975,
+        "candidate": 371975,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-10/repeat",
+        "reference": 303575,
+        "candidate": 303575,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-15/after-warehouse",
+        "reference": 430740,
+        "candidate": 430740,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-15/first",
+        "reference": 499140,
+        "candidate": 499140,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-15/repeat",
+        "reference": 430740,
+        "candidate": 430740,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-2/after-warehouse",
+        "reference": 100111,
+        "candidate": 100111,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-2/first",
+        "reference": 168511,
+        "candidate": 168511,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-2/repeat",
+        "reference": 100111,
+        "candidate": 100111,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-5/after-warehouse",
+        "reference": 176410,
+        "candidate": 176410,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-5/first",
+        "reference": 244810,
+        "candidate": 244810,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-crates-5/repeat",
+        "reference": 176410,
+        "candidate": 176410,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-monuments-1/first",
+        "reference": 187746,
+        "candidate": 187746,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-monuments-1/repeat",
+        "reference": 102246,
+        "candidate": 102246,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-monuments-15/first",
+        "reference": 854608,
+        "candidate": 854608,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-monuments-15/repeat",
+        "reference": 197512,
+        "candidate": 197512,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-monuments-5/first",
+        "reference": 378278,
+        "candidate": 378278,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-monuments-5/repeat",
+        "reference": 292778,
+        "candidate": 292778,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-1/after-crate",
+        "reference": 102067,
+        "candidate": 102067,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-1/first",
+        "reference": 187567,
+        "candidate": 187567,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-1/repeat",
+        "reference": 102067,
+        "candidate": 102067,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-15/after-crate",
+        "reference": 768929,
+        "candidate": 768929,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-15/first",
+        "reference": 854429,
+        "candidate": 854429,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-15/repeat",
+        "reference": 768929,
+        "candidate": 768929,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-5/after-crate",
+        "reference": 292599,
+        "candidate": 292599,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-5/first",
+        "reference": 378099,
+        "candidate": 378099,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "mint-warehouses-5/repeat",
+        "reference": 292599,
+        "candidate": 292599,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "payouts/delivery-release-first",
+        "reference": 84450,
+        "candidate": 84450,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "payouts/delivery-release-repeat",
+        "reference": 42350,
+        "candidate": 42350,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "payouts/mint-release-first",
+        "reference": 176167,
+        "candidate": 176167,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "payouts/mint-release-repeat",
+        "reference": 74867,
+        "candidate": 74867,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "unbox-batch15/batch300",
+        "reference": 1194670,
+        "candidate": 1194760,
+        "delta": 90,
+        "percent": 0.007533461123155349,
+        "status": "0x1"
+      },
+      {
+        "name": "unbox-bonus-batch15/batch311",
+        "reference": 1198757,
+        "candidate": 1198847,
+        "delta": 90,
+        "percent": 0.007507776805474337,
+        "status": "0x1"
+      },
+      {
+        "name": "unbox-bonus31/unbox31",
+        "reference": 133028,
+        "candidate": 133034,
+        "delta": 6,
+        "percent": 0.004510328652614487,
+        "status": "0x1"
+      },
+      {
+        "name": "unbox-monument/unbox111",
+        "reference": 2896229,
+        "candidate": 2896235,
+        "delta": 6,
+        "percent": 0.00020716593888121416,
+        "status": "0x1"
+      },
+      {
+        "name": "unbox-ordinary/first20",
+        "reference": 128941,
+        "candidate": 128947,
+        "delta": 6,
+        "percent": 0.0046532910400881025,
+        "status": "0x1"
+      },
+      {
+        "name": "unbox-ordinary/repeat20",
+        "reference": 111841,
+        "candidate": 111847,
+        "delta": 6,
+        "percent": 0.005364758898793823,
+        "status": "0x1"
+      },
+      {
+        "name": "unbox-warehouse/unbox11",
+        "reference": 349636,
+        "candidate": 349642,
+        "delta": 6,
+        "percent": 0.0017160704275303459,
+        "status": "0x1"
+      },
+      {
+        "name": "wallet-unbox-batch15/batch300",
+        "reference": 1657159,
+        "candidate": 1657249,
+        "delta": 90,
+        "percent": 0.005430981577507047,
+        "status": "0x1"
+      },
+      {
+        "name": "wallet-warm-mints/free-two",
+        "reference": 120761,
+        "candidate": 120761,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      },
+      {
+        "name": "wallet-warm-mints/mint-two",
+        "reference": 197112,
+        "candidate": 197112,
+        "delta": 0,
+        "percent": 0,
+        "status": "0x1"
+      }
+    ]
+  },
+  "status": "passed"
+}

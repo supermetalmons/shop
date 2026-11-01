@@ -97,6 +97,53 @@ contract NFT111KMetadataTest is TestSupport {
         }
     }
 
+    function testBaseUriCharacterBoundariesInConstructorAndSetter() public {
+        uint8[8] memory characters = [uint8(0), 31, 32, 33, 126, 127, 128, 255];
+        for (uint256 i; i < characters.length; ++i) {
+            string memory uri = string(bytes.concat(bytes(BASE), bytes1(characters[i]), bytes("/")));
+            if (characters[i] == 33 || characters[i] == 126) {
+                NFT111K deployed = _deploy(uri);
+                assertEq(deployed.baseURI(), uri);
+                assertEq(deployed.previewTokenURI(1, 42), string.concat(uri, "42.json"));
+                token.setBaseURI(uri);
+                assertEq(token.baseURI(), uri);
+                assertEq(token.previewTokenURI(1, 42), string.concat(uri, "42.json"));
+                token.setBaseURI(BASE);
+            } else {
+                vm.expectRevert(NFT111K.InvalidBaseURI.selector);
+                _deploy(uri);
+                vm.expectRevert(NFT111K.InvalidBaseURI.selector);
+                token.setBaseURI(uri);
+                assertEq(token.baseURI(), BASE);
+            }
+        }
+    }
+
+    function testLongBaseUriChecksItsFinalPathCharacters() public {
+        bytes memory value = new bytes(1024);
+        bytes memory prefix = bytes(BASE);
+        for (uint256 i; i < prefix.length; ++i) {
+            value[i] = prefix[i];
+        }
+        for (uint256 i = prefix.length; i < value.length - 1; ++i) {
+            value[i] = "a";
+        }
+        value[value.length - 1] = "/";
+        string memory uri = string(value);
+        NFT111K deployed = _deploy(uri);
+        assertEq(deployed.baseURI(), uri);
+        token.setBaseURI(uri);
+        assertEq(token.baseURI(), uri);
+        assertEq(token.previewTokenURI(1, 42), string.concat(uri, "42.json"));
+        bytes memory invalid = bytes.concat(value);
+        invalid[invalid.length - 2] = "?";
+        vm.expectRevert(NFT111K.InvalidBaseURI.selector);
+        _deploy(string(invalid));
+        vm.expectRevert(NFT111K.InvalidBaseURI.selector);
+        token.setBaseURI(string(invalid));
+        assertEq(token.baseURI(), uri);
+    }
+
     function testOnlyOwnerCanChangeBaseURI() public {
         vm.prank(address(0xA110));
         vm.expectRevert();

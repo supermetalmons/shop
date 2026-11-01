@@ -772,9 +772,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             && value[4] == ":" && value[5] == "/" && value[6] == "/";
         if ((!secure && !local) || value[secure ? 8 : 7] == "/") revert InvalidBaseURI();
         for (uint256 i; i < value.length; ++i) {
+            bytes1 character = value[i];
             if (
-                uint8(value[i]) <= 32 || uint8(value[i]) >= 127 || value[i] == "?" || value[i] == "#"
-                    || value[i] == "\\" || value[i] == "@"
+                uint8(character) <= 32 || uint8(character) >= 127 || character == "?" || character == "#"
+                    || character == "\\" || character == "@"
             ) revert InvalidBaseURI();
         }
     }
