@@ -75,7 +75,7 @@ for (const operation of ['create', 'status'] as const) {
     response.tokenIds = ['117189'];
     Object.assign(response.items[0], { id: ethereumAssetId(config.chainId, config.contractAddress!, '117189'),
       tokenId: '117189', kind: 'relic', displayId: 18, name: 'Relic #18',
-      image: 'https://wip.lil.org/111k/monuments/18.webp' });
+      image: 'https://wip.lil.org/111k/relics/18.webp' });
     context.mock.method(globalThis, 'fetch', async () => Response.json(response));
     assert.deepEqual((await request()).items, response.items);
     response.tokenIds = ['3000018'];

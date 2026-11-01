@@ -12,6 +12,17 @@
         "0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9",
         "0x440f0940F7fc3b5C4Efd087F8B947C85aD81FDe9"
       ]
+    },
+    {
+      "name": "Additional relic test wallets",
+      "crates": 0,
+      "warehouses": 0,
+      "relics": 2,
+      "wallets": [
+        "0x31CD63C73E74808793F134f8146a1E3AA1637B5d",
+        "0xf743b8e23d3FFcbdE398ABA9b9F83a98F56845f4",
+        "0x336C8E2ADd19149bfc934fb2557C6bdEffa8009B"
+      ]
     }
   ]
 }

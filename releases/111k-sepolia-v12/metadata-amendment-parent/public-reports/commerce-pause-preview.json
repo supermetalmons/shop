@@ -1,0 +1,19 @@
+{
+  "dryRun": true,
+  "command": "pause",
+  "control": {
+    "paused": false,
+    "revision": 31,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c",
+    "resetGuardId": null,
+    "lastResetId": "e5005ce0-d067-42a9-a266-b45221b5cc16",
+    "updatedAtMs": 1793551267000
+  },
+  "targetScope": {
+    "chainId": 11155111,
+    "contractAddress": "0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c"
+  },
+  "sql": "UPDATE ethereum_111k_control SET paused = 1, revision = revision + 1,\n    paused_at_ms = (CAST(strftime('%s', 'now') AS INTEGER) * 1000),\n    chain_id = 11155111, contract_address = '0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c', updated_at_ms = (CAST(strftime('%s', 'now') AS INTEGER) * 1000)\n    WHERE singleton = 1 AND revision = 31 AND reset_guard_id IS NULL\n      AND paused = 0\n      AND chain_id IS 11155111 AND contract_address IS '0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c'\n       RETURNING *"
+}

@@ -1,0 +1,602 @@
+{
+  "scope": {
+    "deploymentId": "v12",
+    "chainId": 11155111,
+    "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
+    "prefix": "111k-sepolia/v12/"
+  },
+  "state": {
+    "registry": {
+      "deployment_id": "v12",
+      "drop_id": "111k_devnet",
+      "chain_id": 11155111,
+      "contract_address": "0x320cf00a3606350821ed90ea435e93955b180874",
+      "metadata_base_uri": "https://cdn.mons.shop/111k-sepolia/v12/",
+      "state": "ready",
+      "revision": 2,
+      "template_sha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33"
+    },
+    "chain": {
+      "saleActive": "false",
+      "totalSupply": "0",
+      "relicsAllocated": "18",
+      "relicsMinted": "0",
+      "getRelicClaimedMask": "0",
+      "baseURI": "https://cdn.mons.shop/111k-sepolia/v12/"
+    },
+    "blockNumber": 12043379,
+    "blockHash": "0x9225e041637bbd4a924a7d731f1a18516c1d1a087e892ff647ead2d20d0c86fc",
+    "checkedAt": "2026-11-01T20:25:05.524Z"
+  },
+  "media": [
+    {
+      "url": "https://wip.lil.org/111k/relics/2.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 49194,
+      "sha256": "bf074a77999ea0b4947f2255597c5ddf80c8d43de6ce2f6091aa7cc8d6ea9b6e"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/1.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 65606,
+      "sha256": "4b66a8b1f49aed77de03fd4baf950e867db6da5fe232be531b3bbb4661469603"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/5.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 142826,
+      "sha256": "5e05efc9cef6f15591020867c21e8b4a786f588901efc512860f9e934d9cde30"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/4.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 106690,
+      "sha256": "99fff88f5840b41fa39a90cc4574f4e31eefef375ff04806dcd18e3562f9b5d4"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/6.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 232536,
+      "sha256": "f9d9d1bff96102c4f84d5e7c92d7e9ebd2833780240e9ea1e0f99d94d47f37bf"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/3.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 306902,
+      "sha256": "43918f356eceefb554eee4ac8a9c496b385e95d1912bd8a72174f30f4d8348c4"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/10.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 106690,
+      "sha256": "99fff88f5840b41fa39a90cc4574f4e31eefef375ff04806dcd18e3562f9b5d4"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/7.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 65606,
+      "sha256": "4b66a8b1f49aed77de03fd4baf950e867db6da5fe232be531b3bbb4661469603"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/8.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 49194,
+      "sha256": "bf074a77999ea0b4947f2255597c5ddf80c8d43de6ce2f6091aa7cc8d6ea9b6e"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/11.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 142826,
+      "sha256": "5e05efc9cef6f15591020867c21e8b4a786f588901efc512860f9e934d9cde30"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/12.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 232536,
+      "sha256": "f9d9d1bff96102c4f84d5e7c92d7e9ebd2833780240e9ea1e0f99d94d47f37bf"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/9.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 306902,
+      "sha256": "43918f356eceefb554eee4ac8a9c496b385e95d1912bd8a72174f30f4d8348c4"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/15.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 306902,
+      "sha256": "43918f356eceefb554eee4ac8a9c496b385e95d1912bd8a72174f30f4d8348c4"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/13.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 65606,
+      "sha256": "4b66a8b1f49aed77de03fd4baf950e867db6da5fe232be531b3bbb4661469603"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/18.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 232536,
+      "sha256": "f9d9d1bff96102c4f84d5e7c92d7e9ebd2833780240e9ea1e0f99d94d47f37bf"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/14.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 49194,
+      "sha256": "bf074a77999ea0b4947f2255597c5ddf80c8d43de6ce2f6091aa7cc8d6ea9b6e"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/16.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 106690,
+      "sha256": "99fff88f5840b41fa39a90cc4574f4e31eefef375ff04806dcd18e3562f9b5d4"
+    },
+    {
+      "url": "https://wip.lil.org/111k/relics/17.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "bytes": 142826,
+      "sha256": "5e05efc9cef6f15591020867c21e8b4a786f588901efc512860f9e934d9cde30"
+    }
+  ],
+  "inventories": {
+    "v12": {
+      "prefix": "111k-sepolia/v12/",
+      "objectCount": 344984,
+      "totalBytes": 71175814,
+      "inventorySha256": "00505cd8ecc3e8c628d2ea2edb17fb47001fa93a7e1719a485137bfcc7c775e6"
+    },
+    "v11": {
+      "prefix": "111k-sepolia/v11/",
+      "objectCount": 344984,
+      "totalBytes": 71193618,
+      "inventorySha256": "c2b39e1957be69ee45d097842a8fd435fa7b07356221a3bc8f5fdd8d7f7ca813"
+    },
+    "mainnet": {
+      "prefix": "111k/",
+      "objectCount": 344978,
+      "totalBytes": 71174467,
+      "inventorySha256": "68d10a369cd0ceae2f2261bb59681ec49310a7b07989084a8b74a1ad03826689"
+    }
+  },
+  "changes": [
+    {
+      "tokenId": 117172,
+      "key": "111k-sepolia/v12/117172.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #1\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/1.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"f903ae26729acb18384e8629b5d5abb0\"",
+        "sha256": "aa4510654e08ea4241aeb15c03688d56cbb8b62a236f69c1575da35eaa8cc0c8",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #1\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/1.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "cbdd0f541d28a9546042e1c4e4e8aabdddd90ddf85b27ce3a85f6b223d5fe20c",
+        "bytes": 185,
+        "etag": "\"9e098f23a4279262d32802cdcb7bc241\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/1.webp",
+      "image": "https://wip.lil.org/111k/relics/1.webp"
+    },
+    {
+      "tokenId": 117173,
+      "key": "111k-sepolia/v12/117173.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #2\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/2.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"d684775b20ab30b963eb1f25d108a7c0\"",
+        "sha256": "8ee287c53ea08cca252d87675e89430865ad82833c9f202d924cbe693eb03365",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #2\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/2.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "a1fee7355e50e137fdbde264a7d4a79f8551cf3add84c0e13b5f144fbbb512eb",
+        "bytes": 185,
+        "etag": "\"7bb2d1ab6a1a7b2df61a89bbc9daf95a\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/2.webp",
+      "image": "https://wip.lil.org/111k/relics/2.webp"
+    },
+    {
+      "tokenId": 117174,
+      "key": "111k-sepolia/v12/117174.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #3\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/3.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"2d52a06bbd8b1ca54d709bbb3e51adbb\"",
+        "sha256": "e193a561852a1f4bf547a843f2f8eb4fc192300f14212af744c8d6b3e8bd855b",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #3\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/3.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "a9c08a56d8e331e82d1a0321c3ef0c4e4d4eb664ee7402ebd329e2496ea8de39",
+        "bytes": 185,
+        "etag": "\"02a4df8ff398c1f49f7959dc055607ac\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/3.webp",
+      "image": "https://wip.lil.org/111k/relics/3.webp"
+    },
+    {
+      "tokenId": 117175,
+      "key": "111k-sepolia/v12/117175.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #4\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/4.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"5f4d3c51805b3bbc5457262f603bdebf\"",
+        "sha256": "68516af876dbdb5dacf815b2b35577c3160e8c3acb215fad69c3d4a530131638",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #4\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/4.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "8c7d7d7445b7027979dcc591d82ef7e3f5ad09a751ee8b28fb7f3346ab1de55a",
+        "bytes": 185,
+        "etag": "\"6ed463b62d29873fc0397b9cc958caa8\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/4.webp",
+      "image": "https://wip.lil.org/111k/relics/4.webp"
+    },
+    {
+      "tokenId": 117176,
+      "key": "111k-sepolia/v12/117176.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #5\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/5.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"b5fb413733c070a0befef431137c821d\"",
+        "sha256": "27e956bd6c197b74e4dfe9ca542e13df359017891872fdbfd7435edfdf10d6a1",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #5\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/5.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "93ff83d0651a9af8c2590ce6598a9dff02f318ff0acff67d1b9e299f2affdb32",
+        "bytes": 185,
+        "etag": "\"06a6dc92734b1e4f20b118af6efd901d\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/5.webp",
+      "image": "https://wip.lil.org/111k/relics/5.webp"
+    },
+    {
+      "tokenId": 117177,
+      "key": "111k-sepolia/v12/117177.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #6\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/6.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"71faa4a84f054a080c00a02fc245a978\"",
+        "sha256": "ea11361c0aae4fa22103fcb567aadf98a0bfd50186406413d5bc4f191e5b2066",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #6\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/6.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "2bb02ed169fc98483dc9ca9a5eb59e44d78910a187455e16e305379d5c158807",
+        "bytes": 185,
+        "etag": "\"a7dfc7d5fa17602691fdf2d0c05f3345\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/6.webp",
+      "image": "https://wip.lil.org/111k/relics/6.webp"
+    },
+    {
+      "tokenId": 117178,
+      "key": "111k-sepolia/v12/117178.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #7\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/7.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"2e38a3bf003a292220bc3bf67fa72785\"",
+        "sha256": "14934cb4de67d96ec668357c7dd062d227c4945d49ffe4e28c773d48ac360e17",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #7\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/7.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "b97d934eb51c77d1d3aaa9f5ece6d596096c8790ae798e0be78b0ae5cc8bdfd3",
+        "bytes": 185,
+        "etag": "\"bdf41e2d97e307293fa8d1e86ed254b8\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/7.webp",
+      "image": "https://wip.lil.org/111k/relics/7.webp"
+    },
+    {
+      "tokenId": 117179,
+      "key": "111k-sepolia/v12/117179.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #8\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/8.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"830350d6b35179d7d15e25e94ce7bbc5\"",
+        "sha256": "82c4103668ff7926badfddfc8617cc2f18bf843d2bfdc96881dab0dfd571b543",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #8\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/8.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "72933c82003ee18d067e8810144b9012588e859526e19cb6b68d34e363bd4d1f",
+        "bytes": 185,
+        "etag": "\"ede3062651da9b8ea357ff88810153d2\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/8.webp",
+      "image": "https://wip.lil.org/111k/relics/8.webp"
+    },
+    {
+      "tokenId": 117180,
+      "key": "111k-sepolia/v12/117180.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #9\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/9.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"a0d3070f4dc8dcd4a3c63cb74fdf5232\"",
+        "sha256": "10492e06461b5c595183c56de85f754a4386d8942c6c6290ed71d6789f91a466",
+        "bytes": 188,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #9\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/9.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "cef4f2fb9f7e4b590fe33c27fab267350a497b5627a6af2e78f8bf0fa7d8b7c8",
+        "bytes": 185,
+        "etag": "\"400f5aac0944dd1d0cfba83c826c42ec\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/9.webp",
+      "image": "https://wip.lil.org/111k/relics/9.webp"
+    },
+    {
+      "tokenId": 117181,
+      "key": "111k-sepolia/v12/117181.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #10\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/10.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"0f7eb995e93e503b7ad84ab836a81616\"",
+        "sha256": "2891a09115e5d2610dd3451866fb2812a5d1651226dc29727b12f0d7d92c4694",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #10\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/10.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "a6df22311c477c1620243fb14b0f039273a22421f11c453bc18551641ddf6793",
+        "bytes": 187,
+        "etag": "\"02cd89cb12d7aa7bd949a6d66c665717\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/10.webp",
+      "image": "https://wip.lil.org/111k/relics/10.webp"
+    },
+    {
+      "tokenId": 117182,
+      "key": "111k-sepolia/v12/117182.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #11\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/11.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"4b34ec667be82aa85a4d85e4985f36cf\"",
+        "sha256": "8a8743d17fa97c05f7c0427ee8310bb06b343ac13548672dc969e8a1e3f175df",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #11\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/11.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "84152d37ced6ace7fa3645701fddf10ebaa6edb8c8b59ee9fede0e73d9ada3d7",
+        "bytes": 187,
+        "etag": "\"c4b645f6d8879d455114f409a6a38825\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/11.webp",
+      "image": "https://wip.lil.org/111k/relics/11.webp"
+    },
+    {
+      "tokenId": 117183,
+      "key": "111k-sepolia/v12/117183.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #12\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/12.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"36850741702617acb0f684293ddd589f\"",
+        "sha256": "8a28cebef5a9e6ed0528417893a87a6221a6c0081e7576a3e316c8959ac9a836",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #12\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/12.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "9d49c2eb734d167bb09fdda9cddf90e74afe861dbb6c73bf379f98f010cc4b2e",
+        "bytes": 187,
+        "etag": "\"fb0e331a71d06851deab154381341986\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/12.webp",
+      "image": "https://wip.lil.org/111k/relics/12.webp"
+    },
+    {
+      "tokenId": 117184,
+      "key": "111k-sepolia/v12/117184.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #13\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/13.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"0b1194c301547ca11b435896fa84054c\"",
+        "sha256": "03509252a1b171a48a4778ec4671f34fad01d914ee0efe01be520b10d892e0e3",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #13\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/13.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "47b4028c1a24eb98a79aebfcc6b0fa54ec9ad456f1db6d49d90b03ab9f9413f9",
+        "bytes": 187,
+        "etag": "\"b99aa62310fb8d6f558a4ff5dba84108\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/13.webp",
+      "image": "https://wip.lil.org/111k/relics/13.webp"
+    },
+    {
+      "tokenId": 117185,
+      "key": "111k-sepolia/v12/117185.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #14\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/14.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"f66ac053638ad0404130f5f43c13025f\"",
+        "sha256": "c40e3bb7339a8a7f3076dd18adce761447d94b39e019d8ff2e0a345b9a8f18f4",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #14\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/14.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "bf7cdd0876af699f0c68152d8d3458c373464975a9e178753643bd030eef1adf",
+        "bytes": 187,
+        "etag": "\"dc11591c933629089bbede09f67347a4\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/14.webp",
+      "image": "https://wip.lil.org/111k/relics/14.webp"
+    },
+    {
+      "tokenId": 117186,
+      "key": "111k-sepolia/v12/117186.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #15\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/15.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"0b5faf9e011e9e3201a8350bc80b642c\"",
+        "sha256": "83cec997a7f8db5d0bdf25e2af5687a9da97a39c310e7abe7300b2d7c74b71aa",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #15\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/15.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "d99084cbe6be985aba8b1019398ec3e1e2ded443e390e02981ffb3afc7c75381",
+        "bytes": 187,
+        "etag": "\"82cbb568aac62e938aa5bd190f4ea7e7\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/15.webp",
+      "image": "https://wip.lil.org/111k/relics/15.webp"
+    },
+    {
+      "tokenId": 117187,
+      "key": "111k-sepolia/v12/117187.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #16\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/16.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"a1b7723a2819f53306477b4b47fe1358\"",
+        "sha256": "befb7ddef1a150de15be661bf42b70c33d1e587e0506205c7550990ca57d2844",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #16\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/16.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "70310ce841db370dfeb24e536197296abf2c4d9707f4b2b5006e6cacdd2f5049",
+        "bytes": 187,
+        "etag": "\"27f505bdfd6dbadc6d23b7c8b60ac906\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/16.webp",
+      "image": "https://wip.lil.org/111k/relics/16.webp"
+    },
+    {
+      "tokenId": 117188,
+      "key": "111k-sepolia/v12/117188.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #17\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/17.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"7a5cffe0088c73317fbaa6deb2e5382c\"",
+        "sha256": "7d18670583d15d0d5d7335cb4f981ceb2933502bf89560da74133649025b7e20",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #17\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/17.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "ae6e565b3c61c51246d655d60366a97d50dd0d78c824cec053892c67a5ed66aa",
+        "bytes": 187,
+        "etag": "\"c1ce7fc57a09574b10450318be5283ce\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/17.webp",
+      "image": "https://wip.lil.org/111k/relics/17.webp"
+    },
+    {
+      "tokenId": 117189,
+      "key": "111k-sepolia/v12/117189.json",
+      "imageOnly": true,
+      "before": {
+        "body": "{\n  \"name\": \"Relic #18\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/monuments/18.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "etag": "\"f508f6772c3f596364dd5b14f80cf467\"",
+        "sha256": "8b1d6159dabd7932649ca49907e930ceb9920b5b939b828518976192251b43d8",
+        "bytes": 190,
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "after": {
+        "body": "{\n  \"name\": \"Relic #18\",\n  \"description\": \"\",\n  \"image\": \"https://wip.lil.org/111k/relics/18.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"relic\"\n    }\n  ]\n}\n",
+        "sha256": "d27c99e9ba0201c7b22077e4e4fabdc76cbcb9f5189ebdc2b6340e1bb636e8be",
+        "bytes": 187,
+        "etag": "\"7907458ffd122a8f91f21030f0467bec\"",
+        "contentType": "application/json; charset=utf-8",
+        "cacheControl": "no-store"
+      },
+      "previousImage": "https://wip.lil.org/111k/monuments/18.webp",
+      "image": "https://wip.lil.org/111k/relics/18.webp"
+    }
+  ],
+  "originalObjectsSha256": "b62be315ed1c14ea87a909e160c8e6643575a067902412866ef83854b3b8cf4d",
+  "objectsSha256": "cb3cb6eb9613e2676e71d540a6bffd35504bd1cd96024c38599e9a17510f3208",
+  "manifestSha256": "2ab69c5381241d86f759aa5df332b71daff759e8440e1812ab18a6e699ef8bd0",
+  "objectCount": 344984,
+  "totalBytes": 71175760,
+  "revisionDirectory": ".cache/111k-v12-metadata-amendment/metadata",
+  "preparedAt": "2026-11-01T20:27:02.544Z"
+}

@@ -19,7 +19,7 @@ import { withMetadataLock } from '../scripts/ethereum-metadata/lock.ts';
 const examples: Array<{ kind: EthereumItemKind; name: string; image: string; type: string }> = [
   { kind: 'artwork', name: '1', image: 'artwork_placeholder.png', type: 'painting' },
   { kind: 'warehouse', name: 'Warehouse #1', image: 'warehouse.webp', type: 'warehouse' },
-  { kind: 'relic', name: 'Relic #1', image: 'monuments/1.webp', type: 'relic' },
+  { kind: 'relic', name: 'Relic #1', image: 'relics/1.webp', type: 'relic' },
   { kind: 'crate', name: 'Crate #1', image: 'crate.jpg', type: 'crate' },
   { kind: 'crate_receipt', name: 'Crate Receipt #1', image: 'crate_receipt.webp', type: 'crate receipt' },
   { kind: 'artwork_receipt', name: 'Receipt #1', image: 'artwork_placeholder_receipt.webp', type: 'receipt' },
@@ -47,7 +47,7 @@ test('all eighteen relics use their individual images and reject numbers outside
   const { templates } = await loadMetadataTemplates();
   for (let displayId = 1; displayId <= 18; displayId++) {
     assert.deepEqual(renderMetadata('relic', displayId, templates), {
-      name: `Relic #${displayId}`, description: '', image: `https://wip.lil.org/111k/monuments/${displayId}.webp`,
+      name: `Relic #${displayId}`, description: '', image: `https://wip.lil.org/111k/relics/${displayId}.webp`,
       attributes: [{ trait_type: 'type', value: 'relic' }],
     });
   }

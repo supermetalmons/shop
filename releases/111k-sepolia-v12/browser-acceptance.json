@@ -1,0 +1,119 @@
+{
+  "checkedAt": "2026-11-01T20:37:24.610Z",
+  "url": "https://mons.shop/111k_devnet",
+  "relicCount": 18,
+  "selectedRelic": 18,
+  "claimEnabled": true,
+  "images": [
+    {
+      "complete": true,
+      "height": 825,
+      "src": "https://wip.lil.org/111k/relics/1.webp",
+      "width": 398
+    },
+    {
+      "complete": true,
+      "height": 516,
+      "src": "https://wip.lil.org/111k/relics/2.webp",
+      "width": 454
+    },
+    {
+      "complete": true,
+      "height": 1288,
+      "src": "https://wip.lil.org/111k/relics/3.webp",
+      "width": 1269
+    },
+    {
+      "complete": true,
+      "height": 746,
+      "src": "https://wip.lil.org/111k/relics/4.webp",
+      "width": 500
+    },
+    {
+      "complete": true,
+      "height": 1045,
+      "src": "https://wip.lil.org/111k/relics/5.webp",
+      "width": 781
+    },
+    {
+      "complete": true,
+      "height": 1231,
+      "src": "https://wip.lil.org/111k/relics/6.webp",
+      "width": 965
+    },
+    {
+      "complete": true,
+      "height": 825,
+      "src": "https://wip.lil.org/111k/relics/7.webp",
+      "width": 398
+    },
+    {
+      "complete": true,
+      "height": 516,
+      "src": "https://wip.lil.org/111k/relics/8.webp",
+      "width": 454
+    },
+    {
+      "complete": true,
+      "height": 1288,
+      "src": "https://wip.lil.org/111k/relics/9.webp",
+      "width": 1269
+    },
+    {
+      "complete": true,
+      "height": 746,
+      "src": "https://wip.lil.org/111k/relics/10.webp",
+      "width": 500
+    },
+    {
+      "complete": true,
+      "height": 1045,
+      "src": "https://wip.lil.org/111k/relics/11.webp",
+      "width": 781
+    },
+    {
+      "complete": true,
+      "height": 1231,
+      "src": "https://wip.lil.org/111k/relics/12.webp",
+      "width": 965
+    },
+    {
+      "complete": true,
+      "height": 825,
+      "src": "https://wip.lil.org/111k/relics/13.webp",
+      "width": 398
+    },
+    {
+      "complete": true,
+      "height": 516,
+      "src": "https://wip.lil.org/111k/relics/14.webp",
+      "width": 454
+    },
+    {
+      "complete": true,
+      "height": 1288,
+      "src": "https://wip.lil.org/111k/relics/15.webp",
+      "width": 1269
+    },
+    {
+      "complete": true,
+      "height": 746,
+      "src": "https://wip.lil.org/111k/relics/16.webp",
+      "width": 500
+    },
+    {
+      "complete": true,
+      "height": 1045,
+      "src": "https://wip.lil.org/111k/relics/17.webp",
+      "width": 781
+    },
+    {
+      "complete": true,
+      "height": 1231,
+      "src": "https://wip.lil.org/111k/relics/18.webp",
+      "width": 965
+    }
+  ],
+  "allImagesLoaded": true,
+  "claimSubmitted": false
+}

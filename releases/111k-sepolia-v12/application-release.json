@@ -1,0 +1,26 @@
+{
+  "releaseId": "111k-v12-2026-11-01T19-49-01-791Z-48e54fba",
+  "manifestSha256": "a3902468180b625b414483312192414fbe5be24b593903342c4906031138f7c6",
+  "sourceRevision": "5d5c2386a3ce32a5275ebb5d461548b5ee0f3427",
+  "workingTreeChangesIncluded": true,
+  "api": {
+    "name": "mons-shop-api",
+    "deploymentId": "b5bfaaca-5029-4707-b0ba-013dc3248766",
+    "versionId": "0d9df106-a399-4e6e-b398-da4bec93f4c0",
+    "publishedAt": "2026-11-01T20:32:42.518157Z",
+    "previousVersionId": "d610b2a5-82f7-4a99-ad2e-2f6c2105682e",
+    "configurationSha256": "71f47c439b4bf1e7821890702dfda722b0232653d13a9bc22f68bccbd3ec5e07"
+  },
+  "frontend": {
+    "name": "mons-shop",
+    "deploymentId": "29201248-ce84-4a9d-a0d9-d52f3769071f",
+    "versionId": "0a6edddd-370c-435b-a97b-621551145343",
+    "publishedAt": "2026-11-01T20:33:08.302295Z",
+    "previousVersionId": "d561b7dd-25c2-4238-8ef4-03cf3cd76b27",
+    "indexSha256": "606a0b5c54c7839bc6b5840c7b2e06fa512affc180d6390d655a7040e9b631e8",
+    "asset": "/assets/index-DI1LM4Om.js"
+  },
+  "validation": "validation.json",
+  "publication": "Native Wrangler deploy --strict after the required validation components, final configuration checks, zero-pending migration application, and remote database integrity checks.",
+  "publishedAt": "2026-11-01T20:39:51.840Z"
+}

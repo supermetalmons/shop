@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-11-01T19:46:56.264Z",
+  "chainId": 11155111,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "balanceWei": "5618954408871950175",
+  "nonce": 52,
+  "oldContract": "0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c",
+  "block": 12043188,
+  "blockHash": "0x0a250bd9bd79d10531660ca3416acf17c168d2401d1ad2280cfab44dbc0d128a",
+  "oldState": {
+    "saleActive": true,
+    "redemptionsPaused": false,
+    "totalSupply": "124",
+    "relicsAllocated": "12",
+    "relicsMinted": "1",
+    "allocatedCrates": "1351",
+    "totalMintReceived": "13850000000000000",
+    "totalMintReleased": "0"
+  }
+}

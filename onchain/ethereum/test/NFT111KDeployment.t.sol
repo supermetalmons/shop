@@ -229,12 +229,25 @@ contract NFT111KDeploymentTest is TestSupport {
         harness.freeMints(preset, address(0x123));
         vm.chainId(11155111);
         NFT111K.FreeMintAllocation[] memory allocations = harness.freeMints(preset, address(0x123));
-        assertEq(allocations.length, 4);
+        address[7] memory wallets = [
+            address(0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE),
+            0xE4790DD79c334e3f848904975272ec17f9F70366,
+            0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9,
+            0x440f0940F7fc3b5C4Efd087F8B947C85aD81FDe9,
+            0x31CD63C73E74808793F134f8146a1E3AA1637B5d,
+            0xf743b8e23d3FFcbdE398ABA9b9F83a98F56845f4,
+            0x336C8E2ADd19149bfc934fb2557C6bdEffa8009B
+        ];
+        assertEq(allocations.length, wallets.length);
+        uint256 relics;
         for (uint256 i; i < allocations.length; ++i) {
+            assertEq(allocations[i].wallet, wallets[i]);
             assertEq(allocations[i].crateLimit, 0);
             assertEq(allocations[i].warehouseLimit, 0);
-            assertEq(allocations[i].relicLimit, 3);
+            assertEq(allocations[i].relicLimit, i < 4 ? 3 : 2);
+            relics += allocations[i].relicLimit;
         }
+        assertEq(relics, 18);
         vm.chainId(1);
         assertEq(harness.freeMints(vm.readFile("config/free-mints.json"), address(0x123)).length, 0);
     }

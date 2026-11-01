@@ -1,6 +1,6 @@
 # 111K offchain metadata
 
-The [v11 release](../../releases/111k-sepolia-v11/README.md) publishes the relic templates as a collection with 344984 metadata objects, including relic tokens `117172.json`–`117189.json` and relic receipts `3000001.json`–`3000018.json`. The [v10 release](../../releases/111k-sepolia-v10/README.md) and earlier releases preserve their original metadata, terminology, and registered prefixes; this source change does not republish them.
+The [v12 release](../../releases/111k-sepolia-v12/README.md) publishes the complete relic collection at `https://cdn.mons.shop/111k-sepolia/v12/`: 344984 metadata objects, including relic tokens `117172.json`–`117189.json` and relic receipts `3000001.json`–`3000018.json`. Relic IDs 1–18 use `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. The [v11 release](../../releases/111k-sepolia-v11/README.md), [v10 release](../../releases/111k-sepolia-v10/README.md), and earlier releases preserve their original metadata and registered prefixes; the replacement does not republish those namespaces.
 
 Deployment IDs are globally unique across networks. Later replacements must choose an unused ID. A future mainnet deployment can use a distinct ID such as `mainnet-relics-v1`, with the same ID in its prefix suffix. Publish and verify the complete collection at each new prefix before deployment and registration. Existing reveal-managed prefixes remain associated with their original deployments.
 
@@ -43,13 +43,13 @@ Each template contains `name`, `description`, `image`, and `attributes`. The ini
 | --- | --- | --- | --- |
 | `artwork.json` | `{{tokenId}}` | `artwork_placeholder.png` | `painting` |
 | `warehouse.json` | `Warehouse #{{displayId}}` | `warehouse.webp` | `warehouse` |
-| `relic.json` | `Relic #{{displayId}}` | `monuments/{{displayId}}.webp` | `relic` |
+| `relic.json` | `Relic #{{displayId}}` | `relics/{{displayId}}.webp` | `relic` |
 | `crate.json` | `Crate #{{displayId}}` | `crate.jpg` | `crate` |
 | `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `crate_receipt.webp` | `crate receipt` |
 | `artwork_receipt.json` | `Receipt #{{displayId}}` | `artwork_placeholder_receipt.webp` | `receipt` |
 | `relic_receipt.json` | `Relic Receipt #{{displayId}}` | `receipt_background.webp` | `relic receipt` |
 
-Relic image URLs retain the existing `monuments/` storage path so published media keeps working. The image filenames above are rooted at `https://wip.lil.org/111k/`. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
+New relic publications use the `relics/` image path. Historical publications retain their recorded image URLs. The image filenames above are rooted at `https://wip.lil.org/111k/`. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
 
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
@@ -74,7 +74,7 @@ npm run ethereum:metadata -- generate --directory "$metadata_dir"
 npm run ethereum:metadata -- validate --directory "$metadata_dir"
 ```
 
-Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344984 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Relic display IDs 1–18 generate files `117172.json`–`117189.json` with images `monuments/1.webp`–`monuments/18.webp`.
+Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344984 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Relic display IDs 1–18 generate files `117172.json`–`117189.json` with images `relics/1.webp`–`relics/18.webp`.
 
 A completed revision directory can be reused for both networks after validation. Do not rerun generation into a completed directory. A shared generated revision does not imply a shared deployment ID.
 
@@ -142,7 +142,7 @@ Freshness applies when a client requests metadata. An already rendered page or a
 
 ## Local development and checks
 
-Local deployment manifest version 15 records `metadataBaseURI`. Local deployment and the end-to-end test default to the replacement `https://cdn.mons.shop/111k-sepolia/v11/` publication. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` overrides the local deployment namespace. The variable accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 15 requires a fresh deployment with relic claim availability, including manifests with matching CDN URLs. Local baseline metadata reads still require network access. The v10 publication retains historical names; updated relic names require a newly published full collection. Before publication, E2E validation can use a generated local revision through the test-only adapter below.
+Local deployment manifest version 15 records `metadataBaseURI`. Local deployment and the end-to-end test default to the replacement `https://cdn.mons.shop/111k-sepolia/v12/` publication. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` overrides the local deployment namespace. The variable accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 15 requires a fresh deployment with relic claim availability, including manifests with matching CDN URLs. Local baseline metadata reads still require network access. The v10 publication retains historical names; updated relic names require a newly published full collection. Before publication, E2E validation can use a generated local revision through the test-only adapter below.
 
 Publish the baseline metadata for a custom namespace before using it locally. Local artwork media is verified against the local reveal ledger even if shared CDN metadata was already revealed by a different collection.
 

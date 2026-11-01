@@ -31,7 +31,7 @@ const output = resolve(root, '.cache/111k-e2e');
 const { initialReceiver: initialDeliveryReceiver } = JSON.parse(await readFile(resolve(project, 'config/delivery-routing.json'), 'utf8')) as { initialReceiver: string };
 const build = spawnSync('forge', ['build', '--offline'], { cwd: project, stdio: 'inherit' });
 if (build.status !== 0) throw new Error('Contract compilation failed');
-const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v11/', 31337);
+const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v12/', 31337);
 const metadataDirectory = process.env.ETHEREUM_111K_E2E_METADATA_DIRECTORY;
 const metadataManifest = metadataDirectory ? await readMetadataManifest(metadataDirectory) : null;
 const metadataFetch: typeof fetch = async (input, init) => {
@@ -834,7 +834,7 @@ try {
         { transactionHash: claimed.transactionHash });
       assert.equal(confirmed.status, 'confirmed');
       assert.deepEqual(confirmed.items.map(item => [item.tokenId, item.kind, item.displayId, item.image]), [
-        [String(117171 + id), 'relic', id, `https://wip.lil.org/111k/monuments/${id}.webp`],
+        [String(117171 + id), 'relic', id, `https://wip.lil.org/111k/relics/${id}.webp`],
       ]);
     }
     const claimedStatus = await relicStatus();

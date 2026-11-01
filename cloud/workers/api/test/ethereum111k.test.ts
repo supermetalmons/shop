@@ -4377,7 +4377,7 @@ test('relic token information and numbered metadata are available throughout the
     for (const displayId of [1, 18]) {
       const tokenId = String(117171 + displayId);
       const metadata = { name: `Relic #${displayId}`, description: '',
-        image: `https://wip.lil.org/111k/monuments/${displayId}.webp`, attributes: [{ trait_type: 'type', value: 'relic' }] };
+        image: `https://wip.lil.org/111k/relics/${displayId}.webp`, attributes: [{ trait_type: 'type', value: 'relic' }] };
       f.state.tokens.set(tokenId, { kind: 6, displayId, owner: WALLET });
       f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
       const infos = await ethereumTokenInfos(readContext(f), [tokenId]);

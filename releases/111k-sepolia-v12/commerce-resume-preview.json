@@ -1,0 +1,19 @@
+{
+  "dryRun": true,
+  "command": "resume",
+  "control": {
+    "paused": true,
+    "revision": 33,
+    "pausedAtMs": 1793564192000,
+    "chainId": 11155111,
+    "contractAddress": "0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c",
+    "resetGuardId": null,
+    "lastResetId": "08e01802-6efe-4a3e-bb81-b2722199fb66",
+    "updatedAtMs": 1793564546000
+  },
+  "targetScope": {
+    "chainId": 11155111,
+    "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874"
+  },
+  "sql": "UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,\n    paused_at_ms = NULL,\n    chain_id = 11155111, contract_address = '0x320cf00a3606350821ed90ea435e93955b180874', updated_at_ms = (CAST(strftime('%s', 'now') AS INTEGER) * 1000)\n    WHERE singleton = 1 AND revision = 33 AND reset_guard_id IS NULL\n      AND paused = 1\n      AND chain_id IS 11155111 AND contract_address IS '0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c'\n      AND NOT EXISTS (SELECT 1 FROM commerce_documents WHERE drop_id = '111k_devnet')\n       AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_quotes WHERE chain_id = 11155111 AND contract_address = '0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c')\n       AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkouts WHERE chain_id = 11155111 AND contract_address = '0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c')\n       AND NOT EXISTS (SELECT 1 FROM ethereum_crate_claims WHERE chain_id = 11155111 AND contract_address = '0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c')\n       AND NOT EXISTS (SELECT 1 FROM ethereum_reconciliation_cursor WHERE chain_id = 11155111 AND contract_address = '0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c') RETURNING *"
+}

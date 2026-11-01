@@ -1753,7 +1753,7 @@ test('the relic icon opens claims without adding a public relic mint', async t =
 });
 
 test('relics preserve their numbered images and allow delivery together or opening individually', async t => {
-  const relic = { ...item('117189', 'relic'), displayId: 18, name: 'Relic #18', image: 'https://wip.lil.org/111k/monuments/18.webp' };
+  const relic = { ...item('117189', 'relic'), displayId: 18, name: 'Relic #18', image: 'https://wip.lil.org/111k/relics/18.webp' };
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [relic, item()], nextCursor: null, observedBlock: 10 }));
   const view = page();
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${relic.id}"]`)));
@@ -1771,7 +1771,7 @@ test('relics preserve their numbered images and allow delivery together or openi
 
 test('relic receipts preserve the matching image and offer transfer without further claims or delivery', async t => {
   const receipt = { ...item('3000018', 'relic_receipt'), displayId: 18, name: 'Relic Receipt #18',
-    image: 'https://wip.lil.org/111k/monuments/18.webp' };
+    image: 'https://wip.lil.org/111k/relics/18.webp' };
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [receipt], nextCursor: null, observedBlock: 10 }));
   const view = page();
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Relic Receipt #18' })));

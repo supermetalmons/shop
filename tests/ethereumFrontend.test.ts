@@ -566,7 +566,7 @@ test('relic metadata requests stay bounded and preserve ID order across out-of-o
     maximum = Math.max(maximum, active);
     await new Promise(resolve => setTimeout(resolve, (19 - id) % 4));
     active--;
-    return Response.json({ name: `Relic #${id}`, image: `https://wip.lil.org/111k/monuments/${id}.webp` });
+    return Response.json({ name: `Relic #${id}`, image: `https://wip.lil.org/111k/relics/${id}.webp` });
   });
   const metadata = await ethereumApi.relicMetadata(config);
   assert.equal(maximum, 4);

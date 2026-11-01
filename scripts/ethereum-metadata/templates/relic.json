@@ -1,7 +1,7 @@
 {
   "name": "Relic #{{displayId}}",
   "description": "",
-  "image": "https://wip.lil.org/111k/monuments/{{displayId}}.webp",
+  "image": "https://wip.lil.org/111k/relics/{{displayId}}.webp",
   "attributes": [
     { "trait_type": "type", "value": "relic" }
   ]
