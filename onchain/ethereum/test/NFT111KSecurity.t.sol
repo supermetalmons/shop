@@ -1,6 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
+import {DeliveryAccounting} from "./DeliveryAccounting.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 interface SecurityVm {
@@ -17,13 +18,20 @@ contract SecurityCollection is NFT111K {
     constructor(
         address owner_,
         address signer_,
-        address payable deliveryReceiver_,
+        address initialDeliveryReceiver_,
         string memory baseURI_,
         address[] memory recipients_,
         uint256[] memory shares_
     )
         NFT111K(
-            owner_, signer_, deliveryReceiver_, baseURI_, bytes32(0), recipients_, shares_, new FreeMintAllocation[](0)
+            owner_,
+            signer_,
+            initialDeliveryReceiver_,
+            baseURI_,
+            bytes32(0),
+            recipients_,
+            shares_,
+            new FreeMintAllocation[](0)
         )
     {}
 
@@ -171,7 +179,7 @@ contract SecurityReceiver {
         }
         if (checkProceeds) {
             require(token.totalMintReceived() == expectedProceeds[0], "callback mint proceeds mismatch");
-            require(token.totalDeliveryReceived() == expectedProceeds[1], "callback delivery proceeds mismatch");
+            require(DeliveryAccounting.received(token) == expectedProceeds[1], "callback delivery proceeds mismatch");
         }
         if (checkMonuments) {
             (,,,,,,,,,, uint256 monuments,) = token.stats(address(0));
@@ -275,7 +283,7 @@ contract NFT111KSecurityTest is TestSupport {
     bytes32 internal constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 internal constant DELIVERY_TYPEHASH = keccak256(
-        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
     );
     bytes32 internal constant CLAIM_TYPEHASH =
         keccak256("CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)");
@@ -508,9 +516,9 @@ contract NFT111KSecurityTest is TestSupport {
         _outputs(111115, 11, 2, 4, ALICE);
         uint256 balance = address(token).balance;
         _releaseAllMint();
-        token.releaseDelivery();
-        assertEq(DELIVERY_RECEIVER.balance, token.totalDeliveryReceived());
-        assertEq(token.totalMintReleased() + token.totalDeliveryReleased(), balance);
+        DeliveryAccounting.release(token, DELIVERY_RECEIVER);
+        assertEq(DELIVERY_RECEIVER.balance, DeliveryAccounting.received(token));
+        assertEq(token.totalMintReleased() + DeliveryAccounting.released(token), balance);
         assertEq(address(token).balance, 0);
         assertTrue(token.redemptionsPaused());
         token.setRedemptionsPaused(false);
@@ -828,7 +836,7 @@ contract NFT111KSecurityTest is TestSupport {
         receipts[0] = 1000001;
         receipts[1] = 1000020;
         NFT111K.DeliveryQuote memory quote = NFT111K.DeliveryQuote(
-            2, address(buyer), 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts))
+            2, address(buyer), 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)), 1
         );
         bytes memory signature = _deliverySignature(ids, quote, SIGNER_KEY);
         SecurityCall[] memory calls = new SecurityCall[](2);
@@ -1145,7 +1153,7 @@ contract NFT111KSecurityTest is TestSupport {
     function _expectRoutePurchaseTotals(SecurityReceiver buyer, uint256 route) internal {
         buyer.expectProceeds(
             token.totalMintReceived() + (route == 0 ? 0.0003 ether : route == 1 ? 0.0033 ether : 0),
-            token.totalDeliveryReceived() + (route == 4 ? 0.0001 ether : 0)
+            DeliveryAccounting.received(token) + (route == 4 ? 0.0001 ether : 0)
         );
         if (route < 2) buyer.expectPurchaseTotals(route == 0 ? 18 : 48, route == 0 ? 1 : 4, 0);
     }
@@ -1265,8 +1273,8 @@ contract NFT111KSecurityTest is TestSupport {
             abi.encode(
                 token.totalMintReceived(),
                 token.totalMintReleased(),
-                token.totalDeliveryReceived(),
-                token.totalDeliveryReleased()
+                DeliveryAccounting.received(token),
+                DeliveryAccounting.released(token)
             )
         );
         return keccak256(
@@ -1331,7 +1339,9 @@ contract NFT111KSecurityTest is TestSupport {
             receipts[i] = (kind == 1 ? 1000000 : kind == 2 ? 2000000 : 3000000) + displayId;
         }
         return
-            NFT111K.DeliveryQuote(orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
+            NFT111K.DeliveryQuote(
+                orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)), 1
+            );
     }
 
     function _redeem(address wallet, uint256[] memory ids, uint256 orderId) internal {
@@ -1353,7 +1363,8 @@ contract NFT111KSecurityTest is TestSupport {
                 quote.receiptIdsHash,
                 quote.orderId,
                 quote.fee,
-                quote.deadline
+                quote.deadline,
+                quote.configId
             )
         );
         return _sign(structHash, key);

@@ -1,11 +1,18 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
+import {DeliveryAccounting} from "./DeliveryAccounting.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract RejectingDeliveryReceiver {
-    fallback() external payable {
-        revert();
+    bool public rejecting = true;
+
+    function acceptPayments() external {
+        rejecting = false;
+    }
+
+    receive() external payable {
+        if (rejecting) revert();
     }
 }
 
@@ -77,7 +84,7 @@ contract NFT111KTest is TestSupport {
     bytes32 internal constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 internal constant DELIVERY_TYPEHASH = keccak256(
-        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
     );
     bytes32 internal constant CLAIM_TYPEHASH =
         keccak256("CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)");
@@ -377,7 +384,7 @@ contract NFT111KTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         Vm.Log memory delivery = logs[logs.length - 1];
-        assertEq(delivery.topics[0], keccak256("DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[])"));
+        assertEq(delivery.topics[0], keccak256("DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[],uint256)"));
         (uint256 fee, uint256[] memory sources, uint256[] memory receipts) =
             abi.decode(delivery.data, (uint256, uint256[], uint256[]));
         assertEq(fee, quote.fee);
@@ -392,7 +399,7 @@ contract NFT111KTest is TestSupport {
         assertEq(token.remainingCrates(), 5444);
         assertEq(token.monumentsMinted(), 1);
         assertEq(token.totalSupply(), 1);
-        assertEq(token.totalDeliveryReceived(), quote.fee);
+        assertEq(DeliveryAccounting.received(token), quote.fee);
         for (uint256 id = 111112; id < 111223; ++id) {
             _info(id, 0, 0, address(0));
         }
@@ -464,7 +471,7 @@ contract NFT111KTest is TestSupport {
         _info(117172, 6, 1, address(buyer));
         _info(3000001, 0, 0, address(0));
         assertFalse(token.usedDeliveryOrders(1));
-        assertEq(token.totalDeliveryReceived(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
         assertEq(token.allocatedCrates(), 111);
         buyer.setRejectReceipt(false);
         buyer.setTransferOnReceipt(3000001, bob);
@@ -623,7 +630,8 @@ contract NFT111KTest is TestSupport {
                 quote.receiptIdsHash,
                 quote.orderId,
                 quote.fee,
-                quote.deadline
+                quote.deadline,
+                quote.configId
             )
         );
         bytes memory signature = _sign(keccak256(abi.encodePacked(hex"1901", legacyDomain, deliveryHash)));
@@ -786,7 +794,9 @@ contract NFT111KTest is TestSupport {
         Vm.Log memory delivered = logs[logs.length - 1];
         assertEq(delivered.emitter, address(token));
         assertEq(delivered.topics.length, 3);
-        assertEq(delivered.topics[0], keccak256("DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[])"));
+        assertEq(
+            delivered.topics[0], keccak256("DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[],uint256)")
+        );
         assertEq(delivered.topics[1], bytes32(quote.orderId));
         assertEq(delivered.topics[2], bytes32(uint256(uint160(alice))));
         (uint256 fee, uint256[] memory eventIds, uint256[] memory eventReceipts) =
@@ -806,20 +816,21 @@ contract NFT111KTest is TestSupport {
     }
 
     function testRejectingDeliveryReceiverCannotBlockPurchasesOrDeliveryAndReleaseCanRetry() public {
-        token.setDeliveryPaymentReceiver(payable(address(new RejectingDeliveryReceiver())));
+        RejectingDeliveryReceiver rejecting = new RejectingDeliveryReceiver();
+        deliveryReceiver = payable(address(rejecting));
         _buyCrates(alice, 1);
         _redeem(alice, _one(111112), 1);
         vm.expectRevert(NFT111K.ProceedsPaymentFailed.selector);
-        token.releaseDelivery();
+        token.releaseDeliveryFor(2, false);
         assertEq(address(token).balance, 0.0002 ether);
-        assertEq(token.totalDeliveryReleased(), 0);
+        assertEq(DeliveryAccounting.released(token), 0);
         address[] memory recipients = _proceedsRecipients();
         for (uint256 i; i < recipients.length; ++i) {
             token.releaseMint(recipients[i]);
         }
         assertEq(address(token).balance, 0.0001 ether);
-        token.setDeliveryPaymentReceiver(deliveryReceiver);
-        token.releaseDelivery();
+        rejecting.acceptPayments();
+        DeliveryAccounting.release(token, deliveryReceiver);
         assertEq(deliveryReceiver.balance, 0.0001 ether);
         assertEq(address(token).balance, 0);
     }
@@ -988,7 +999,6 @@ contract NFT111KTest is TestSupport {
 
     function _quote(address wallet, uint256 orderId, uint256[] memory ids)
         internal
-        view
         returns (NFT111K.DeliveryQuote memory)
     {
         uint256[] memory receipts = new uint256[](ids.length);
@@ -998,8 +1008,14 @@ contract NFT111KTest is TestSupport {
             else if (kind == 2) receipts[i] = 2_000_000 + displayId;
             else if (kind == 6) receipts[i] = 3_000_000 + displayId;
         }
-        return
-            NFT111K.DeliveryQuote(orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
+        return NFT111K.DeliveryQuote(
+            orderId,
+            wallet,
+            0.0001 ether,
+            block.timestamp + 300,
+            keccak256(abi.encode(receipts)),
+            DeliveryAccounting.ensureSingle(token, deliveryReceiver)
+        );
     }
 
     function _redeem(address wallet, uint256[] memory ids, uint256 orderId) internal {
@@ -1025,7 +1041,8 @@ contract NFT111KTest is TestSupport {
                 quote.receiptIdsHash,
                 quote.orderId,
                 quote.fee,
-                quote.deadline
+                quote.deadline,
+                quote.configId
             )
         );
         return _sign(keccak256(abi.encodePacked(hex"1901", _domain(), structHash)));

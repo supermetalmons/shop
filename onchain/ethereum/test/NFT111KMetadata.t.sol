@@ -204,7 +204,7 @@ contract NFT111KMetadataTest is TestSupport {
         return new NFT111K(
             address(this),
             address(0x5151),
-            payable(address(0xFEE)),
+            address(0xBEEF),
             baseURI,
             bytes32(0),
             _proceedsRecipients(),

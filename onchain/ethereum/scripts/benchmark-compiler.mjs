@@ -48,7 +48,7 @@ if (baselineReference) {
   assert.deepEqual(Object.keys(baselineReference.gas), expectedNames, 'Compiler baseline benchmark names changed');
 }
 const temporaryRoot = mkdtempSync(join(tmpdir(), '111k-compiler-'));
-const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim|release|setFreeMintAllowances|setBaseURI)/.test(name));
+const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name));
 const progress = message => process.stderr.write(message + '\n');
 const save = report => writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
 const sourceHashes = directory => Object.fromEntries(readdirSync(join(directory, 'src'))
@@ -125,7 +125,7 @@ contract ${harnessName} is NFT111KGasTest {
         returns (NFT111K)
     {
         return NFT111K(_deployCandidate("NFT111K", abi.encode(
-            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), "${metadataBaseURI}", bytes32(0), recipients, shares,
+            address(this), vm.addr(SIGNER_KEY), address(0xBEEF), "${metadataBaseURI}", bytes32(0), recipients, shares,
             new NFT111K.FreeMintAllocation[](0)
         )));
     }

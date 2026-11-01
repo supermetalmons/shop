@@ -223,6 +223,7 @@ export function createCommerceD1Harness(
     ethereumControlMigration?: boolean;
     preorderAssetLookupMigration?: boolean;
     frozenCommerceMetadataCleanupMigration?: boolean;
+    ethereumDeliveryRoutingMigration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -283,6 +284,7 @@ export function createCommerceD1Harness(
         if (options.ethereumControlMigration === false && migration.name >= '0041_') break;
         if (options.preorderAssetLookupMigration === false && migration.name >= '0045_') break;
         if (options.frozenCommerceMetadataCleanupMigration === false && migration.name >= '0046_') break;
+        if (options.ethereumDeliveryRoutingMigration === false && migration.name >= '0047_') break;
         database.exec(migration.sql);
       }
     }

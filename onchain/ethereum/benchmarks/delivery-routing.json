@@ -1,0 +1,495 @@
+{
+  "schemaVersion": 1,
+  "referenceCommit": "d37e03bc17db5fb6b08463f6a61c84c6a7335c2c",
+  "candidateBaseCommit": "d37e03bc17db5fb6b08463f6a61c84c6a7335c2c",
+  "settings": {
+    "solc": "0.8.30",
+    "optimizer": true,
+    "optimizerRuns": 500,
+    "viaIR": false,
+    "evm": "prague",
+    "bytecodeHash": "none"
+  },
+  "method": "Actual local Prague receipts; two identical runs per variant; fixed addresses, timestamps, token selections, fee and 25% secondary amount. Version-specific constructor, delivery signature/calldata and withdrawal adapters preserve equivalent single-receiver behavior. Setup and signing are excluded. Receipts include intrinsic calldata gas and refunds; withdrawals target initially empty ordinary addresses. Split comparisons use matching single-receiver scenarios; the old contract has no split feature. No gas estimate or remote chain is used.",
+  "provenance": {
+    "sourceSha256": {
+      "reference": "2ef2e621c4a481499823527b6e1838ddf3e4abdbd468ba31ba09be4b3c594b9f",
+      "candidate": "584193b2e5ba87983b35c694c2bd8cc51c972b9ae553e454d217a916e871d436"
+    },
+    "scriptSha256": "30e5663d0048cbc48e9ffa27fd632c26a73d107ff19761192a8b31781f27dab3",
+    "gasHarnessSha256": "4262b92ecf1e471ca13561a3268d21f6d41329171feab5ca0f19f777cc9c98ed",
+    "packageLockSha256": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b",
+    "rootPackageLockSha256": "7135dd0b4cbdd89d7de817e0d60584cd87fe40ecb3c0e2bcfa0a644cfcafa7db",
+    "abiHelperSha256": "d9a58cf4807c4b59ecb1b9a593ab19d0ea8fb15d0fbbac1db49da58b4102602e",
+    "cryptoHelperSha256": "fb2cd1db87737027fa6ee0231abb0f49656d9905db9cc35568984bba9fb08757",
+    "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+    "anvil": "anvil Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+    "node": "v26.5.0"
+  },
+  "artifacts": {
+    "reference": {
+      "runtimeBytes": 23438,
+      "headroomBytes": 1138,
+      "creationBytes": 27952,
+      "maximumConstructorArgumentBytes": 6656,
+      "creationSha256": "0e26907a599a6e3f230aea8572cf3fa4cbda2274a417192675b4b7523d2846b8",
+      "runtimeSha256": "6f9b5ad669b6a96f95f0cce599203c400a34780afd59e7a334a900217713056a"
+    },
+    "candidate": {
+      "runtimeBytes": 23832,
+      "headroomBytes": 744,
+      "creationBytes": 28182,
+      "maximumConstructorArgumentBytes": 6624,
+      "creationSha256": "415ab11ea0c6e89ad1bd75ae4041cbf73b525b87b5c14078eacac78efa80fc49",
+      "runtimeSha256": "0adeab72c4c009a6c969a1b0cd20c245d6208ac29f991cbe8fe7062a4a19a3c2"
+    }
+  },
+  "isolated": {
+    "repetitions": 2,
+    "identicalRepeats": true,
+    "method": "Forge --isolate; runtime call snapshots include intrinsic gas and refunds; setup/signing excluded.",
+    "rows": [
+      {
+        "name": "deliverySingleCrateAfterRelease",
+        "gasUsed": 144042
+      },
+      {
+        "name": "deliverySingleCrateFresh",
+        "gasUsed": 178242
+      },
+      {
+        "name": "deliverySingleCratePending",
+        "gasUsed": 126942
+      },
+      {
+        "name": "deliverySingleMixed50Fresh",
+        "gasUsed": 2494286
+      },
+      {
+        "name": "deliverySingleMixed50Pending",
+        "gasUsed": 2460086
+      },
+      {
+        "name": "deliverySplitCrateAfterRelease",
+        "gasUsed": 169554
+      },
+      {
+        "name": "deliverySplitCrateFresh",
+        "gasUsed": 203754
+      },
+      {
+        "name": "deliverySplitCrateOneFresh",
+        "gasUsed": 152454
+      },
+      {
+        "name": "deliverySplitCratePending",
+        "gasUsed": 135354
+      },
+      {
+        "name": "deliverySplitMixed50Fresh",
+        "gasUsed": 2519798
+      },
+      {
+        "name": "deliverySplitMixed50Pending",
+        "gasUsed": 2468498
+      },
+      {
+        "name": "releaseDelivery",
+        "gasUsed": 80754
+      },
+      {
+        "name": "releaseDeliveryAfterRelease",
+        "gasUsed": 38654
+      },
+      {
+        "name": "releaseDeliveryEmpty",
+        "gasUsed": 24465
+      }
+    ]
+  },
+  "receipts": {
+    "repetitions": 2,
+    "variants": {
+      "reference": {
+        "identicalRepeats": true,
+        "deploymentGas": 5652926,
+        "rows": [
+          {
+            "name": "crate-single-fresh",
+            "gasUsed": 151040,
+            "status": "0x1",
+            "calldataBytes": 420,
+            "transactions": 2,
+            "traceSha256": "bab344668d62475fc40e6bfd6635d5f3b3ac99f0d86cdc5ced12929c18e9993c"
+          },
+          {
+            "name": "crate-single-pending",
+            "gasUsed": 116840,
+            "status": "0x1",
+            "calldataBytes": 420,
+            "transactions": 3,
+            "traceSha256": "c348de9e83b2ebff04f04dba743ab06e8e65e16e207b4de2aaae1ac18a5ec5f1"
+          },
+          {
+            "name": "mixed50-single-fresh",
+            "gasUsed": 2467066,
+            "status": "0x1",
+            "calldataBytes": 1988,
+            "transactions": 5,
+            "traceSha256": "ba005ed98132bcc2d079a20de2a5e4faacbb35b477a1550c0a93b97b008015f4"
+          },
+          {
+            "name": "mixed50-single-pending",
+            "gasUsed": 2449966,
+            "status": "0x1",
+            "calldataBytes": 1988,
+            "transactions": 6,
+            "traceSha256": "e7a1c3ccc0a82e171554397ce53e83f9541530ea9cd01b2db93f1b01d12d4bcd"
+          },
+          {
+            "name": "crate-single-after-withdrawal",
+            "gasUsed": 116840,
+            "status": "0x1",
+            "calldataBytes": 420,
+            "transactions": 4,
+            "traceSha256": "bfb8822e6100e5102e33e03c552a35475b957be555568474a3c39e617e3f1cdf"
+          },
+          {
+            "name": "withdrawal-first",
+            "gasUsed": 84450,
+            "status": "0x1",
+            "calldataBytes": 4,
+            "transactions": 3,
+            "traceSha256": "8dc4dde1fb5f3308cf64986aa86b787a0a366d57b1fa02ad61a614eda8d84e50"
+          },
+          {
+            "name": "withdrawal-repeat",
+            "gasUsed": 42350,
+            "status": "0x1",
+            "calldataBytes": 4,
+            "transactions": 5,
+            "traceSha256": "09fd285d82428a38ea2468acceb1618c400b670da347ef9a0c68e6840a17860f"
+          },
+          {
+            "name": "withdrawal-empty",
+            "gasUsed": 26218,
+            "status": "0x1",
+            "calldataBytes": 4,
+            "transactions": 1,
+            "traceSha256": "3eb40d966e7c8eab133aec8974a5f8d397dd3fc1b916dcb8f7c7f1250378afd6"
+          },
+          {
+            "name": "withdrawal-rejecting",
+            "gasUsed": 57843,
+            "status": "0x0",
+            "calldataBytes": 4,
+            "transactions": 4,
+            "traceSha256": "9fb3ae6b9268a02ed477ca76a4612505c0d2ca646d2e13b050b5261ec253653d"
+          }
+        ]
+      },
+      "candidate": {
+        "identicalRepeats": true,
+        "deploymentGas": 5710607,
+        "rows": [
+          {
+            "name": "crate-single-fresh",
+            "gasUsed": 178458,
+            "status": "0x1",
+            "calldataBytes": 516,
+            "transactions": 2,
+            "traceSha256": "0ebb454778659f639741afa4c5e0bb53817e2ff5967b5439fb3f82949fe38209"
+          },
+          {
+            "name": "crate-split-fresh",
+            "gasUsed": 203970,
+            "status": "0x1",
+            "calldataBytes": 516,
+            "transactions": 2,
+            "traceSha256": "e6fd9d6f6aa061e497911d9ad28c6a2d30826a866fdd18b4ee60b4dd8e50d647"
+          },
+          {
+            "name": "crate-single-pending",
+            "gasUsed": 127158,
+            "status": "0x1",
+            "calldataBytes": 516,
+            "transactions": 3,
+            "traceSha256": "f9981ca5294828814439e0b4a6ff1775b3ebea67de25a17ba726b6013a82c4b5"
+          },
+          {
+            "name": "crate-split-pending",
+            "gasUsed": 135558,
+            "status": "0x1",
+            "calldataBytes": 516,
+            "transactions": 3,
+            "traceSha256": "f874156cefe8b06a041f5b5e11589779879528173670d9f1b6b1d75bb78d593e"
+          },
+          {
+            "name": "mixed50-single-fresh",
+            "gasUsed": 2494502,
+            "status": "0x1",
+            "calldataBytes": 2084,
+            "transactions": 5,
+            "traceSha256": "f23cf1a6819b566a5dd986dba1f740b2496ac703a615d994bcdb46fde5c7bfde"
+          },
+          {
+            "name": "mixed50-split-fresh",
+            "gasUsed": 2520014,
+            "status": "0x1",
+            "calldataBytes": 2084,
+            "transactions": 5,
+            "traceSha256": "f5d94659bae4b53eaf22f2e42c6b4a47cebc2072ff99861328b2d086c70aff2a"
+          },
+          {
+            "name": "mixed50-single-pending",
+            "gasUsed": 2460302,
+            "status": "0x1",
+            "calldataBytes": 2084,
+            "transactions": 6,
+            "traceSha256": "79839db05de56b7bcf0f49ed94790628d98b8753a7e9816ee7579d014333eca0"
+          },
+          {
+            "name": "mixed50-split-pending",
+            "gasUsed": 2468714,
+            "status": "0x1",
+            "calldataBytes": 2084,
+            "transactions": 6,
+            "traceSha256": "017fd76c4948e9403b4769981ee3192f2224d103f43905dc7f3f5905fa708ff7"
+          },
+          {
+            "name": "crate-single-after-withdrawal",
+            "gasUsed": 144258,
+            "status": "0x1",
+            "calldataBytes": 516,
+            "transactions": 4,
+            "traceSha256": "9324abc7b9ca85be051cff7b8f49136fc6518ba146450854687ebf324bc3b484"
+          },
+          {
+            "name": "crate-split-after-withdrawal",
+            "gasUsed": 169770,
+            "status": "0x1",
+            "calldataBytes": 516,
+            "transactions": 5,
+            "traceSha256": "ef5db3dc5703f2508c9dd550cdbd2211ab89d3443e54c03c33735cf8225d3e12"
+          },
+          {
+            "name": "crate-split-one-fresh",
+            "gasUsed": 152658,
+            "status": "0x1",
+            "calldataBytes": 516,
+            "transactions": 3,
+            "traceSha256": "8dbf03b8f2f4c75a8088061d61e3a22af8d8ae87998b5506e90f5e9990ef41fe"
+          },
+          {
+            "name": "withdrawal-first",
+            "gasUsed": 80754,
+            "status": "0x1",
+            "calldataBytes": 36,
+            "transactions": 3,
+            "traceSha256": "af09c4445eb3a2a33bd3dc6168ec6c078f1c9c2cec15e1b2f1506bdd80aa29f2"
+          },
+          {
+            "name": "withdrawal-repeat",
+            "gasUsed": 38654,
+            "status": "0x1",
+            "calldataBytes": 36,
+            "transactions": 5,
+            "traceSha256": "d4aa7bc5a4886aff879341930986ae82bfb900832c620c8f2098cac98ee356ae"
+          },
+          {
+            "name": "withdrawal-empty",
+            "gasUsed": 24465,
+            "status": "0x1",
+            "calldataBytes": 36,
+            "transactions": 1,
+            "traceSha256": "41afbd1e199c758b87a74a10499fdccec5cdb78616746e5f5a4f3890f09ffc62"
+          },
+          {
+            "name": "withdrawal-rejecting",
+            "gasUsed": 59164,
+            "status": "0x0",
+            "calldataBytes": 36,
+            "transactions": 3,
+            "traceSha256": "b8e5e876d51618d912a9babb6548f2183b4a18f72053a3f1d5384032c7ff33f8"
+          }
+        ]
+      }
+    },
+    "scenarioCount": 15,
+    "measuredReceiptCount": 48,
+    "collection": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512"
+  },
+  "baselineComparisons": [
+    {
+      "name": "crate-single-fresh",
+      "referenceName": "crate-single-fresh",
+      "before": 151040,
+      "after": 178458,
+      "delta": 27418,
+      "percent": 18.15280720338983
+    },
+    {
+      "name": "crate-split-fresh",
+      "referenceName": "crate-single-fresh",
+      "before": 151040,
+      "after": 203970,
+      "delta": 52930,
+      "percent": 35.043697033898304
+    },
+    {
+      "name": "crate-single-pending",
+      "referenceName": "crate-single-pending",
+      "before": 116840,
+      "after": 127158,
+      "delta": 10318,
+      "percent": 8.830879835672715
+    },
+    {
+      "name": "crate-split-pending",
+      "referenceName": "crate-single-pending",
+      "before": 116840,
+      "after": 135558,
+      "delta": 18718,
+      "percent": 16.020198562136255
+    },
+    {
+      "name": "mixed50-single-fresh",
+      "referenceName": "mixed50-single-fresh",
+      "before": 2467066,
+      "after": 2494502,
+      "delta": 27436,
+      "percent": 1.112090231878677
+    },
+    {
+      "name": "mixed50-split-fresh",
+      "referenceName": "mixed50-single-fresh",
+      "before": 2467066,
+      "after": 2520014,
+      "delta": 52948,
+      "percent": 2.1461930892809518
+    },
+    {
+      "name": "mixed50-single-pending",
+      "referenceName": "mixed50-single-pending",
+      "before": 2449966,
+      "after": 2460302,
+      "delta": 10336,
+      "percent": 0.4218834057288958
+    },
+    {
+      "name": "mixed50-split-pending",
+      "referenceName": "mixed50-single-pending",
+      "before": 2449966,
+      "after": 2468714,
+      "delta": 18748,
+      "percent": 0.7652351093851915
+    },
+    {
+      "name": "crate-single-after-withdrawal",
+      "referenceName": "crate-single-after-withdrawal",
+      "before": 116840,
+      "after": 144258,
+      "delta": 27418,
+      "percent": 23.46627867168778
+    },
+    {
+      "name": "crate-split-after-withdrawal",
+      "referenceName": "crate-single-after-withdrawal",
+      "before": 116840,
+      "after": 169770,
+      "delta": 52930,
+      "percent": 45.3012666894899
+    },
+    {
+      "name": "crate-split-one-fresh",
+      "referenceName": "crate-single-pending",
+      "before": 116840,
+      "after": 152658,
+      "delta": 35818,
+      "percent": 30.65559739815132
+    },
+    {
+      "name": "withdrawal-first",
+      "referenceName": "withdrawal-first",
+      "before": 84450,
+      "after": 80754,
+      "delta": -3696,
+      "percent": -4.376554174067495
+    },
+    {
+      "name": "withdrawal-repeat",
+      "referenceName": "withdrawal-repeat",
+      "before": 42350,
+      "after": 38654,
+      "delta": -3696,
+      "percent": -8.727272727272727
+    },
+    {
+      "name": "withdrawal-empty",
+      "referenceName": "withdrawal-empty",
+      "before": 26218,
+      "after": 24465,
+      "delta": -1753,
+      "percent": -6.686246090472195
+    },
+    {
+      "name": "withdrawal-rejecting",
+      "referenceName": "withdrawal-rejecting",
+      "before": 57843,
+      "after": 59164,
+      "delta": 1321,
+      "percent": 2.283768130975226
+    }
+  ],
+  "splitComparisons": [
+    {
+      "name": "crate-split-fresh",
+      "singleName": "crate-single-fresh",
+      "before": 178458,
+      "after": 203970,
+      "delta": 25512,
+      "percent": 14.29580069259994
+    },
+    {
+      "name": "crate-split-pending",
+      "singleName": "crate-single-pending",
+      "before": 127158,
+      "after": 135558,
+      "delta": 8400,
+      "percent": 6.605954796395036
+    },
+    {
+      "name": "mixed50-split-fresh",
+      "singleName": "mixed50-single-fresh",
+      "before": 2494502,
+      "after": 2520014,
+      "delta": 25512,
+      "percent": 1.0227291860259082
+    },
+    {
+      "name": "mixed50-split-pending",
+      "singleName": "mixed50-single-pending",
+      "before": 2460302,
+      "after": 2468714,
+      "delta": 8412,
+      "percent": 0.3419092452877736
+    },
+    {
+      "name": "crate-split-after-withdrawal",
+      "singleName": "crate-single-after-withdrawal",
+      "before": 144258,
+      "after": 169770,
+      "delta": 25512,
+      "percent": 17.68498107557293
+    },
+    {
+      "name": "crate-split-one-fresh",
+      "singleName": "crate-single-pending",
+      "before": 127158,
+      "after": 152658,
+      "delta": 25500,
+      "percent": 20.053791346199215
+    }
+  ],
+  "status": "passed"
+}

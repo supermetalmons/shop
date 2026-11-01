@@ -23,6 +23,7 @@ const { ethereumInventoryScope, readEthereumExpected, readEthereumOperation, rea
 type Wallet = Parameters<typeof useEthereum111k>[0];
 dom.window.close();
 
+const deliveryConfigId = 1;
 const owner = '0x1111111111111111111111111111111111111111';
 const other = '0x2222222222222222222222222222222222222222';
 const contract = '0x3333333333333333333333333333333333333333';
@@ -408,8 +409,8 @@ test('Ethereum delivery sends once, encrypts the address and automatically publi
     const deadline = Math.floor(Date.now() / 1000) + 600;
     const signature = `0x${'ab'.repeat(65)}`;
     const receiptIdsHash = ethereumReceiptIdsHash(['2000001']);
-    return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash },
-      transaction: { to: contract, data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash], signature]), value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`, chainId: config.chainId } };
+    return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash, configId: deliveryConfigId },
+      transaction: { to: contract, data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash, deliveryConfigId], signature]), value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`, chainId: config.chainId } };
   });
   const connected = wallet();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
@@ -461,8 +462,8 @@ for (const differentArtworkOrder of [false, true]) test(`delivery sorts a copy o
   const receiptIdsHash = ethereumReceiptIdsHash(differentArtworkOrder ? ['1000842', '1000850', '1000001', '2000001', '3000018'] : ['1000842', '1000850', '2000001', '3000018']);
   const prepare = t.mock.method(ethereumApi, 'prepareDelivery', async ids => {
     assert.deepEqual(ids, tokenIds);
-    return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash },
-      transaction: { to: contract, data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash], signature]), value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`, chainId: config.chainId } };
+    return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash, configId: deliveryConfigId },
+      transaction: { to: contract, data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash, deliveryConfigId], signature]), value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`, chainId: config.chainId } };
   });
   const connected = wallet();
   const view = harness(connected, false, 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=');
@@ -475,8 +476,8 @@ for (const differentArtworkOrder of [false, true]) test(`delivery sorts a copy o
   assert.equal(prepare.mock.callCount(), 1);
   assert.equal(connected.sent.length, 1);
   const [sent] = connected.sent[0] as [{ data: string }];
-  assert.deepEqual(decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], `0x${sent.data.slice(10)}`), [
-    tokenIds.map(BigInt), [42n, owner, BigInt(config.deliveryFeeWei), BigInt(deadline), receiptIdsHash], signature,
+  assert.deepEqual(decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], `0x${sent.data.slice(10)}`), [
+    tokenIds.map(BigInt), [42n, owner, BigInt(config.deliveryFeeWei), BigInt(deadline), receiptIdsHash, BigInt(deliveryConfigId)], signature,
   ]);
   assert.equal(readEthereumPending(scope)?.intent?.data, sent.data);
   assert.deepEqual(selected, originalSelection);

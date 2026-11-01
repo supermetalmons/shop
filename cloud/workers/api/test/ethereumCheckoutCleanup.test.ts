@@ -42,6 +42,7 @@ function fixture(t: TestContext) {
     ETHEREUM_111K_DEPLOYMENT_BLOCK: '2',
     ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
     ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_SIGNER_SECRET: SIGNER_KEY,
+    ETHEREUM_111K_DELIVERY_CONFIG_ID: '1',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
   };
   let rpcCalls = 0;
@@ -60,6 +61,10 @@ function fixture(t: TestContext) {
       } else if (request.method === 'eth_call') {
         const data = (request.params[0] as { data: string }).data;
         if (data.startsWith(encodeCall('quoteSigner()', [], []))) result = encodeAbi(['address'], [ethereumSignerAddress(SIGNER_KEY)]);
+        else if (data.startsWith(encodeCall('deliveryConfigs(uint256)', [], []))) {
+          result = encodeAbi(['address', 'address', 'uint16', 'uint256', 'uint256', 'uint256'],
+            [WALLET, `0x${'0'.repeat(40)}`, 0, 0, 0, 0]);
+        }
         else if (data.startsWith(encodeCall('getTokenInfos(uint256[])', [], []))) {
           result = encodeAbi(['(uint8,uint256,address)[]'], [[[2, 1, WALLET]]]);
         } else throw new Error(`Unexpected contract read: ${data}`);
@@ -87,8 +92,8 @@ function fixture(t: TestContext) {
   function quote(number: number) {
     commerce.database.prepare(`INSERT INTO ethereum_delivery_quotes
       (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
-        items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id)
-      VALUES (31337, ?, ?, ?, ?, ?, '{}', '["111112"]', '[]', '0', ?, 'prepared', ?, ?, ?)`)
+        items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id, config_id)
+      VALUES (31337, ?, ?, ?, ?, ?, '{}', '["111112"]', '[]', '0', ?, 'prepared', ?, ?, ?, 1)`)
       .run(CONTRACT, number, id(number), WALLET, ADDRESS_ID, Math.floor(NOW / 1000) + 600, NOW, NOW, id(number));
   }
   const context = (nowMs = NOW): EthereumContext => ({ env, config: ethereumConfig(env), nowMs,

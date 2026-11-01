@@ -13,9 +13,9 @@ export const nft111KAbi = [
         "internalType": "address"
       },
       {
-        "name": "deliveryPaymentReceiver_",
+        "name": "initialDeliveryReceiver",
         "type": "address",
-        "internalType": "address payable"
+        "internalType": "address"
       },
       {
         "name": "baseURI_",
@@ -479,13 +479,57 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
-    "name": "deliveryPaymentReceiver",
+    "name": "deliveryConfigCount",
     "inputs": [],
     "outputs": [
       {
         "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "deliveryConfigs",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "receiver1",
         "type": "address",
-        "internalType": "address payable"
+        "internalType": "address"
+      },
+      {
+        "name": "receiver2",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "receiver2Bps",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "totalReceived",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "released1",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "released2",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1090,6 +1134,11 @@ export const nft111KAbi = [
             "name": "receiptIdsHash",
             "type": "bytes32",
             "internalType": "bytes32"
+          },
+          {
+            "name": "configId",
+            "type": "uint256",
+            "internalType": "uint256"
           }
         ]
       },
@@ -1117,16 +1166,32 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
-    "name": "releasableDelivery",
-    "inputs": [],
+    "name": "registerDeliveryConfig",
+    "inputs": [
+      {
+        "name": "receiver1",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "receiver2",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "receiver2Bps",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
     "outputs": [
       {
-        "name": "",
+        "name": "configId",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -1158,6 +1223,24 @@ export const nft111KAbi = [
     "type": "function",
     "name": "releaseDelivery",
     "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "releaseDeliveryFor",
+    "inputs": [
+      {
+        "name": "configId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "secondary",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -1284,19 +1367,6 @@ export const nft111KAbi = [
         "name": "baseURI_",
         "type": "string",
         "internalType": "string"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setDeliveryPaymentReceiver",
-    "inputs": [
-      {
-        "name": "receiver",
-        "type": "address",
-        "internalType": "address payable"
       }
     ],
     "outputs": [],
@@ -1536,32 +1606,6 @@ export const nft111KAbi = [
         "name": "",
         "type": "string",
         "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "totalDeliveryReceived",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "totalDeliveryReleased",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -2015,13 +2059,56 @@ export const nft111KAbi = [
   },
   {
     "type": "event",
-    "name": "DeliveryPaymentReceiverUpdated",
+    "name": "DeliveryConfigRegistered",
     "inputs": [
+      {
+        "name": "configId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "receiver1",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "receiver2",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "receiver2Bps",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "DeliveryProceedsReleaseFailed",
+    "inputs": [
+      {
+        "name": "configId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
       {
         "name": "receiver",
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -2030,6 +2117,12 @@ export const nft111KAbi = [
     "type": "event",
     "name": "DeliveryProceedsReleased",
     "inputs": [
+      {
+        "name": "configId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
       {
         "name": "receiver",
         "type": "address",
@@ -2078,6 +2171,12 @@ export const nft111KAbi = [
         "type": "uint256[]",
         "indexed": false,
         "internalType": "uint256[]"
+      },
+      {
+        "name": "configId",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -2548,6 +2647,16 @@ export const nft111KAbi = [
   {
     "type": "error",
     "name": "InvalidBaseURI",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidDeliveryConfig",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidDeliverySplit",
     "inputs": []
   },
   {

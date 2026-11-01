@@ -13,6 +13,7 @@ const MONUMENT_RECEIPT_OFFSET = 3_000_000n;
 export const ETHEREUM_MAX_MINT_QUANTITY = 15;
 export const ETHEREUM_MAX_UNBOX_QUANTITY = 15;
 export const ETHEREUM_MAX_DELIVERY_ITEMS = 50;
+export const ETHEREUM_MAX_DELIVERY_CONFIGS = 32;
 export const ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE = 150;
 export const ETHEREUM_MAX_EXPECTED_IDS = 500;
 export const ETHEREUM_MAX_INVENTORY_EXPECTED_IDS = 2 * ETHEREUM_MAX_EXPECTED_IDS;
@@ -137,6 +138,7 @@ export type EthereumDeliveryQuote = {
   fee: string;
   deadline: number;
   receiptIdsHash: string;
+  configId: number;
 };
 
 export const ETHEREUM_FUNCTIONS = {
@@ -152,7 +154,7 @@ export const ETHEREUM_FUNCTIONS = {
   unboxWarehouse: 'unboxWarehouse(uint256)',
   unboxMonument: 'unboxMonument(uint256)',
   transfer: 'safeTransferFrom(address,address,uint256)',
-  redeemForDelivery: 'redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)',
+  redeemForDelivery: 'redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)',
   claimCrateReceipt: 'claimCrateReceipt(uint256,bytes32,uint256,bytes)',
   tokenInfo: 'getTokenInfo(uint256)',
   tokenInfos: 'getTokenInfos(uint256[])',

@@ -6,17 +6,18 @@ import nacl from 'tweetnacl';
 import { decodeReturn, encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
 import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
-import { ETHEREUM_CRATES_PER_MONUMENT, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_MONUMENTS,
+import { ETHEREUM_CRATES_PER_MONUMENT, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_DELIVERY_CONFIGS, ETHEREUM_MAX_MONUMENTS,
   ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
-import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
+import { parseInitialDeliveryReceiver, parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from './shared/ethereum111kLocalReveal.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
+  initialDeliveryReceiver: string; deliveryConfigId: number;
 };
-if (deployment.protocolVersion !== 11) throw new Error('The local deployment does not support monument receipts in the collection contract. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 13) throw new Error('The local deployment does not support registered delivery configurations. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -29,8 +30,14 @@ try {
 }
 const contractAddress = requireEthereumAddress(deployment.contractAddress);
 const proceeds = parseProceedsConfig(deployment, contractAddress) as {
-  mintRecipients: string[]; mintSharesBps: number[]; deliveryPaymentReceiver: string;
+  mintRecipients: string[]; mintSharesBps: number[];
 };
+const initialDeliveryReceiver = parseInitialDeliveryReceiver({ initialReceiver: deployment.initialDeliveryReceiver }, contractAddress, proceeds.mintRecipients);
+if (deployment.deliveryConfigId !== 1) throw new Error('The initial delivery configuration must be 1.');
+const deliveryConfigId = process.env.ETHEREUM_111K_DELIVERY_CONFIG_ID ?? String(deployment.deliveryConfigId);
+if (!/^[1-9][0-9]*$/.test(deliveryConfigId) || Number(deliveryConfigId) > ETHEREUM_MAX_DELIVERY_CONFIGS) {
+  throw new Error('The local delivery configuration ID is invalid.');
+}
 if (!Number.isSafeInteger(deployment.deploymentBlock) || deployment.deploymentBlock < 0) throw new Error('Invalid deployment block.');
 const testKey = `0x${'0'.repeat(59)}a11ce`;
 const signer = ethereumSignerAddress(testKey);
@@ -89,20 +96,24 @@ async function proceedsRead(signature: string, types: string[], values: unknown[
   if (typeof result !== 'string') throw new Error('Invalid local proceeds contract response.');
   return decodeReturn([resultType], result)[0];
 }
-const [recipientCount, deliveryReceiver, recipients, shares, ...accounting] = await Promise.all([
+const [recipientCount, recipients, shares, deliveryConfigCount, initialConfig, selectedConfig, ...accounting] = await Promise.all([
   proceedsRead('mintRecipientCount()', [], [], 'uint256'),
-  proceedsRead('deliveryPaymentReceiver()', [], [], 'address'),
   Promise.all(proceeds.mintRecipients.map((_, index) => proceedsRead('mintRecipients(uint256)', ['uint256'], [index], 'address'))),
   Promise.all(proceeds.mintRecipients.map(address => proceedsRead('mintSharesBps(address)', ['address'], [address], 'uint256'))),
-  ...['totalMintReceived()', 'totalMintReleased()', 'totalDeliveryReceived()', 'totalDeliveryReleased()', 'releasableDelivery()']
+  proceedsRead('deliveryConfigCount()', [], [], 'uint256'),
+  proceedsRead('deliveryConfigs(uint256)', ['uint256'], [1], '(address,address,uint16,uint256,uint256,uint256)'),
+  proceedsRead('deliveryConfigs(uint256)', ['uint256'], [deliveryConfigId], '(address,address,uint16,uint256,uint256,uint256)'),
+  ...['totalMintReceived()', 'totalMintReleased()']
     .map(signature => proceedsRead(signature, [], [], 'uint256')),
   ...proceeds.mintRecipients.flatMap(address => ['mintReleased(address)', 'releasableMint(address)']
     .map(signature => proceedsRead(signature, ['address'], [address], 'uint256'))),
 ]);
-parseProceedsConfig({ ...proceeds, deliveryPaymentReceiver: deliveryReceiver }, contractAddress);
 if (recipientCount !== BigInt(proceeds.mintRecipients.length) ||
   !Array.isArray(recipients) || recipients.some((recipient, index) => recipient !== proceeds.mintRecipients[index]) ||
   !Array.isArray(shares) || shares.some((share, index) => share !== BigInt(proceeds.mintSharesBps[index])) ||
+  typeof deliveryConfigCount !== 'bigint' || deliveryConfigCount < 1n || deliveryConfigCount > BigInt(ETHEREUM_MAX_DELIVERY_CONFIGS) ||
+  !Array.isArray(initialConfig) || initialConfig[0] !== initialDeliveryReceiver || initialConfig[1] !== `0x${'0'.repeat(40)}` || initialConfig[2] !== 0n ||
+  !Array.isArray(selectedConfig) || selectedConfig[0] === `0x${'0'.repeat(40)}` ||
   accounting.some(value => typeof value !== 'bigint')) {
   throw new Error('The local collection does not match its proceeds configuration. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
@@ -120,6 +131,7 @@ const config = {
     ETHEREUM_111K_DEPLOYMENT_BLOCK: String(deployment.deploymentBlock),
     ETHEREUM_111K_METADATA_BASE_URI: deployment.metadataBaseURI,
     ETHEREUM_111K_RPC_URL: rpcUrl.href, ETHEREUM_111K_SIGNER_SECRET: testKey,
+    ETHEREUM_111K_DELIVERY_CONFIG_ID: deliveryConfigId,
     ADDRESS_DECRYPTION_SECRET: Buffer.from(addressKeyPair.secretKey).toString('base64'),
   },
   d1_databases: rawConfig.d1_databases.map((database: Record<string, unknown>) => ({

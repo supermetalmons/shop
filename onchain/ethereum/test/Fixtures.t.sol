@@ -35,7 +35,7 @@ contract FixturesTest is TestSupport {
         f.receiptIds[0] = 2_000_001;
         f.receiptIds[1] = 1_000_017;
         f.receiptIds[2] = 1_000_030;
-        f.quote = NFT111K.DeliveryQuote(42, WALLET, 0.0001 ether, 2_000_000_600, keccak256(abi.encode(f.receiptIds)));
+        f.quote = NFT111K.DeliveryQuote(42, WALLET, 0.0001 ether, 2_000_000_600, keccak256(abi.encode(f.receiptIds)), 1);
         f.domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -48,14 +48,15 @@ contract FixturesTest is TestSupport {
         f.deliveryHash = keccak256(
             abi.encode(
                 keccak256(
-                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
                 ),
                 WALLET,
                 keccak256(abi.encode(f.ids)),
                 f.quote.receiptIdsHash,
                 f.quote.orderId,
                 f.quote.fee,
-                f.quote.deadline
+                f.quote.deadline,
+                f.quote.configId
             )
         );
         f.deliveryDigest = keccak256(abi.encodePacked(hex"1901", f.domain, f.deliveryHash));
@@ -129,6 +130,7 @@ contract FixturesTest is TestSupport {
     function _deliveryJson(AuthorizationFixture memory f) private pure returns (string memory output) {
         output =
             '"delivery":{"tokenIds":[111112,17,30],"receiptIds":[2000001,1000017,1000030],"orderId":"42","fee":"100000000000000","deadline":2000000600,';
+        output = string.concat(output, '"configId":"', f.quote.configId.toString(), '",');
         output = string.concat(output, '"tokenIdsHash":"', uint256(keccak256(abi.encode(f.ids))).toHexString(32));
         output = string.concat(output, '","receiptIdsHash":"', uint256(f.quote.receiptIdsHash).toHexString(32));
         output = string.concat(

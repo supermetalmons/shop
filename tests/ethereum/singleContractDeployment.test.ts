@@ -20,7 +20,7 @@ test('local deployment rejects current-address payees and deploys one collection
     'onchain/ethereum/scripts/free-mint-config.mjs', 'onchain/ethereum/config/free-mints.json',
     'onchain/ethereum/fixtures/free-mints.json',
     'onchain/ethereum/foundry.toml', 'onchain/ethereum/fixtures/eip712.json',
-    'onchain/ethereum/config/proceeds.json', 'src/ethereum/discounts/111k.json']) {
+    'onchain/ethereum/config/proceeds.json', 'onchain/ethereum/config/delivery-routing.json', 'src/ethereum/discounts/111k.json']) {
     const target = join(directory, path);
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(join(root, path), target);
@@ -63,12 +63,14 @@ test('local deployment rejects current-address payees and deploys one collection
       .match(/^Computed Address: (0x[0-9a-fA-F]{40})\s*$/)?.[1];
     assert.ok(predicted);
     const proceedsPath = join(project, 'config/proceeds.json');
+    const deliveryRoutingPath = join(project, 'config/delivery-routing.json');
     const freeMintsPath = join(project, 'config/free-mints.json');
     const freeMints = JSON.parse(readFileSync(join(project, 'fixtures/free-mints.json'), 'utf8'));
     const proceeds = JSON.parse(readFileSync(proceedsPath, 'utf8'));
+    const deliveryRouting = JSON.parse(readFileSync(deliveryRoutingPath, 'utf8'));
     const fixture = JSON.parse(readFileSync(join(project, 'fixtures/eip712.json'), 'utf8'));
     const discounts = JSON.parse(readFileSync(join(directory, 'src/ethereum/discounts/111k.json'), 'utf8'));
-    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v9/';
+    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v10/';
     const run = () => spawnSync(process.execPath, ['scripts/deploy-local.mjs'], {
       cwd: project, encoding: 'utf8', timeout: 60_000,
       env: {
@@ -78,7 +80,6 @@ test('local deployment rejects current-address payees and deploys one collection
       },
     });
     for (const invalid of [
-      { ...proceeds, deliveryPaymentReceiver: predicted },
       { ...proceeds, mintRecipients: [predicted, ...proceeds.mintRecipients.slice(1)] },
     ]) {
       writeFileSync(proceedsPath, JSON.stringify(invalid));
@@ -89,6 +90,18 @@ test('local deployment rejects current-address payees and deploys one collection
       assert.equal(await rpc('eth_getTransactionCount', [deployer, 'latest']), '0x5');
     }
     writeFileSync(proceedsPath, JSON.stringify(proceeds));
+    for (const invalid of [
+      { initialReceiver: predicted }, { initialReceiver: proceeds.mintRecipients[0] },
+      { ...deliveryRouting, receiver2: predicted },
+    ]) {
+      writeFileSync(deliveryRoutingPath, JSON.stringify(invalid));
+      const result = run();
+      assert.ifError(result.error);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /delivery/i);
+      assert.equal(await rpc('eth_getTransactionCount', [deployer, 'latest']), '0x5');
+    }
+    writeFileSync(deliveryRoutingPath, JSON.stringify(deliveryRouting));
     for (const invalid of [
       { groups: [{ name: 'A', crates: 1, warehouses: 0, monuments: 0, wallets: [predicted] }] },
       { groups: [{ ...freeMints.groups[0], wallets: Array.from({ length: 33 }, (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`) }] },
@@ -107,7 +120,14 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(result.stdout);
     assert.deepEqual(manifest, JSON.parse(readFileSync(join(project, '.local/deployment.json'), 'utf8')));
-    assert.equal(manifest.protocolVersion, 11);
+    assert.equal(manifest.protocolVersion, 13);
+    assert.equal(manifest.initialDeliveryReceiver, deliveryRouting.initialReceiver.toLowerCase());
+    assert.equal(manifest.deliveryConfigId, 1);
+    const encodedConfig = await rpc<string>('eth_call', [{ to: manifest.contractAddress,
+      data: encodeCall('deliveryConfigs(uint256)', ['uint256'], [1]) }, 'latest']);
+    assert.deepEqual(decodeReturn(['address','address','uint16','uint256','uint256','uint256'], encodedConfig),
+      [manifest.initialDeliveryReceiver, '0x0000000000000000000000000000000000000000', 0n, 0n, 0n, 0n]);
+    assert.equal('deliveryPaymentReceiver' in manifest, false);
     assert.equal(manifest.contractAddress.toLowerCase(), predicted.toLowerCase());
     assert.equal(manifest.metadataBaseURI, baseURI);
     assert.equal(manifest.owner, owner);

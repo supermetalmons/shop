@@ -29,6 +29,16 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         uint256 fee;
         uint256 deadline;
         bytes32 receiptIdsHash;
+        uint256 configId;
+    }
+
+    struct DeliveryConfig {
+        address receiver1;
+        address receiver2;
+        uint16 receiver2Bps;
+        uint256 totalReceived;
+        uint256 released1;
+        uint256 released2;
     }
 
     struct TokenInfo {
@@ -67,6 +77,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public constant MAX_TOKEN_INFO_BATCH_SIZE = 150;
     uint256 public constant MAX_METADATA_BATCH_SIZE = 30;
     uint256 public constant MAX_DELIVERY_ITEMS = 50;
+    uint256 private constant MAX_DELIVERY_CONFIGS = 32;
     uint256 public constant MAX_MINT_RECIPIENTS = 32;
     uint256 public constant MINT_PAYOUT_GAS_LIMIT = 100_000;
     uint256 public constant MAX_QUOTE_LIFETIME = 10 minutes;
@@ -78,7 +89,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public constant MONUMENT_RECEIPT_OFFSET = 3_000_000;
 
     bytes32 private constant DELIVERY_TYPEHASH = keccak256(
-        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
     );
     bytes32 private constant CLAIM_TYPEHASH =
         keccak256("CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)");
@@ -95,14 +106,13 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     bool public saleActive;
     bool public redemptionsPaused;
     address public quoteSigner;
-    address payable public deliveryPaymentReceiver;
+    uint256 public deliveryConfigCount;
+    mapping(uint256 => DeliveryConfig) public deliveryConfigs;
     address[] public mintRecipients;
     mapping(address => uint256) public mintSharesBps;
     mapping(address => uint256) public mintReleased;
     uint256 public totalMintReceived;
     uint256 public totalMintReleased;
-    uint256 public totalDeliveryReceived;
-    uint256 public totalDeliveryReleased;
     string public baseURI;
     mapping(uint256 => uint256) public warehouseFirstCrate;
     mapping(uint256 => uint256) public monumentFirstCrate;
@@ -127,6 +137,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     error InvalidAddress();
     error InvalidMintSplit();
     error InvalidMintRecipient();
+    error InvalidDeliverySplit();
+    error InvalidDeliveryConfig();
     error ProceedsPaymentFailed();
     error InsufficientMintPayoutGas();
     error TokenAlreadyIssued();
@@ -151,7 +163,12 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         address indexed owner, bytes32 indexed tokenIdsHash, uint256 firstArtToken, uint256 artworkCount
     );
     event DeliveryRedeemed(
-        uint256 indexed orderId, address indexed wallet, uint256 fee, uint256[] tokenIds, uint256[] receiptIds
+        uint256 indexed orderId,
+        address indexed wallet,
+        uint256 fee,
+        uint256[] tokenIds,
+        uint256[] receiptIds,
+        uint256 configId
     );
     event CrateReceiptClaimed(
         bytes32 indexed claimId, address indexed wallet, uint256 indexed receiptId, uint256[] receiptIds
@@ -165,17 +182,20 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event SaleStatusUpdated(bool active);
     event RedemptionsPauseUpdated(bool paused);
     event QuoteSignerUpdated(address indexed signer);
-    event DeliveryPaymentReceiverUpdated(address indexed receiver);
     event BaseURIUpdated(string baseURI);
     event MintProceedsReleased(address indexed recipient, uint256 amount);
     event MintProceedsReleaseFailed(address indexed recipient, uint256 amount);
-    event DeliveryProceedsReleased(address indexed receiver, uint256 amount);
+    event DeliveryConfigRegistered(
+        uint256 indexed configId, address indexed receiver1, address indexed receiver2, uint16 receiver2Bps
+    );
+    event DeliveryProceedsReleased(uint256 indexed configId, address indexed receiver, uint256 amount);
+    event DeliveryProceedsReleaseFailed(uint256 indexed configId, address indexed receiver, uint256 amount);
     event BatchMetadataUpdate(uint256 fromTokenId, uint256 toTokenId);
 
     constructor(
         address initialOwner,
         address signer,
-        address payable deliveryPaymentReceiver_,
+        address initialDeliveryReceiver,
         string memory baseURI_,
         bytes32 discountRoot,
         address[] memory mintRecipients_,
@@ -199,9 +219,11 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             mintSharesBps[recipient] = share;
         }
         if (totalShares != 10_000) revert InvalidMintSplit();
-        _validateDeliveryPaymentReceiver(deliveryPaymentReceiver_);
+        _validateDeliveryPaymentReceiver(initialDeliveryReceiver);
+        deliveryConfigCount = 1;
+        deliveryConfigs[1].receiver1 = initialDeliveryReceiver;
+        emit DeliveryConfigRegistered(1, initialDeliveryReceiver, address(0), 0);
         quoteSigner = signer;
-        deliveryPaymentReceiver = deliveryPaymentReceiver_;
         baseURI = baseURI_;
         discountMerkleRoot = discountRoot;
         if (freeMintAllocations_.length > 32) revert InvalidFreeMintConfig();
@@ -326,11 +348,14 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
                     quote.receiptIdsHash,
                     quote.orderId,
                     quote.fee,
-                    quote.deadline
+                    quote.deadline,
+                    quote.configId
                 )
             )
         );
         if (ECDSA.recoverCalldata(digest, signature) != quoteSigner) revert InvalidAuthorization();
+        DeliveryConfig storage deliveryConfig = deliveryConfigs[quote.configId];
+        if (deliveryConfig.receiver1 == address(0)) revert InvalidDeliveryConfig();
         uint256[] memory receiptIds = new uint256[](tokenIds.length);
         for (uint256 i; i < tokenIds.length; ++i) {
             (uint8 kind, uint256 displayId, address holder) = getTokenInfo(tokenIds[i]);
@@ -341,7 +366,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             else revert WrongItemKind();
         }
         if (keccak256(abi.encode(receiptIds)) != quote.receiptIdsHash) revert InvalidAuthorization();
-        totalDeliveryReceived += msg.value;
+        deliveryConfig.totalReceived += msg.value;
         usedDeliveryOrders[quote.orderId] = true;
         // Burn hooks must remain free of external calls so upfront ownership checks stay valid.
         for (uint256 i; i < tokenIds.length; ++i) {
@@ -350,7 +375,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         for (uint256 i; i < receiptIds.length; ++i) {
             _mintSpotOnce(msg.sender, receiptIds[i]);
         }
-        emit DeliveryRedeemed(quote.orderId, msg.sender, quote.fee, tokenIds, receiptIds);
+        emit DeliveryRedeemed(quote.orderId, msg.sender, quote.fee, tokenIds, receiptIds, quote.configId);
     }
 
     function claimCrateReceipt(uint256 receiptId, bytes32 claimId, uint256 deadline, bytes calldata signature)
@@ -553,12 +578,6 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit QuoteSignerUpdated(signer);
     }
 
-    function setDeliveryPaymentReceiver(address payable receiver) external onlyOwner {
-        _validateDeliveryPaymentReceiver(receiver);
-        deliveryPaymentReceiver = receiver;
-        emit DeliveryPaymentReceiverUpdated(receiver);
-    }
-
     function setBaseURI(string calldata baseURI_) external onlyOwner {
         _validateBaseURI(baseURI_);
         baseURI = baseURI_;
@@ -572,7 +591,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function releasableMint(address recipient) public view returns (uint256) {
         uint256 share = mintSharesBps[recipient];
-        uint256 entitlement = (totalMintReceived / 10_000) * share + ((totalMintReceived % 10_000) * share) / 10_000;
+        uint256 entitlement = _shareOf(totalMintReceived, share);
         return entitlement - mintReleased[recipient];
     }
 
@@ -595,11 +614,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         totalMintReleased += amount;
         bool paid;
         if (batch) {
-            // Reserve gas for call overhead and failure accounting without underfunding the recipient call.
-            if (gasleft() < MINT_PAYOUT_GAS_LIMIT + 50_000) revert InsufficientMintPayoutGas();
-            assembly ("memory-safe") {
-                paid := call(MINT_PAYOUT_GAS_LIMIT, recipient, amount, 0, 0, 0, 0)
-            }
+            paid = _payWithBoundedGas(recipient, amount);
         } else {
             (paid,) = payable(recipient).call{value: amount}("");
         }
@@ -613,18 +628,80 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit MintProceedsReleased(recipient, amount);
     }
 
-    function releasableDelivery() public view returns (uint256) {
-        return totalDeliveryReceived - totalDeliveryReleased;
+    function registerDeliveryConfig(address receiver1, address receiver2, uint16 receiver2Bps)
+        external
+        onlyOwner
+        returns (uint256 configId)
+    {
+        if (deliveryConfigCount == MAX_DELIVERY_CONFIGS) revert InvalidDeliveryConfig();
+        _validateDeliveryPaymentReceiver(receiver1);
+        if (receiver2 == address(0)) {
+            if (receiver2Bps != 0) revert InvalidDeliverySplit();
+        } else {
+            _validateDeliveryPaymentReceiver(receiver2);
+            if (receiver1 == receiver2 || receiver2Bps == 0 || receiver2Bps >= 10_000) revert InvalidDeliverySplit();
+        }
+        configId = ++deliveryConfigCount;
+        DeliveryConfig storage config = deliveryConfigs[configId];
+        config.receiver1 = receiver1;
+        config.receiver2 = receiver2;
+        config.receiver2Bps = receiver2Bps;
+        emit DeliveryConfigRegistered(configId, receiver1, receiver2, receiver2Bps);
+    }
+
+    function _releasableDelivery(uint256 configId) private view returns (uint256 amount1, uint256 amount2) {
+        DeliveryConfig storage config = deliveryConfigs[configId];
+        if (config.receiver1 == address(0)) revert InvalidDeliveryConfig();
+        uint256 total = config.totalReceived;
+        uint256 share = config.receiver2Bps;
+        uint256 entitlement2 = _shareOf(total, share);
+        amount1 = total - entitlement2 - config.released1;
+        amount2 = entitlement2 - config.released2;
     }
 
     function releaseDelivery() external nonReentrant {
-        uint256 amount = releasableDelivery();
+        uint256 count = deliveryConfigCount;
+        for (uint256 configId = 1; configId <= count; ++configId) {
+            (uint256 amount1, uint256 amount2) = _releasableDelivery(configId);
+            _releaseDelivery(configId, false, amount1, true);
+            _releaseDelivery(configId, true, amount2, true);
+        }
+    }
+
+    function releaseDeliveryFor(uint256 configId, bool secondary) external nonReentrant {
+        (uint256 amount1, uint256 amount2) = _releasableDelivery(configId);
+        _releaseDelivery(configId, secondary, secondary ? amount2 : amount1, false);
+    }
+
+    function _releaseDelivery(uint256 configId, bool secondary, uint256 amount, bool batch) private {
         if (amount == 0) return;
-        address payable receiver = deliveryPaymentReceiver;
-        totalDeliveryReleased += amount;
-        (bool paid,) = receiver.call{value: amount}("");
-        if (!paid) revert ProceedsPaymentFailed();
-        emit DeliveryProceedsReleased(receiver, amount);
+        DeliveryConfig storage config = deliveryConfigs[configId];
+        address receiver = secondary ? config.receiver2 : config.receiver1;
+        if (secondary) config.released2 += amount;
+        else config.released1 += amount;
+        bool paid;
+        if (batch) paid = _payWithBoundedGas(receiver, amount);
+        else (paid,) = payable(receiver).call{value: amount}("");
+        if (!paid) {
+            if (!batch) revert ProceedsPaymentFailed();
+            if (secondary) config.released2 -= amount;
+            else config.released1 -= amount;
+            emit DeliveryProceedsReleaseFailed(configId, receiver, amount);
+            return;
+        }
+        emit DeliveryProceedsReleased(configId, receiver, amount);
+    }
+
+    function _shareOf(uint256 total, uint256 share) private pure returns (uint256) {
+        return (total / 10_000) * share + ((total % 10_000) * share) / 10_000;
+    }
+
+    function _payWithBoundedGas(address receiver, uint256 amount) private returns (bool paid) {
+        // Reserve gas for call overhead and failure accounting without underfunding the recipient call.
+        if (gasleft() < MINT_PAYOUT_GAS_LIMIT + 50_000) revert InsufficientMintPayoutGas();
+        assembly ("memory-safe") {
+            paid := call(MINT_PAYOUT_GAS_LIMIT, receiver, amount, 0, 0, 0, 0)
+        }
     }
 
     function _validateDeliveryPaymentReceiver(address receiver) private view {

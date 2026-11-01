@@ -1,25 +1,20 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
+import {DeliveryAccounting} from "./DeliveryAccounting.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract ProceedsReceiver {
     NFT111K public token;
     bool public rejecting;
     bool public attacking;
-    address payable public rotateTo;
     uint256 public callbacks;
     uint256 public blockedCalls;
 
-    function configure(NFT111K token_, bool rejecting_, bool attacking_, address payable rotateTo_) external {
+    function configure(NFT111K token_, bool rejecting_, bool attacking_) external {
         token = token_;
         rejecting = rejecting_;
         attacking = attacking_;
-        rotateTo = rotateTo_;
-    }
-
-    function acceptOwnership() external {
-        token.acceptOwnership();
     }
 
     receive() external payable {
@@ -27,7 +22,7 @@ contract ProceedsReceiver {
         if (rejecting) revert();
         callbacks++;
         require(token.releasableMint(address(this)) == 0);
-        if (token.deliveryPaymentReceiver() == address(this)) require(token.releasableDelivery() == 0);
+        require(DeliveryAccounting.pending(token, address(this)) == 0);
         if (attacking) {
             _blocked(abi.encodeCall(token.releaseMint, (token.mintRecipients(0))));
             _blocked(abi.encodeCall(token.releaseAllMint, ()));
@@ -38,7 +33,6 @@ contract ProceedsReceiver {
             NFT111K.DeliveryQuote memory quote;
             _blocked(abi.encodeCall(token.redeemForDelivery, (ids, quote, bytes(""))));
         }
-        if (rotateTo != address(0)) token.setDeliveryPaymentReceiver(rotateTo);
     }
 
     function _blocked(bytes memory data) private {
@@ -112,7 +106,7 @@ contract ProceedsBuyer {
     function onERC721Received(address, address, uint256, bytes calldata) external view returns (bytes4) {
         require(msg.sender == address(token));
         require(token.totalMintReceived() == expectedMint);
-        require(token.totalDeliveryReceived() == expectedDelivery);
+        require(DeliveryAccounting.received(token) == expectedDelivery);
         if (rejecting) revert();
         return this.onERC721Received.selector;
     }
@@ -148,6 +142,7 @@ contract ForcedProceeds {
 
 contract NFT111KProceedsTest is TestSupport {
     NFT111K private token;
+    address private deliveryReceiver;
     address private constant BUYER = address(0xB00001);
     address payable private constant DELIVERY = payable(address(0xD00001));
     address payable private constant NEXT_DELIVERY = payable(address(0xD00002));
@@ -172,7 +167,6 @@ contract NFT111KProceedsTest is TestSupport {
                 assertEq(configured.mintRecipients(i), recipients[i]);
                 assertEq(configured.mintSharesBps(recipients[i]), shares[i]);
             }
-            assertEq(configured.deliveryPaymentReceiver(), DELIVERY);
         }
     }
 
@@ -211,14 +205,17 @@ contract NFT111KProceedsTest is TestSupport {
         recipients[0] = _nextCreateAddress();
         vm.expectRevert(NFT111K.InvalidAddress.selector);
         _deploy(recipients, shares, DELIVERY);
-        recipients[0] = address(0xC00001);
+    }
+
+    function testConstructorRejectsInvalidInitialDeliveryReceiver() public {
+        (address[] memory recipients, uint256[] memory shares) = _split(3);
         vm.expectRevert(NFT111K.InvalidAddress.selector);
         _deploy(recipients, shares, payable(address(0)));
         vm.expectRevert(NFT111K.InvalidAddress.selector);
         _deploy(recipients, shares, payable(recipients[0]));
-        address payable self = payable(_nextCreateAddress());
+        address payable collection = payable(_nextCreateAddress());
         vm.expectRevert(NFT111K.InvalidAddress.selector);
-        _deploy(recipients, shares, self);
+        _deploy(recipients, shares, collection);
     }
 
     function testMintRoutesRecordActualRevenueAndSeparateDelivery() public {
@@ -232,15 +229,15 @@ contract NFT111KProceedsTest is TestSupport {
         token.mintWarehouses{value: 0.0022 ether}(2);
         _deliver(BUYER, 111112, 1, 17);
         assertEq(token.totalMintReceived(), 0.00245 ether);
-        assertEq(token.totalDeliveryReceived(), 17);
-        assertEq(token.releasableDelivery(), 17);
+        assertEq(DeliveryAccounting.received(token), 17);
+        assertEq(DeliveryAccounting.pending(token, deliveryReceiver), 17);
         vm.prank(address(0xCA11));
-        token.releaseDelivery();
+        DeliveryAccounting.release(token, deliveryReceiver);
         assertEq(DELIVERY.balance, 17);
         assertEq(address(token).balance, 0.00245 ether);
         _releaseAll();
         assertEq(token.totalMintReleased(), 0.00245 ether);
-        assertEq(token.totalDeliveryReleased(), 17);
+        assertEq(DeliveryAccounting.released(token), 17);
         assertEq(address(token).balance, 0);
         for (uint256 i; i < token.mintRecipientCount(); ++i) {
             assertEq(token.mintReleased(token.mintRecipients(i)), 0.00245 ether / 4);
@@ -252,9 +249,9 @@ contract NFT111KProceedsTest is TestSupport {
         vm.expectRevert(NFT111K.InvalidMintRecipient.selector);
         token.releaseMint(BUYER);
         token.releaseMint(token.mintRecipients(0));
-        token.releaseDelivery();
+        DeliveryAccounting.release(token, deliveryReceiver);
         assertEq(token.totalMintReleased(), 0);
-        assertEq(token.totalDeliveryReleased(), 0);
+        assertEq(DeliveryAccounting.released(token), 0);
     }
 
     function testBatchReleaseIsPermissionlessAndSkipsEmptyAndAlreadyPaidRecipients() public {
@@ -462,34 +459,24 @@ contract NFT111KProceedsTest is TestSupport {
         assertEq(address(token).balance, 1);
     }
 
-    function testDeliveryRotationMovesOnlyOutstandingDeliveryFees() public {
+    function testDifferentQuotesKeepOutstandingDeliveryCreditsWithTheirReceivers() public {
         _buyAt(100);
         _deliver(BUYER, 111112, 1, 31);
-        vm.prank(BUYER);
-        vm.expectRevert();
-        token.setDeliveryPaymentReceiver(NEXT_DELIVERY);
-        token.setDeliveryPaymentReceiver(NEXT_DELIVERY);
-        token.releaseDelivery();
-        assertEq(DELIVERY.balance, 0);
-        assertEq(NEXT_DELIVERY.balance, 31);
-        assertEq(token.totalMintReleased(), 0);
-        assertEq(address(token).balance, 100);
+        deliveryReceiver = NEXT_DELIVERY;
         _buyAt(100);
         _deliver(BUYER, 111113, 2, 19);
-        token.setDeliveryPaymentReceiver(DELIVERY);
-        token.releaseDelivery();
-        assertEq(DELIVERY.balance, 19);
-        assertEq(NEXT_DELIVERY.balance, 31);
-        assertEq(token.totalDeliveryReceived(), 50);
-        assertEq(token.totalDeliveryReleased(), 50);
-        vm.expectRevert(NFT111K.InvalidAddress.selector);
-        token.setDeliveryPaymentReceiver(payable(address(0)));
-        vm.expectRevert(NFT111K.InvalidAddress.selector);
-        token.setDeliveryPaymentReceiver(payable(address(token)));
-        address payable mintRecipient = payable(token.mintRecipients(0));
-        vm.expectRevert(NFT111K.InvalidAddress.selector);
-        token.setDeliveryPaymentReceiver(mintRecipient);
-        assertEq(token.deliveryPaymentReceiver(), DELIVERY);
+        assertEq(DeliveryAccounting.pending(token, DELIVERY), 31);
+        assertEq(DeliveryAccounting.pending(token, NEXT_DELIVERY), 19);
+        vm.prank(BUYER);
+        DeliveryAccounting.release(token, DELIVERY);
+        assertEq(DELIVERY.balance, 31);
+        assertEq(NEXT_DELIVERY.balance, 0);
+        DeliveryAccounting.release(token, NEXT_DELIVERY);
+        assertEq(NEXT_DELIVERY.balance, 19);
+        assertEq(DeliveryAccounting.received(token), 50);
+        assertEq(DeliveryAccounting.released(token), 50);
+        assertEq(token.totalMintReleased(), 0);
+        assertEq(address(token).balance, 200);
     }
 
     function testRejectingMintRecipientDoesNotBlockOthersOrPurchases() public {
@@ -498,7 +485,7 @@ contract NFT111KProceedsTest is TestSupport {
         recipients[0] = address(receiver);
         token = _deploy(recipients, shares, DELIVERY);
         token.setSaleActive(true);
-        receiver.configure(token, true, false, payable(address(0)));
+        receiver.configure(token, true, false);
         token.releaseMint(address(receiver));
         _buyAt(100);
         _deliver(BUYER, 111112, 1, 11);
@@ -508,53 +495,60 @@ contract NFT111KProceedsTest is TestSupport {
         assertEq(token.totalMintReleased(), 0);
         assertEq(token.releasableMint(address(receiver)), 50);
         token.releaseMint(recipients[1]);
-        token.releaseDelivery();
+        DeliveryAccounting.release(token, deliveryReceiver);
         _buyAt(100);
-        receiver.configure(token, false, false, payable(address(0)));
+        receiver.configure(token, false, false);
         token.releaseMint(address(receiver));
         assertEq(address(receiver).balance, 100);
         assertEq(token.mintReleased(address(receiver)), 100);
         assertEq(DELIVERY.balance, 11);
     }
 
-    function testRejectingDeliveryReceiverDoesNotBlockMintAndCanBeRotated() public {
+    function testRejectingDeliveryReceiverKeepsCreditsAndCannotBlockOtherReceivers() public {
         ProceedsReceiver receiver = new ProceedsReceiver();
-        receiver.configure(token, true, false, payable(address(0)));
-        token.setDeliveryPaymentReceiver(payable(address(receiver)));
-        token.releaseDelivery();
+        receiver.configure(token, true, false);
+        deliveryReceiver = address(receiver);
+        DeliveryAccounting.release(token, deliveryReceiver);
         _buyAt(100);
         _deliver(BUYER, 111112, 1, 13);
         vm.expectRevert(NFT111K.ProceedsPaymentFailed.selector);
-        token.releaseDelivery();
-        assertEq(token.totalDeliveryReleased(), 0);
-        assertEq(token.releasableDelivery(), 13);
+        token.releaseDeliveryFor(2, false);
+        assertEq(DeliveryAccounting.released(token), 0);
+        assertEq(DeliveryAccounting.pending(token, address(receiver)), 13);
+        deliveryReceiver = NEXT_DELIVERY;
+        _buyAt(100);
+        _deliver(BUYER, 111113, 2, 19);
+        DeliveryAccounting.release(token, NEXT_DELIVERY);
+        assertEq(NEXT_DELIVERY.balance, 19);
+        assertEq(DeliveryAccounting.pending(token, address(receiver)), 13);
         _releaseAll();
-        token.setDeliveryPaymentReceiver(NEXT_DELIVERY);
-        token.releaseDelivery();
-        assertEq(NEXT_DELIVERY.balance, 13);
+        receiver.configure(token, false, false);
+        DeliveryAccounting.release(token, address(receiver));
+        assertEq(address(receiver).balance, 13);
+        assertEq(DeliveryAccounting.released(token), 32);
         assertEq(address(token).balance, 0);
     }
 
     function testEthCallbacksCannotReenterAndSeeReleasedAccounting() public {
         ProceedsReceiver mintReceiver = new ProceedsReceiver();
-        ProceedsReceiver deliveryReceiver = new ProceedsReceiver();
+        ProceedsReceiver deliveryContract = new ProceedsReceiver();
         (address[] memory recipients, uint256[] memory shares) = _split(2);
         recipients[0] = address(mintReceiver);
-        token = _deploy(recipients, shares, payable(address(deliveryReceiver)));
+        token = _deploy(recipients, shares, payable(address(deliveryContract)));
         token.setSaleActive(true);
-        mintReceiver.configure(token, false, true, payable(address(0)));
-        deliveryReceiver.configure(token, false, true, payable(address(0)));
+        mintReceiver.configure(token, false, true);
+        deliveryContract.configure(token, false, true);
         _buyAt(100);
         _deliver(BUYER, 111112, 1, 17);
         token.releaseMint(address(mintReceiver));
-        token.releaseDelivery();
+        DeliveryAccounting.release(token, deliveryReceiver);
         assertEq(mintReceiver.callbacks(), 1);
-        assertEq(deliveryReceiver.callbacks(), 1);
+        assertEq(deliveryContract.callbacks(), 1);
         assertEq(mintReceiver.blockedCalls(), 6);
-        assertEq(deliveryReceiver.blockedCalls(), 6);
+        assertEq(deliveryContract.blockedCalls(), 6);
         assertEq(token.totalMintReceived(), 100);
         assertEq(token.totalMintReleased(), 50);
-        assertEq(token.totalDeliveryReleased(), 17);
+        assertEq(DeliveryAccounting.released(token), 17);
     }
 
     function testBatchCallbacksCannotReenterAndSeeReleasedAccounting() public {
@@ -563,7 +557,7 @@ contract NFT111KProceedsTest is TestSupport {
         recipients[1] = address(receiver);
         token = _deploy(recipients, shares, DELIVERY);
         token.setSaleActive(true);
-        receiver.configure(token, false, true, payable(address(0)));
+        receiver.configure(token, false, true);
         _buyAt(10_000);
         token.releaseAllMint();
         assertEq(receiver.callbacks(), 1);
@@ -574,27 +568,26 @@ contract NFT111KProceedsTest is TestSupport {
         assertEq(address(token).balance, 0);
     }
 
-    function testDeliveryReleaseEventUsesPaidReceiverDuringCallbackRotation() public {
+    function testDeliveryReleaseEventUsesTheCreditedReceiver() public {
         ProceedsReceiver receiver = new ProceedsReceiver();
-        receiver.configure(token, false, false, NEXT_DELIVERY);
-        token.setDeliveryPaymentReceiver(payable(address(receiver)));
-        token.transferOwnership(address(receiver));
-        receiver.acceptOwnership();
-        vm.prank(BUYER);
-        token.mintCrates{value: 0.0001 ether}(1);
+        receiver.configure(token, false, false);
+        deliveryReceiver = address(receiver);
+        _buyAt(100);
         _deliver(BUYER, 111112, 1, 29);
         vm.recordLogs();
-        token.releaseDelivery();
+        vm.prank(BUYER);
+        DeliveryAccounting.release(token, address(receiver));
         Vm.Log[] memory logs = vm.getRecordedLogs();
-        assertEq(logs.length, 2);
-        assertEq(logs[1].emitter, address(token));
-        assertEq(logs[1].topics[0], keccak256("DeliveryProceedsReleased(address,uint256)"));
-        assertEq(logs[1].topics[1], bytes32(uint256(uint160(address(receiver)))));
-        assertEq(abi.decode(logs[1].data, (uint256)), 29);
+        assertEq(logs.length, 1);
+        assertEq(logs[0].emitter, address(token));
+        assertEq(logs[0].topics[0], keccak256("DeliveryProceedsReleased(uint256,address,uint256)"));
+        assertEq(logs[0].topics[1], bytes32(uint256(2)));
+        assertEq(logs[0].topics[2], bytes32(uint256(uint160(address(receiver)))));
+        assertEq(abi.decode(logs[0].data, (uint256)), 29);
         assertEq(address(receiver).balance, 29);
         assertEq(NEXT_DELIVERY.balance, 0);
-        assertEq(token.deliveryPaymentReceiver(), NEXT_DELIVERY);
-        assertEq(token.totalDeliveryReleased(), 29);
+        assertEq(DeliveryAccounting.pending(token, address(receiver)), 0);
+        assertEq(DeliveryAccounting.released(token), 29);
     }
 
     function testPausesDoNotPreventEitherRelease() public {
@@ -604,9 +597,9 @@ contract NFT111KProceedsTest is TestSupport {
         token.setRedemptionsPaused(true);
         token.releaseMint(token.mintRecipients(0));
         token.releaseAllMint();
-        token.releaseDelivery();
+        DeliveryAccounting.release(token, deliveryReceiver);
         assertEq(token.totalMintReleased(), 100);
-        assertEq(token.totalDeliveryReleased(), 7);
+        assertEq(DeliveryAccounting.released(token), 7);
         assertEq(address(token).balance, 0);
     }
 
@@ -615,18 +608,18 @@ contract NFT111KProceedsTest is TestSupport {
         assertFalse(paid);
         new ForcedProceeds{value: 101}(payable(address(token)));
         assertEq(token.totalMintReceived(), 0);
-        assertEq(token.totalDeliveryReceived(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
         _buyAt(100);
         _deliver(BUYER, 111112, 1, 7);
         token.releaseAllMint();
-        assertEq(token.totalDeliveryReleased(), 0);
-        assertEq(token.releasableDelivery(), 7);
+        assertEq(DeliveryAccounting.released(token), 0);
+        assertEq(DeliveryAccounting.pending(token, deliveryReceiver), 7);
         assertEq(address(token).balance, 108);
-        token.releaseDelivery();
+        DeliveryAccounting.release(token, deliveryReceiver);
         assertEq(address(token).balance, 101);
         assertEq(token.totalMintReleased(), 100);
-        assertEq(token.totalDeliveryReleased(), 7);
-        assertEq(token.releasableDelivery(), 0);
+        assertEq(DeliveryAccounting.released(token), 7);
+        assertEq(DeliveryAccounting.pending(token, deliveryReceiver), 0);
         assertEq(token.releasableMint(token.mintRecipients(0)), 0);
     }
 
@@ -656,8 +649,8 @@ contract NFT111KProceedsTest is TestSupport {
             assertEq(address(token).balance, 75);
             assertEq(token.totalMintReceived(), 100);
             assertEq(token.totalMintReleased(), 25);
-            assertEq(token.totalDeliveryReceived(), 0);
-            assertEq(token.totalDeliveryReleased(), 0);
+            assertEq(DeliveryAccounting.received(token), 0);
+            assertEq(DeliveryAccounting.released(token), 0);
         }
     }
 
@@ -678,7 +671,7 @@ contract NFT111KProceedsTest is TestSupport {
         assertEq(token.ownerOf(111112), BUYER);
         assertEq(address(token).balance, 100);
         assertEq(token.totalMintReceived(), 100);
-        assertEq(token.totalDeliveryReceived(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
     }
 
     function testPaidMintCallbackCanApproveAndTransferWithoutEth() public {
@@ -709,16 +702,22 @@ contract NFT111KProceedsTest is TestSupport {
         buyer.execute(abi.encodeCall(token.mintWarehouses, (1)), 0.0011 ether);
         uint256[] memory ids = new uint256[](1);
         ids[0] = 111112;
-        (NFT111K.DeliveryQuote memory quote, bytes memory signature) = _quote(address(buyer), ids, 1, 17);
+        (NFT111K.DeliveryQuote memory quote,) = _quote(address(buyer), ids, 1, 17);
+        quote.configId = token.registerDeliveryConfig(DELIVERY, NEXT_DELIVERY, 3000);
+        bytes memory signature = _deliverySignature(ids, quote);
         buyer.configure(0.0012 ether, 17, true);
         vm.expectRevert();
         buyer.execute(abi.encodeCall(token.redeemForDelivery, (ids, quote, signature)), 17);
-        assertEq(token.totalDeliveryReceived(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
+        assertEq(DeliveryAccounting.pending(token, DELIVERY), 0);
+        assertEq(DeliveryAccounting.pending(token, NEXT_DELIVERY), 0);
         assertFalse(token.usedDeliveryOrders(1));
         assertEq(token.ownerOf(111112), address(buyer));
         buyer.configure(0.0012 ether, 17, false);
         buyer.execute(abi.encodeCall(token.redeemForDelivery, (ids, quote, signature)), 17);
-        assertEq(token.totalDeliveryReceived(), 17);
+        assertEq(DeliveryAccounting.received(token), 17);
+        assertEq(DeliveryAccounting.pending(token, DELIVERY), 12);
+        assertEq(DeliveryAccounting.pending(token, NEXT_DELIVERY), 5);
         assertEq(token.totalMintReceived(), 0.0012 ether);
     }
 
@@ -739,7 +738,7 @@ contract NFT111KProceedsTest is TestSupport {
         }
         token = _deploy(recipients, shares, DELIVERY);
         token.setSaleActive(true);
-        if (mode == 0) rejecting.configure(token, true, false, payable(address(0)));
+        if (mode == 0) rejecting.configure(token, true, false);
         _buyAt(10_000);
         vm.recordLogs();
         vm.prank(address(0xCA11));
@@ -774,7 +773,7 @@ contract NFT111KProceedsTest is TestSupport {
         if (mode == 0) {
             vm.expectRevert(NFT111K.ProceedsPaymentFailed.selector);
             token.releaseMint(recipients[index]);
-            rejecting.configure(token, false, false, payable(address(0)));
+            rejecting.configure(token, false, false);
         } else {
             expensive.setBurning(false);
             for (uint256 i; i < 8; ++i) {
@@ -802,6 +801,7 @@ contract NFT111KProceedsTest is TestSupport {
         private
         returns (NFT111K)
     {
+        deliveryReceiver = delivery;
         return new NFT111K(
             address(this),
             vm.addr(SIGNER_KEY),
@@ -849,7 +849,21 @@ contract NFT111KProceedsTest is TestSupport {
             (uint8 kind, uint256 displayId,) = token.getTokenInfo(ids[i]);
             receipts[i] = (kind == 1 ? 1_000_000 : 2_000_000) + displayId;
         }
-        quote = NFT111K.DeliveryQuote(orderId, wallet, fee, block.timestamp + 300, keccak256(abi.encode(receipts)));
+        quote = NFT111K.DeliveryQuote(
+            orderId,
+            wallet,
+            fee,
+            block.timestamp + 300,
+            keccak256(abi.encode(receipts)),
+            DeliveryAccounting.ensureSingle(token, deliveryReceiver)
+        );
+        signature = _deliverySignature(ids, quote);
+    }
+
+    function _deliverySignature(uint256[] memory ids, NFT111K.DeliveryQuote memory quote)
+        private
+        returns (bytes memory signature)
+    {
         bytes32 domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -862,14 +876,15 @@ contract NFT111KProceedsTest is TestSupport {
         bytes32 structHash = keccak256(
             abi.encode(
                 keccak256(
-                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
                 ),
-                wallet,
+                quote.wallet,
                 keccak256(abi.encode(ids)),
                 quote.receiptIdsHash,
-                orderId,
-                fee,
-                quote.deadline
+                quote.orderId,
+                quote.fee,
+                quote.deadline,
+                quote.configId
             )
         );
         (uint8 v, bytes32 r, bytes32 s) =

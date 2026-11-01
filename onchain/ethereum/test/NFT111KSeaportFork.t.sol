@@ -114,7 +114,7 @@ contract NFT111KSeaportForkTest is TestSupport {
         token = new NFT111K(
             address(this),
             vm.addr(0x5151),
-            payable(address(0xBEEF)),
+            address(0xBEEF),
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             _proceedsRecipients(),

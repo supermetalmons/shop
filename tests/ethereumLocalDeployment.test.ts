@@ -52,20 +52,20 @@ test('the local API rejects old deployment manifests before connecting to Anvil'
     });
   };
   try {
-    for (const protocolVersion of [undefined, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+    for (const protocolVersion of [undefined, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) {
       const result = start({ protocolVersion });
       assert.ifError(result.error);
       assert.equal(result.status, 1);
-      assert.match(result.stderr, /The local deployment does not support monument receipts in the collection contract\./);
+      assert.match(result.stderr, /The local deployment does not support registered delivery configurations\./);
       assert.match(result.stderr, /Restart Anvil and run npm --prefix onchain\/ethereum run deploy:local again\./);
     }
-    const current = start({ protocolVersion: 11, chainId: 1, rpcUrl: 'http://127.0.0.1:8545' });
+    const current = start({ protocolVersion: 13, chainId: 1, rpcUrl: 'http://127.0.0.1:8545' });
     assert.ifError(current.error);
     assert.equal(current.status, 1);
     assert.match(current.stderr, /The local API accepts only an Anvil deployment on an HTTP loopback URL, chain ID 31337\./);
     for (const metadataBaseURI of ['http://127.0.0.1:8789/111k-sepolia/', 'http://localhost:8789/111k/',
       'http://[::1]:8789/111k-sepolia/', 'https://example.com/111k-sepolia/']) {
-      const local = start({ protocolVersion: 11, chainId: 31337, rpcUrl: 'http://127.0.0.1:8545', metadataBaseURI });
+      const local = start({ protocolVersion: 13, chainId: 31337, rpcUrl: 'http://127.0.0.1:8545', metadataBaseURI });
       assert.ifError(local.error);
       assert.equal(local.status, 1);
       assert.match(local.stderr, /Local metadata must use the collection CDN\./);
@@ -82,9 +82,10 @@ test('the local API probes monument constants and the extended stats before init
   const fixture = JSON.parse(readFileSync('onchain/ethereum/fixtures/eip712.json', 'utf8'));
   const proceeds = JSON.parse(readFileSync('onchain/ethereum/config/proceeds.json', 'utf8'));
   const metadataBaseURI = 'https://cdn.mons.shop/111k-sepolia/probe/';
-  writeFileSync(deploymentFile, JSON.stringify({ ...proceeds, protocolVersion: 11, chainId: 31337,
+  const { initialReceiver: initialDeliveryReceiver } = JSON.parse(readFileSync('onchain/ethereum/config/delivery-routing.json', 'utf8'));
+  writeFileSync(deploymentFile, JSON.stringify({ ...proceeds, protocolVersion: 13, chainId: 31337,
     rpcUrl: 'http://127.0.0.1:8545', contractAddress: `0x${'7'.repeat(40)}`, deploymentBlock: 0,
-    quoteSigner: fixture.signer, metadataBaseURI }));
+    quoteSigner: fixture.signer, metadataBaseURI, initialDeliveryReceiver, deliveryConfigId: 1 }));
   const types = ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
     'uint256', 'uint256', 'uint256', 'uint256', 'uint256'];
   const stats = [111n, 0n, 0n, 100n, 1100n, true, `0x${'0'.repeat(64)}`, 50n, 1n, 0n, 1n, 17n];
@@ -132,59 +133,38 @@ test('the local API probes monument constants and the extended stats before init
   }
 });
 
-test('proceeds configuration accepts two through eight recipients and the committed configuration', () => {
+test('proceeds configuration accepts two through 32 recipients and the committed mint configuration', () => {
   const config = JSON.parse(readFileSync('onchain/ethereum/config/proceeds.json', 'utf8'));
   assert.deepEqual(parseProceedsConfig(config), {
     mintRecipients: config.mintRecipients.map((address: string) => address.toLowerCase()),
     mintSharesBps: config.mintSharesBps,
-    deliveryPaymentReceiver: config.deliveryPaymentReceiver.toLowerCase(),
   });
-  for (let count = 2; count <= 8; count++) {
-    const mintRecipients = Array.from({ length: count }, (_, index) => `0x${String(index + 1).repeat(40)}`);
+  for (let count = 2; count <= 32; count++) {
+    const mintRecipients = Array.from({ length: count }, (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`);
     const mintSharesBps = Array.from({ length: count }, (_, index) => index === 0 ? 10_000 - count + 1 : 1);
-    assert.equal(parseProceedsConfig({ mintRecipients, mintSharesBps, deliveryPaymentReceiver: `0x${'9'.repeat(40)}` }).mintRecipients.length, count);
+    assert.equal(parseProceedsConfig({ mintRecipients, mintSharesBps }).mintRecipients.length, count);
   }
 });
 
-test('proceeds configuration normalizes checksummed payees including an Anvil buyer', () => {
+test('proceeds configuration normalizes checksummed mint payees including an Anvil buyer', () => {
   const mintRecipients = ['0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC', `0x${'9'.repeat(40)}`];
-  const deliveryPaymentReceiver = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
-  const config = { mintRecipients, mintSharesBps: [5000, 5000], deliveryPaymentReceiver };
-  assert.deepEqual(parseProceedsConfig(config), {
-    mintRecipients: mintRecipients.map(address => address.toLowerCase()),
-    mintSharesBps: [5000, 5000],
-    deliveryPaymentReceiver: deliveryPaymentReceiver.toLowerCase(),
+  assert.deepEqual(parseProceedsConfig({ mintRecipients, mintSharesBps: [5000, 5000] }), {
+    mintRecipients: mintRecipients.map(address => address.toLowerCase()), mintSharesBps: [5000, 5000],
   });
 });
 
-test('proceeds preflight rejects malformed splits and invalid or overlapping receiver addresses', () => {
+test('proceeds preflight rejects malformed splits and invalid mint recipient addresses', () => {
   const first = `0x${'a'.repeat(40)}`;
   const second = `0x${'b'.repeat(40)}`;
-  const delivery = `0x${'c'.repeat(40)}`;
-  const valid = { mintRecipients: [first, second], mintSharesBps: [5000, 5000], deliveryPaymentReceiver: delivery };
+  const valid = { mintRecipients: [first, second], mintSharesBps: [5000, 5000] };
   for (const invalid of [
     null, {}, { ...valid, mintRecipients: [first] },
-    { ...valid, mintRecipients: Array(9).fill(first), mintSharesBps: Array(9).fill(1) },
+    { ...valid, mintRecipients: Array(33).fill(first), mintSharesBps: Array(33).fill(1) },
     { ...valid, mintSharesBps: [10_000] }, { ...valid, mintSharesBps: [0, 10_000] },
     { ...valid, mintSharesBps: [-1, 10_001] }, { ...valid, mintSharesBps: [5000.5, 4999.5] },
     { ...valid, mintSharesBps: ['5000', 5000] }, { ...valid, mintSharesBps: [4999, 5000] },
     { ...valid, mintRecipients: [first, first.toUpperCase().replace('0X', '0x')] },
-    ...[null, 1, '0x123', `0x${'0'.repeat(40)}`, `0x${'g'.repeat(40)}`].flatMap(address => [
-      { ...valid, mintRecipients: [first, address] }, { ...valid, deliveryPaymentReceiver: address },
-    ]),
-    { ...valid, deliveryPaymentReceiver: first.toUpperCase().replace('0X', '0x') },
+    ...[null, 1, '0x123', `0x${'0'.repeat(40)}`, `0x${'g'.repeat(40)}`].map(address => ({ ...valid, mintRecipients: [first, address] })),
   ]) assert.throws(() => parseProceedsConfig(invalid));
   assert.throws(() => parseProceedsConfig(valid, first));
-  assert.throws(() => parseProceedsConfig(valid, delivery));
-});
-
-test('a rotated delivery receiver remains valid without changing the deployment mint configuration', () => {
-  const original = parseProceedsConfig(JSON.parse(readFileSync('onchain/ethereum/config/proceeds.json', 'utf8')));
-  const occupied = new Set([...original.mintRecipients, original.deliveryPaymentReceiver]);
-  let receiver = 1n;
-  while (occupied.has(`0x${receiver.toString(16).padStart(40, '0')}`)) receiver++;
-  const rotated = parseProceedsConfig({ ...original, deliveryPaymentReceiver: `0x${receiver.toString(16).padStart(40, '0')}` });
-  assert.deepEqual(rotated.mintRecipients, original.mintRecipients);
-  assert.deepEqual(rotated.mintSharesBps, original.mintSharesBps);
-  assert.notEqual(rotated.deliveryPaymentReceiver, original.deliveryPaymentReceiver);
 });

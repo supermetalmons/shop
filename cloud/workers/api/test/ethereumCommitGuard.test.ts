@@ -20,8 +20,8 @@ function seed(harness: CommerceD1Harness): void {
     .run(CONTRACT);
   harness.database.prepare(`INSERT INTO ethereum_delivery_quotes
     (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
-      items_json, fee_wei, deadline, status, transaction_hash, block_number, block_hash, created_at_ms, updated_at_ms)
-    VALUES (?, ?, 42, 'request', 'wallet', 'address', '{}', '[]', '[]', '0', 2000, 'confirmed', ?, 100, ?, 1000, 1000)`)
+      items_json, fee_wei, deadline, status, transaction_hash, block_number, block_hash, created_at_ms, updated_at_ms, config_id)
+    VALUES (?, ?, 42, 'request', 'wallet', 'address', '{}', '[]', '[]', '0', 2000, 'confirmed', ?, 100, ?, 1000, 1000, 1)`)
     .run(delivery.chainId, CONTRACT, HASH, BLOCK_HASH);
   harness.database.prepare(`INSERT INTO ethereum_crate_claims
     (chain_id, contract_address, receipt_id, crate_id, order_id, code_hash, code, claim_id, status,

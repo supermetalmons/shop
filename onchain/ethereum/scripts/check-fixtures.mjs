@@ -7,6 +7,7 @@ assert.equal(eip712.domainName, '111K');
 assert.equal(eip712.domainVersion, '2');
 assert.equal(eip712.delivery.receiptIds.length, eip712.delivery.tokenIds.length);
 assert.match(eip712.delivery.receiptIdsHash, /^0x[0-9a-f]{64}$/);
+assert.equal(eip712.delivery.configId, '1');
 assert.equal(eip712.delivery.signature.length, 132);
 assert.equal(eip712.claim.signature.length, 132);
 process.stdout.write('Validated authorization fixtures.\n');

@@ -6,7 +6,7 @@ import { notificationOutboxWriteStatement } from '../src/notificationOutboxRepos
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { packStatusOutboxInsertStatement } from '../src/packStatusOutboxRepository.ts';
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -35,6 +35,8 @@ import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/s
 import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata } from '../../../../shared/stripeCheckoutState.ts';
 import { stripeCheckoutStateWriteStatement } from '../src/stripeCheckoutStateStore.ts';
 import { parseReceiptClaimFailureOutboxRow } from '../../../../shared/receiptClaimFailureOutbox.ts';
+import { buildEthereum111kResetBatch, buildEthereum111kResetPlan, readEthereum111kSnapshot,
+  type Ethereum111kQueryBatch } from '../../../../scripts/shared/ethereum111kMaintenance.ts';
 
 function batchDocuments(db: D1Database, statements: Array<D1PreparedStatement | D1PreparedStatement[]>): Promise<D1Result[]> {
   return db.batch(statements.flat());
@@ -199,6 +201,93 @@ test('document-path migration backfills a populated Commerce D1 in the real runt
   }
 });
 
+test('registered delivery configuration migration requires the old scope reset in the real D1 runtime', async context => {
+  const migrationDirectory = mkdtempSync(join(tmpdir(), 'mons-delivery-config-migrations-'));
+  context.after(() => rmSync(migrationDirectory, { force: true, recursive: true }));
+  const migrationsRoot = resolve('cloud/workers/api/commerce-migrations');
+  for (const name of readdirSync(migrationsRoot).filter(name => name.endsWith('.sql') && name < '0047_')) {
+    copyFileSync(join(migrationsRoot, name), join(migrationDirectory, name));
+  }
+  const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
+  const runtimeConfig = {
+    ...productionConfig, main: resolve('cloud/workers/api/src/index.ts'), routes: undefined,
+    d1_databases: productionConfig.d1_databases.map((database: Record<string, unknown>) => ({
+      ...database, remote: false, migrations_dir: database.binding === 'COMMERCE_DB'
+        ? migrationDirectory : resolve('cloud/workers/api', String(database.migrations_dir)),
+    })),
+  };
+  delete runtimeConfig.$schema;
+  delete runtimeConfig.secrets;
+  delete runtimeConfig.services;
+  const server = createTestHarness({ root: resolve('.'), workers: [{ config: runtimeConfig }] });
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const env = await worker.getEnv();
+    const db = env.COMMERCE_DB;
+    await db.batch([
+      db.prepare(`INSERT INTO commerce_authority_control_lease (singleton, lease_token, acquired_at_ms, expires_at_ms)
+        VALUES (1, ?, CAST(strftime('%s','now') AS INTEGER) * 1000,
+          CAST(strftime('%s','now') AS INTEGER) * 1000 + 60000)`).bind(crypto.randomUUID()),
+      db.prepare(`UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s','now') AS INTEGER) * 1000,
+        updated_at_ms = CAST(strftime('%s','now') AS INTEGER) * 1000 WHERE singleton = 1`),
+      ...['commerce_notification_outbox_control', 'commerce_stripe_checkout_state_control',
+        'commerce_pack_status_outbox_control', 'commerce_delivery_recovery_control'].flatMap(table => [
+        db.prepare(`UPDATE ${table} SET preparation_state = 'preparing', source_documents_revision = 0 WHERE singleton = 1`),
+        db.prepare(`UPDATE ${table} SET preparation_state = 'ready', prepared_at_ms = 0 WHERE singleton = 1`),
+        db.prepare(`UPDATE ${table} SET storage_mode = 'table' WHERE singleton = 1`),
+      ]),
+      db.prepare(`UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
+        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s','now') AS INTEGER) * 1000 WHERE singleton = 1`),
+      db.prepare('DELETE FROM commerce_authority_control_lease WHERE singleton = 1'),
+    ]);
+    const oldContract = `0x${'1'.repeat(40)}`;
+    const newContract = `0x${'2'.repeat(40)}`;
+    await db.prepare(`UPDATE ethereum_111k_control SET paused = 0, paused_at_ms = NULL, chain_id = 31337,
+      contract_address = ?, revision = revision + 1 WHERE singleton = 1`).bind(oldContract).run();
+    const oldInsert = `INSERT INTO ethereum_delivery_quotes
+      (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
+       items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms)
+      VALUES (31337, ?, 1, 'old-order', 'wallet', 'address', '{}', '["7"]', '[]', '100', 1000, 'prepared', 1, 1)`;
+    await db.prepare(oldInsert).bind(oldContract).run();
+    const migrationName = '0047_ethereum_delivery_routing.sql';
+    copyFileSync(join(migrationsRoot, migrationName), join(migrationDirectory, migrationName));
+    await assert.rejects(worker.applyD1Migrations('COMMERCE_DB'));
+    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').first<{ n: number }>())!.n, 1);
+    assert.equal(await db.prepare("SELECT name FROM pragma_table_info('ethereum_delivery_quotes') WHERE name = 'config_id'").first(), null);
+    assert.equal(await db.prepare('SELECT name FROM d1_migrations WHERE name = ?').bind(migrationName).first(), null);
+    await db.prepare(`UPDATE ethereum_111k_control SET paused = 1,
+      paused_at_ms = CAST(strftime('%s','now') AS INTEGER) * 1000 - 70000,
+      revision = revision + 1 WHERE singleton = 1`).run();
+    const queryBatch: Ethereum111kQueryBatch = async queries => {
+      const entries = Object.entries(queries);
+      const results = await db.batch<Record<string, unknown>>(entries.map(([, sql]) => db.prepare(sql)));
+      return Object.fromEntries(entries.map(([name], index) => [name, results[index].results]));
+    };
+    const scope = { chainId: 31337, contractAddress: oldContract };
+    const snapshot = await readEthereum111kSnapshot(queryBatch, scope);
+    const plan = buildEthereum111kResetPlan(snapshot, scope, snapshot.control.revision, crypto.randomUUID());
+    await queryBatch(buildEthereum111kResetBatch(plan));
+    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').first<{ n: number }>())!.n, 0);
+    assert.equal((await db.prepare('SELECT paused FROM ethereum_111k_control').first<{ paused: number }>())!.paused, 1);
+    await worker.applyD1Migrations('COMMERCE_DB');
+    assert.deepEqual(await db.prepare("SELECT type, [notnull], dflt_value FROM pragma_table_info('ethereum_delivery_quotes') WHERE name = 'config_id'").first(),
+      { type: 'INTEGER', notnull: 1, dflt_value: null });
+    await db.prepare(`UPDATE ethereum_111k_control SET paused = 0, paused_at_ms = NULL, contract_address = ?,
+      revision = revision + 1 WHERE singleton = 1`).bind(newContract).run();
+    await assert.rejects(db.prepare(oldInsert).bind(oldContract).run());
+    await assert.rejects(db.prepare(oldInsert).bind(newContract).run(), /NOT NULL/);
+    await db.prepare(`INSERT INTO ethereum_delivery_quotes
+      (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
+       items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, config_id)
+      VALUES (31337, ?, 2, 'new-order', 'wallet', 'address', '{}', '["7"]', '[]', '100', 1000, 'prepared', 1, 1, 1)`)
+      .bind(newContract).run();
+    await assert.rejects(db.prepare('UPDATE ethereum_delivery_quotes SET config_id = 2').run(), /configuration is immutable/);
+    assert.equal((await db.prepare('SELECT config_id FROM ethereum_delivery_quotes').first<{ config_id: number }>())!.config_id, 1);
+  } finally { await server.close(); }
+});
+
 test('commerce repository reads and transaction guards run through the real D1 runtime', async (context) => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const runtimeConfig = {
@@ -272,6 +361,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0044_ethereum_checkout_attempt_order_index.sql',
       '0045_preorder_asset_lookup.sql',
       '0046_frozen_commerce_metadata_cleanup.sql',
+      '0047_ethereum_delivery_routing.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms

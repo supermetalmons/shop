@@ -11,7 +11,7 @@ const baseline = 'benchmarks/compiler-legacy-200-single-contract.json';
 const historical = ['compiler-legacy-200.json', 'compiler-legacy-200-cdn.json', 'compiler-settings.json'];
 const read = path => readFileSync(path, 'utf8');
 
-test('compiler benchmarks regenerate and reproduce supported recipient configurations without changing historical baselines', () => {
+test('compiler benchmarks reproduce deployable variants and reject oversized bytecode without changing historical baselines', () => {
   const originalBaseline = read(join(root, baseline));
   const historicalBaselines = historical.map(name => read(join(root, 'benchmarks', name)));
   const directory = mkdtempSync(join(tmpdir(), '111k-compiler-test-'));
@@ -34,13 +34,20 @@ test('compiler benchmarks regenerate and reproduce supported recipient configura
         cwd: directory, encoding: 'utf8', timeout: 180_000, maxBuffer: 16 * 1024 * 1024,
       });
       assert.ifError(result.error);
-      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const report = JSON.parse(read(join(directory, output)));
       assert.equal(report.status, 'complete');
+      const oversize = variant => variant.artifacts.NFT111K.runtimeBytes > 24576 ||
+        variant.artifacts.NFT111K.creationBytes + report.reproduction.maximumCollectionArgumentBytes > 49152;
+      assert.equal(result.status, report.variants.some(oversize) ? 1 : 0, `${result.stdout}\n${result.stderr}`);
       assert.equal(report.reproduction.maximumCollectionArgumentBytes, 6656);
       assert.equal(report.writeBenchmarkCount,
-        Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release|setFreeMintAllowances|setBaseURI)/.test(name)).length);
+        Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name)).length);
       for (const variant of report.variants) {
+        if (oversize(variant)) {
+          assert.equal(variant.status, 'benchmark-failed');
+          assert.equal(variant.deploymentTransactions, undefined);
+          continue;
+        }
         assert.equal(variant.status, 'measured');
         for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'mintCrates1ThirtyTwoRecipients',
           'releaseMint', 'releaseMintEightRecipients', 'releaseAllMintThirtyTwoRecipients',

@@ -1,6 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
+import {DeliveryAccounting} from "./DeliveryAccounting.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 contract NFT111KInvariantHandler is TestSupport {
@@ -28,7 +29,7 @@ contract NFT111KInvariantHandler is TestSupport {
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant DELIVERY_TYPEHASH = keccak256(
-        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
     );
     bytes32 private constant CLAIM_TYPEHASH =
         keccak256("CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)");
@@ -57,19 +58,28 @@ contract NFT111KInvariantHandler is TestSupport {
     uint256 private deliveryRevenue;
     uint256[4] private mintPaid;
     uint256 private deliveryPaid;
+    uint256[2] private deliveryAccrued;
+    uint256[2] private deliveryWithdrawn;
+    uint256[4] private deliveryConfigReceived;
+    uint256[4] private deliveryReleased1;
+    uint256[4] private deliveryReleased2;
     bool private paused;
 
     constructor() {
         token = new NFT111K(
             address(this),
             vm.addr(SIGNER_KEY),
-            payable(address(0xFEE)),
+            address(0xFEE),
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps(),
             new NFT111K.FreeMintAllocation[](0)
         );
+        assertEq(token.deliveryConfigCount(), 1);
+        assertEq(token.registerDeliveryConfig(_deliveryReceiver(1), address(0), 0), 2);
+        assertEq(token.registerDeliveryConfig(_deliveryReceiver(0), _deliveryReceiver(1), 3333), 3);
+        assertEq(token.registerDeliveryConfig(_deliveryReceiver(1), _deliveryReceiver(0), 6667), 4);
         token.setSaleActive(true);
         bytes32 firstLeaf = _discountLeaf(actors[0]);
         bytes32 secondLeaf = _discountLeaf(actors[1]);
@@ -311,8 +321,30 @@ contract NFT111KInvariantHandler is TestSupport {
 
     function releaseDelivery(uint256 seed) external {
         vm.prank(actors[seed % actors.length]);
-        token.releaseDelivery();
-        deliveryPaid = deliveryRevenue;
+        if (seed % 3 == 0) {
+            token.releaseDelivery();
+            for (uint256 i; i < 4; ++i) {
+                _recordDeliveryRelease(i, false);
+                _recordDeliveryRelease(i, true);
+            }
+        } else {
+            uint256 index = seed % 4;
+            bool secondary = (seed / 4) % 2 == 1;
+            token.releaseDeliveryFor(index + 1, secondary);
+            _recordDeliveryRelease(index, secondary);
+        }
+    }
+
+    function _recordDeliveryRelease(uint256 index, bool secondary) private {
+        uint256 second = deliveryConfigReceived[index] * _deliveryShare(index) / 10_000;
+        uint256 entitlement = secondary ? second : deliveryConfigReceived[index] - second;
+        uint256 released = secondary ? deliveryReleased2[index] : deliveryReleased1[index];
+        uint256 amount = entitlement - released;
+        if (secondary) deliveryReleased2[index] = entitlement;
+        else deliveryReleased1[index] = entitlement;
+        uint256 receiverIndex = index % 2;
+        deliveryWithdrawn[secondary ? 1 - receiverIndex : receiverIndex] += amount;
+        deliveryPaid += amount;
     }
 
     function releaseAllMint(uint256 seed) external {
@@ -345,10 +377,24 @@ contract NFT111KInvariantHandler is TestSupport {
         }
         assertEq(token.totalMintReceived(), mintRevenue);
         assertEq(token.totalMintReleased(), released);
-        assertEq(token.totalDeliveryReceived(), deliveryRevenue);
-        assertEq(token.totalDeliveryReleased(), deliveryPaid);
-        assertEq(token.deliveryPaymentReceiver().balance, deliveryPaid);
-        assertEq(token.releasableDelivery(), deliveryRevenue - deliveryPaid);
+        assertEq(token.deliveryConfigCount(), 4);
+        for (uint256 i; i < 4; ++i) {
+            NFT111K.DeliveryConfig memory config = DeliveryAccounting.config(token, i + 1);
+            assertEq(config.receiver1, _deliveryReceiver(i % 2));
+            assertEq(config.receiver2, i < 2 ? address(0) : _deliveryReceiver(1 - i % 2));
+            assertEq(config.receiver2Bps, _deliveryShare(i));
+            assertEq(config.totalReceived, deliveryConfigReceived[i]);
+            assertEq(config.released1, deliveryReleased1[i]);
+            assertEq(config.released2, deliveryReleased2[i]);
+        }
+        assertEq(DeliveryAccounting.received(token), deliveryRevenue);
+        assertEq(DeliveryAccounting.released(token), deliveryPaid);
+        for (uint256 i; i < 2; ++i) {
+            assertEq(_deliveryReceiver(i).balance, deliveryWithdrawn[i]);
+            assertEq(DeliveryAccounting.pending(token, _deliveryReceiver(i)), deliveryAccrued[i] - deliveryWithdrawn[i]);
+        }
+        assertEq(deliveryAccrued[0] + deliveryAccrued[1], deliveryRevenue);
+        assertEq(deliveryWithdrawn[0] + deliveryWithdrawn[1], deliveryPaid);
         assertEq(address(token).balance + released + deliveryPaid, mintRevenue + deliveryRevenue);
         assertTrue(token.redemptionsPaused() == paused);
         assertTrue(allocations <= MODELED_CRATE_LIMIT);
@@ -569,6 +615,13 @@ contract NFT111KInvariantHandler is TestSupport {
         _issue(receipt, original.kind == 1 ? 4 : original.kind == 2 ? 5 : 7, original.displayId, original.holder);
         if (original.kind == 1) ++redeemedArtworks;
         deliveryRevenue += quote.fee;
+        uint256 configIndex = quote.configId - 1;
+        uint256 previousSecond = deliveryConfigReceived[configIndex] * _deliveryShare(configIndex) / 10_000;
+        deliveryConfigReceived[configIndex] += quote.fee;
+        uint256 second = deliveryConfigReceived[configIndex] * _deliveryShare(configIndex) / 10_000 - previousSecond;
+        uint256 receiverIndex = configIndex % 2;
+        deliveryAccrued[receiverIndex] += quote.fee - second;
+        deliveryAccrued[1 - receiverIndex] += second;
         consumedOrders.push(orderId);
     }
 
@@ -611,11 +664,24 @@ contract NFT111KInvariantHandler is TestSupport {
         return 0;
     }
 
+    function _deliveryShare(uint256 index) private pure returns (uint256) {
+        return index < 2 ? 0 : index == 2 ? 3333 : 6667;
+    }
+
+    function _deliveryReceiver(uint256 index) private pure returns (address) {
+        return index == 0 ? address(0xFEE) : address(0xFEF);
+    }
+
     function _quote(uint256 id, uint256 orderId) private view returns (NFT111K.DeliveryQuote memory) {
         ModelToken storage original = model[id];
         uint256 receipt = (original.kind == 1 ? 1000000 : original.kind == 2 ? 2000000 : 3000000) + original.displayId;
         return NFT111K.DeliveryQuote(
-            orderId, original.holder, DELIVERY_FEE, block.timestamp + 300, keccak256(abi.encode(_one(receipt)))
+            orderId,
+            original.holder,
+            DELIVERY_FEE,
+            block.timestamp + 300,
+            keccak256(abi.encode(_one(receipt))),
+            orderId % 4 + 1
         );
     }
 
@@ -632,7 +698,8 @@ contract NFT111KInvariantHandler is TestSupport {
                     quote.receiptIdsHash,
                     quote.orderId,
                     quote.fee,
-                    quote.deadline
+                    quote.deadline,
+                    quote.configId
                 )
             )
         );

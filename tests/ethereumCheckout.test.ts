@@ -22,6 +22,7 @@ const { checkoutReservesItems, observeCheckoutReservation, rememberCheckoutReser
 dom.window.close();
 
 const checkoutId = '11111111-1111-4111-8111-111111111111';
+const deliveryConfigId = 1;
 const owner = '0x1111111111111111111111111111111111111111';
 const otherOwner = '0x2222222222222222222222222222222222222222';
 const config = resolveEthereum111kConfig({ contractAddress: '0x3333333333333333333333333333333333333333' });
@@ -75,10 +76,10 @@ function prepare() {
   const receiptIdsHash = ethereumReceiptIdsHash(['2000001']);
   const signature = `0x${'ab'.repeat(65)}`;
   return { orderId: 42, expiresAtMs: deadline * 1000, signature,
-    quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash },
+    quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash, configId: deliveryConfigId },
     transaction: { to: config.contractAddress!, chainId: config.chainId, value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`,
-      data: encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'],
-        [['111112'], [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash], signature]) },
+      data: encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+        [['111112'], [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash, deliveryConfigId], signature]) },
   };
 }
 

@@ -30,6 +30,8 @@ const ORIGIN = 'https://mons.shop';
 const CONTRACT = '0x1111111111111111111111111111111111111111';
 const OTHER_CONTRACT = '0x9999999999999999999999999999999999999999';
 const ZERO = '0x0000000000000000000000000000000000000000';
+const DELIVERY_RECEIVER = '0x3333333333333333333333333333333333333333';
+const SECOND_RECEIVER = '0x4444444444444444444444444444444444444444';
 const WALLET_KEY = `0x${'11'.repeat(32)}`;
 const OTHER_KEY = `0x${'22'.repeat(32)}`;
 const SIGNER_KEY = `0x${'0'.repeat(59)}a11ce`;
@@ -83,12 +85,16 @@ function fixture(controlActive = true) {
     ETHEREUM_111K_DEPLOYMENT_BLOCK: '2',
     ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
     ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_SIGNER_SECRET: SIGNER_KEY,
+    ETHEREUM_111K_DELIVERY_CONFIG_ID: '1',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
   };
   const state = {
     now: NOW, head: 102, blockTimestamp: null as number | null, rpcChainId: null as number | null,
     finalizedBlock: null as { number: number; timestamp: number } | null,
     expectedSigner: SIGNER, contractCode: new Set<string>(), magic: '0x1626ba7e',
+    deliveryConfigs: new Map<number, [string, string, bigint, bigint, bigint, bigint]>([
+      [1, [DELIVERY_RECEIVER, ZERO, 0n, 0n, 0n, 0n]],
+    ]),
     allocatedCrates: 25, monumentsMinted: 0,
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
@@ -139,6 +145,11 @@ function fixture(controlActive = true) {
       const selector = call.data.slice(0, 10);
       const argumentsHex = `0x${call.data.slice(10)}`;
       if (selector === functionSelector('quoteSigner()')) return encodeAbi(['address'], [state.expectedSigner]);
+      if (selector === functionSelector('deliveryConfigs(uint256)')) {
+        const [configId] = decodeReturn(['uint256'], argumentsHex) as [bigint];
+        return encodeAbi(['address', 'address', 'uint16', 'uint256', 'uint256', 'uint256'],
+          state.deliveryConfigs.get(Number(configId)) ?? [ZERO, ZERO, 0n, 0n, 0n, 0n]);
+      }
       if (selector === functionSelector('usedDeliveryOrders(uint256)')) {
         const orderId = Number(decodeReturn(['uint256'], argumentsHex)[0]);
         const canonical = [...state.receipts.values()].some((receipt) => receipt.status === '0x1' &&
@@ -242,7 +253,8 @@ function fixture(controlActive = true) {
   function deliveryLog(prepared: EthereumDeliveryPrepareResponse, ids = ['111112'], receipts = ['2000001'], hash = HASH): EthereumLog {
     return { address: CONTRACT, topics: [ETHEREUM_EVENT_TOPICS.DeliveryRedeemed,
       topicNumber(prepared.orderId), topicAddress(prepared.quote.wallet)],
-    data: encodeAbi(['uint256', 'uint256[]', 'uint256[]'], [prepared.quote.fee, ids, receipts]),
+    data: encodeAbi(['uint256', 'uint256[]', 'uint256[]', 'uint256'],
+      [prepared.quote.fee, ids, receipts, prepared.quote.configId]),
     blockNumber: '0x64', blockHash: blockHash(100), transactionHash: hash, logIndex: '0x0' };
   }
   function claimLog(prepared: EthereumClaimPrepareResponse, ids = physicalCrateArtworkIds(1).map(id => String(1_000_000 + id)), hash = CLAIM_HASH): EthereumLog {
@@ -1002,6 +1014,53 @@ test('checkout lost-hash recovery verifies immutable transaction intent and nonc
   } finally { f.close(); }
 });
 
+test('checkout recovery rejects a changed signed configuration and accepts the saved ID', async () => {
+  const f = fixture();
+  try {
+    f.state.deliveryConfigs.set(2, [DELIVERY_RECEIVER, SECOND_RECEIVER, 2500n, 0n, 0n, 0n]);
+    f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = '2';
+    const ready = await startedCheckout(f);
+    const input = { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'recover', transactionHash: HASH };
+    for (const change of [{ configId: 1 }, { configId: 3 }]) {
+      const quote = { ...ready.prepared.quote, ...change };
+      const data = encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)',
+        ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+        [['111112'], [quote.orderId, quote.wallet, quote.fee, quote.deadline, quote.receiptIdsHash,
+          quote.configId], ready.prepared.signature]);
+      setCheckoutTransaction(f, ready.prepared, HASH, { input: data });
+      const rejected = await f.request(checkoutPaths.submission, input, ready.authentication.token);
+      assert.equal(rejected.response.status, 409, JSON.stringify(rejected.body));
+      assert.equal(f.quoteRow(ready.prepared.orderId).transaction_hash, null);
+    }
+    setCheckoutTransaction(f, ready.prepared);
+    const accepted = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, input, ready.authentication.token);
+    assert.equal(accepted.response.status, 200, JSON.stringify(accepted.body));
+    assert.equal(accepted.body.canSend, false);
+  } finally { f.close(); }
+});
+
+test('contract-wallet recovery requires the receipt to prove the saved configuration ID', async () => {
+  const f = fixture();
+  try {
+    f.state.deliveryConfigs.set(2, [DELIVERY_RECEIVER, SECOND_RECEIVER, 2500n, 0n, 0n, 0n]);
+    f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = '2';
+    f.state.contractCode.add(WALLET);
+    const ready = await startedCheckout(f);
+    const input = { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'recover', transactionHash: HASH };
+    setCheckoutTransaction(f, ready.prepared, HASH, { from: OTHER_WALLET, to: WALLET, input: '0x1234', value: '0x0' });
+    for (const change of [{ configId: 1 }, { configId: 3 }]) {
+      f.setReceipt(HASH, [f.deliveryLog({ ...ready.prepared, quote: { ...ready.prepared.quote, ...change } })]);
+      const rejected = await f.request(checkoutPaths.submission, input, ready.authentication.token);
+      assert.equal(rejected.response.status, 403, JSON.stringify(rejected.body));
+      assert.equal(f.quoteRow(ready.prepared.orderId).transaction_hash, null);
+    }
+    f.setReceipt(HASH, [f.deliveryLog(ready.prepared)]);
+    const accepted = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, input, ready.authentication.token);
+    assert.equal(accepted.response.status, 200, JSON.stringify(accepted.body));
+    assert.equal(accepted.body.canSend, false);
+  } finally { f.close(); }
+});
+
 test('checkout replacement validates the original nonce, tracks cancellation, and reopens uncertainty after a reorg', async () => {
   const f = fixture();
   try {
@@ -1663,8 +1722,9 @@ test('delivery preparation persists one immutable selection before returning a v
     assert.equal(stored.token_ids_json, JSON.stringify(input.tokenIds));
     assert.equal(JSON.parse(String(stored.address_json)).encrypted, 'encrypted-test-address');
     assert.equal(prepared.quote.receiptIdsHash, ethereumReceiptIdsHash(['2000001', '1000007']));
-    assert.deepEqual(decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], `0x${prepared.transaction.data.slice(10)}`),
-      [[111112n, 7n], [BigInt(prepared.orderId), WALLET, BigInt(prepared.quote.fee), BigInt(prepared.quote.deadline), prepared.quote.receiptIdsHash], prepared.signature]);
+    assert.deepEqual(decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], `0x${prepared.transaction.data.slice(10)}`),
+      [[111112n, 7n], [BigInt(prepared.orderId), WALLET, BigInt(prepared.quote.fee), BigInt(prepared.quote.deadline),
+        prepared.quote.receiptIdsHash, 1n], prepared.signature]);
     assert.equal(recoverEthereumAddress(deliveryDigest({ ...prepared.quote, chainId: 31337, contractAddress: CONTRACT, tokenIds: input.tokenIds }), prepared.signature), SIGNER);
     assert.equal((await f.request(paths.deliveryPrepare, { ...input, tokenIds: ['111112'] }, session.token)).response.status, 409);
     f.state.now = prepared.expiresAtMs + 1000;
@@ -1673,6 +1733,88 @@ test('delivery preparation persists one immutable selection before returning a v
     assert.equal(refreshed.body.orderId, prepared.orderId);
     assert.ok(refreshed.body.quote.deadline > prepared.quote.deadline);
     assert.notEqual(refreshed.body.signature, prepared.signature);
+  } finally { f.close(); }
+});
+
+test('delivery configuration is fixed across changes, retries, and deadline renewal', async () => {
+  const f = fixture();
+  try {
+    const { authentication, prepared } = await f.prepared();
+    assert.equal(prepared.quote.configId, 1);
+    assert.equal(f.quoteRow(prepared.orderId).config_id, 1);
+    f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = '';
+    f.state.calls = [];
+    const input = { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: REQUEST_ID };
+    const retried = await f.request<EthereumDeliveryPrepareResponse>(paths.deliveryPrepare, input, authentication.token);
+    assert.equal(retried.response.status, 200, JSON.stringify(retried.body));
+    assert.deepEqual(retried.body, prepared);
+    assert.equal(f.state.calls.some(call => call.method === 'eth_call' &&
+      (call.params[0] as { data: string }).data.startsWith(functionSelector('deliveryConfigs(uint256)'))), false);
+    f.state.deliveryConfigs.set(2, [DELIVERY_RECEIVER, SECOND_RECEIVER, 2500n, 0n, 0n, 0n]);
+    f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = '2';
+    f.state.now = prepared.expiresAtMs + 1000;
+    const renewed = await f.request<EthereumDeliveryPrepareResponse>(paths.deliveryPrepare, input, authentication.token);
+    assert.equal(renewed.response.status, 200, JSON.stringify(renewed.body));
+    assert.deepEqual(renewed.body.quote, { ...prepared.quote, deadline: renewed.body.quote.deadline });
+    assert.ok(renewed.body.quote.deadline > prepared.quote.deadline);
+    const next = await f.request<EthereumDeliveryPrepareResponse>(paths.deliveryPrepare,
+      { ...input, requestId: crypto.randomUUID() }, authentication.token);
+    assert.equal(next.response.status, 200, JSON.stringify(next.body));
+    assert.equal(next.body.quote.configId, 2);
+    assert.equal(f.quoteRow(next.body.orderId).config_id, 2);
+  } finally { f.close(); }
+});
+
+test('concurrent delivery preparation reuses the winning persisted configuration after an environment change', async () => {
+  const f = fixture();
+  try {
+    const authentication = await f.session();
+    await f.saveAddress(authentication.token);
+    const input = { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: REQUEST_ID };
+    const paused = pauseRpc(f, call => call.method === 'eth_call' &&
+      (call.params[0] as { data: string }).data.startsWith(functionSelector('deliveryConfigs(uint256)')));
+    const first = f.request<EthereumDeliveryPrepareResponse>(paths.deliveryPrepare, input, authentication.token);
+    await paused.paused;
+    f.state.deliveryConfigs.set(2, [DELIVERY_RECEIVER, SECOND_RECEIVER, 2500n, 0n, 0n, 0n]);
+    f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = '2';
+    const winner = await f.request<EthereumDeliveryPrepareResponse>(paths.deliveryPrepare, input, authentication.token);
+    paused.resume();
+    const resumed = await first;
+    assert.equal(winner.response.status, 200, JSON.stringify(winner.body));
+    assert.equal(resumed.response.status, 200, JSON.stringify(resumed.body));
+    assert.deepEqual(resumed.body, winner.body);
+    assert.equal(resumed.body.quote.configId, 2);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 1);
+  } finally { f.close(); }
+});
+
+test('delivery preparation rejects missing or unregistered configuration IDs and client overrides', async () => {
+  const f = fixture();
+  try {
+    const authentication = await f.session();
+    await f.saveAddress(authentication.token);
+    const input = { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: REQUEST_ID };
+    for (const value of ['', '0', '01', '33', '2']) {
+      f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = value;
+      const denied = await f.request(paths.deliveryPrepare, input, authentication.token);
+      assert.equal(denied.response.status, 503, JSON.stringify(denied.body));
+      assert.equal(denied.body.signature, undefined);
+    }
+    f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = '1';
+    assert.equal((await f.request(paths.deliveryPrepare, { ...input, configId: 2 }, authentication.token)).response.status, 400);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 0);
+  } finally { f.close(); }
+});
+
+test('stored delivery configuration IDs cannot change or become null', async () => {
+  const f = fixture();
+  try {
+    const { prepared } = await f.prepared();
+    for (const value of [2, 0, null]) {
+      assert.throws(() => f.commerce.database.prepare('UPDATE ethereum_delivery_quotes SET config_id = ?').run(value), /configuration is immutable/);
+    }
+    f.commerce.database.prepare('UPDATE ethereum_delivery_quotes SET config_id = config_id').run();
+    assert.equal(f.quoteRow(prepared.orderId).config_id, 1);
   } finally { f.close(); }
 });
 
@@ -1790,6 +1932,25 @@ test('delivery confirmation requires the exact contract event and three canonica
     assert.equal((await confirm()).body.status, 'confirmed');
     assert.equal(f.claimRow().code, code);
     assert.equal(f.commerce.database.prepare("SELECT COUNT(*) AS n FROM commerce_documents WHERE document_kind = 'delivery_order'").get()!.n, 1);
+  } finally { f.close(); }
+});
+
+test('delivery confirmation refuses receipts with a different configuration ID', async () => {
+  const f = fixture();
+  try {
+    f.state.deliveryConfigs.set(2, [DELIVERY_RECEIVER, SECOND_RECEIVER, 2500n, 0n, 0n, 0n]);
+    f.env.ETHEREUM_111K_DELIVERY_CONFIG_ID = '2';
+    const { prepared, authentication } = await f.prepared();
+    for (const change of [{ configId: 1 }, { configId: 3 }]) {
+      f.setReceipt(HASH, [f.deliveryLog({ ...prepared, quote: { ...prepared.quote, ...change } })]);
+      const rejected = await f.request(paths.deliveryConfirm, { orderId: prepared.orderId, transactionHash: HASH }, authentication.token);
+      assert.equal(rejected.response.status, 403, JSON.stringify(rejected.body));
+      assert.equal(f.quoteRow(prepared.orderId).status, 'prepared');
+      assert.equal(f.order(prepared.orderId), null);
+    }
+    f.setReceipt(HASH, [f.deliveryLog(prepared)]);
+    assert.equal((await f.request(paths.deliveryConfirm,
+      { orderId: prepared.orderId, transactionHash: HASH }, authentication.token)).body.status, 'confirmed');
   } finally { f.close(); }
 });
 
@@ -1922,8 +2083,8 @@ for (const kind of ['delivery', 'claim'] as const) {
       const insertDelivery = f.commerce.database.prepare(`INSERT INTO ethereum_delivery_quotes
         (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
           items_json, fee_wei, deadline, status, transaction_hash, block_number, block_hash, published_at_ms,
-          verified_at_block, created_at_ms, updated_at_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?)`);
+          verified_at_block, created_at_ms, updated_at_ms, config_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?)`);
       const insertClaim = f.commerce.database.prepare(`INSERT INTO ethereum_crate_claims
         (chain_id, contract_address, receipt_id, crate_id, order_id, code_hash, code, claim_id, status,
           transaction_hash, block_number, block_hash, verified_at_block, updated_at_ms)
@@ -1936,7 +2097,7 @@ for (const kind of ['delivery', 'claim'] as const) {
         insertDelivery.run(31337, CONTRACT, orderId, crypto.randomUUID(), WALLET, ADDRESS_ID, source.address_json,
           source.token_ids_json, source.items_json, source.fee_wei, source.deadline, hash,
           kind === 'delivery' ? 100 : 10, blockHash(kind === 'delivery' ? 100 : 10), NOW,
-          kind === 'delivery' ? 102 : 100, NOW, NOW);
+          kind === 'delivery' ? 102 : 100, NOW, NOW, source.config_id);
         if (kind === 'claim') {
           insertClaim.run(31337, CONTRACT, String(2_000_001 + index), index + 1,
             orderId, hash, code, hash, hash, blockHash(100), NOW);
@@ -2896,8 +3057,8 @@ test('crowded event windows split and resume a hot block without replaying compl
     const insert = f.commerce.database.prepare(`INSERT INTO ethereum_delivery_quotes
       (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
         items_json, fee_wei, deadline, status, transaction_hash, block_number, block_hash, published_at_ms,
-        verified_at_block, created_at_ms, updated_at_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        verified_at_block, created_at_ms, updated_at_ms, config_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (let index = 0; index < 1001; index++) {
       const orderId = index + 10_000;
       const tokenId = String(index + 1);
@@ -2912,7 +3073,8 @@ test('crowded event windows split and resume a hot block without replaying compl
         JSON.stringify([tokenId]), JSON.stringify([{ tokenId, kind: 'artwork', displayId: index + 1, owner: WALLET }]),
         source.fee_wei, source.deadline, completed || moved ? 'confirmed' : 'prepared',
         completed || moved ? hash : null, completed || moved ? 100 : null, moved ? blockHash(999) : completed ? blockHash(100) : null,
-        completed || moved ? NOW : null, completed || moved ? 2200 : null, NOW, NOW);
+        completed || moved ? NOW : null, completed || moved ? 2200 : null, NOW, NOW,
+        source.config_id);
     }
     let remaining = 46;
     for (let attempt = 0; attempt < 5 && remaining; attempt++) {

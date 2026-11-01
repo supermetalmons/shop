@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseProceedsConfig } from './proceeds-config.mjs';
+import { parseInitialDeliveryReceiver, parseProceedsConfig } from './proceeds-config.mjs';
 
 const address = value => `0x${value.toString(16).padStart(40, '0')}`;
 const configuration = count => ({
   mintRecipients: Array.from({ length: count }, (_, index) => address(0xabc000 + index)),
   mintSharesBps: Array.from({ length: count }, (_, index) => Math.floor(10_000 / count) + (index < 10_000 % count ? 1 : 0)),
-  deliveryPaymentReceiver: address(0xdef000),
 });
 
 test('accepts all supported recipient counts with exact total shares', () => {
@@ -28,18 +27,16 @@ test('rejects unsupported counts and invalid basis point allocations', () => {
   }
 });
 
-test('normalizes receiver casing and rejects duplicates or delivery overlap at the maximum count', () => {
+test('normalizes receiver casing and rejects duplicate mint recipients at the maximum count', () => {
   const input = configuration(32);
   const mixedCase = value => `0x${value.slice(2).toUpperCase()}`;
   assert.deepEqual(parseProceedsConfig({
     ...input,
     mintRecipients: input.mintRecipients.map(mixedCase),
-    deliveryPaymentReceiver: mixedCase(input.deliveryPaymentReceiver),
   }), input);
   const duplicate = [...input.mintRecipients];
   duplicate[31] = mixedCase(duplicate[0]);
   assert.throws(() => parseProceedsConfig({ ...input, mintRecipients: duplicate }), /must be distinct/);
-  assert.throws(() => parseProceedsConfig({ ...input, deliveryPaymentReceiver: mixedCase(input.mintRecipients[31]) }), /must be distinct/);
 });
 
 test('rejects invalid, zero, and collection receiver addresses', () => {
@@ -48,8 +45,30 @@ test('rejects invalid, zero, and collection receiver addresses', () => {
     const recipients = [...input.mintRecipients];
     recipients[31] = invalid;
     assert.throws(() => parseProceedsConfig({ ...input, mintRecipients: recipients }), /Invalid proceeds receiver/);
-    assert.throws(() => parseProceedsConfig({ ...input, deliveryPaymentReceiver: invalid }), /Invalid proceeds receiver/);
   }
   assert.throws(() => parseProceedsConfig(input, input.mintRecipients[31]), /Invalid proceeds receiver/);
-  assert.throws(() => parseProceedsConfig(input, input.deliveryPaymentReceiver), /Invalid proceeds receiver/);
+});
+
+
+test('initial delivery receiver normalizes casing', () => {
+  const initialReceiver = address(0xdef000);
+  assert.equal(parseInitialDeliveryReceiver({ initialReceiver: `0x${initialReceiver.slice(2).toUpperCase()}` }), initialReceiver);
+});
+
+test('initial delivery receiver rejects zero, malformed, collection, and mint recipient addresses', () => {
+  const collection = address(0xdef001);
+  const mint = configuration(32).mintRecipients;
+  for (const initialReceiver of [undefined, null, address(0), '0x1234', 'not-an-address', collection, mint[0], mint[31]]) {
+    assert.throws(() => parseInitialDeliveryReceiver({ initialReceiver }, collection, mint), /Invalid initial delivery receiver/);
+  }
+});
+
+test('initial delivery receiver accepts only the bootstrap receiver setting', () => {
+  for (const value of [null, undefined, [], false, '', {}, { receiver1: address(0xdef000) }]) {
+    assert.throws(() => parseInitialDeliveryReceiver(value), /Invalid initial delivery receiver/);
+  }
+  const initialReceiver = address(0xdef000);
+  for (const extra of [{ receiver1: initialReceiver }, { receiver2: address(0) }, { receiver2Bps: 0 }, { configId: 1 }]) {
+    assert.throws(() => parseInitialDeliveryReceiver({ initialReceiver, ...extra }), /Invalid initial delivery receiver configuration/);
+  }
 });

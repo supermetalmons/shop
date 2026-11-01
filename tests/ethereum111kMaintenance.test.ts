@@ -31,8 +31,8 @@ function seedCheckout(harness: CommerceD1Harness, scope = SCOPE, linked = true) 
   if (linked) {
     harness.database.prepare(`INSERT INTO ethereum_delivery_quotes
       (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
-        items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id)
-      VALUES (?, ?, 43, ?, 'wallet', 'checkout-address', '{}', '["1"]', '[]', '0', 2000, 'prepared', 1000, 1000, ?)`)
+        items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id, config_id)
+      VALUES (?, ?, 43, ?, 'wallet', 'checkout-address', '{}', '["1"]', '[]', '0', 2000, 'prepared', 1000, 1000, ?, 1)`)
       .run(scope.chainId, scope.contractAddress, id, id);
     harness.database.prepare(`INSERT INTO ethereum_delivery_checkout_attempts
       (attempt_id, checkout_id, order_id, wallet, status, quote_deadline, expected_nonce, created_at_ms, updated_at_ms)
@@ -50,8 +50,8 @@ function seedDrafts(harness: CommerceD1Harness, count: number, options: { state?
     VALUES (?, ?, 'https://mons.shop', '111k_devnet', ?, ?, '["1"]', '[]', 'https://vvv.so/callback', ?, 1, 1000, 5000)`);
   const quote = harness.database.prepare(`INSERT INTO ethereum_delivery_quotes
     (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
-      items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id)
-    VALUES (?, ?, ?, ?, 'wallet', 'private-address', '{"address":"private"}', '["1"]', '[]', '0', 2000, 'prepared', 1000, 1000, ?)`);
+      items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id, config_id)
+    VALUES (?, ?, ?, ?, 'wallet', 'private-address', '{"address":"private"}', '["1"]', '[]', '0', 2000, 'prepared', 1000, 1000, ?, 1)`);
   const attempt = harness.database.prepare(`INSERT INTO ethereum_delivery_checkout_attempts
     (attempt_id, checkout_id, order_id, wallet, status, quote_deadline, created_at_ms, updated_at_ms)
     VALUES (?, ?, ?, 'wallet', 'started', 2000, 1000, 1000)`);
@@ -109,13 +109,14 @@ function fixture(context: test.TestContext) {
   return harness;
 }
 
-function seed(harness: CommerceD1Harness) {
+function seed(harness: CommerceD1Harness, routed = false) {
   activate(harness);
   harness.database.prepare(`INSERT INTO ethereum_delivery_quotes
     (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
-      items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms)
-    VALUES (?, ?, 42, 'request', 'wallet', 'private-address', '{"address":"private"}', '[]', '[]', '0', 2000, 'prepared', 1000, 1000)`)
-    .run(SCOPE.chainId, SCOPE.contractAddress);
+      items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, config_id)
+    VALUES (?, ?, 42, 'request', 'wallet', 'private-address', '{"address":"private"}', '[]', '[]', ?, 2000, 'prepared', 1000, 1000, ?)`)
+    .run(SCOPE.chainId, SCOPE.contractAddress, routed ? '5' : '0',
+      routed ? 2 : 1);
   harness.database.prepare(`INSERT INTO ethereum_crate_claims
     (chain_id, contract_address, receipt_id, crate_id, order_id, code_hash, code, claim_id, status, updated_at_ms)
     VALUES (?, ?, '2000001', 1, 42, 'code-hash', 'private-code', 'claim-id', 'available', 1000)`)
@@ -393,6 +394,25 @@ test('changed checkout or attempt snapshots prevent reset and failures restore t
   batch.quotes = "SELECT json('forced failure after attempt deletion')";
   await assert.rejects(async () => queryBatch(h)(batch), /malformed JSON/);
   assert.equal(ethereum111kResetOutcome(resetPlan, await readEthereum111kSnapshot(queryBatch(h), SCOPE)), 'unchanged');
+});
+
+test('reset guards include signed configuration IDs without admitting unsafe identifiers', async context => {
+  const h = fixture(context);
+  seed(h, true);
+  const resetPlan = await plan(h);
+  assert.equal(resetPlan.snapshot.quotes[0].config_id, 2);
+  for (const value of [1, 3]) {
+    const changed = structuredClone(resetPlan);
+    changed.snapshot.quotes[0].config_id = value;
+    const batch = buildEthereum111kResetBatch(changed);
+    await assert.rejects(async () => queryBatch(h)(batch), /malformed JSON/);
+    assert.equal(h.database.prepare('SELECT COUNT(*) AS count FROM ethereum_delivery_quotes').get()!.count, 1);
+  }
+  const invalid = structuredClone(resetPlan);
+  invalid.snapshot.quotes[0]['config_id); DROP TABLE ethereum_delivery_quotes;--'] = 'x';
+  assert.throws(() => buildEthereum111kResetBatch(invalid), /Invalid snapshot column/);
+  queryBatch(h)(buildEthereum111kResetBatch(resetPlan));
+  assert.equal(h.database.prepare('SELECT COUNT(*) AS count FROM ethereum_delivery_quotes').get()!.count, 0);
 });
 
 test('changing deployment scope refuses an unprepared checkout until reset', async context => {

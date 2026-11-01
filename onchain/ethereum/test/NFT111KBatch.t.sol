@@ -18,7 +18,7 @@ contract NFT111KBatchTest is TestSupport {
         token = new NFT111K(
             address(this),
             vm.addr(SIGNER_KEY),
-            payable(BOB),
+            address(0xBEEF),
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             _proceedsRecipients(),
@@ -329,7 +329,7 @@ contract NFT111KBatchTest is TestSupport {
         receipts[0] = 1000001;
         receipts[1] = 2000002;
         NFT111K.DeliveryQuote memory quote =
-            NFT111K.DeliveryQuote(1, ALICE, 0, block.timestamp + 300, keccak256(abi.encode(receipts)));
+            NFT111K.DeliveryQuote(1, ALICE, 0, block.timestamp + 300, keccak256(abi.encode(receipts)), 1);
         bytes32 domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -342,14 +342,15 @@ contract NFT111KBatchTest is TestSupport {
         bytes32 digest = keccak256(
             abi.encode(
                 keccak256(
-                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
                 ),
                 quote.wallet,
                 keccak256(abi.encode(ids)),
                 quote.receiptIdsHash,
                 quote.orderId,
                 quote.fee,
-                quote.deadline
+                quote.deadline,
+                quote.configId
             )
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_KEY, keccak256(abi.encodePacked(hex"1901", domain, digest)));

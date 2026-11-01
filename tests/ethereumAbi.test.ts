@@ -24,15 +24,16 @@ test('generated contract ABI covers every client call and collection metadata', 
 
 const WALLET = '0x1111111111111111111111111111111111111111';
 const CONTRACT = '0x2222222222222222222222222222222222222222';
+const CONFIG_ID = 2;
 const CAST_RECEIPTS_HASH = '0x3135a7cb738129654bbf3ba3ce5d9f682fa58813bbda9dfa4e7b1e5bfc8cc71b';
-const CAST_DELIVERY_VECTOR = '0x00000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000002a000000000000000000000000111111111111111111111111111111111111111100000000000000000000000000000000000000000000000000005af3107a400000000000000000000000000000000000000000000000000000000000773594003135a7cb738129654bbf3ba3ce5d9f682fa58813bbda9dfa4e7b1e5bfc8cc71b0000000000000000000000000000000000000000000000000000000000000160000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000031234560000000000000000000000000000000000000000000000000000000000';
+const CAST_DELIVERY_VECTOR = '0x0000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000002a000000000000000000000000111111111111111111111111111111111111111100000000000000000000000000000000000000000000000000005af3107a400000000000000000000000000000000000000000000000000000000000773594003135a7cb738129654bbf3ba3ce5d9f682fa58813bbda9dfa4e7b1e5bfc8cc71b00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000180000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000031234560000000000000000000000000000000000000000000000000000000000';
 const CAST_NESTED_VECTOR = '0x00000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000015b3000000000000000000000000000000000000000000000000000000000001b207000000000000000000000000000000000000000000000000000000000000000c3131316b2072656365697074000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000056372617465000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000977617265686f7573650000000000000000000000000000000000000000000000';
 
 test('ABI delivery tuple and calldata match independent Foundry cast encoding', () => {
-  const types = ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'];
+  const types = ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'];
   const receiptIdsHash = ethereumReceiptIdsHash([1000001, 1000002, 1000020]);
   assert.equal(receiptIdsHash, CAST_RECEIPTS_HASH);
-  const args = [[1n, 2n, 20n], [42n, WALLET, 100000000000000n, 2000000000n, receiptIdsHash], '0x123456'];
+  const args = [[1n, 2n, 20n], [42n, WALLET, 100000000000000n, 2000000000n, receiptIdsHash, BigInt(CONFIG_ID)], '0x123456'];
   assert.equal(encodeAbi(types, args), CAST_DELIVERY_VECTOR);
   assert.deepEqual(decodeReturn(types, CAST_DELIVERY_VECTOR), args);
   assert.equal(encodeCall('mintCrates(uint256)', ['uint256'], [15]), '0x38aa175c' + 'f'.padStart(64, '0'));
@@ -78,7 +79,8 @@ test('ABI rejects unsafe inputs and malformed provider output', () => {
 test('delivery signatures bind the exact order, wallet, tokens, artwork identities, amount, domain and expiry', () => {
   const key = '01'.padStart(64, '0');
   const args = { chainId: 31337, contractAddress: CONTRACT, wallet: WALLET, tokenIds: ['1', '2'], orderId: 42,
-    fee: '100000000000000', deadline: 2000000000, receiptIdsHash: ethereumReceiptIdsHash([1000001, 1000002]) };
+    fee: '100000000000000', deadline: 2000000000, receiptIdsHash: ethereumReceiptIdsHash([1000001, 1000002]),
+    configId: CONFIG_ID };
   const digest = deliveryDigest(args);
   const signature = signDigest(key, digest);
   const signer = ethereumSignerAddress(key);
@@ -90,6 +92,7 @@ test('delivery signatures bind the exact order, wallet, tokens, artwork identiti
     { receiptIdsHash: ethereumReceiptIdsHash([1000021, 1000002]) },
     { receiptIdsHash: ethereumReceiptIdsHash([1000002, 1000001]) },
     { fee: '0' }, { deadline: 2000000001 },
+    { configId: 1 }, { configId: 3 },
   ]) assert.notEqual(recoverEthereumAddress(deliveryDigest({ ...args, ...changed }), signature), signer);
   assert.equal(recoverEthereumAddress(digest, signature.slice(0, -2) + 'ff'), null);
 });
@@ -109,7 +112,7 @@ test('claim authorization is separate from delivery and signing a message is rec
 test('delivery and claim digests and calldata match Solidity-generated fixtures', () => {
   const fixture = JSON.parse(readFileSync(new URL('../onchain/ethereum/fixtures/eip712.json', import.meta.url), 'utf8')) as {
     chainId: number; verifyingContract: string; wallet: string; signer: string;
-    delivery: { tokenIds: number[]; receiptIds: number[]; receiptIdsHash: string; orderId: string; fee: string; deadline: number; digest: string; signature: string; calldata: string };
+    delivery: { tokenIds: number[]; receiptIds: number[]; receiptIdsHash: string; orderId: string; fee: string; deadline: number; configId: number; digest: string; signature: string; calldata: string };
     claim: { receiptId: string; claimId: string; deadline: number; digest: string; signature: string; calldata: string };
   };
   const domain = { chainId: fixture.chainId, contractAddress: fixture.verifyingContract, wallet: fixture.wallet };
@@ -119,8 +122,9 @@ test('delivery and claim digests and calldata match Solidity-generated fixtures'
   assert.equal(recoverEthereumAddress(fixture.delivery.digest, fixture.delivery.signature), fixture.signer);
   assert.equal(recoverEthereumAddress(fixture.claim.digest, fixture.claim.signature), fixture.signer);
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery,
-    ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'],
-    [fixture.delivery.tokenIds, [fixture.delivery.orderId, fixture.wallet, fixture.delivery.fee, fixture.delivery.deadline, fixture.delivery.receiptIdsHash], fixture.delivery.signature]), fixture.delivery.calldata);
+    ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+    [fixture.delivery.tokenIds, [fixture.delivery.orderId, fixture.wallet, fixture.delivery.fee, fixture.delivery.deadline, fixture.delivery.receiptIdsHash,
+      fixture.delivery.configId], fixture.delivery.signature]), fixture.delivery.calldata);
   assert.equal(encodeCall('claimCrateReceipt(uint256,bytes32,uint256,bytes)', ['uint256', 'bytes32', 'uint256', 'bytes'],
     [fixture.claim.receiptId, fixture.claim.claimId, fixture.claim.deadline, fixture.claim.signature]), fixture.claim.calldata);
 });
@@ -144,13 +148,17 @@ test('events decode only the configured contract and retain exact uint256 token 
     address: CONTRACT, topics: [ETHEREUM_EVENT_TOPICS.Transfer, encodeAbi(['address'], [WALLET]), encodeAbi(['address'], [CONTRACT]), encodeAbi(['uint256'], [2005555])], data: '0x',
   }, {
     address: CONTRACT, topics: [ETHEREUM_EVENT_TOPICS.DeliveryRedeemed, encodeAbi(['uint256'], [42]), encodeAbi(['address'], [WALLET])],
-    data: encodeAbi(['uint256', 'uint256[]', 'uint256[]'], [0, [111112n, 1n], [2000001n, 1000001n]]),
+    data: encodeAbi(['uint256', 'uint256[]', 'uint256[]', 'uint256'],
+      [5, [111112n, 1n], [2000001n, 1000001n], CONFIG_ID]),
   }];
   const events = decodeEventLogs(logs, CONTRACT);
   assert.equal(events.length, 2);
   assert.equal(events[0].name, 'Transfer');
   assert.equal(events[1].name, 'DeliveryRedeemed');
-  if (events[1].name === 'DeliveryRedeemed') assert.deepEqual(events[1].receiptIds, ['2000001', '1000001']);
+  if (events[1].name === 'DeliveryRedeemed') {
+    assert.deepEqual(events[1].receiptIds, ['2000001', '1000001']);
+    assert.equal(events[1].configId, CONFIG_ID);
+  }
   assert.equal(decodeEventLogs(logs, WALLET).length, 0);
   assert.equal(decodeEventLogs([{ ...logs[0], removed: true }], CONTRACT).length, 0);
 });
@@ -185,7 +193,7 @@ test('digital and physical-only receipt identities occupy separate complete rang
 });
 
 test('metadata base URIs accept only the published CDN namespaces', () => {
-  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/v9/');
+  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/v10/');
   assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'https://cdn.mons.shop/111k/' }).metadataBaseUri,
     'https://cdn.mons.shop/111k/');
   assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri: 'https://cdn.mons.shop/111k/' }));

@@ -86,9 +86,9 @@ test('contract-wallet recovery binds every supported action to its emitted colle
     { name: 'warehouse opening', pending: submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [116667])),
       log: event('WarehouseUnboxed(uint256,address,uint256,uint256)', ['uint256', 'address'], [116667, owner], ['uint256', 'uint256'], [111112, 11]) },
     { name: 'delivery', pending: { ...submission('delivery', encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery,
-      ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], [[111112, 1], [42, owner, 5, 2000, receiptHash], '0x11']), '0x5'), orderId: 42 },
-      log: event('DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[])', ['uint256', 'address'], [42, owner],
-        ['uint256', 'uint256[]', 'uint256[]'], [5, [111112, 1], receiptIds]) },
+      ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], [[111112, 1], [42, owner, 5, 2000, receiptHash, 1], '0x11']), '0x5'), orderId: 42 },
+      log: event('DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[],uint256)', ['uint256', 'address'], [42, owner],
+        ['uint256', 'uint256[]', 'uint256[]', 'uint256'], [5, [111112, 1], receiptIds, 1]) },
     { name: 'crate receipt claim', pending: { ...submission('claim', encodeCall(ETHEREUM_FUNCTIONS.claimCrateReceipt,
       ['uint256', 'bytes32', 'uint256', 'bytes'], [2000001, claimId, 2000, '0x11'])), claimId },
       log: event('CrateReceiptClaimed(bytes32,address,uint256,uint256[])', ['bytes32', 'address', 'uint256'], [claimId, owner, 2000001],
@@ -181,10 +181,10 @@ test('wrapped recovery rejects unrelated wallet, amount, quantity, operation and
 
 test('delivery recovery binds order, original token order, fee and expected receipt identities', async () => {
   const makePending = (ids: number[], receipts: number[], fee = 5, orderId = 42) => ({ ...submission('delivery',
-    encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'],
-      [ids, [orderId, owner, fee, 2000, ethereumReceiptIdsHash(receipts)], '0x11']), `0x${fee.toString(16)}`), orderId });
-  const f = fixture([event('DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[])', ['uint256', 'address'], [42, owner],
-    ['uint256', 'uint256[]', 'uint256[]'], [5, [111112, 1], [2000001, 1000001]])]);
+    encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+      [ids, [orderId, owner, fee, 2000, ethereumReceiptIdsHash(receipts), 1], '0x11']), `0x${fee.toString(16)}`), orderId });
+  const f = fixture([event('DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[],uint256)', ['uint256', 'address'], [42, owner],
+    ['uint256', 'uint256[]', 'uint256[]', 'uint256'], [5, [111112, 1], [2000001, 1000001], 1])]);
   for (const pending of [makePending([1, 111112], [2000001, 1000001]), makePending([111112, 1], [2000001, 1000021]),
     makePending([111112, 1], [2000001, 1000001], 6), makePending([111112, 1], [2000001, 1000001], 5, 43)]) {
     await assert.rejects(f.recover(pending), /does not contain/);
@@ -205,6 +205,25 @@ test('wrapped recovery requires deployed wallet code, a successful canonical inc
   f.state.receipt = null;
   await assert.rejects(f.recover(), /Wait until.*mined/);
   await assert.rejects(f.recover(known(), () => { throw new Error('account changed'); }), /account changed/);
+});
+
+test('contract-wallet delivery recovery verifies the signed configuration ID', async () => {
+  const ids = [111112, 1];
+  const receipts = [2000001, 1000001];
+  const pending = { ...submission('delivery', encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery,
+    ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+    [ids, [42, owner, 5, 2000, ethereumReceiptIdsHash(receipts), 2], '0x11']), '0x5'), orderId: 42 };
+  const makeLog = (configId = 2) =>
+    event('DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[],uint256)',
+      ['uint256', 'address'], [42, owner], ['uint256', 'uint256[]', 'uint256[]', 'uint256'],
+      [5, ids, receipts, configId]);
+  const f = fixture([makeLog()]);
+  assert.equal((await f.recover(pending)).hash, hash);
+  for (const altered of [makeLog(1), makeLog(3)]) {
+    f.state.receipt!.logs = [altered];
+    await assert.rejects(f.recover(pending), /does not contain/);
+    await assert.rejects(f.recover(known(pending)), /does not contain/);
+  }
 });
 
 test('an older matching mint cannot recover a lost hash even above a stale saved checkpoint', async () => {

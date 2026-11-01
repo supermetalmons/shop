@@ -1,7 +1,7 @@
 import type { Ethereum111kConfig, EthereumClaimPrepareResponse, EthereumDeliveryPrepareResponse, EthereumInventoryItem, EthereumPreparedTransaction } from '../../shared/ethereum/api';
 import { encodeCall } from '../../shared/ethereum/abi';
 import { ethereumReceiptIdsHash } from '../../shared/ethereum/crypto';
-import { ETHEREUM_FUNCTIONS, ethereumReceiptTokenId, isEthereumDeliveryKind, normalizeEthereumAddress } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_DELIVERY_CONFIGS, ethereumReceiptTokenId, isEthereumDeliveryKind, normalizeEthereumAddress } from '../../shared/ethereum/protocol';
 
 function checkedTransaction(transaction: EthereumPreparedTransaction, config: Ethereum111kConfig, expectedData: string, expectedValue: string): EthereumPreparedTransaction {
   if (normalizeEthereumAddress(transaction.to) !== config.contractAddress || transaction.chainId !== config.chainId ||
@@ -30,8 +30,12 @@ export function checkedEthereumDelivery(prepared: EthereumDeliveryPrepareRespons
   if (typeof quote.receiptIdsHash !== 'string' || quote.receiptIdsHash.toLowerCase() !== receiptIdsHash) {
     throw new Error('The delivery quote does not match the selected items. Please try again.');
   }
-  const data = encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'],
-    [selected.map(item => item.tokenId), [prepared.orderId, owner, config.deliveryFeeWei, quote.deadline, receiptIdsHash], prepared.signature]);
+  if (!Number.isSafeInteger(quote.configId) || quote.configId < 1 || quote.configId > ETHEREUM_MAX_DELIVERY_CONFIGS) {
+    throw new Error('The delivery quote has an invalid payment configuration. Please try again.');
+  }
+  const data = encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+    [selected.map(item => item.tokenId), [prepared.orderId, owner, config.deliveryFeeWei, quote.deadline, receiptIdsHash,
+      quote.configId], prepared.signature]);
   return checkedTransaction(prepared.transaction, config, data, config.deliveryFeeWei);
 }
 

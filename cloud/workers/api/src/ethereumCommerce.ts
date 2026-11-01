@@ -20,6 +20,7 @@ import {
 import { matchesSha256Hex, sha256Hex } from './sessionSecrets.js';
 import { D1CommerceRepository, commerceFieldValue, commerceKeys } from './commerceRepository.js';
 import { blockingEthereumCheckout, inspectEthereumCheckoutFailures, requireResolvedEthereumCheckoutFailures } from './ethereumCheckoutAttempts.js';
+import { requireEthereumDeliveryConfigId, resolveEthereumDeliveryConfig } from './ethereumDeliveryConfig.js';
 
 export type EthereumDeliveryRow = {
   chain_id: number; contract_address: string; order_id: number; request_id: string; wallet: string;
@@ -28,6 +29,7 @@ export type EthereumDeliveryRow = {
   block_number: number | null; block_hash: string | null; created_at_ms: number; updated_at_ms: number;
   published_at_ms: number | null; verified_at_block: number | null;
   checkout_id?: string | null;
+  config_id: number;
 };
 
 export type EthereumClaimRow = {
@@ -151,6 +153,7 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   if (row && (row.wallet !== wallet || row.chain_id !== context.config.chainId || row.contract_address !== contractAddress)) {
     throw new EthereumApiError('permission-denied', 'This checkout belongs to a different wallet or collection.');
   }
+  if (row) requireEthereumDeliveryConfigId(row.config_id);
   const failures = await inspectEthereumCheckoutFailures(context, { wallet, tokenIdsJson: JSON.stringify(tokenIds) });
   requireResolvedEthereumCheckoutFailures(failures);
   const assertCheckoutAvailable = async (prepared: EthereumDeliveryRow | null) => {
@@ -185,17 +188,19 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   const address = await loadEthereumAddress(context, wallet, body.addressId);
   const deadline = await authorizationDeadline(context);
   if (!row) {
+    const configId = await resolveEthereumDeliveryConfig(context);
     for (let attempt = 0; attempt < 16; attempt++) {
       const orderId = (crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fff_ffff) || 1;
       const existing = await new D1CommerceRepository(context.env.COMMERCE_DB).get(commerceKeys.deliveryOrder(context.config.dropId, String(orderId)));
       if (existing) continue;
       const result = await context.env.COMMERCE_DB.prepare(`INSERT OR IGNORE INTO ethereum_delivery_quotes
         (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json, items_json,
-         fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ? WHERE ${failures.sql}`)
+         fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id, config_id)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ? WHERE ${failures.sql}`)
         .bind(context.config.chainId, contractAddress, orderId, body.requestId, wallet, body.addressId,
           JSON.stringify(address), JSON.stringify(tokenIds), JSON.stringify(items), context.config.deliveryFeeWei,
-          deadline, context.nowMs, context.nowMs, checkout?.checkoutId ?? null, ...failures.values).run();
+          deadline, context.nowMs, context.nowMs, checkout?.checkoutId ?? null,
+          configId, ...failures.values).run();
       row = await loadPrepared();
       if (row) break;
       await assertCheckoutAvailable(row);
@@ -220,15 +225,17 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
     throw new EthereumApiError('failed-precondition', 'The selected items changed onchain. Refresh your inventory and start a new delivery.');
   }
   const quote = { orderId: row.order_id, wallet: row.wallet, fee: row.fee_wei, deadline: row.deadline,
+    configId: requireEthereumDeliveryConfigId(row.config_id),
     receiptIdsHash: ethereumReceiptIdsHash(deliveryReceiptIds(storedItems)) };
   await requireEthereum111kWrites(context.env.COMMERCE_DB, context.config, context.signal);
   await assertCheckoutAvailable(row);
   const signature = signDigest(secret, deliveryDigest({ ...quote, chainId: context.config.chainId, contractAddress, tokenIds }));
   return { orderId: row.order_id, expiresAtMs: row.deadline * 1000, quote, signature,
     transaction: { to: contractAddress, chainId: context.config.chainId, value: ethereumHexQuantity(row.fee_wei),
-      data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)',
-        ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'],
-        [tokenIds, [quote.orderId, quote.wallet, quote.fee, quote.deadline, quote.receiptIdsHash], signature]) } };
+      data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)',
+        ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+        [tokenIds, [quote.orderId, quote.wallet, quote.fee, quote.deadline, quote.receiptIdsHash,
+          quote.configId], signature]) } };
 }
 
 function randomClaimCode(): string {
@@ -351,7 +358,7 @@ async function publishEthereumOrder(context: EthereumContext, row: EthereumDeliv
 export function requireMatchingDelivery(event: Extract<EthereumDecodedEvent, { name: 'DeliveryRedeemed' }>, row: EthereumDeliveryRow): void {
   const expectedReceipts = deliveryReceiptIds(deliveryItems(row));
   if (event.wallet !== row.wallet || event.fee !== row.fee_wei || JSON.stringify(event.tokenIds) !== row.token_ids_json ||
-    JSON.stringify(event.receiptIds) !== JSON.stringify(expectedReceipts)) {
+    JSON.stringify(event.receiptIds) !== JSON.stringify(expectedReceipts) || event.configId !== row.config_id) {
     throw new EthereumApiError('permission-denied', 'The transaction does not match this delivery order.');
   }
 }

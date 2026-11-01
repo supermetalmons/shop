@@ -11,7 +11,7 @@ export function createEthereum111kMaintenanceRunner(
 ) {
   return createD1MaintenanceRunner('commerce', (file, args, options) => {
     try {
-      return executeFile(file, args, { ...options, env: { ...options.env, WRANGLER_LOG_SANITIZE: 'true' } });
+      return executeFile(file, args, { ...options, env: { ...(options.env ?? process.env), WRANGLER_LOG_SANITIZE: 'true' } });
     } catch {
       throw new Error('Ethereum 111k D1 request failed.');
     }
@@ -203,7 +203,7 @@ function rowAssertions(table: string, rows: CommerceD1Row[], ownsReset: string):
       yield `EXISTS (SELECT 1 FROM ${table} WHERE ${Object.entries(row)
         .filter(([key]) => key !== 'address_json' && key !== 'code' && (table !== 'ethereum_delivery_checkouts' || key !== 'items_json'))
         .map(([key, value]) => {
-          if (!/^[a-z_]+$/.test(key)) throw new Error('Invalid snapshot column.');
+          if (!/^[a-z_][a-z0-9_]*$/.test(key)) throw new Error('Invalid snapshot column.');
           return `${key} IS ${sqlValue(value)}`;
         }).join(' AND ')})`;
     }

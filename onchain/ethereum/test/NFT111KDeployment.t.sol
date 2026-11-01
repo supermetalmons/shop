@@ -2,7 +2,8 @@ pragma solidity 0.8.30;
 
 import {Deploy111K} from "../script/Deploy111K.s.sol";
 import {NFT111K} from "../src/NFT111K.sol";
-import {TestSupport} from "./TestSupport.sol";
+import {DeliveryAccounting} from "./DeliveryAccounting.sol";
+import {TestSupport, Vm} from "./TestSupport.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 interface DeploymentVm {
@@ -29,12 +30,40 @@ contract NFT111KDeploymentTest is TestSupport {
     address private constant BUYER = address(0xA110);
     address private constant NEXT_OWNER = address(0xB0B);
     address private constant SIGNER = address(0x5151);
+    address private constant INITIAL_DELIVERY_RECEIVER = address(0xD311D);
     bytes32 private constant DISCOUNT_ROOT = keccak256("deployment-discounts");
     DeploymentMetadataHarness private harness;
 
     function setUp() public {
         harness = new DeploymentMetadataHarness();
         DeploymentVm(address(vm)).setEnv("ETHEREUM_111K_FREE_MINT_CONFIG", "config/free-mints.json");
+        DeploymentVm(address(vm))
+            .setEnv("ETHEREUM_111K_INITIAL_DELIVERY_RECEIVER", Strings.toHexString(INITIAL_DELIVERY_RECEIVER));
+    }
+
+    function testMaximumDeploymentConfigurationFitsRuntimeAndInitcodeLimits() public {
+        address[] memory recipients = new address[](32);
+        uint256[] memory shares = new uint256[](32);
+        NFT111K.FreeMintAllocation[] memory allocations = new NFT111K.FreeMintAllocation[](32);
+        bytes memory deploymentId = new bytes(64);
+        for (uint256 i; i < deploymentId.length; ++i) {
+            deploymentId[i] = "a";
+        }
+        string memory uri = string.concat("https://cdn.mons.shop/111k-sepolia/", string(deploymentId), "/");
+        for (uint256 i; i < 32; ++i) {
+            recipients[i] = address(uint160(0xC00001 + i));
+            shares[i] = i < 16 ? 313 : 312;
+            allocations[i] = NFT111K.FreeMintAllocation(address(uint160(0xD00001 + i)), 5555, 505, 18);
+        }
+        bytes memory arguments =
+            abi.encode(address(this), SIGNER, address(0xBEEF), uri, DISCOUNT_ROOT, recipients, shares, allocations);
+        assertEq(arguments.length, 6656);
+        assertTrue(type(NFT111K).creationCode.length + arguments.length <= 49_152);
+        NFT111K token =
+            new NFT111K(address(this), SIGNER, address(0xBEEF), uri, DISCOUNT_ROOT, recipients, shares, allocations);
+        assertTrue(address(token).code.length <= 24_576);
+        assertEq(token.mintRecipientCount(), 32);
+        assertEq(token.baseURI(), uri);
     }
 
     function testFreeMintConfigurationMatchesSharedFixture() public view {
@@ -184,7 +213,23 @@ contract NFT111KDeploymentTest is TestSupport {
         vm.chainId(1);
         address deployer = vm.addr(DEPLOYER_KEY);
         uint64 nonce = vm.getNonce(deployer);
+        vm.recordLogs();
         NFT111K token = harness.run();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 registrations;
+        for (uint256 i; i < logs.length; ++i) {
+            if (
+                logs[i].emitter != address(token)
+                    || logs[i].topics[0] != keccak256("DeliveryConfigRegistered(uint256,address,address,uint16)")
+            ) continue;
+            registrations++;
+            assertEq(logs[i].topics[1], bytes32(uint256(1)));
+            assertEq(logs[i].topics[2], bytes32(uint256(uint160(INITIAL_DELIVERY_RECEIVER))));
+            assertEq(logs[i].topics[3], bytes32(0));
+            assertEq(abi.decode(logs[i].data, (uint16)), 0);
+        }
+        assertEq(registrations, 1);
+        assertEq(token.deliveryConfigCount(), 1);
         assertEq(address(token), vm.computeCreateAddress(deployer, nonce));
         assertEq(vm.getNonce(deployer), nonce + 1);
         assertEq(token.owner(), address(this));
@@ -300,6 +345,12 @@ contract NFT111KDeploymentTest is TestSupport {
     function _assertDeployment(NFT111K token, uint256 chainId, string memory prefix) private view {
         assertEq(token.owner(), address(this));
         assertEq(token.quoteSigner(), SIGNER);
+        assertEq(token.deliveryConfigCount(), 1);
+        NFT111K.DeliveryConfig memory initialConfig = DeliveryAccounting.config(token, 1);
+        assertEq(initialConfig.receiver1, INITIAL_DELIVERY_RECEIVER);
+        assertEq(initialConfig.receiver2, address(0));
+        assertEq(initialConfig.receiver2Bps, 0);
+        assertEq(initialConfig.totalReceived + initialConfig.released1 + initialConfig.released2, 0);
         assertEq(token.discountMerkleRoot(), DISCOUNT_ROOT);
         assertEq(token.baseURI(), prefix);
         assertTrue(address(token).code.length <= 24576);
@@ -323,7 +374,6 @@ contract NFT111KDeploymentTest is TestSupport {
         string memory proceeds = vm.readFile("config/proceeds.json");
         address[] memory recipients = vm.parseJsonAddressArray(proceeds, ".mintRecipients");
         uint256[] memory shares = vm.parseJsonUintArray(proceeds, ".mintSharesBps");
-        assertEq(token.deliveryPaymentReceiver(), vm.parseJsonAddress(proceeds, ".deliveryPaymentReceiver"));
         assertEq(token.mintRecipientCount(), recipients.length);
         for (uint256 i; i < recipients.length; ++i) {
             assertEq(token.mintRecipients(i), recipients[i]);
@@ -371,8 +421,8 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(token.discountUsed(BUYER), 0);
         assertEq(token.totalMintReceived(), 0);
         assertEq(token.totalMintReleased(), 0);
-        assertEq(token.totalDeliveryReceived(), 0);
-        assertEq(token.totalDeliveryReleased(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
+        assertEq(DeliveryAccounting.released(token), 0);
         assertEq(address(token).balance, 0);
     }
 
@@ -425,8 +475,8 @@ contract NFT111KDeploymentTest is TestSupport {
 
     function _assertMintProceeds(NFT111K token, uint256 received) private {
         assertEq(token.totalMintReceived(), received);
-        assertEq(token.totalDeliveryReceived(), 0);
-        assertEq(token.releasableDelivery(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
+        assertEq(DeliveryAccounting.pending(token, address(0xBEEF)), 0);
         uint256[] memory balances = new uint256[](token.mintRecipientCount());
         for (uint256 i; i < balances.length; ++i) {
             balances[i] = token.mintRecipients(i).balance;

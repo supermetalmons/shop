@@ -1,6 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
+import {DeliveryAccounting} from "./DeliveryAccounting.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract FreeMintReceiver {
@@ -178,7 +179,7 @@ contract NFT111KFreeMintTest is TestSupport {
         assertEq(token.ownerOf(116667), ALICE);
         assertEq(token.ownerOf(117172), CAROL);
         assertEq(token.totalMintReceived(), 0);
-        assertEq(token.totalDeliveryReceived(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
         assertEq(address(token).balance, 0);
         vm.prank(ALICE);
         vm.expectRevert(NFT111K.FreeMintAllowanceExceeded.selector);
@@ -441,7 +442,7 @@ contract NFT111KFreeMintTest is TestSupport {
         assertEq(token.ownerOf(firstToken), ALICE);
         assertEq(token.ownerOf(firstToken + limit - 1), ALICE);
         assertEq(token.totalMintReceived(), 0);
-        assertEq(token.totalDeliveryReceived(), 0);
+        assertEq(DeliveryAccounting.received(token), 0);
         assertEq(token.discountUsed(ALICE), 0);
         assertEq(address(token).balance, 0);
         token.setFreeMintAllowances(_wallet(ALICE), 0, 0, 0);
@@ -464,7 +465,7 @@ contract NFT111KFreeMintTest is TestSupport {
         return new NFT111K(
             address(this),
             address(0x5151),
-            payable(address(0xFEE)),
+            address(0xBEEF),
             "https://cdn.mons.shop/111k-sepolia/",
             keccak256(bytes.concat(keccak256(abi.encode(ALICE)))),
             _proceedsRecipients(),

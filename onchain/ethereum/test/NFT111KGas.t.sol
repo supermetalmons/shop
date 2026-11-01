@@ -30,7 +30,7 @@ contract NFT111KGasTest is TestSupport {
     bytes32 internal constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 internal constant DELIVERY_TYPEHASH = keccak256(
-        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+        "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
     );
     bytes32 internal constant CLAIM_TYPEHASH =
         keccak256("CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)");
@@ -133,8 +133,141 @@ contract NFT111KGasTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         token.releaseDelivery();
         vm.snapshotGasLastCall("releaseDelivery");
-        assertEq(token.deliveryPaymentReceiver().balance, quote.fee);
+        assertEq(address(0xBEEF).balance, quote.fee);
         assertEq(address(token).balance, 0.0001 ether);
+    }
+
+    function testGasDeliverySingleCrateFresh() public {
+        _deliveryRouting(false, false, 0, "deliverySingleCrateFresh");
+    }
+
+    function testGasDeliverySplitCrateFresh() public {
+        _deliveryRouting(false, true, 0, "deliverySplitCrateFresh");
+    }
+
+    function testGasDeliverySingleCratePending() public {
+        _deliveryRouting(false, false, 1, "deliverySingleCratePending");
+    }
+
+    function testGasDeliverySplitCratePending() public {
+        _deliveryRouting(false, true, 1, "deliverySplitCratePending");
+    }
+
+    function testGasDeliverySingleMixed50Fresh() public {
+        _deliveryRouting(true, false, 0, "deliverySingleMixed50Fresh");
+    }
+
+    function testGasDeliverySplitMixed50Fresh() public {
+        _deliveryRouting(true, true, 0, "deliverySplitMixed50Fresh");
+    }
+
+    function testGasDeliverySingleMixed50Pending() public {
+        _deliveryRouting(true, false, 1, "deliverySingleMixed50Pending");
+    }
+
+    function testGasDeliverySplitMixed50Pending() public {
+        _deliveryRouting(true, true, 1, "deliverySplitMixed50Pending");
+    }
+
+    function testGasDeliverySingleCrateAfterRelease() public {
+        _deliveryRouting(false, false, 2, "deliverySingleCrateAfterRelease");
+    }
+
+    function testGasDeliverySplitCrateAfterRelease() public {
+        _deliveryRouting(false, true, 2, "deliverySplitCrateAfterRelease");
+    }
+
+    function testGasDeliverySplitCrateNewConfigAfterSingle() public {
+        _deliveryRouting(false, true, 3, "deliverySplitCrateNewConfigAfterSingle");
+    }
+
+    function testGasReleaseDeliveryAfterRelease() public {
+        _buyCrates(alice, 2);
+        _redeemRouting(_range(111112, 1), 1, false);
+        token.releaseDelivery();
+        _redeemRouting(_range(111113, 1), 2, false);
+        token.releaseDelivery();
+        vm.snapshotGasLastCall("releaseDeliveryAfterRelease");
+        assertEq(address(0xBEEF).balance, 0.0002 ether);
+        assertEq(_pendingDelivery(address(0xBEEF)), 0);
+    }
+
+    function testGasReleaseDeliveryEmpty() public {
+        token.releaseDelivery();
+        vm.snapshotGasLastCall("releaseDeliveryEmpty");
+        assertEq(address(0xBEEF).balance, 0);
+    }
+
+    function testGasRegisterDeliverySingle() public {
+        uint256 configId = token.registerDeliveryConfig(address(0xFEED), address(0), 0);
+        vm.snapshotGasLastCall("registerDeliverySingle");
+        assertEq(configId, 2);
+    }
+
+    function testGasRegisterDeliverySplit() public {
+        uint256 configId = token.registerDeliveryConfig(address(0xBEEF), address(0xFEED), 2500);
+        vm.snapshotGasLastCall("registerDeliverySplit");
+        assertEq(configId, 2);
+    }
+
+    function testGasReleaseDeliveryFor() public {
+        _buyCrates(alice, 1);
+        _redeemRouting(_range(111112, 1), 1, false);
+        token.releaseDeliveryFor(1, false);
+        vm.snapshotGasLastCall("releaseDeliveryFor");
+        assertEq(address(0xBEEF).balance, 0.0001 ether);
+        assertEq(_pendingDelivery(address(0xBEEF)), 0);
+    }
+
+    function _pendingDelivery(address recipient) private view returns (uint256 pending) {
+        for (uint256 configId = 1; configId <= token.deliveryConfigCount(); ++configId) {
+            (address first, address second, uint16 share, uint256 total, uint256 released1, uint256 released2) =
+                token.deliveryConfigs(configId);
+            uint256 entitlement2 = total * share / 10_000;
+            if (first == recipient) pending += total - entitlement2 - released1;
+            if (second == recipient) pending += entitlement2 - released2;
+        }
+    }
+
+    function _deliveryRouting(bool mixed, bool split, uint256 startingState, string memory name) private {
+        if (split) assertEq(token.registerDeliveryConfig(address(0xBEEF), address(0xFEED), 2500), 2);
+        _buyCrates(alice, mixed ? 28 : 2);
+        uint256[] memory ids;
+        if (mixed) {
+            vm.startPrank(alice);
+            token.unboxCrate(111112);
+            token.unboxCrate(111113);
+            vm.stopPrank();
+            ids = new uint256[](50);
+            for (uint256 i; i < 25; ++i) {
+                ids[i] = i + 1;
+                ids[i + 25] = 111114 + i;
+            }
+        } else {
+            ids = _range(111112, 1);
+        }
+        if (startingState != 0) {
+            _redeemRouting(_range(mixed ? 111139 : 111113, 1), 2, split && startingState != 3);
+            if (startingState == 2) {
+                token.releaseDelivery();
+            }
+        }
+        _redeemRouting(ids, 1, split);
+        vm.snapshotGasLastCall(name);
+        uint256 primary = split ? 0.000075 ether : 0.0001 ether;
+        if (startingState == 1) primary *= 2;
+        if (startingState == 3) primary += 0.0001 ether;
+        assertEq(_pendingDelivery(address(0xBEEF)), primary);
+        assertEq(_pendingDelivery(address(0xFEED)), split ? (startingState == 1 ? 0.00005 ether : 0.000025 ether) : 0);
+    }
+
+    function _redeemRouting(uint256[] memory ids, uint256 orderId, bool split) private {
+        NFT111K.DeliveryQuote memory quote = _quote(alice, ids);
+        quote.orderId = orderId;
+        quote.configId = split ? 2 : 1;
+        bytes memory signature = _deliverySignature(ids, quote);
+        vm.prank(alice);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
     }
 
     function testGasMintCrates1EightRecipients() public {
@@ -203,7 +336,7 @@ contract NFT111KGasTest is TestSupport {
         return new NFT111K(
             address(this),
             vm.addr(SIGNER_KEY),
-            payable(address(0xBEEF)),
+            address(0xBEEF),
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             recipients,
@@ -1194,7 +1327,8 @@ contract NFT111KGasTest is TestSupport {
             (uint8 kind, uint256 displayId,) = token.getTokenInfo(ids[i]);
             receipts[i] = (kind == 1 ? 1_000_000 : kind == 2 ? 2_000_000 : 3_000_000) + displayId;
         }
-        return NFT111K.DeliveryQuote(1, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
+        return NFT111K.DeliveryQuote(1, wallet, 0.0001 ether, block.timestamp + 300,
+            keccak256(abi.encode(receipts)), 1);
     }
 
     function _deliverySignature(uint256[] memory ids, NFT111K.DeliveryQuote memory quote)
@@ -1210,7 +1344,8 @@ contract NFT111KGasTest is TestSupport {
                     quote.receiptIdsHash,
                     quote.orderId,
                     quote.fee,
-                    quote.deadline
+                    quote.deadline,
+                    quote.configId
                 )
             )
         );

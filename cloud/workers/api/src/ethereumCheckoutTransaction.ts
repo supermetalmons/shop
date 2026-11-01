@@ -27,14 +27,15 @@ async function readCheckoutTransaction(context: EthereumContext, hash: string): 
 
 function matchesDeliveryIntent(transaction: CheckoutTransaction, quote: EthereumDeliveryRow, deadline: number): boolean {
   if (transaction.to !== quote.contract_address || BigInt(transaction.value) !== BigInt(quote.fee_wei) ||
-    transaction.data.slice(0, 10) !== encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)', [], [])) return false;
+    transaction.data.slice(0, 10) !== encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)', [], [])) return false;
   try {
-    const [ids, fields] = decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], `0x${transaction.data.slice(10)}`) as
-      [bigint[], [bigint, string, bigint, bigint, string], string];
-    const [orderId, wallet, fee, expires, receiptIdsHash] = fields;
+    const [ids, fields] = decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], `0x${transaction.data.slice(10)}`) as
+      [bigint[], [bigint, string, bigint, bigint, string, bigint], string];
+    const [orderId, wallet, fee, expires, receiptIdsHash, configId] = fields;
     const items = JSON.parse(quote.items_json) as EthereumTokenInfo[];
     return orderId === BigInt(quote.order_id) && wallet === quote.wallet && fee === BigInt(quote.fee_wei) &&
       expires === BigInt(deadline) && JSON.stringify(ids.map(String)) === quote.token_ids_json &&
+      configId === BigInt(quote.config_id) &&
       receiptIdsHash === ethereumReceiptIdsHash(items.map(item => {
         if (!isEthereumDeliveryKind(item.kind)) throw new Error('Invalid delivery item.');
         return ethereumReceiptTokenId(item.kind, item.displayId);

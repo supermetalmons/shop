@@ -13,7 +13,7 @@ contract NFT111KMonumentTest is TestSupport {
         token = new SecurityCollection(
             address(this),
             address(0x5151),
-            payable(address(0xFEE)),
+            address(0xBEEF),
             "https://cdn.mons.shop/111k-sepolia/",
             _proceedsRecipients(),
             _proceedsSharesBps()

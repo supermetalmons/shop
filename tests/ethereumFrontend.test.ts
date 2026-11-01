@@ -14,6 +14,7 @@ import type { EthereumInventoryItem } from '../shared/ethereum/api.ts';
 import type { EthereumSubmission } from '../src/ethereum/state.ts';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 
+const deliveryConfigId = 1;
 const owner = '0x1111111111111111111111111111111111111111';
 const other = '0x2222222222222222222222222222222222222222';
 const contract = '0x3333333333333333333333333333333333333333';
@@ -432,10 +433,10 @@ test('delivery authorization bytes must match the selected IDs, wallet, order, s
   const signature = `0x${'ab'.repeat(65)}`;
   const selected = [item('1'), item('2')];
   const receiptIdsHash = ethereumReceiptIdsHash(['1000001', '1000002']);
-  const quote = { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash };
+  const quote = { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash, configId: deliveryConfigId };
   const prepared = { orderId: 42, quote, expiresAtMs: deadline * 1000, signature,
     transaction: { chainId: config.chainId, to: contract, value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`,
-      data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], [['1', '2'], [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash], signature]) } };
+      data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], [['1', '2'], [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash, deliveryConfigId], signature]) } };
   assert.equal(checkedEthereumDelivery(prepared, config, owner, selected), prepared.transaction);
   assert.throws(() => checkedEthereumDelivery(prepared, config, owner, [...selected].reverse()), /does not match/);
   assert.throws(() => checkedEthereumDelivery({ ...prepared, quote: { ...quote, wallet: other } }, config, owner, selected), /wallet or fee/);
@@ -444,6 +445,17 @@ test('delivery authorization bytes must match the selected IDs, wallet, order, s
   assert.throws(() => checkedEthereumDelivery(prepared, config, owner, [{ ...selected[0], displayId: 3 }, selected[1]]), /selected items/);
   assert.throws(() => checkedEthereumDelivery(prepared, config, owner, [{ ...selected[0], kind: 'crate' }, selected[1]]), /selected items/);
   assert.throws(() => checkedEthereumDelivery({ ...prepared, quote: { ...quote, receiptIdsHash: ethereumReceiptIdsHash(['1000002', '1000001']) } }, config, owner, selected), /selected items/);
+  assert.throws(() => checkedEthereumDelivery({ ...prepared, quote: { ...quote, configId: 2 } }, config, owner, selected), /does not match/);
+  for (const configId of [0, -1, 33, 1.5, NaN, Infinity]) {
+    assert.throws(() => checkedEthereumDelivery({ ...prepared, quote: { ...quote, configId } }, config, owner, selected), /invalid payment configuration/);
+  }
+  const split = { ...quote, configId: 2 };
+  const splitPrepared = { ...prepared, quote: split, transaction: { ...prepared.transaction,
+    data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)',
+      ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'],
+      [['1', '2'], [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash, split.configId], signature]),
+  } };
+  assert.equal(checkedEthereumDelivery(splitPrepared, config, owner, selected), splitPrepared.transaction);
 });
 
 test('only authenticated 401 responses identify the session token to invalidate', async t => {

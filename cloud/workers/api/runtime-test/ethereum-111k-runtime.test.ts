@@ -355,8 +355,8 @@ test('native D1 rejects stale Ethereum state inside the document commit', async 
     const hash = `0x${'ab'.repeat(32)}`;
     await db.prepare(`INSERT INTO ethereum_delivery_quotes (chain_id, contract_address, order_id, request_id, wallet,
       address_id, address_json, token_ids_json, items_json, fee_wei, deadline, status, transaction_hash,
-      block_number, block_hash, created_at_ms, updated_at_ms)
-      VALUES (31337, ?, 7, 'runtime-request', ?, 'runtime-address', '{}', '[]', '[]', '0', 1000, 'prepared', ?, 100, ?, 100, 100)`)
+      block_number, block_hash, created_at_ms, updated_at_ms, config_id)
+      VALUES (31337, ?, 7, 'runtime-request', ?, 'runtime-address', '{}', '[]', '[]', '0', 1000, 'prepared', ?, 100, ?, 100, 100, 1)`)
       .bind(contract, WALLET, hash, hash).run();
     const repository = new D1CommerceRepository(db);
     const key = commerceKeys.deliveryOrder('111k_devnet', '7');
@@ -424,9 +424,9 @@ test('native Ethereum reconciliation reads only eligible rows in oldest-first or
     await db.batch([
       db.prepare(`${sequence} INSERT INTO ethereum_delivery_quotes (chain_id, contract_address, order_id,
         request_id, wallet, address_id, address_json, token_ids_json, items_json, fee_wei, deadline, status,
-        transaction_hash, block_number, published_at_ms, verified_at_block, created_at_ms, updated_at_ms)
+        transaction_hash, block_number, published_at_ms, verified_at_block, created_at_ms, updated_at_ms, config_id)
         SELECT 31337, ?, n, CAST(n AS TEXT), ?, 'address', '{}', '[]', '[]', '0', 1000, 'confirmed',
-          'transaction', 100, 1, CASE WHEN n > 500 THEN 163 ELSE 164 END, n, 1000 - n FROM sequence`)
+          'transaction', 100, 1, CASE WHEN n > 500 THEN 163 ELSE 164 END, n, 1000 - n, 1 FROM sequence`)
         .bind(contract, WALLET),
       db.prepare(`${sequence} INSERT INTO ethereum_crate_claims (chain_id, contract_address, receipt_id,
         crate_id, order_id, code_hash, code, claim_id, status, transaction_hash, block_number, verified_at_block, updated_at_ms)

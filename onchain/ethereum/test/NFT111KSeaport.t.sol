@@ -39,7 +39,7 @@ contract NFT111KSeaportTest is TestSupport {
         token = new NFT111K(
             address(this),
             vm.addr(SIGNER_KEY),
-            payable(BOB),
+            address(0xBEEF),
             "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             _proceedsRecipients(),
@@ -239,19 +239,20 @@ contract NFT111KSeaportTest is TestSupport {
     {
         uint256[] memory ids = new uint256[](1);
         ids[0] = receiptId;
-        quote = NFT111K.DeliveryQuote(orderId, wallet, 0, block.timestamp + 60, keccak256(abi.encode(ids)));
+        quote = NFT111K.DeliveryQuote(orderId, wallet, 0, block.timestamp + 60, keccak256(abi.encode(ids)), 1);
         ids[0] = tokenId;
         bytes32 structHash = keccak256(
             abi.encode(
                 keccak256(
-                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)"
+                    "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
                 ),
                 wallet,
                 keccak256(abi.encode(ids)),
                 quote.receiptIdsHash,
                 orderId,
                 0,
-                quote.deadline
+                quote.deadline,
+                quote.configId
             )
         );
         bytes32 domain = keccak256(

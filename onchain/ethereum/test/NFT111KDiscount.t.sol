@@ -50,7 +50,7 @@ contract NFT111KDiscountTest is TestSupport {
         token = new NFT111K(
             address(this),
             address(0x5151),
-            payable(address(0xFEE)),
+            address(0xBEEF),
             "https://cdn.mons.shop/111k-sepolia/",
             root,
             _proceedsRecipients(),

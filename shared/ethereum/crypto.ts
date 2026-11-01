@@ -65,11 +65,13 @@ export function ethereumReceiptIdsHash(receiptIds: readonly (string | bigint | n
 export function deliveryDigest(args: {
   chainId: number; contractAddress: string; wallet: string; tokenIds: readonly (string | bigint | number)[];
   orderId: number | bigint | string; fee: string | bigint; deadline: number | bigint; receiptIdsHash: string;
+  configId: number | bigint | string;
 }): Hex {
   const idsHash = ethereumTokenIdsHash(args.tokenIds);
-  const structHash = keccakHex(encodeAbi(['bytes32', 'address', 'bytes32', 'bytes32', 'uint256', 'uint256', 'uint256'], [
-    hashText('Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)'),
+  const structHash = keccakHex(encodeAbi(['bytes32', 'address', 'bytes32', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256'], [
+    hashText('Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)'),
     requireEthereumAddress(args.wallet), idsHash, args.receiptIdsHash, args.orderId, args.fee, args.deadline,
+    args.configId,
   ]));
   return typedDigest(args.chainId, args.contractAddress, structHash);
 }

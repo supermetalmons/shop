@@ -146,12 +146,13 @@ export function matchesEthereumOperationEvent(pending: EthereumSubmission, owner
   }
   const event = decodeEventLogs([log], contract)[0];
   if (pending.action === 'delivery' && event?.name === 'DeliveryRedeemed') {
-    const args = intentArguments(intent, ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes']);
+    const args = intentArguments(intent, ETHEREUM_FUNCTIONS.redeemForDelivery, ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes']);
     if (!args) return false;
-    const [ids, [orderId, wallet, fee, , receiptIdsHash]] = args as [bigint[], [bigint, string, bigint, bigint, string], string];
+    const [ids, [orderId, wallet, fee, , receiptIdsHash, configId]] =
+      args as [bigint[], [bigint, string, bigint, bigint, string, bigint], string];
     return event.wallet === owner && wallet === owner && event.orderId === pending.orderId && BigInt(event.orderId) === orderId &&
       BigInt(event.fee) === fee && fee === BigInt(intent.value) && JSON.stringify(event.tokenIds) === JSON.stringify(ids.map(String)) &&
-      ethereumReceiptIdsHash(event.receiptIds) === receiptIdsHash;
+      ethereumReceiptIdsHash(event.receiptIds) === receiptIdsHash && BigInt(event.configId) === configId;
   }
   if (pending.action === 'claim' && event?.name === 'CrateReceiptClaimed') {
     const args = intentArguments(intent, ETHEREUM_FUNCTIONS.claimCrateReceipt, ['uint256', 'bytes32', 'uint256', 'bytes']);
