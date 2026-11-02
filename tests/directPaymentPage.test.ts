@@ -42,7 +42,6 @@ beforeEach(context => {
     return { network, wallet, nonce: 0, deadline, expiresAtMs: deadline * 1000, signature,
       transaction: { to: CONTRACT, chainId: config.chainId, data: encodePre111kReservation(0, deadline, signature), value: `0x${BigInt(config.priceWei).toString(16)}` } };
   });
-  t.mock.method(pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({ status: 'pending', confirmations: 0, reservationNonce: null, transactionHash }));
 });
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
 

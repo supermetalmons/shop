@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
@@ -6,57 +6,67 @@ import { checkedPre111kReservation, pre111kApi } from './pre111kApi';
 import { ethereumOperation, ethereumWalletError } from './wallet';
 import { EthereumApiError } from './api';
 
-type Pending = { hash: string | null; nonce: number; submittedAt: number };
-const STORAGE_PREFIX = 'mons.shop.pre111k.pending:';
-const STORAGE_EVENT = 'mons:pre111k-pending';
-const memory = new WeakMap<Window, Map<string, string | null>>();
-const flightListeners = new Set<() => void>();
-let submissionInFlight = false;
+type Attempt = {
+  scope: string;
+  nonce: number | null;
+  controller: AbortController;
+  operation?: ReturnType<typeof ethereumOperation>;
+};
+const STORAGE_PREFIX = 'mons.shop.pre111k.last-transaction:';
+const LEGACY_STORAGE_PREFIX = 'mons.shop.pre111k.pending:';
+const STORAGE_EVENT = 'mons:pre111k-transaction';
+const memory = new WeakMap<Window, Map<string, string>>();
 
-function setInFlight(value: boolean) {
-  submissionInFlight = value;
-  for (const listener of flightListeners) listener();
+function transactionHash(value: unknown): string | null {
+  return typeof value === 'string' && /^0x[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : null;
 }
 
-function subscribeFlight(listener: () => void) {
-  flightListeners.add(listener);
-  return () => { flightListeners.delete(listener); };
-}
-
-function readPending(scope: string | null): string | null {
+function readTransaction(scope: string | null): string | null {
   if (!scope) return null;
-  const fallback = memory.get(window);
-  if (fallback?.has(scope)) return fallback.get(scope) ?? null;
-  try { return window.localStorage.getItem(`${STORAGE_PREFIX}${scope}`); }
+  const cached = memory.get(window)?.get(scope);
+  if (cached) return cached;
+  try { return transactionHash(window.localStorage.getItem(`${STORAGE_PREFIX}${scope}`)); }
   catch { return null; }
 }
 
-function writePending(scope: string, pending: Pending | null) {
-  const value = pending ? JSON.stringify(pending) : null;
+function writeTransaction(scope: string, hash: string): boolean {
   let saved = memory.get(window);
   if (!saved) { saved = new Map(); memory.set(window, saved); }
+  let persisted = false;
   try {
-    if (value) window.localStorage.setItem(`${STORAGE_PREFIX}${scope}`, value);
-    else window.localStorage.removeItem(`${STORAGE_PREFIX}${scope}`);
+    window.localStorage.setItem(`${STORAGE_PREFIX}${scope}`, hash);
     saved.delete(scope);
-  } catch { saved.set(scope, value); }
+    persisted = true;
+  } catch { saved.set(scope, hash); }
   window.dispatchEvent(new window.Event(STORAGE_EVENT));
+  return persisted;
 }
 
-function subscribePending(listener: () => void) {
-  window.addEventListener('storage', listener);
-  window.addEventListener(STORAGE_EVENT, listener);
-  return () => { window.removeEventListener('storage', listener); window.removeEventListener(STORAGE_EVENT, listener); };
-}
-
-function parsePending(value: string | null): Pending | null {
-  if (!value) return null;
+function migrateTransaction(scope: string) {
   try {
-    const parsed = JSON.parse(value) as Pending;
-    if (parsed && (parsed.hash === null || /^0x[0-9a-f]{64}$/.test(parsed.hash)) && Number.isSafeInteger(parsed.nonce) &&
-      parsed.nonce >= 0 && parsed.nonce < 18 && Number.isSafeInteger(parsed.submittedAt) && parsed.submittedAt > 0) return parsed;
+    const legacy = window.localStorage.getItem(`${LEGACY_STORAGE_PREFIX}${scope}`);
+    if (legacy === null) return;
+    let hash: string | null = null;
+    try {
+      const value: unknown = JSON.parse(legacy);
+      if (value && typeof value === 'object' && 'hash' in value) hash = transactionHash(value.hash);
+    } catch {}
+    const reference = readTransaction(scope) ?? hash;
+    if (reference && transactionHash(window.localStorage.getItem(`${STORAGE_PREFIX}${scope}`)) !== reference &&
+      !writeTransaction(scope, reference)) return;
+    window.localStorage.removeItem(`${LEGACY_STORAGE_PREFIX}${scope}`);
   } catch {}
-  return null;
+}
+
+function subscribeTransaction(listener: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null) memory.get(window)?.clear();
+    else if (event.key.startsWith(STORAGE_PREFIX)) memory.get(window)?.delete(event.key.slice(STORAGE_PREFIX.length));
+    listener();
+  };
+  window.addEventListener('storage', onStorage);
+  window.addEventListener(STORAGE_EVENT, listener);
+  return () => { window.removeEventListener('storage', onStorage); window.removeEventListener(STORAGE_EVENT, listener); };
 }
 
 export function usePre111k(network: Pre111kNetwork, accessCode: string | null, onAccessRejected: (code: string) => void) {
@@ -66,24 +76,35 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
   const latestAccess = useRef({ code: accessCode, reject: onAccessRejected });
   latestAccess.current = { code: accessCode, reject: onAccessRejected };
   const mounted = useRef(false);
-  const attempt = useRef<AbortController | null>(null);
+  const attempt = useRef<Attempt | null>(null);
+  const latestAttempt = useRef<Attempt | null>(null);
   const queryClient = useQueryClient();
   const queryKey = ['pre111k', network, wallet.address] as const;
   const approved = Boolean(accessCode);
   const previouslyApproved = useRef(approved);
   const statusQuery = useQuery({ queryKey, queryFn: ({ signal }) => pre111kApi.status(network, wallet.address, signal),
-    refetchInterval: approved ? 10_000 : false, refetchOnWindowFocus: approved, refetchOnReconnect: approved,
+    refetchInterval: approved ? wallet.address ? 3_000 : 10_000 : false,
+    refetchOnWindowFocus: approved, refetchOnReconnect: approved,
     staleTime: 5_000, retry: approved ? 1 : false });
   const status = statusQuery.data;
   const config = status?.config;
   const scope = config?.contractAddress && wallet.address ? `${config.chainId}:${config.contractAddress}:${wallet.address}` : null;
-  const pendingRaw = useSyncExternalStore(subscribePending, useCallback(() => readPending(scope), [scope]), () => null);
-  const pending = useMemo(() => parsePending(pendingRaw), [pendingRaw]);
-  const inFlight = useSyncExternalStore(subscribeFlight, () => submissionInFlight, () => false);
+  const latestScope = useRef(scope);
+  latestScope.current = scope;
+  const hash = useSyncExternalStore(subscribeTransaction, useCallback(() => readTransaction(scope), [scope]), () => null);
+  const [inFlight, setInFlight] = useState(false);
   const [stage, setStage] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<{ scope: string | null; error: boolean; message: string } | null>(null);
-  const feedbackForScope = feedback?.scope === scope ? feedback : null;
-  const [confirmationRetry, setConfirmationRetry] = useState(0);
+  const [error, setError] = useState<{ scope: string; message: string } | null>(null);
+
+  const finish = useCallback((current: Attempt) => {
+    if (attempt.current !== current) return;
+    attempt.current = null;
+    current.controller.abort();
+    current.operation?.dispose();
+    if (mounted.current) { setInFlight(false); setStage(null); }
+  }, []);
+
+  useEffect(() => { if (scope) migrateTransaction(scope); }, [scope]);
 
   useEffect(() => {
     const opened = approved && !previouslyApproved.current;
@@ -93,68 +114,53 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; attempt.current?.abort(); };
-  }, []);
-
-  useEffect(() => {
-    attempt.current?.abort();
-    setStage(null);
-  }, [network, wallet.address, wallet.provider, accessCode]);
-
-  useEffect(() => {
-    if (!pending?.hash || !scope || !wallet.address) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = async () => {
-      try {
-        const result = await pre111kApi.confirm(network, wallet.address!, pending.hash!, controller.signal);
-        if (controller.signal.aborted) return;
-        if (result.status === 'confirmed') {
-          if (result.reservationNonce !== pending.nonce) throw new Error('This transaction does not match your saved reservation. Check the transaction hash.');
-          await queryClient.invalidateQueries({ queryKey: ['pre111k', network] });
-          if (controller.signal.aborted) return;
-          writePending(scope, null);
-          setFeedback({ scope, error: false, message: 'Relic reserved.' });
-          return;
-        }
-        if (result.status === 'failed') {
-          if (result.reservationNonce !== pending.nonce) throw new Error('This transaction does not match your saved reservation. Check the transaction hash.');
-          writePending(scope, null);
-          setFeedback({ scope, error: true, message: 'The reservation did not complete. No relic was reserved by this transaction.' });
-          void queryClient.invalidateQueries({ queryKey: ['pre111k', network] });
-          return;
-        }
-        setFeedback(current => current?.scope === scope && current.error ? null : current);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setFeedback({ scope, error: true, message: ethereumWalletError(error) });
-      }
-      timer = setTimeout(() => { void refresh(); }, 3_000);
+    return () => {
+      mounted.current = false;
+      latestAttempt.current = null;
+      if (attempt.current) finish(attempt.current);
     };
-    void refresh();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [network, pending, queryClient, scope, wallet.address, confirmationRetry]);
+  }, [finish]);
+
+  useEffect(() => {
+    setError(null);
+    return () => {
+      latestAttempt.current = null;
+      if (attempt.current) finish(attempt.current);
+    };
+  }, [network, scope, wallet.address, wallet.provider, accessCode, finish]);
+
+  useEffect(() => {
+    const current = attempt.current;
+    if (!current || current.scope !== scope || current.nonce === null || !statusQuery.isSuccess || statusQuery.isStale ||
+      status?.wallet !== wallet.address || status.reservedRelics === null || status.reservedRelics <= current.nonce) return;
+    finish(current);
+  }, [scope, status, statusQuery.isSuccess, statusQuery.isStale, wallet.address, stage, finish]);
 
   const reserve = async () => {
-    if (!mounted.current || !accessCode || submissionInFlight || pending || !scope || !config?.enabled || !wallet.address || !wallet.provider ||
+    if (!mounted.current || !accessCode || attempt.current || !scope || !config?.enabled || !wallet.address || !wallet.provider ||
       !wallet.ready || wallet.status !== 'connected') return;
-    const savedScope = scope;
     const savedWallet = wallet.address;
-    const controller = new AbortController();
-    attempt.current = controller;
+    const savedProvider = wallet.provider;
+    const current: Attempt = { scope, nonce: null, controller: new AbortController() };
+    attempt.current = current;
+    latestAttempt.current = current;
     setInFlight(true);
-    setFeedback(null);
+    setError(null);
     setStage('Preparing reservation…');
-    let operation: ReturnType<typeof ethereumOperation> | undefined;
-    let submitted = false;
+    const isLatest = () => mounted.current && latestAttempt.current === current &&
+      latestScope.current === current.scope && latestWallet.current.address === savedWallet &&
+      latestWallet.current.provider === savedProvider && latestAccess.current.code === accessCode;
+    const isCurrent = () => isLatest() && attempt.current === current && !current.controller.signal.aborted;
     try {
-      operation = ethereumOperation(() => mounted.current ? latestWallet.current : { address: null, provider: null }, config);
+      const operation = ethereumOperation(() => isCurrent() ? latestWallet.current : { address: null, provider: null }, config);
+      current.operation = operation;
+      operation.signal.addEventListener('abort', () => finish(current), { once: true, signal: current.controller.signal });
       const assertCurrent = () => {
-        controller.signal.throwIfAborted();
-        operation!.assertCurrent();
-        if (latestAccess.current.code !== accessCode) throw new Error('Enter your secret code to continue.');
+        current.controller.signal.throwIfAborted();
+        operation.assertCurrent();
+        if (!isCurrent()) throw new Error('Your reservation request changed. Please try again.');
       };
-      const signal = AbortSignal.any([controller.signal, operation.signal]);
+      const signal = AbortSignal.any([current.controller.signal, operation.signal]);
       const fresh = await pre111kApi.status(network, savedWallet, signal);
       assertCurrent();
       if (!fresh.config.enabled || fresh.config.contractAddress !== config.contractAddress || fresh.config.chainId !== config.chainId ||
@@ -166,52 +172,24 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
       const prepared = await pre111kApi.prepare(network, savedWallet, accessCode, signal);
       assertCurrent();
       const transaction = checkedPre111kReservation(prepared, fresh.config, savedWallet, fresh.reservedRelics);
-      setStage('Confirm in your wallet…');
-      const hash = await operation.send(transaction, () => {
+      const transactionHash = await operation.send(transaction, () => {
         assertCurrent();
         checkedPre111kReservation(prepared, fresh.config, savedWallet, fresh.reservedRelics!);
-        submitted = true;
-        writePending(savedScope, { hash: null, nonce: prepared.nonce, submittedAt: Date.now() });
+        current.nonce = prepared.nonce;
+        setStage('Confirm in your wallet…');
       });
-      writePending(savedScope, { hash, nonce: prepared.nonce, submittedAt: Date.now() });
-    } catch (error) {
-      if (!submitted && error instanceof EthereumApiError && error.code === 'unauthenticated') {
-        latestAccess.current.reject(accessCode);
-      }
-      const rejected = error && typeof error === 'object' && 'code' in error && error.code === 4001;
-      if (submitted && rejected) writePending(savedScope, null);
-      if (mounted.current && latestWallet.current.address === savedWallet) {
-        setFeedback({ scope: savedScope, error: true, message: submitted && !rejected
-          ? 'Check your wallet for the reservation transaction, then enter its hash below to track it.' : ethereumWalletError(error) });
-      }
+      if (!isLatest()) return;
+      writeTransaction(current.scope, transactionHash);
+      void queryClient.invalidateQueries({ queryKey: ['pre111k', network] });
+    } catch (cause) {
+      if (!isCurrent()) return;
+      if (cause instanceof EthereumApiError && cause.code === 'unauthenticated') latestAccess.current.reject(accessCode);
+      else setError({ scope: current.scope, message: ethereumWalletError(cause) });
     } finally {
-      operation?.dispose();
-      if (attempt.current === controller) attempt.current = null;
-      if (mounted.current) setStage(null);
-      setInFlight(false);
+      finish(current);
     }
   };
 
-  const track = (hash: string) => {
-    if (!scope || !pending || inFlight) return;
-    const normalized = hash.trim().toLowerCase();
-    if (!/^0x[0-9a-f]{64}$/.test(normalized)) {
-      setFeedback({ scope, error: true, message: 'Enter the transaction hash from your wallet.' });
-      return;
-    }
-    writePending(scope, { ...pending, hash: normalized });
-    setFeedback(null);
-    setConfirmationRetry(value => value + 1);
-  };
-
-  const stopTracking = () => {
-    if (!scope || inFlight) return;
-    writePending(scope, null);
-    setFeedback(null);
-    void statusQuery.refetch();
-  };
-
-  return { wallet, status, statusQuery, pending, inFlight, stage, reserve, track, stopTracking,
-    error: wallet.error || (feedbackForScope?.error ? feedbackForScope.message : null),
-    message: feedbackForScope && !feedbackForScope.error ? feedbackForScope.message : null };
+  return { wallet, status, statusQuery, inFlight, stage, reserve, transactionHash: hash,
+    error: wallet.error || (error?.scope === scope ? error.message : null) };
 }

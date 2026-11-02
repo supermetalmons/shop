@@ -20,8 +20,19 @@ The contract verifies the caller, nonce, signer, price, and remaining supply.
 The API does not hold supply offchain. Concurrent quotes can race for the final
 slot; only a successful onchain reservation consumes it. Duplicate quotes for
 one wallet's current nonce cannot both succeed. Counts are read from the chain,
-including reservations submitted outside the storefront. The storefront retains
-a submitted hash and resumes confirmation after reload.
+including reservations submitted outside the storefront, and refresh every three
+seconds while an unlocked wallet is connected.
+
+The storefront is busy only during preparation and the wallet request. A returned
+hash or wallet error releases the button immediately; an increased verified count
+also releases it if the wallet response is delayed. Each new reservation still
+fetches and validates a fresh count and authorization. The UI does not wait for
+receipt confirmation or show a persistent success claim.
+
+The last valid transaction hash is stored per network, contract, and wallet as an
+explorer reference. Legacy pending records are imported as references and removed;
+they never restore a reservation lock. The storefront does not poll receipts or
+expose manual transaction tracking controls.
 
 The API routes are:
 

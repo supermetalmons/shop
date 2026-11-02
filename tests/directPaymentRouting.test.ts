@@ -10,6 +10,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 const OWNER = '0x1111111111111111111111111111111111111111';
 const OTHER = '0x2222222222222222222222222222222222222222';
 const HASH = `0x${'ab'.repeat(32)}`;
+const DEVNET_HASH = `0x${'cd'.repeat(32)}`;
 const contracts = { mainnet: '0x3333333333333333333333333333333333333333', devnet: '0x4444444444444444444444444444444444444444' };
 const config = (network: Pre111kNetwork) => resolvePre111kConfig(network, { contractAddress: contracts[network], enabled: true });
 function prepared(network: Pre111kNetwork, wallet: string, nonce = 0): Pre111kPrepareResponse {
@@ -25,14 +26,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test('relic routes scope backend authorizations and preserve wallet submissions across navigation', async t => {
+test('relic routes scope authorizations and transaction links without retaining abandoned wallet attempts', async t => {
   const { dom } = setupFrontendDom();
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
   t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState(null, '', '/111k/relics');
-  const { act, fireEvent, getByRole, getByText, waitFor } = await import('@testing-library/react');
+  const { act, fireEvent, getByRole, getByText, queryByRole, waitFor } = await import('@testing-library/react');
   const { default: ReactDOM } = await import('react-dom/client');
   const { QueryClient } = await import('@tanstack/react-query');
   const { navigate } = await import('../src/navigation.ts');
@@ -67,7 +68,6 @@ test('relic routes scope backend authorizations and preserve wallet submissions 
   t.mock.method(pre111kApi, 'status', async (network, wallet) => ({ config: config(network), wallet,
     totalReserved: 0, reservedRelics: wallet ? 0 : null, remainingRelics: 18, observedBlock: 1, blockHash: `0x${'aa'.repeat(32)}` }));
   t.mock.method(pre111kApi, 'prepare', async (network, wallet) => { prepareCalls++; return prepareGate ? prepareGate.promise : prepared(network, wallet); });
-  t.mock.method(pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({ status: 'pending', confirmations: 0, transactionHash, reservationNonce: null }));
   let resolveDestination!: () => void;
   const bridge = { ready: new Promise<void>(resolve => { resolveDestination = resolve; }), loads: 0 };
   Object.defineProperty(globalThis, '__directPaymentRoutingTest', { configurable: true, value: bridge });
@@ -94,6 +94,7 @@ test('relic routes scope backend authorizations and preserve wallet submissions 
     imports.deregister(); Reflect.deleteProperty(globalThis, '__directPaymentRoutingTest'); dom.window.close();
   });
   const reserveButton = (network: Pre111kNetwork) => getByRole(document.body, 'button', { name: `Reserve Relic · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement;
+  const transactionKey = (network: Pre111kNetwork) => `mons.shop.pre111k.last-transaction:${config(network).chainId}:${contracts[network]}:${OWNER}`;
   const ready = async (network: Pre111kNetwork) => {
     await waitFor(() => {
       getByRole(document.body, 'button', { name: 'Disconnect' });
@@ -132,30 +133,54 @@ test('relic routes scope backend authorizations and preserve wallet submissions 
     await ready('mainnet');
   });
 
-  await t.test('network navigation preserves a pending wallet submission and saves its hash in the original scope', async () => {
-    pendingSend = deferred<string>();
+  await t.test('network navigation releases the old attempt and late wallet responses cannot finish the next attempt', async () => {
+    const abandonedSend = deferred<string>();
+    pendingSend = abandonedSend;
     fireEvent.click(reserveButton('mainnet'));
     await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 1));
     await act(async () => navigate('/111k/relics_devnet'));
-    await waitFor(() => getByText(document.body, '0x1111…1111'));
-    assert.equal(reserveButton('devnet').disabled, true);
-    fireEvent.click(reserveButton('devnet'));
-    assert.equal(prepareCalls, 3);
-    await act(async () => pendingSend!.resolve(HASH));
-    pendingSend = null;
     await ready('devnet');
-    const saved = JSON.parse(window.localStorage.getItem(`mons.shop.pre111k.pending:1:${contracts.mainnet}:${OWNER}`)!);
-    assert.equal(saved.hash, HASH);
+    pendingSend = deferred<string>();
     fireEvent.click(reserveButton('devnet'));
     await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 2));
+    assert.equal(prepareCalls, 4);
+    await act(async () => abandonedSend.resolve(HASH));
+    assert.equal((getByRole(document.body, 'button', { name: 'Confirm in your wallet…' }) as HTMLButtonElement).disabled, true);
+    assert.equal(queryByRole(document.body, 'alert'), null);
+    assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
+    assert.equal(window.localStorage.getItem(transactionKey('mainnet')), null);
+    assert.equal(window.localStorage.getItem(transactionKey('devnet')), null);
     const last = requests.filter(request => request.method === 'eth_sendTransaction').at(-1)!;
     const transaction = (last.params as Array<{ to: string; value: string; data: string; chainId: string }>)[0];
     assert.equal(transaction.to, contracts.devnet);
     assert.equal(BigInt(transaction.value), 2300000000000000n);
     assert.equal(transaction.chainId, '0xaa36a7');
     assert.notEqual(transaction.data, '0x');
+    await act(async () => pendingSend!.resolve(DEVNET_HASH));
+    pendingSend = null;
+    await ready('devnet');
+    assert.equal(window.localStorage.getItem(transactionKey('devnet')), DEVNET_HASH);
+    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${DEVNET_HASH}`);
+    assert.equal(window.localStorage.getItem(`mons.shop.pre111k.pending:1:${contracts.mainnet}:${OWNER}`), null);
+    assert.equal(window.localStorage.getItem(`mons.shop.pre111k.pending:11155111:${contracts.devnet}:${OWNER}`), null);
+  });
+
+  await t.test('the same wallet keeps distinct explorer links when navigating between networks', async () => {
     await act(async () => navigate('/111k/relics'));
-    await waitFor(() => getByRole(document.body, 'button', { name: 'Confirming reservation…' }));
+    await ready('mainnet');
+    assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
     assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 2);
+    fireEvent.click(reserveButton('mainnet'));
+    await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3));
+    await ready('mainnet');
+    assert.equal(window.localStorage.getItem(transactionKey('mainnet')), HASH);
+    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://etherscan.io/tx/${HASH}`);
+    await act(async () => navigate('/111k/relics_devnet'));
+    await ready('devnet');
+    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${DEVNET_HASH}`);
+    await act(async () => navigate('/111k/relics'));
+    await ready('mainnet');
+    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://etherscan.io/tx/${HASH}`);
+    assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3);
   });
 });

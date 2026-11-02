@@ -69,23 +69,6 @@ test('reservation checks bind wallet, nonce, exact price, network and calldata b
   }
 });
 
-test('confirmation validates transaction identity, finality and reservation nonce', async t => {
-  let response: unknown = { status: 'pending', confirmations: 1, transactionHash: hash, reservationNonce: null };
-  t.mock.method(globalThis, 'fetch', async () => Response.json(response));
-  assert.deepEqual(await pre111kApi.confirm('devnet', wallet, hash), response);
-  response = { status: 'confirmed', confirmations: 3, transactionHash: hash, reservationNonce: 2 };
-  assert.deepEqual(await pre111kApi.confirm('devnet', wallet, hash), response);
-  for (const invalid of [
-    { status: 'confirmed', confirmations: 2, transactionHash: hash, reservationNonce: 2 },
-    { status: 'confirmed', confirmations: 3, transactionHash: hash, reservationNonce: null },
-    { status: 'confirmed', confirmations: 3, transactionHash: hash, reservationNonce: 19 },
-    { status: 'confirmed', confirmations: 3, transactionHash: `0x${'bb'.repeat(32)}`, reservationNonce: 2 },
-  ]) {
-    response = invalid;
-    await assert.rejects(pre111kApi.confirm('devnet', wallet, hash));
-  }
-});
-
 test('access verification posts only the code with CSRF and no-cache request conventions', async t => {
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.match(String(url), /\/ethereum\/pre111k\/access$/);

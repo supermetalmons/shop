@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { ShopHeader } from '../components/ShopHeader';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
@@ -11,14 +11,11 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const access = usePre111kAccess();
   const approved = Boolean(access.code);
   const model = usePre111k(network, access.code, access.reject);
-  const { wallet, status, pending } = model;
+  const { wallet, status } = model;
   const reservationSection = useRef<HTMLElement>(null);
   const previouslyApproved = useRef(approved);
   const firstWallet = useRef<HTMLButtonElement>(null);
   const reserveButton = useRef<HTMLButtonElement>(null);
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
-  const [replacementHash, setReplacementHash] = useState('');
-  const [confirmStop, setConfirmStop] = useState(false);
   const choosing = wallet.status === 'choosing';
   const connecting = !wallet.ready || wallet.status === 'connecting' || wallet.status === 'restoring';
   const connected = wallet.status === 'connected' && Boolean(wallet.address);
@@ -26,8 +23,8 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const available = status?.config.enabled && status.remainingRelics !== null && status.remainingRelics > 0 && !model.statusQuery.isError;
   const soldOut = status?.remainingRelics === 0;
   const price = network === 'mainnet' ? '2.3' : '0.0023';
-  const explorerLink = pending?.hash && status?.config.explorerUrl ? `${status.config.explorerUrl}/tx/${pending.hash}` : null;
-  const hasFeedback = Boolean(model.statusQuery.isError || status && !status.config.enabled || model.error || model.message || pending && (explorerLink || !model.inFlight));
+  const explorerLink = model.transactionHash && status?.config.explorerUrl ? `${status.config.explorerUrl}/tx/${model.transactionHash}` : null;
+  const hasFeedback = Boolean(model.statusQuery.isError || status && !status.config.enabled || model.error || explorerLink);
 
   useEffect(() => {
     document.body.classList.add('relic-page-body');
@@ -43,7 +40,6 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   }, [approved]);
 
   useEffect(() => { if (approved && choosing) firstWallet.current?.focus(); }, [approved, choosing, wallet.wallets.length]);
-  useEffect(() => { setRecoveryOpen(false); setReplacementHash(''); setConfirmStop(false); }, [network, wallet.address, pending?.hash]);
   const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => reserveButton.current?.focus()); };
 
   return (
@@ -56,9 +52,9 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
           </figure>
         </main>
         <section ref={reservationSection} className="relic-preorder" aria-label="Reserve a relic" tabIndex={-1}>
-          <button ref={reserveButton} type="button" className="relic-preorder__reserve" disabled={!approved || connecting || choosing || model.inFlight || Boolean(pending) || (connected && !available)}
+          <button ref={reserveButton} type="button" className="relic-preorder__reserve" disabled={!approved || connecting || choosing || model.inFlight || (connected && !available)}
             onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
-            {model.stage ?? (pending ? pending.hash ? 'Confirming reservation…' : 'Check your wallet…' : connecting ? 'Connecting…' : connected && soldOut ? 'All relics reserved' : `Reserve Relic · ${price} ETH`)}
+            {model.stage ?? (connecting ? 'Connecting…' : connected && soldOut ? 'All relics reserved' : `Reserve Relic · ${price} ETH`)}
           </button>
           <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
             {wallet.address ? <div className="relic-preorder__connection">
@@ -82,19 +78,9 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
             role={hasFeedback ? 'region' : undefined} aria-label={hasFeedback ? 'Reservation messages' : undefined}>
             {model.statusQuery.isError ? <p>Couldn’t load reservations. <button type="button" className="relic-preorder__text-button" onClick={() => { void model.statusQuery.refetch(); }}>Retry</button></p>
               : status && !status.config.enabled ? <p>Reservations are not open yet.</p> : null}
-            {model.error ? <p role="alert">{model.error}</p> : model.message ? <p role="status">{model.message}</p> : null}
-            {pending ? <p>{explorerLink ? <a href={explorerLink} target="_blank" rel="noopener noreferrer">View transaction ↗</a> : null}
-              {!model.inFlight ? <button type="button" className="relic-preorder__text-button" onClick={() => setRecoveryOpen(value => !value)}>{pending.hash ? 'Manage pending transaction' : 'Track transaction'}</button> : null}</p> : null}
+            {model.error ? <p role="alert">{model.error}</p> : null}
+            {explorerLink ? <p><a href={explorerLink} target="_blank" rel="noopener noreferrer">View transaction ↗</a></p> : null}
           </div>
-          {pending && recoveryOpen ? <div className="relic-preorder__recovery">
-            <form onSubmit={event => { event.preventDefault(); model.track(replacementHash); }}>
-              <label>Transaction hash<input value={replacementHash} onChange={event => setReplacementHash(event.target.value)} placeholder="0x…" autoComplete="off" spellCheck={false} /></label>
-              <button type="submit" disabled={model.inFlight}>Track transaction</button>
-            </form>
-            {confirmStop ? <><p>Stopping tracking does not cancel the transaction. It may still reserve a relic. Check your wallet before reserving again.</p>
-              <button type="button" className="relic-preorder__text-button" onClick={model.stopTracking}>Stop tracking this transaction</button></>
-              : <button type="button" className="relic-preorder__text-button" onClick={() => setConfirmStop(true)}>Stop tracking…</button>}
-          </div> : null}
         </section>
       </div>
       <Pre111kAccessGate open={!approved} input={access.input} setInput={access.setInput}

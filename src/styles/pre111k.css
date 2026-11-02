@@ -48,6 +48,7 @@ body:has(.relic-page--locked) {
 .relic-page--locked .relic-page__content {
   opacity: .2;
   filter: blur(18px);
+  will-change: filter;
   pointer-events: none;
   user-select: none;
 }
@@ -183,8 +184,7 @@ body:has(.relic-page--locked) {
   overscroll-behavior: contain;
 }
 
-.relic-preorder__feedback p,
-.relic-preorder__recovery p {
+.relic-preorder__feedback p {
   margin: 0;
 }
 
@@ -193,30 +193,7 @@ body:has(.relic-page--locked) {
 }
 
 .relic-preorder__feedback a {
-  margin-right: 12px;
   color: inherit;
-}
-
-.relic-preorder__recovery {
-  width: min(100%, 420px);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-height: 30svh;
-  overflow-y: auto;
-  touch-action: pan-y;
-}
-
-.relic-preorder__recovery form,
-.relic-preorder__recovery label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.relic-preorder__recovery input {
-  min-width: 0;
-  width: 100%;
 }
 
 .relic-access {
