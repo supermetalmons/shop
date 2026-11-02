@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "name": "A Light",
+  "approved_selection": "Round 4 \u00b7 1 / A Light",
+  "blender_version": "4.5.3 LTS",
+  "blender_build_hash": "67807e1800cc",
+  "engine": "CYCLES",
+  "device": "METAL",
+  "samples": 48,
+  "seed": 19,
+  "verification": {
+    "maximum_8bit_difference": 1,
+    "maximum_changed_channel_fraction": 0.0001
+  },
+  "configuration": {
+    "depth": 0.06,
+    "roll_radius": 0.028,
+    "face_crown": 0.002,
+    "edge_tension": 0.0015,
+    "corner_fold": 0.003,
+    "edge_irregularity": 0.001,
+    "corner_overlap": 0.65,
+    "yaw": 0,
+    "pitch": 0,
+    "photo_scale": 1,
+    "texture_opacity": 0.35,
+    "weave_contrast": 0.38,
+    "edge_photo_strength": 0.6,
+    "bump_distance": 0.0011,
+    "bump_strength": 0.8,
+    "diffuse_mix": 0.75,
+    "wrap_fraction": 0.012,
+    "corner_squareness": 5,
+    "macro_contrast": 0.035,
+    "roughness": 0.96,
+    "pigment_strength": 1
+  },
+  "assets": {
+    "reference-weave.png": "d5f5d2c963397a504a813c5b6eabcb5e59bff69a2a8754fe67d39d78e3388cf1",
+    "reference-edge.png": "6ba0b15a574dfda05a76f13404066202e0899b9461fd92e5b3f3d92fb7e111e9"
+  }
+}

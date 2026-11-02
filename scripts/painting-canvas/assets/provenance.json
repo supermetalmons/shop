@@ -1,0 +1,48 @@
+{
+  "reference_source_sha256": "bb32afbaf87fff8dd95a6fadb7d164890e0708a630861228ccbeb457cd2446d9",
+  "assets": {
+    "reference-weave.png": {
+      "source_sha256": "bb32afbaf87fff8dd95a6fadb7d164890e0708a630861228ccbeb457cd2446d9",
+      "crop": [
+        80,
+        82,
+        1178,
+        1176
+      ],
+      "size": [
+        1098,
+        1094
+      ],
+      "channels": {
+        "red": "Local thread relief, illumination-normalized over 4px.",
+        "green": "Fabric pigment variation, illumination-normalized over 24px.",
+        "blue": "Broader yarn irregularity, 2px low-pass divided by 40px illumination."
+      },
+      "green_mean": 0.5010699033737183,
+      "green_std": 0.217153862118721,
+      "output_sha256": "d5f5d2c963397a504a813c5b6eabcb5e59bff69a2a8754fe67d39d78e3388cf1"
+    },
+    "reference-edge.png": {
+      "crop": [
+        38,
+        38,
+        1219,
+        1217
+      ],
+      "size": [
+        1181,
+        1179
+      ],
+      "encoding": "Non-color grayscale multiplied by1.5 in the shader; neutral interior170/255 decodes to1.",
+      "multiplier_bounds": [
+        0.6,
+        1.08
+      ],
+      "full_strength_border_fraction": 0.016,
+      "neutral_interior_after_border_fraction": 0.031,
+      "normalization": "Luminance divided by a16px-smoothed nearby interior field, sampled at least44px inward.",
+      "output_sha256": "6ba0b15a574dfda05a76f13404066202e0899b9461fd92e5b3f3d92fb7e111e9",
+      "source_sha256": "bb32afbaf87fff8dd95a6fadb7d164890e0708a630861228ccbeb457cd2446d9"
+    }
+  }
+}

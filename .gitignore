@@ -15,6 +15,7 @@ node_modules/
 dist/
 .vite/
 .cache/
+/output/canvas/
 .wrangler/
 renderer-samples/
 scripts/collection-files/

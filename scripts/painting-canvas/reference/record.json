@@ -1,0 +1,90 @@
+{
+  "id": 1,
+  "source_url": "https://wip.lil.org/111k/paintings/1.webp",
+  "width": 1200,
+  "height": 1295,
+  "source_sha256": "b37043a1245cf6d6aedf4ff3883093523cef75dc012742d193c4facd86d0d8f4",
+  "approved_sha256": "c8a4e81df07debe02d749f14d8a133cbbf890b602e1e91847b9fba092f4b1452",
+  "approved_device": [
+    "Apple M1 Max (GPU - 32 cores)"
+  ],
+  "validation": {
+    "date": "2026-11-02",
+    "blender_version": "4.5.3 LTS",
+    "passed": true,
+    "samples": [
+      {
+        "id": 1,
+        "dimensions": [
+          1200,
+          1295
+        ],
+        "different_channels": 20,
+        "maximum_8bit_difference": 1,
+        "changed_channel_fraction": 4.29000429000429e-06,
+        "approved_sha256": "c8a4e81df07debe02d749f14d8a133cbbf890b602e1e91847b9fba092f4b1452",
+        "rendered_sha256": "0cf33044fadceef8d3f945097dfe81efcae16260d02680869221ad5532d99f33"
+      },
+      {
+        "id": 7,
+        "dimensions": [
+          1207,
+          1303
+        ],
+        "different_channels": 25,
+        "maximum_8bit_difference": 1,
+        "changed_channel_fraction": 5.298672385841693e-06,
+        "approved_sha256": "20fb57ed07af8e9973074e0b931d96ca07d458fe077a83c98b275921168e4fb9",
+        "rendered_sha256": "4b49f178d6f54db284d57550e05efcf46203791053d40392709a2eb5b9d7e960"
+      },
+      {
+        "id": 336,
+        "dimensions": [
+          932,
+          1006
+        ],
+        "different_channels": 2,
+        "maximum_8bit_difference": 1,
+        "changed_channel_fraction": 7.11041334254843e-07,
+        "approved_sha256": "ba04471bce60697bc491cb861d7b860f3b4640fd06e195d31def03e844390033",
+        "rendered_sha256": "8e9b6d4e9c39ddfab34346446a82e54f5122230ae07ac455294d305010475364"
+      }
+    ],
+    "note": "Unchanged original renderer also exhibited one-level rounding in20 pixels on its control rerun.",
+    "local_input_passed": true,
+    "landscape_framing_passed": true,
+    "clean_environment_verified": true,
+    "verification": {
+      "passed": true,
+      "comparison": "Decoded RGB8 pixels with bounded Metal rounding tolerance",
+      "exact_pixels": false,
+      "different_pixels": 19,
+      "different_channels": 22,
+      "changed_channel_fraction": 4.719004719004719e-06,
+      "maximum_8bit_difference": 1,
+      "tolerance": {
+        "maximum_8bit_difference": 1,
+        "maximum_changed_channel_fraction": 0.0001
+      }
+    },
+    "source_hashes": {
+      "preset.json": "6a89ddb166a21e746033df321a08fa05bf49d6878c8da2bb31fe6aa22b93ff32",
+      "render.py": "6b66b7618fc27eab97e5dd93da77d40ad017bf660fcfd9908ccf72dc6eac78ae",
+      "render.mjs": "09c26ba8ab4481d82e5522a4f5af124fa0bd00dc7c7a57a68cff8472d158e27a",
+      "geometry.py": "2274ba3cbb39dbd08870715e05ac666d10a71f55f8b5bc3412efe3f16a7a9b03",
+      "material.py": "3ebce0f6418b712bce0f957cd0fd8b295c5ad57956c7277568d9c906bb8df154"
+    }
+  },
+  "approved_sample_ids": [
+    1,
+    3,
+    7,
+    79,
+    275,
+    336,
+    1883,
+    12345,
+    64000,
+    85556
+  ]
+}

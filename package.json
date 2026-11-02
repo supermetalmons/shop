@@ -25,6 +25,7 @@
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",
     "render:clear-cards": "node scripts/render-clear-cards.mjs",
     "render:mi-note-videos": "node scripts/mi-note-video/cli.mjs",
+    "render:canvases": "node scripts/painting-canvas/render.mjs",
     "test:mi-note-videos": "node scripts/mi-note-video/test.mjs",
     "build": "vite build",
     "validate:browser-bundle": "node --env-file-if-exists=cloud/workers/frontend/.env.bundle-scan --experimental-strip-types scripts/validate-browser-bundle.ts",

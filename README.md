@@ -107,6 +107,7 @@ Release evidence describes the recorded verification time, not live service stat
 | Metadata fields | [Drop metadata](scripts/docs/drop_metadata.md) |
 | One-off Worker-signed transactions | [Worker transactions](scripts/docs/worker_transactions.md) |
 | Card video rendering | [Native Mi Note renderer](scripts/mi-note-video/README.md) |
+| Canvas artwork rendering | [Approved A Light renderer](scripts/painting-canvas/README.md) |
 | Completed releases and retired operations | [Release index](releases/README.md) |
 
 API deployment runs checks, applies migrations, verifies remote integrity, and
