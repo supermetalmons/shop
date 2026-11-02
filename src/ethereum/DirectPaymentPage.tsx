@@ -54,7 +54,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
         <section ref={reservationSection} className="relic-preorder" aria-label="Reserve a relic" tabIndex={-1}>
           <button ref={reserveButton} type="button" className="relic-preorder__reserve" disabled={!approved || connecting || choosing || model.inFlight || (connected && !available)}
             onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
-            {model.stage ?? (connecting ? 'Connecting…' : connected && soldOut ? 'All relics reserved' : `Reserve Relic · ${price} ETH`)}
+            {model.stage ?? (connected && soldOut ? 'All relics reserved' : `Reserve Relic · ${price} ETH`)}
           </button>
           <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
             {wallet.address ? <div className="relic-preorder__connection">
