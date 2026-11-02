@@ -1,0 +1,432 @@
+{
+  "config": {
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "chainName": "Sepolia",
+    "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v13/",
+    "deploymentBlock": 12051125,
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "enabled": true,
+    "testnet": true,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "deliveryFeeWei": "100000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15,
+    "maxDeliveryItems": 50
+  },
+  "stats": {
+    "chainId": 11155111,
+    "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+    "owner": null,
+    "allocatedCrates": 1998,
+    "warehousesMinted": 0,
+    "artworksMinted": 0,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": false,
+    "remainingCrates": 3557,
+    "remainingWarehouses": 323,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "relicsAllocated": 18,
+    "relicsMinted": 0,
+    "remainingRelics": 18
+  },
+  "commerce": {
+    "paused": false,
+    "revision": 37,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+    "resetGuardId": null,
+    "lastResetId": "1c299a27-54b8-4f87-ab14-c88d989832f8",
+    "updatedAtMs": 1793660527000
+  },
+  "currentReveal": {
+    "deploymentId": "v13",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v13/",
+    "deploymentBlock": 12051125,
+    "catalogVersion": "111k-v2",
+    "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+    "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+    "state": "active",
+    "revision": 3,
+    "createdAtMs": 1793660150000,
+    "updatedAtMs": 1793660574000,
+    "activatedAtMs": 1793660574000,
+    "provisionedAtMs": 1793660414105,
+    "lastError": null
+  },
+  "previousReveal": {
+    "deploymentId": "v12",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v12/",
+    "deploymentBlock": 12043279,
+    "catalogVersion": "111k-v1",
+    "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+    "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+    "state": "paused",
+    "revision": 4,
+    "createdAtMs": 1793563862000,
+    "updatedAtMs": 1793659809390,
+    "activatedAtMs": 1793565265000,
+    "provisionedAtMs": 1793564113701,
+    "lastError": null
+  },
+  "relicEligibility": [
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "owner": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "observedBlock": 12051305,
+      "blockHash": "0x67167517bfff6e73e30c6c3f5ee4abe0ee276262070595f6c2b3317fe3345cec",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "owner": "0xe4790dd79c334e3f848904975272ec17f9f70366",
+      "observedBlock": 12051305,
+      "blockHash": "0x67167517bfff6e73e30c6c3f5ee4abe0ee276262070595f6c2b3317fe3345cec",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "owner": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "observedBlock": 12051305,
+      "blockHash": "0x67167517bfff6e73e30c6c3f5ee4abe0ee276262070595f6c2b3317fe3345cec",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "owner": "0x29f7a2cfe212492ddb343035479d062112284ddf",
+      "observedBlock": 12051305,
+      "blockHash": "0x67167517bfff6e73e30c6c3f5ee4abe0ee276262070595f6c2b3317fe3345cec",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "owner": "0x31cd63c73e74808793f134f8146a1e3aa1637b5d",
+      "observedBlock": 12051305,
+      "blockHash": "0x67167517bfff6e73e30c6c3f5ee4abe0ee276262070595f6c2b3317fe3345cec",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 2,
+      "relicsUsed": 0,
+      "remainingAllowance": 2
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "owner": "0xf743b8e23d3ffcbde398aba9b9f83a98f56845f4",
+      "observedBlock": 12051305,
+      "blockHash": "0x67167517bfff6e73e30c6c3f5ee4abe0ee276262070595f6c2b3317fe3345cec",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 2,
+      "relicsUsed": 0,
+      "remainingAllowance": 2
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "owner": "0x336c8e2add19149bfc934fb2557c6bdeffa8009b",
+      "observedBlock": 12051305,
+      "blockHash": "0x67167517bfff6e73e30c6c3f5ee4abe0ee276262070595f6c2b3317fe3345cec",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 2,
+      "relicsUsed": 0,
+      "remainingAllowance": 2
+    }
+  ],
+  "receipts": [
+    {
+      "displayId": 1,
+      "tokenId": "3000001",
+      "name": "Relic Receipt #1",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 2,
+      "tokenId": "3000002",
+      "name": "Relic Receipt #2",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 3,
+      "tokenId": "3000003",
+      "name": "Relic Receipt #3",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 4,
+      "tokenId": "3000004",
+      "name": "Relic Receipt #4",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 5,
+      "tokenId": "3000005",
+      "name": "Relic Receipt #5",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 6,
+      "tokenId": "3000006",
+      "name": "Relic Receipt #6",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 7,
+      "tokenId": "3000007",
+      "name": "Relic Receipt #7",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 8,
+      "tokenId": "3000008",
+      "name": "Relic Receipt #8",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 9,
+      "tokenId": "3000009",
+      "name": "Relic Receipt #9",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 10,
+      "tokenId": "3000010",
+      "name": "Relic Receipt #10",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 11,
+      "tokenId": "3000011",
+      "name": "Relic Receipt #11",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 12,
+      "tokenId": "3000012",
+      "name": "Relic Receipt #12",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 13,
+      "tokenId": "3000013",
+      "name": "Relic Receipt #13",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 14,
+      "tokenId": "3000014",
+      "name": "Relic Receipt #14",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 15,
+      "tokenId": "3000015",
+      "name": "Relic Receipt #15",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 16,
+      "tokenId": "3000016",
+      "name": "Relic Receipt #16",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 17,
+      "tokenId": "3000017",
+      "name": "Relic Receipt #17",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    },
+    {
+      "displayId": 18,
+      "tokenId": "3000018",
+      "name": "Relic Receipt #18",
+      "image": "https://wip.lil.org/111k/receipt_background.webp",
+      "description": "",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "relic receipt"
+        }
+      ]
+    }
+  ],
+  "frontendAsset": "/assets/index-Dp49kLgp.js",
+  "frontendAssetSha256": "28f62953d06240ba0487df754e89c633444d959cd4e64208648e716f5a50f924"
+}

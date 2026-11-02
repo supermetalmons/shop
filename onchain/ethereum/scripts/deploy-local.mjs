@@ -5,7 +5,7 @@ import { parseInitialDeliveryReceiver, parseProceedsConfig } from './proceeds-co
 import { parseFreeMintConfigJson } from './free-mint-config.mjs';
 
 const root = new URL('../', import.meta.url);
-const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v12/';
+const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v13/';
 const metadataUrl = new URL(metadataBaseURI);
 const hostedMetadata = metadataUrl.origin === 'https://cdn.mons.shop' &&
   /^\/111k(?:-sepolia)?\/(?:[a-z0-9][a-z0-9-]{0,63}\/)?$/.test(metadataUrl.pathname);

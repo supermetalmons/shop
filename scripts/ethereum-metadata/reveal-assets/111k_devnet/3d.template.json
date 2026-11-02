@@ -1,0 +1,12 @@
+{
+  "name": "{{tokenId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/3d/{{assetId}}.webp",
+  "animation_url": "https://wip.lil.org/111k/3d/{{assetId}}.glb",
+  "aspectRatio": { "width": 1, "height": 1 },
+  "attributes": [
+    { "trait_type": "type", "value": "3d" }
+  ],
+  "category": "3d",
+  "revealStatus": "revealed"
+}

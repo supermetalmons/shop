@@ -38,7 +38,7 @@ export function ethereumInventoryView(item: EthereumInventoryItem): EthereumInve
     dropId: '111k_devnet', name: item.name, image: containerMedia?.src ?? item.image,
     ...(containerMedia ? { imageDimensions: { width: containerMedia.width, height: containerMedia.height } } : {}),
     ...(!containerMedia && item.aspectRatio ? { imageDimensions: item.aspectRatio } : {}),
-    ...(item.animation_url ? { previewVideo: { sources: [{ src: item.animation_url }], posterSrc: item.image } } : {}),
+    ...(item.category === 'video' && item.animation_url ? { previewVideo: { sources: [{ src: item.animation_url }], posterSrc: item.image } } : {}),
     kind: item.kind.endsWith('_receipt') ? 'certificate' : item.kind === 'artwork' ? 'dude' : 'box',
     ...(item.kind === 'artwork' || item.kind === 'artwork_receipt' ? { dudeId: item.displayId } : { boxId: String(item.displayId) }),
     attributes: item.attributes?.map(attribute => ({ trait_type: attribute.trait_type, value: String(attribute.value) })),

@@ -26,7 +26,7 @@ const ids = (first: number, count = 20) => Array.from({ length: count }, (_, ind
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] });
 const deployment: EthereumRevealDeployment = {
   deploymentId: 'test-local', dropId: '111k_devnet', chainId: 31337, contractAddress: CONTRACT,
-  metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/', deploymentBlock: 100, catalogVersion: '111k-v1',
+  metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/', deploymentBlock: 100, catalogVersion: '111k-v2',
   templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex'), state: 'active', revision: 3,
   createdAtMs: 1, updatedAtMs: 3, provisionedAtMs: 2, activatedAtMs: 3, lastError: null,
 };
@@ -85,14 +85,14 @@ async function abortable<T>(work: Promise<T>, signal?: AbortSignal | null): Prom
   } finally { if (abort) signal.removeEventListener('abort', abort); }
 }
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys=ON');
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
   database.prepare(`INSERT INTO ethereum_reveal_deployments(deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,
     deployment_block,catalog_version,template_json,template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
     VALUES(?,?,?,?,?,?,?,?,?,'active',3,1,3,2,3)`).run(deployment.deploymentId, deployment.dropId, deployment.chainId, CONTRACT,
-    deployment.metadataBaseUri, deployment.deploymentBlock, deployment.catalogVersion, templateJson, deployment.templateSha256);
+    deployment.metadataBaseUri, deployment.deploymentBlock, catalogVersion, templateJson, deployment.templateSha256);
   const sql: RevealSql = { exec(query, ...bindings) {
     const statement = database.prepare(query);
     const parameters = bindings.map(entry => entry instanceof ArrayBuffer ? new Uint8Array(entry) : entry);
@@ -127,7 +127,7 @@ function fixture(t: TestContext) {
       database.exec('BEGIN');
       try { const result = action(); database.exec('COMMIT'); return result; }
       catch (error) { database.exec('ROLLBACK'); throw error; }
-    }, getAlarm: async () => alarm, setAlarm: async (next: number) => { alarm = next; } },
+    }, getAlarm: async () => alarm, setAlarm: async (next: number) => { alarm = next; }, deleteAlarm: async () => { alarm = null; } },
     waitUntil(promise: Promise<unknown>) {
       tasks.add(promise);
       void promise.finally(() => tasks.delete(promise)).catch(() => undefined);
@@ -155,7 +155,7 @@ function fixture(t: TestContext) {
     return current;
   };
   const object = make();
-  object.store.configure(deployment);
+  object.store.configure({ ...deployment, catalogVersion });
   while (!object.store.initializeChunk()) {}
   while (!object.store.migrationReady()) object.store.migrateChunk(Date.now(), 128);
   const state = { head: 1000, minted: 0, receipts: new Map<string, Receipt | Promise<Receipt | null>>(),
@@ -226,7 +226,7 @@ function fixture(t: TestContext) {
   const freeze = (transactionHash: string, first = 1, crateTokenId = '111112', all = true) => object.store.freeze(deployment,
     { transactionHash, blockNumber: 101, blockHash: hash(101) }, [{ crateTokenId, tokenIds: ids(first) }], Date.now(), all);
   return { object, store: object.store, database, sql, state, published, metadata, media, firstBatch: firstBatch.promise,
-    pending, freeze, settle, reopen: make, getAlarm: () => alarm,
+    pending, freeze, settle, reopen: make, getAlarm: () => alarm, setAlarm: context.storage.setAlarm,
     verifier: (transactionHash: string) => env.ETHEREUM_REVEAL_VERIFIER.getByName(`${deployment.chainId}:${CONTRACT}:${transactionHash}`),
     rows: (query: string) => database.prepare(query).all() };
 }
@@ -1260,6 +1260,33 @@ test('incomplete receipt evidence stays private and does not block another crate
   await f.object.watchdog(deployment);
   await f.settle();
   assert.equal(f.store.frozen(ids(1)).length, 20);
+});
+
+test('retired catalog alarms stop without changing frozen artwork, reservations or pending publication', async t => {
+  const f = fixture(t, '111k-v1');
+  const legacy = { ...deployment, catalogVersion: '111k-v1' };
+  f.store.reserve(['111112', '111113']);
+  f.store.freeze(legacy, { transactionHash: hash(1), blockNumber: 101, blockHash: hash(101) },
+    [{ crateTokenId: '111112', tokenIds: ids(1) }], Date.now());
+  const before = {
+    assignments: f.rows('SELECT * FROM assignments ORDER BY category,asset_id'),
+    pools: f.rows('SELECT * FROM pools ORDER BY category'),
+    publication: f.rows('SELECT * FROM publication ORDER BY token_id'),
+    settings: f.rows('SELECT * FROM settings'),
+  };
+  await f.setAlarm(Date.now());
+  await f.reopen().alarm();
+  await f.settle();
+  assert.equal(f.getAlarm(), null);
+  assert.deepEqual(f.state.calls, []);
+  assert.equal(f.media.writes, 0);
+  assert.deepEqual({
+    assignments: f.rows('SELECT * FROM assignments ORDER BY category,asset_id'),
+    pools: f.rows('SELECT * FROM pools ORDER BY category'),
+    publication: f.rows('SELECT * FROM publication ORDER BY token_id'),
+    settings: f.rows('SELECT * FROM settings'),
+  }, before);
+  await assert.rejects(f.object.revealTokens(legacy, ['1']), /temporarily unavailable/);
 });
 
 test('alarm processing reloads deployment state and continues already admitted recovery while paused', async t => {

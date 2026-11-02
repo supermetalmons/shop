@@ -6,7 +6,7 @@ export const ETHEREUM_REVEAL_PATHS = {
 export const ETHEREUM_REVEAL_MAX_TOKEN_IDS = 500;
 export const ETHEREUM_REVEAL_RETRY_MS = 2_000;
 
-export type EthereumArtworkCategory = 'egg' | 'painting' | 'video';
+export type EthereumArtworkCategory = 'egg' | 'painting' | 'video' | '3d';
 export type EthereumArtworkAspectRatio = { width: number; height: number };
 export type EthereumRevealObservation = { transactionHash: string; blockNumber: number; blockHash: string };
 export type EthereumRevealScope = {

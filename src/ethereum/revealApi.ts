@@ -30,10 +30,10 @@ function parseArtwork(value: unknown): EthereumRevealedArtwork {
   if (!record(value) || !tokenId(value.tokenId) || typeof value.crateTokenId !== 'string' ||
     normalizeEthereumTokenId(value.crateTokenId) !== value.crateTokenId ||
     BigInt(value.crateTokenId) < 111112n || BigInt(value.crateTokenId) > 116666n ||
-    !['egg', 'painting', 'video'].includes(String(value.category)) || typeof value.name !== 'string' ||
+    !['egg', 'painting', 'video', '3d'].includes(String(value.category)) || typeof value.name !== 'string' ||
     value.description !== undefined && typeof value.description !== 'string' ||
     !hasValidEthereumMedia(value) || !isEthereumMediaUrl(value.image) || value.aspectRatio === undefined ||
-    (value.category === 'video' ? !isEthereumMediaUrl(value.animation_url) : value.animation_url !== undefined) ||
+    (value.category === 'video' || value.category === '3d' ? !isEthereumMediaUrl(value.animation_url) : value.animation_url !== undefined) ||
     !record(value.observation) || typeof value.observation.transactionHash !== 'string' ||
     !hashPattern.test(value.observation.transactionHash) || typeof value.observation.blockHash !== 'string' ||
     !hashPattern.test(value.observation.blockHash) || !Number.isSafeInteger(value.observation.blockNumber) ||

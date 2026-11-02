@@ -1,7 +1,8 @@
 import { ethereumMetadataBaseUri } from './config.ts';
 import { normalizeEthereumAddress } from './protocol.ts';
 
-export const ETHEREUM_REVEAL_CATALOG_VERSION = '111k-v1';
+export const ETHEREUM_REVEAL_CATALOG_VERSION = '111k-v2';
+export const ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN = /^111k-v[1-9]\d{0,8}$/;
 export const ETHEREUM_REVEAL_DEPLOYMENTS_SQL = 'SELECT * FROM ethereum_reveal_deployments';
 export const ETHEREUM_REVEAL_DEPLOYMENT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -44,7 +45,8 @@ export function parseEthereumRevealDeployment(row: Record<string, unknown>): Eth
   if (typeof row.deployment_id !== 'string' || !ETHEREUM_REVEAL_DEPLOYMENT_ID.test(row.deployment_id) ||
     typeof row.drop_id !== 'string' || !/^[a-z0-9_][a-z0-9_-]{0,63}$/.test(row.drop_id) ||
     !address || address !== row.contract_address || /^0x0{40}$/.test(address) ||
-    typeof row.metadata_base_uri !== 'string' || row.catalog_version !== ETHEREUM_REVEAL_CATALOG_VERSION ||
+    typeof row.metadata_base_uri !== 'string' || typeof row.catalog_version !== 'string' ||
+    !ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN.test(row.catalog_version) ||
     typeof row.template_json !== 'string' || typeof row.template_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.template_sha256) ||
     !['provisioning', 'ready', 'active', 'paused'].includes(String(row.state)) ||
     row.last_error !== null && typeof row.last_error !== 'string') throw new Error('Invalid reveal deployment.');

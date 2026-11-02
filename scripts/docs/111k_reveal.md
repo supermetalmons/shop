@@ -32,7 +32,7 @@ POST /ethereum/111k/reveal/transaction
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
+  "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
   "transactionHash": "<wallet-returned 0x-prefixed 64-hex-digit hash>"
 }
 ```
@@ -63,7 +63,7 @@ POST /ethereum/111k/reveal/tokens
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
+  "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
   "tokenIds": ["1", "21"]
 }
 ```
@@ -103,21 +103,49 @@ Each artwork has this shape (illustrative values):
   "aspectRatio": { "width": 16, "height": 9 },
   "observation": {
     "transactionHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
-    "blockNumber": 12005468,
+    "blockNumber": 12051126,
     "blockHash": "0x2222222222222222222222222222222222222222222222222222222222222222"
   }
 }
 ```
 
-- `category`: `egg`, `painting`, or `video`.
-- `image`: the image or video poster. Videos also include an MP4 `animation_url`.
+- `category`: `egg`, `painting`, `video`, or `3d`.
+- `image`: the artwork image, video poster, or square 3D preview.
+- `animation_url`: present for videos (MP4) and 3D models (GLB). Choose the renderer from `category`; a GLB URL is not a video source. Eggs and paintings have no `animation_url`.
 - `aspectRatio`: proportions, **not pixel dimensions**. Use CSS `aspect-ratio: width / height`.
 - Optional `description` and `attributes`; each attribute has `trait_type` and a string or number `value`.
 - `observation`: the first transaction/block that authorized reveal; it does not prove ownership or finality.
 
+For a 3D artwork, the media fields are:
+
+```json
+{
+  "category": "3d",
+  "image": "https://wip.lil.org/111k/3d/1.webp",
+  "animation_url": "https://wip.lil.org/111k/3d/1.glb",
+  "aspectRatio": { "width": 1, "height": 1 },
+  "attributes": [{ "trait_type": "type", "value": "3d" }]
+}
+```
+
+This fragment uses the same `tokenId`, `crateTokenId`, `name`, and `observation`
+fields as the complete artwork example. Use the WEBP in grids and as the loading
+or error fallback; load the GLB in an interactive model viewer when opening the
+artwork. The 1:1 ratio describes the preview frame, not the model's geometry.
+Media IDs are local to each category and do not have to match the onchain token ID.
+
+The v2 catalog contains 22,222 eggs, 84,556 paintings, 3,333 videos, and 1,000 3D
+models: 111,111 artworks total. The token-ID range and request limits are unchanged.
+
 Cache media by `(chainId, contractAddress, tokenId)`. Revealed artwork stays unchanged through reorgs and remints. Use inventory data for ownership.
 
 Metadata JSON addresses follow the collection's configured base URI plus the decimal token ID and `.json`. The JSON address itself is predictable before minting; it contains only the placeholder until reveal. Use the methods above to establish reveal status and obtain media immediately, without waiting for CDN or marketplace refreshes.
+
+Published revealed metadata also contains `revealStatus: "revealed"`, which the
+shop uses to skip redundant recovery requests. Baseline placeholder metadata
+omits this field. It is a shop-specific metadata field, not an OpenSea requirement
+or an extra field on each artwork returned by these API endpoints. Transaction
+responses use their top-level `status`; token responses use `artworks` and `unresolved`.
 
 ## Errors and retries
 
@@ -128,7 +156,7 @@ Errors contain `error.code` and `error.message`. For normal polling, follow `ret
 | `400` / `405` | Correct the request body / use `POST`. |
 | `403` | Check `Origin` and `X-Mons-CSRF`. |
 | `404` | Confirm the chain and contract with Mons. |
-| `409` | New reveal admission is paused or unavailable. Previously admitted work continues. |
+| `409` | The collection is paused or uses a retired catalog. For a paused current catalog, admitted work continues. A retired catalog is no longer served; stop polling it and use the current collection configuration. |
 | `429` | Rate or tracking capacity was reached. Wait for `Retry-After` (seconds), then retry the same request. |
 | `5xx` / network error | Retry with exponential backoff, capped at 30 seconds. |
 

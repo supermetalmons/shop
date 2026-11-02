@@ -60,7 +60,8 @@ async function waitWithRenders(milliseconds: number) {
 function artwork(tokenId = '1', category: EthereumRevealedArtwork['category'] = 'painting'): EthereumRevealedArtwork {
   return { tokenId, crateTokenId: '111112', category, name: `Artwork ${tokenId}`,
     image: `https://wip.lil.org/reveal-test/${tokenId}.webp`, aspectRatio: { width: 1080, height: 1920 },
-    ...(category === 'video' ? { animation_url: `https://wip.lil.org/reveal-test/${tokenId}.mp4` } : {}),
+    ...(category === 'video' ? { animation_url: `https://wip.lil.org/reveal-test/${tokenId}.mp4` } :
+      category === '3d' ? { animation_url: `https://wip.lil.org/111k/3d/${tokenId}.glb`, aspectRatio: { width: 1, height: 1 } } : {}),
     attributes: [{ trait_type: 'type', value: category }], observation: { transactionHash: hash, blockNumber: 101, blockHash } };
 }
 function item(tokenId = '1'): EthereumInventoryItem {
@@ -120,6 +121,17 @@ test('artwork requests carry deployment identity and CSRF without requesting a w
   ]);
 });
 
+test('3D reveal metadata survives inventory parsing and never becomes a video preview', async t => {
+  const model = artwork('1', '3d');
+  t.mock.method(globalThis, 'fetch', async () => Response.json(transactionResponse('revealed', [model])));
+  assert.deepEqual((await ethereumRevealApi.transaction(config, hash)).artworks, [model]);
+  const inventory = parseEthereumInventoryItem({ ...item(), ...model, revealStatus: 'revealed' }, config, owner);
+  const preview = ethereumInventoryView(inventory);
+  assert.equal(preview.previewVideo, undefined);
+  assert.equal(preview.ethereum.animation_url, model.animation_url);
+  assert.deepEqual(preview.imageDimensions, { width: 1, height: 1 });
+});
+
 for (const status of ['pending', 'reverted', 'not_unpack'] as const) test(`${status} artwork responses cannot smuggle media into the client`, async t => {
   t.mock.method(globalThis, 'fetch', async () => Response.json(transactionResponse(status, [artwork()])));
   await assert.rejects(ethereumRevealApi.transaction(config, hash), /invalid response/);
@@ -133,6 +145,8 @@ test('artwork response validation rejects foreign scopes, unsafe media, malforme
     { artworks: [{ ...artwork(), image: 'http://wip.lil.org/art.webp' }] },
     { artworks: [{ ...artwork('1', 'video'), animation_url: 'https://user:secret@wip.lil.org/a.mp4' }] },
     { artworks: [{ ...artwork('1', 'video'), animation_url: undefined }] },
+    { artworks: [{ ...artwork('1', '3d'), animation_url: undefined }] },
+    { artworks: [{ ...artwork('1', '3d'), animation_url: 'javascript:alert(1)' }] },
     { artworks: [{ ...artwork(), aspectRatio: { width: 0, height: 12 } }] },
     { artworks: [{ ...artwork(), aspectRatio: { width: 12, height: Infinity } }] },
     { artworks: [{ ...artwork(), observation: undefined }] },

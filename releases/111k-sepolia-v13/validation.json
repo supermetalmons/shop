@@ -1,0 +1,104 @@
+{
+  "checkedAt": "2026-11-02T22:35:15.523594+00:00",
+  "manifestSha256": "caa01bee73aa06b011e55ebcc1b45d9186c806659e87b5e4780a9a9424bc93db",
+  "catalogVersion": "111k-v2",
+  "catalogCounts": {
+    "egg": 22222,
+    "painting": 84556,
+    "video": 3333,
+    "3d": 1000
+  },
+  "totalArtworks": 111111,
+  "checks": [
+    {
+      "command": "npm run check:frontend",
+      "passed": true,
+      "unitTests": 4892
+    },
+    {
+      "command": "npm run check:api",
+      "passed": true,
+      "unitTests": 2936,
+      "runtimeTests": 52
+    },
+    {
+      "command": "npm run test:ethereum:e2e",
+      "passed": true,
+      "report": "reveal-e2e-results.json",
+      "deterministic3dReveal": true,
+      "metadataSource": "live-cdn",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v13/"
+    },
+    {
+      "command": "node --import tsx --test .cache/111k-v13-release/release-helpers.test.cjs",
+      "passed": true,
+      "tests": 12
+    }
+  ],
+  "initialParallelRunRetries": [
+    {
+      "test": "profile reconciliation merges multiple session-validated batches and is idempotent",
+      "initial": "deadline 504 under concurrent full frontend/API suites",
+      "isolatedRetry": "passed",
+      "finalFullApiSuite": "passed"
+    },
+    {
+      "test": "restoration repairs missing objects, damaged metadata and headers from both snapshot versions",
+      "initial": "90000 ms timeout under concurrent full frontend/API suites",
+      "isolatedRetry": "passed",
+      "finalFullFrontendSuite": "passed"
+    }
+  ],
+  "mediaValidation": {
+    "file": "3d-media-validation.json",
+    "objects": 2000,
+    "complete": true
+  },
+  "browser": {
+    "environment": "Local Vite fixture using production media components and public CDN assets",
+    "assets": [
+      1,
+      1000
+    ],
+    "passed": [
+      "GLB rendering",
+      "drag rotation",
+      "keyboard rotation and zoom",
+      "Home resets camera",
+      "390x844 responsive resize",
+      "valid poster retained on missing GLB",
+      "Retry begins fresh load",
+      "existing MP4 video plays",
+      "egg static image renders",
+      "closing viewer removes canvas/video elements"
+    ],
+    "screenshots": [
+      "browser-model-1.jpg",
+      "browser-model-1000-keyboard.jpg",
+      "browser-model-mobile.jpg",
+      "browser-model-fallback.jpg"
+    ]
+  },
+  "publicQaTransactions": {
+    "minted": 0,
+    "unpacked": 0,
+    "relicClaims": 0
+  },
+  "liveAcceptance": {
+    "preopening": "http-preopening.json",
+    "opening": "deployment-open.json",
+    "final": "http-open.json",
+    "revealApi": "live-reveal-check.json",
+    "browser": "browser-acceptance.json",
+    "mainnetUnchanged": "mainnet-approved-diff.json",
+    "totalSupplyAtVerification": 0,
+    "relicClaimsUsedAtVerification": 0,
+    "all18ClaimSlotsPreserved": true
+  },
+  "remoteIntegrityChecks": {
+    "pendingMigrations": 0,
+    "packStatus": "passed",
+    "opsD1": "passed",
+    "commerceD1AfterScopedReset": "passed"
+  }
+}

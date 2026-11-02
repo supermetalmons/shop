@@ -4,6 +4,14 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
+New deployments use catalog version `111k-v2`: 22,222 eggs, 84,556 paintings,
+3,333 videos, and 1,000 3D models. It retains the 111,111-artwork supply. The
+runtime supports this catalog only; v1 registrations remain historical records.
+Retired-catalog API requests return `409`, watchdog scans skip them, and their
+alarms stop. Status and pause commands can still inspect or pause those records;
+registration and activation require the current catalog. Do not rewrite an old
+catalog version or migrate an existing allocation pool to v2.
+
 Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired collections retain their original prefixes. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
 The relic collection contains 344984 metadata objects, including relic tokens 117172–117189 and terminal relic receipts 3000001–3000018. Every relic receipt uses `https://wip.lil.org/111k/receipt_background.webp`. Publish the complete collection to each replacement prefix before deployment and registration; a selected-object preview cannot qualify. Relic images are fixed at `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. Owner allocation reserves relic crate supply before sales; claiming does not change the reserved supply. Opening a relic creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
@@ -46,7 +54,7 @@ Create a private local manifest using the deployment ID and prefix chosen above:
   "contractAddress": "<deployed contract address>",
   "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/<new-sepolia-deployment-id>/",
   "deploymentBlock": 0,
-  "catalogVersion": "111k-v1",
+  "catalogVersion": "111k-v2",
   "publicationDirectory": "./published-metadata"
 }
 ```
@@ -115,6 +123,6 @@ npm run ethereum-reveal-control -- activate --manifest "$target_manifest" --expe
 
 These commands pause and resume one collection for maintenance. During a replacement, pause the retired collection using its separate `old_manifest`; activate only the replacement's `new_manifest` from the registration steps above.
 
-Pausing stops new admission while previously admitted recovery/publication continues. Frozen results remain readable. Preserve retired deployment records, private reservations, frozen assignments, and metadata objects. Commerce reset does not delete reveal state. Never reset a production reveal object or restore an older ledger without reconciling every published immutable assignment. Use a fresh contract and prefix for a replacement collection.
+For the current catalog, pausing stops new admission while previously admitted recovery/publication continues and frozen results remain readable. Retiring a catalog version stops its API execution and background work; its previously published CDN metadata remains available. Preserve retired deployment records, private reservations, frozen assignments, and metadata objects. Commerce reset does not delete reveal state. Never reset a production reveal object or restore an older ledger without reconciling every published immutable assignment. Use a fresh contract and prefix for a replacement collection.
 
 `npm run dev:ethereum:api` provisions local Anvil reveal inventory automatically. Local bindings use isolated SQLite and R2; public CDN baseline metadata reads remain read-only. Restarting the local API discards its local reveal state, so restart Anvil and redeploy the contract together. Local deployment uses the committed default metadata namespace; set `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` only when selecting another complete published baseline. Custom local prefixes must be canonical and have published baseline metadata. Local artwork is checked against its local ledger even if another collection has already revealed the shared CDN metadata. Local contracts also start closed; use the Anvil owner to call `setSaleActive(true)` explicitly before test purchases.

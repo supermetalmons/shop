@@ -37,6 +37,12 @@ export async function runEthereumRevealE2E(input: {
     for (const binding of ['DATA_DB', 'OPS_DB', 'COMMERCE_DB'] as const) await worker.applyD1Migrations(binding);
     const env = await worker.getEnv();
     const deployment = await initializeLocalEthereumReveal(env, input);
+    const storage = await worker.getDurableObjectStorage('ETHEREUM_REVEAL', { name: `31337:${input.contractAddress}` });
+    await storage.exec(`INSERT INTO crates(crate_token_id) VALUES('111112');
+      DELETE FROM free_slots WHERE category='3d' AND slot=999;
+      UPDATE free_slots SET asset_id=1000 WHERE category='3d' AND slot=0;
+      UPDATE pools SET available=available-1 WHERE category='3d';
+      INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('3d',1,'111112',0)`);
     const scope = { chainId: 31337, contractAddress: input.contractAddress };
     async function request<T>(path: string, body: object): Promise<T> {
       const response = await worker.fetch(`https://api.mons.shop${path}`, {
@@ -80,6 +86,11 @@ export async function runEthereumRevealE2E(input: {
     }
     assert.equal(revealed?.status, 'revealed');
     assert.equal(revealed.artworks.length, 20);
+    assert.deepEqual({ category: revealed.artworks[0].category, image: revealed.artworks[0].image,
+      animation_url: revealed.artworks[0].animation_url, aspectRatio: revealed.artworks[0].aspectRatio }, {
+      category: '3d', image: 'https://wip.lil.org/111k/3d/1.webp',
+      animation_url: 'https://wip.lil.org/111k/3d/1.glb', aspectRatio: { width: 1, height: 1 },
+    });
     assert.deepEqual(revealed.artworks.map(artwork => artwork.tokenId), Array.from({ length: 20 }, (_, index) => String(index + 1)));
     assert.equal(new Set(revealed.artworks.map(artwork => artwork.image)).size, 20);
     assert.ok(revealed.artworks.every(artwork => artwork.aspectRatio.width > 0 && artwork.aspectRatio.height > 0));
@@ -95,6 +106,10 @@ export async function runEthereumRevealE2E(input: {
     }
     assert.ok(published);
     assert.equal(JSON.parse(published).image, revealed.artworks[0].image);
+    assert.equal(JSON.parse(published).animation_url, 'https://wip.lil.org/111k/3d/1.glb');
+    assert.equal(JSON.parse(published).category, '3d');
+    assert.equal(JSON.parse(published).revealStatus, 'revealed');
+    assert.deepEqual(JSON.parse(published).attributes, [{ trait_type: 'type', value: '3d' }]);
     assert.deepEqual(JSON.parse(published).aspectRatio, revealed.artworks[0].aspectRatio);
     assert.equal(await input.rpc('evm_revert', [snapshot]), true);
     const afterReorg = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1'] });
@@ -118,7 +133,7 @@ export async function runEthereumRevealE2E(input: {
     assert.deepEqual(healed.unresolved, [{ tokenId: '111111', status: 'unminted' }]);
     return { deploymentId: deployment.deploymentId, contractAddress: input.contractAddress, transactionHash, recoveryHash,
       pendingMediaHidden: true, firstConfirmationArtworkCount: revealed.artworks.length, metadataStorage: 'isolated-local-r2',
-      immutableAfterReorg: true, tokenRecovery: true };
+      deterministic3dReveal: true, immutableAfterReorg: true, tokenRecovery: true };
   } finally {
     await runtime.close();
     await rm(directory, { recursive: true, force: true });

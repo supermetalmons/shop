@@ -9,7 +9,7 @@ function fixture(count: number, failId?: string) {
     deployment_id: `test-${index.toString().padStart(3, '0')}`, drop_id: '111k_devnet', chain_id: 11155111,
     contract_address: `0x${(index + 1).toString(16).padStart(40, '0')}`,
     metadata_base_uri: `https://cdn.mons.shop/111k-sepolia/test-${index.toString().padStart(3, '0')}/`,
-    deployment_block: 100, catalog_version: '111k-v1',
+    deployment_block: 100, catalog_version: '111k-v2',
     template_json: JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
     template_sha256: 'a'.repeat(64), state: 'active', revision: 3, created_at_ms: index,
     updated_at_ms: index, provisioned_at_ms: 1, activated_at_ms: 2, last_error: null,
@@ -21,18 +21,22 @@ function fixture(count: number, failId?: string) {
   const env = {
     OPS_DB: { prepare(sql: string) {
       return {
-        async all<T>() {
-          assert.match(sql, /ORDER BY updated_at_ms ASC LIMIT 100/);
-          return { results: [...rows].sort((a, b) => a.updated_at_ms - b.updated_at_ms).slice(0, 100).map(row => ({ ...row })) as T[] };
-        },
         bind(...values: unknown[]) {
-          return { async run() {
-            assert.equal(sql, 'UPDATE ethereum_reveal_deployments SET updated_at_ms=? WHERE deployment_id=?');
-            assert.equal(typeof values[0], 'number');
-            const row = rows.find(value => value.deployment_id === values[1]);
-            assert.ok(row);
-            row.updated_at_ms = Number(values[0]);
-          } };
+          return {
+            async all<T>() {
+              assert.match(sql, /WHERE catalog_version=\? ORDER BY updated_at_ms ASC LIMIT 100/);
+              assert.deepEqual(values, ['111k-v2']);
+              return { results: rows.filter(row => row.catalog_version === values[0])
+                .sort((a, b) => a.updated_at_ms - b.updated_at_ms).slice(0, 100).map(row => ({ ...row })) as T[] };
+            },
+            async run() {
+              assert.equal(sql, 'UPDATE ethereum_reveal_deployments SET updated_at_ms=? WHERE deployment_id=?');
+              assert.equal(typeof values[0], 'number');
+              const row = rows.find(value => value.deployment_id === values[1]);
+              assert.ok(row);
+              row.updated_at_ms = Number(values[0]);
+            },
+          };
         },
       };
     } },
@@ -64,6 +68,16 @@ test('watchdog rotates a bounded page so later deployments are not starved', asy
   assert.deepEqual(visited.slice(100, 105), ['test-100', 'test-101', 'test-102', 'test-103', 'test-104']);
   assert.equal(names[0], `11155111:0x${'1'.padStart(40, '0')}`);
   assert.equal(peak(), 4);
+});
+
+test('watchdog excludes retired catalogs before its bounded page without changing historical rows', async () => {
+  const { env, visited, rows } = fixture(130);
+  for (const row of rows.slice(0, 125)) row.catalog_version = '111k-v1';
+  const historical = structuredClone(rows.slice(0, 125));
+  const summary = await reconcileEthereumReveals(env, new AbortController().signal);
+  assert.deepEqual(summary, { attempted: 5, completed: 5, deferred: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(visited, ['test-125', 'test-126', 'test-127', 'test-128', 'test-129']);
+  assert.deepEqual(rows.slice(0, 125), historical);
 });
 
 test('one failed deployment rotates and does not prevent subsequent watchdog groups', async () => {

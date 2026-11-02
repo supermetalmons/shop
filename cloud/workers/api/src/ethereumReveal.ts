@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ETHEREUM_REVEAL_MAX_TOKEN_IDS, ETHEREUM_REVEAL_PATHS, type EthereumRevealResult } from '../../../../shared/ethereum/reveal.js';
-import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
+import { ETHEREUM_REVEAL_CATALOG_VERSION, readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { normalizeEthereumAddress, normalizeEthereumTokenId } from '../../../../shared/ethereum/protocol.js';
 import { limitEthereumRequest } from './ethereumAuth.js';
 import { isAllowedEthereumCheckoutStatusOrigin } from './ethereumCheckoutOrigin.js';
@@ -29,6 +29,9 @@ export async function ethereumReveal(request: Request, context: EthereumContext,
   const contractAddress = normalizeEthereumAddress(body.contractAddress)!;
   const deployment = await readEthereumRevealDeployment(context.env.OPS_DB, { chainId: body.chainId, contractAddress });
   if (!deployment) throw new EthereumApiError('not-found', 'Reveal is not configured for this collection.');
+  if (deployment.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) {
+    throw new EthereumApiError('failed-precondition', 'Reveal is retired for this collection.');
+  }
   const namespace = context.env.ETHEREUM_REVEAL;
   if (!namespace) throw new EthereumApiError('unavailable', 'Reveal is temporarily unavailable.');
   const object = namespace.getByName(`${deployment.chainId}:${deployment.contractAddress}`);

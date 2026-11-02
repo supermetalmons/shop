@@ -1,9 +1,9 @@
 import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
 
-export const REVEAL_CATEGORY_COUNTS = { egg: 22_222, painting: 85_556, video: 3_333 } as const;
+export const REVEAL_CATEGORY_COUNTS = { egg: 22_222, painting: 84_556, video: 3_333, '3d': 1_000 } as const;
 export const REVEAL_ARTWORK_COUNT = 111_111;
-export const REVEAL_CATEGORIES = ['egg', 'painting', 'video'] as const;
+export const REVEAL_CATEGORIES = ['egg', 'painting', 'video', '3d'] as const;
 
 export function revealCrateSize(crateTokenId: string): number {
   const id = Number(crateTokenId);
@@ -18,6 +18,10 @@ export function validateRevealCatalog(): void {
     catalog.categories.eggs.count !== REVEAL_CATEGORY_COUNTS.egg ||
     catalog.categories.paintings.count !== REVEAL_CATEGORY_COUNTS.painting ||
     catalog.categories.videos.count !== REVEAL_CATEGORY_COUNTS.video ||
+    catalog.categories['3d'].count !== REVEAL_CATEGORY_COUNTS['3d'] ||
+    catalog.categories['3d'].pathTemplate !== '3d/{id}.glb' ||
+    catalog.categories['3d'].imagePathTemplate !== '3d/{id}.webp' ||
+    catalog.categories['3d'].aspectRatio.length !== 2 || catalog.categories['3d'].aspectRatio.some(value => value !== 1) ||
     catalog.categories.paintings.aspectRatioIndexById.length !== REVEAL_CATEGORY_COUNTS.painting ||
     catalog.categories.paintings.aspectRatioIndexById.some(index => !Number.isInteger(index) || index < 0 ||
       index >= catalog.categories.paintings.aspectRatioPalette.length) ||
@@ -29,11 +33,13 @@ function revealAssetMedia(category: EthereumArtworkCategory, assetId: number) {
   if (!Number.isInteger(assetId) || assetId < 1 || assetId > REVEAL_CATEGORY_COUNTS[category]) throw new Error('Invalid reveal asset.');
   const pair = category === 'painting'
     ? catalog.categories.paintings.aspectRatioPalette[catalog.categories.paintings.aspectRatioIndexById[assetId - 1]]
-    : category === 'egg' ? catalog.categories.eggs.aspectRatio : catalog.categories.videos.aspectRatio;
-  const directory = category === 'egg' ? 'eggs' : category === 'painting' ? 'paintings' : 'videos';
+    : category === 'egg' ? catalog.categories.eggs.aspectRatio
+      : category === 'video' ? catalog.categories.videos.aspectRatio : catalog.categories['3d'].aspectRatio;
+  const directory = category === 'egg' ? 'eggs' : category === 'painting' ? 'paintings' : category === 'video' ? 'videos' : '3d';
   return {
     image: `${catalog.baseUrl}${directory}/${assetId}.webp`,
     ...(category === 'video' ? { animation_url: `${catalog.baseUrl}videos/${assetId}.mp4` } : {}),
+    ...(category === '3d' ? { animation_url: `${catalog.baseUrl}3d/${assetId}.glb` } : {}),
     aspectRatio: { width: pair[0], height: pair[1] },
   };
 }

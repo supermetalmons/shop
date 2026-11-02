@@ -1,0 +1,34 @@
+{
+  "manifestSha256": "caa01bee73aa06b011e55ebcc1b45d9186c806659e87b5e4780a9a9424bc93db",
+  "chainId": 11155111,
+  "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+  "checkedAt": "2026-11-02T22:45:08.810Z",
+  "sourceVerified": true,
+  "match": "similar",
+  "similarMatchAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
+  "contractName": "NFT111K",
+  "compilerVersion": "v0.8.38+commit.1835d247",
+  "optimizerRuns": 500,
+  "evmVersion": "prague",
+  "claimRelicWriteAvailable": true,
+  "claimRelicSelector": "0xd4137c78",
+  "method": "Browser inspection of the published Etherscan source badge and Write Contract pane",
+  "evidence": [
+    "etherscan-code.jpg",
+    "etherscan-write.jpg"
+  ],
+  "url": "https://sepolia.etherscan.io/address/0x8ef2789bc22098749a8ca746263fd85442949eff#code",
+  "frozenSourcesEqualReferencedRelease": true,
+  "sourceCount": 22,
+  "exactCreationRuntimeAndConstructorVerification": "NFT111K.sourcify-verification.json",
+  "etherscanExactMatch": false,
+  "termsAccepted": true,
+  "additionalVerificationSubmittedViaBrowser": false,
+  "exactMatchUpgrade": {
+    "attemptedAt": "2026-11-02T22:51:48.938Z",
+    "status": "unavailable-for-current-credential",
+    "message": "Additional source code verification is temporarily unavailable because this contract already Similar Matches the deployed bytecode.",
+    "evidence": "etherscan-exact-unavailable.jpg",
+    "sourceFileUploaded": false
+  }
+}

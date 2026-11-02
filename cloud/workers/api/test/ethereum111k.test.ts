@@ -65,7 +65,7 @@ function fixture(controlActive = true) {
     ops.prepare(`INSERT INTO ethereum_reveal_deployments
       (deployment_id, drop_id, chain_id, contract_address, metadata_base_uri, deployment_block, catalog_version,
         template_json, template_sha256, state, revision, created_at_ms, updated_at_ms)
-      VALUES (?, '111k_devnet', ?, ?, ?, 2, '111k-v1', ?, ?, ?, 1, ?, ?)`)
+      VALUES (?, '111k_devnet', ?, ?, ?, 2, '111k-v2', ?, ?, ?, 1, ?, ?)`)
       .run(id, chainId, contractAddress, `https://cdn.mons.shop/${chainId === 1 ? '111k' : '111k-sepolia'}/${id}/`,
         JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
         '0'.repeat(64), state, NOW, NOW);
@@ -3436,12 +3436,14 @@ test('all six metadata kinds preserve HTTPS images, empty descriptions and a sin
   } finally { f.close(); }
 });
 
-test('artwork metadata preserves video playback and exact aspect ratios without unsafe media URLs', async () => {
+for (const category of ['video', '3d'] as const) test(`artwork metadata preserves ${category} media and exact aspect ratios without unsafe URLs`, async () => {
   const f = fixture();
   try {
-    const metadata = { name: '1', image: 'https://wip.lil.org/videos/1.webp',
-      animation_url: 'https://wip.lil.org/videos/1.mp4', aspectRatio: { width: 16, height: 9 },
-      category: 'video' as const, revealStatus: 'revealed' as const };
+    const directory = category === 'video' ? 'videos' : '3d';
+    const metadata = { name: '1', image: `https://wip.lil.org/111k/${directory}/1.webp`,
+      animation_url: `https://wip.lil.org/111k/${directory}/1.${category === 'video' ? 'mp4' : 'glb'}`,
+      aspectRatio: category === 'video' ? { width: 16, height: 9 } : { width: 1, height: 1 },
+      category, revealStatus: 'revealed' as const };
     f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}1.json`, metadata);
     const result = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);
     assert.equal(result.response.status, 200);
@@ -3449,7 +3451,7 @@ test('artwork metadata preserves video playback and exact aspect ratios without 
     const items = await ethereumInventoryItems(readContext(f), [{ tokenId: '1', kind: 'artwork', displayId: 1, owner: WALLET }]);
     assert.equal(items[0].animation_url, metadata.animation_url);
     assert.deepEqual(items[0].aspectRatio, metadata.aspectRatio);
-    assert.equal(items[0].category, 'video');
+    assert.equal(items[0].category, category);
     assert.equal(items[0].revealStatus, 'revealed');
     f.metadata.fetch = async () => Response.json({ ...metadata, animation_url: 'javascript:alert(1)',
       aspectRatio: { width: -1, height: 9 }, category: 'unknown', revealStatus: true });

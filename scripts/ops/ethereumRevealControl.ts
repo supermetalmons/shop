@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs, parseEnv } from 'node:util';
 import { verifyRevealDeployment } from '../../cloud/workers/api/src/ethereumRevealChain.ts';
 import { ethereumMetadataBaseUri } from '../../shared/ethereum/config.ts';
-import { ETHEREUM_REVEAL_CATALOG_VERSION, ETHEREUM_REVEAL_DEPLOYMENT_ID, ETHEREUM_REVEAL_DEPLOYMENTS_SQL,
+import { ETHEREUM_REVEAL_CATALOG_VERSION, ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN,
+  ETHEREUM_REVEAL_DEPLOYMENT_ID, ETHEREUM_REVEAL_DEPLOYMENTS_SQL,
   parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
 import { normalizeEthereumAddress } from '../../shared/ethereum/protocol.ts';
 import { createAsyncD1MaintenanceQuery } from '../shared/asyncD1MaintenanceQuery.ts';
@@ -77,7 +78,8 @@ async function loadManifestIdentity(path: string): Promise<{ row: Record<string,
     typeof row.dropId !== 'string' || !/^[a-z0-9_][a-z0-9_-]{0,63}$/.test(row.dropId) || !address || /^0x0{40}$/.test(address) ||
     (row.chainId !== 1 && row.chainId !== 11155111) || typeof row.metadataBaseUri !== 'string' ||
     !Number.isSafeInteger(row.deploymentBlock) || Number(row.deploymentBlock) < 0 ||
-    row.catalogVersion !== undefined && row.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) throw new Error('Invalid reveal registration identity.');
+    row.catalogVersion !== undefined && (typeof row.catalogVersion !== 'string' ||
+      !ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN.test(row.catalogVersion))) throw new Error('Invalid reveal registration identity.');
   const metadataBaseUri = ethereumMetadataBaseUri(row.metadataBaseUri, row.chainId);
   const prefix = row.chainId === 1 ? '111k' : '111k-sepolia';
   if (metadataBaseUri !== `https://cdn.mons.shop/${prefix}/${row.deploymentId}/` && metadataBaseUri !== `https://cdn.mons.shop/${prefix}/`) {
@@ -85,11 +87,12 @@ async function loadManifestIdentity(path: string): Promise<{ row: Record<string,
   }
   return { row, identity: { deploymentId: row.deploymentId, dropId: row.dropId, chainId: row.chainId,
     contractAddress: address, metadataBaseUri, deploymentBlock: Number(row.deploymentBlock),
-    catalogVersion: ETHEREUM_REVEAL_CATALOG_VERSION } };
+    catalogVersion: typeof row.catalogVersion === 'string' ? row.catalogVersion : ETHEREUM_REVEAL_CATALOG_VERSION } };
 }
 
 async function loadRegistrationInput(path: string): Promise<{ deployment: Registration; publicationDirectory?: string }> {
   const { row, identity } = await loadManifestIdentity(path);
+  if (identity.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) throw new Error('New reveal registrations require the current catalog version.');
   if (row.publicationDirectory !== undefined && (typeof row.publicationDirectory !== 'string' || !row.publicationDirectory.trim())) {
     throw new Error('Invalid publicationDirectory.');
   }
@@ -133,6 +136,9 @@ export function buildEthereumRevealRegistration(value: Registration, publication
 }
 
 export function buildEthereumRevealTransition(command: 'activate' | 'pause', current: EthereumRevealDeployment, revision: number): string {
+  if (command === 'activate' && current.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) {
+    throw new Error('Retired reveal catalogs cannot be activated.');
+  }
   if (revision !== current.revision || command === 'activate' && !['ready', 'paused'].includes(current.state) ||
     command === 'pause' && current.state !== 'active' || command === 'activate' && current.provisionedAtMs === null) {
     throw new Error('Reveal deployment state or revision does not permit this transition.');
@@ -173,13 +179,15 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
       return { deployment: parseEthereumRevealDeployment(rows[0]) };
     } finally { await lease.close(); }
   }
-  const target = args.manifest ? (await loadManifestIdentity(args.manifest)).identity : undefined;
+  const manifest = args.manifest ? await loadManifestIdentity(args.manifest) : undefined;
+  const target = manifest?.identity;
   const deploymentId = target?.deploymentId ?? args.deploymentId;
   const selector = deploymentId ? ` WHERE deployment_id = ${sqlString(deploymentId)}` : '';
   const order = args.command === 'status' ? ' ORDER BY created_at_ms, deployment_id' : '';
   const deployments = (await query(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL}${selector}${order}`)).map(parseEthereumRevealDeployment);
   if (target && deployments.some(deployment => !Object.entries(target)
-    .every(([key, value]) => deployment[key as keyof RegistrationIdentity] === value))) {
+    .every(([key, value]) => key === 'catalogVersion' && manifest?.row.catalogVersion === undefined ||
+      deployment[key as keyof RegistrationIdentity] === value))) {
     throw new Error('The manifest identity does not match the registered deployment.');
   }
   if (args.command === 'status') return { deployments };

@@ -136,7 +136,7 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
       templates.set(scope.deploymentId, scopedTemplates);
       const templateJson = JSON.stringify(scopedTemplates.artwork);
       const registered = await env.OPS_DB.prepare(buildEthereumRevealRegistration({ ...scope,
-        dropId: '111k_devnet', deploymentBlock: 100, catalogVersion: '111k-v1', templateJson,
+        dropId: '111k_devnet', deploymentBlock: 100, catalogVersion: '111k-v2', templateJson,
         templateSha256: createHash('sha256').update(templateJson).digest('hex') })).first<Record<string, unknown>>();
       assert.ok(registered);
       let deployment = parseEthereumRevealDeployment(registered);

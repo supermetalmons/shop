@@ -294,7 +294,7 @@ export default {
   const templateJson = JSON.stringify(JSON.parse(readFileSync('scripts/ethereum-metadata/templates/artwork.json', 'utf8')));
   await OPS_DB.prepare(buildEthereumRevealRegistration({ deploymentId: 'relic-runtime', dropId: '111k', chainId: 1,
     contractAddress: contract, metadataBaseUri: 'https://cdn.mons.shop/111k/relic-runtime/', deploymentBlock: 100,
-    catalogVersion: '111k-v1', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') })).first();
+    catalogVersion: '111k-v2', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') })).first();
   await OPS_DB.prepare("UPDATE ethereum_reveal_deployments SET state = 'paused' WHERE deployment_id = 'relic-runtime'").run();
   const scope = `chainId=1&contractAddress=${contract}`;
   for (const origin of ['https://vvv.so', 'https://www.vvv.so']) {

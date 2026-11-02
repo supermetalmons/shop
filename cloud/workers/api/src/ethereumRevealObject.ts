@@ -406,6 +406,10 @@ export class EthereumRevealObject extends DurableObject<Env> {
       if (!identity) return;
       const deployment = await readEthereumRevealDeployment(this.env.OPS_DB, identity);
       if (!deployment) throw unavailable();
+      if (deployment.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) {
+        await this.ctx.storage.deleteAlarm();
+        return;
+      }
       await this.watchdog(deployment);
     } catch {
       await this.ctx.storage.setAlarm(Date.now() + 10_000);

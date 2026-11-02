@@ -191,12 +191,51 @@
   object-fit: contain;
 }
 .ethereum111k__artwork-media > video,
+.ethereum111k__model,
 .ethereum111k__artwork-media > .placeholder {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+.ethereum111k__model-canvas,
+.ethereum111k__model-canvas > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ethereum111k__model-canvas > canvas {
+  touch-action: none;
+  cursor: grab;
+}
+.ethereum111k__model-canvas > canvas:active {
+  cursor: grabbing;
+}
+.ethereum111k__model-canvas > canvas:focus-visible {
+  outline: 2px solid currentColor !important;
+  outline-offset: -3px;
+}
+.ethereum111k__model-status {
+  position: absolute;
+  inset: auto 8px 8px;
+  width: fit-content;
+  margin-inline: auto;
+  padding: 5px 9px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgb(0 0 0 / 65%);
+  font-size: 12px;
+  pointer-events: none;
+}
+.ethereum111k__model-status button {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  pointer-events: auto;
 }
 .ethereum111k__receipt-actions {
   display: flex;

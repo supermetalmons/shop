@@ -124,7 +124,7 @@ test('both deployment networks require the complete seven-kind publication befor
       const deploymentFile = join(publication.directory, `deployment-${network}.json`);
       const deployment = { deploymentId, dropId: '111k_devnet', chainId,
         contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: `https://cdn.mons.shop/${prefix}`,
-        deploymentBlock: 1, catalogVersion: '111k-v1', publicationDirectory: '.' };
+        deploymentBlock: 1, catalogVersion: '111k-v2', publicationDirectory: '.' };
       await writeFile(deploymentFile, JSON.stringify(deployment));
       let verified: Awaited<ReturnType<typeof verifyMetadata>> | undefined;
       let chainChecks = 0;
