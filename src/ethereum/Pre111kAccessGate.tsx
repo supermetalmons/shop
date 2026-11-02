@@ -38,7 +38,7 @@ export function Pre111kAccessGate({ open, input, setInput, verifying, error, sub
     <div className={`relic-access${open ? ' relic-access--open' : ''}${compact ? ' relic-access--compact' : ''}`}
       style={style} inert={!open || undefined} aria-hidden={!open || undefined}>
       <div className="relic-access__composition">
-        <img className="relic-access__logo" src="https://wip.lil.org/111k/111k.webp" alt="111k" draggable={false} />
+        <img className="relic-access__logo" src="https://wip.lil.org/111k/111k.webp" width={927} height={298} alt="111k" draggable={false} />
         <form className="relic-access__form" aria-label="Enter secret code" aria-busy={verifying}
           onSubmit={event => { event.preventDefault(); if (!verifying && input.trim()) void submit(); }}>
           <div className={`relic-access__field${error ? ' relic-access__field--error' : ''}`}>

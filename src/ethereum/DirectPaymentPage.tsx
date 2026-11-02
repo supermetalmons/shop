@@ -50,8 +50,8 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
       <div className="relic-page__content" inert={!approved || undefined} aria-hidden={!approved || undefined}>
         <main className="relic-page__main">
           <figure className="relic-page__showcase">
-            <img className="relic-page__artwork" src="https://wip.lil.org/111k/artwork_placeholder.png" alt="Artwork" draggable={false} />
-            <figcaption className="relic-page__caption">111k reserved relic{network === 'devnet' ? ' · Sepolia testnet' : ''}</figcaption>
+            <img className="relic-page__artwork" src="https://wip.lil.org/111k/artwork_placeholder.png" width={932} height={1006} alt="Artwork" draggable={false} />
+            {network === 'devnet' ? <figcaption className="relic-page__caption">Sepolia testnet</figcaption> : null}
           </figure>
         </main>
         <section ref={reservationSection} className="relic-preorder" aria-label="Reserve a relic" tabIndex={-1}>

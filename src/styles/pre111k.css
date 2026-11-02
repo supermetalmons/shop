@@ -4,6 +4,12 @@
   color: var(--fg);
 }
 
+html:has(.relic-page--locked),
+body:has(.relic-page--locked) {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 .relic-page {
   display: flex;
   flex-direction: column;
@@ -191,6 +197,7 @@
   left: 0;
   width: 100%;
   height: var(--relic-gate-viewport-height, 100svh);
+  overflow: hidden;
   background: color-mix(in srgb, var(--bg) 78%, transparent);
   color: var(--fg);
   visibility: hidden;
@@ -206,24 +213,35 @@
   transition-delay: 0s;
 }
 
+@media (prefers-color-scheme: light) {
+  .relic-access {
+    background: color-mix(in srgb, #ebebeb 78%, transparent);
+  }
+}
+
 .relic-access__composition {
   display: flex;
   flex-direction: column;
   align-items: center;
+  height: 100%;
   gap: 32px;
-  padding: clamp(88px, 14svh, 150px) 24px 24px;
+  padding: max(env(safe-area-inset-top), clamp(88px, 14svh, 150px))
+    max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
 }
 
 .relic-access__logo {
+  flex: 0 1 auto;
   display: block;
-  width: min(440px, 86vw);
+  width: min(100%, 300px);
   height: 142px;
+  min-height: 0;
   object-fit: contain;
   user-select: none;
   pointer-events: none;
 }
 
 .relic-access__form {
+  flex: 0 0 auto;
   width: min(100%, 300px);
 }
 
@@ -321,11 +339,10 @@
 @media (max-width: 600px) {
   .relic-access__composition {
     gap: 24px;
-    padding-top: clamp(88px, 12svh, 112px);
+    padding-top: max(env(safe-area-inset-top), clamp(88px, 12svh, 112px));
   }
 
   .relic-access__logo {
-    width: min(360px, 86vw);
     height: 128px;
   }
 }
@@ -339,29 +356,16 @@
 
 .relic-access--compact .relic-access__composition {
   gap: 12px;
-  padding-top: clamp(8px, calc(var(--relic-gate-viewport-height, 100svh) * .1), 60px);
+  padding-top: max(env(safe-area-inset-top), clamp(8px, calc(var(--relic-gate-viewport-height, 100svh) * .1), 60px));
 }
 
 .relic-access--compact .relic-access__logo {
-  height: clamp(36px, calc(var(--relic-gate-viewport-height, 100svh) * .28), 88px);
-  width: min(280px, 72vw);
+  height: auto;
 }
 
 .relic-access--compact .relic-access__feedback {
   min-height: 0;
   margin-top: 8px;
-}
-
-@media (max-height: 420px) {
-  .relic-access__composition {
-    gap: 12px;
-    padding-top: clamp(8px, calc(var(--relic-gate-viewport-height, 100svh) * .1), 60px);
-  }
-
-  .relic-access__logo {
-    height: clamp(36px, calc(var(--relic-gate-viewport-height, 100svh) * .28), 88px);
-    width: min(280px, 72vw);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
