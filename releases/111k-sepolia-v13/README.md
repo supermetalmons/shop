@@ -53,6 +53,10 @@ CORS, file headers, and image dimensions. Every preview is 1024 × 1024.
 the deterministic local 3D reveal and reorg lifecycle, browser media behavior,
 and the resolved timeouts from an initial concurrent full-suite run.
 
+The subsequent [frontend follow-up](frontend-followup.json) records the
+StrictMode loading fix, its source commit, passing deployment checks, and
+matching published application and 3D viewer assets.
+
 The [application release](application-release.json) identifies the deployed API
 and frontend versions. [Cutover acceptance](cutover-acceptance.json) confirms
 matching collection settings, active v13 reveals, paused v12, and unchanged

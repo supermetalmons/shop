@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "sourceRevision": "cb10f5de1655ed0b41b7b3e355c9013ad047b17a",
+  "verifiedAt": "2026-11-02T23:39:57.740Z",
+  "scope": "frontend",
+  "worker": "mons-shop",
+  "versionId": "050676e6-2141-45f5-8789-03afbc13ec16",
+  "change": "Defer GLB loading past StrictMode effect cleanup while retaining cancellation and retry.",
+  "validation": {
+    "command": "npm run check:frontend",
+    "passed": true,
+    "frontendTests": 4893,
+    "publishedAssetsMatch": true
+  },
+  "assets": [
+    {
+      "path": "/assets/index-Ce4Yn9bQ.js",
+      "sha256": "269a18de3ec43002b73908af6a3a95d6212843bebbebd543a9a46f78b8fe51a4",
+      "bytes": 771539
+    },
+    {
+      "path": "/assets/EthereumModelViewer-hxxeSy7Y.js",
+      "sha256": "0f0c6cb4cee9718210f4fe8330b8d74f5b63478548d132770f06d1e52c6924b5",
+      "bytes": 23614
+    }
+  ],
+  "testnet": {
+    "url": "https://mons.shop/111k_devnet",
+    "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v13/",
+    "saleActive": true
+  },
+  "apiRedeployed": false,
+  "contractTransactionsSubmitted": 0,
+  "previousRecordedVersionId": "11922b46-3a81-42f8-ae24-913801d51c73"
+}
