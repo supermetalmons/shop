@@ -15,33 +15,45 @@ beforeEach(() => window.history.replaceState(null, '', '/'));
 afterEach(cleanup);
 after(() => dom.window.close());
 
-test('direct payment loads and remounts at its standalone route without URL replacement', () => {
-  const href = 'https://mons.shop/111k/relics/?from=direct#artwork';
-  window.history.replaceState({ retained: true }, '', href);
-  for (let load = 0; load < 2; load += 1) {
-    const view = renderHook(useAppRoute);
-    assert.equal(view.result.current.kind, 'direct-payment');
-    assert.equal(view.result.current.path, '/111k/relics');
-    assert.equal(view.result.current.drop, null);
-    assert.equal(view.result.current.ethereumDropId, undefined);
-    assert.equal(view.result.current.replacementHref, null);
-    assert.equal(window.location.href, href);
-    assert.deepEqual(window.history.state, { retained: true });
-    view.unmount();
-  }
-});
+for (const path of ['/111k/relics', '/111k/relics_devnet']) {
+  test(`${path} loads and remounts without URL replacement`, () => {
+    const href = `https://mons.shop${path}/?from=direct#artwork`;
+    window.history.replaceState({ retained: true }, '', href);
+    for (let load = 0; load < 2; load += 1) {
+      const view = renderHook(useAppRoute);
+      assert.equal(view.result.current.kind, 'direct-payment');
+      assert.equal(view.result.current.path, path);
+      assert.equal(view.result.current.drop, null);
+      assert.equal(view.result.current.ethereumDropId, undefined);
+      assert.equal(view.result.current.replacementHref, null);
+      assert.equal(window.location.href, href);
+      assert.deepEqual(window.history.state, { retained: true });
+      view.unmount();
+    }
+  });
+}
 
-test('navigation can enter and leave the direct payment route', () => {
+test('navigation can enter, switch between, and leave the direct payment routes', () => {
   const view = renderHook(useAppRoute);
   act(() => navigate('/111k/relics'));
   assert.equal(view.result.current.kind, 'direct-payment');
-  act(() => navigate('/notify_me'));
-  assert.equal(view.result.current.kind, 'notify');
+  assert.equal(view.result.current.path, '/111k/relics');
+  act(() => navigate('/111k/relics_devnet'));
+  assert.equal(view.result.current.kind, 'direct-payment');
+  assert.equal(view.result.current.path, '/111k/relics_devnet');
   act(() => {
     window.history.replaceState(null, '', '/111k/relics');
     window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
   });
+  assert.equal(view.result.current.path, '/111k/relics');
+  act(() => navigate('/notify_me'));
+  assert.equal(view.result.current.kind, 'notify');
+  act(() => {
+    window.history.replaceState(null, '', '/111k/relics_devnet');
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
   assert.equal(view.result.current.kind, 'direct-payment');
+  assert.equal(view.result.current.path, '/111k/relics_devnet');
   act(() => navigate('/'));
   assert.equal(view.result.current.kind, 'home');
 });

@@ -146,14 +146,17 @@ test('111k announcement and relic payment routes stay separate from the Ethereum
     assert.equal(upcoming.ethereumDropId, undefined);
     assert.equal(upcoming.replacementHref, null);
 
-    const relics = resolveAppRoute({ pathname: `/111k/relics${suffix}` });
-    assert.equal(relics.kind, 'direct-payment');
-    assert.equal(relics.path, '/111k/relics');
-    assert.equal(relics.upcoming, null);
-    assert.equal(relics.drop, null);
-    assert.equal(relics.ethereumDropId, undefined);
-    assert.equal(relics.replacementHref, null);
-    assert.equal(resolveUpcomingDropRouteByPath(`/111k/relics${suffix}`), null);
+    for (const path of ['/111k/relics', '/111k/relics_devnet']) {
+      const relics = resolveAppRoute({ pathname: `${path}${suffix}` });
+      assert.equal(relics.kind, 'direct-payment');
+      assert.equal(relics.path, path);
+      assert.equal(relics.shopPath, path);
+      assert.equal(relics.upcoming, null);
+      assert.equal(relics.drop, null);
+      assert.equal(relics.ethereumDropId, undefined);
+      assert.equal(relics.replacementHref, null);
+      assert.equal(resolveUpcomingDropRouteByPath(`${path}${suffix}`), null);
+    }
     assert.equal(resolveFrontendDropByPath(`/111k${suffix}`), null);
 
     const devnet = resolveAppRoute({ pathname: `/111k_devnet${suffix}` });

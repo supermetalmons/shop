@@ -37,8 +37,8 @@ type RoutedContentProps = {
 function RoutedContent({ route }: RoutedContentProps) {
   if (route.kind === 'direct-payment') {
     return (
-      <React.Suspense key={route.kind} fallback={null}>
-        <DirectPaymentPage />
+      <React.Suspense key={`${route.kind}:${route.path}`} fallback={null}>
+        <DirectPaymentPage network={route.path === '/111k/relics_devnet' ? 'devnet' : 'mainnet'} />
       </React.Suspense>
     );
   }

@@ -135,7 +135,9 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/') return createRoute('home', path, replacementHref);
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
-  if (path === '/111k/relics') return createRoute('direct-payment', path, replacementHref);
+  if (path === '/111k/relics' || path === '/111k/relics_devnet') {
+    return createRoute('direct-payment', path, replacementHref);
+  }
   if (path === '/checkout' || path.startsWith('/checkout/')) {
     return createRoute('checkout', path, replacementHref, {
       checkoutId: path === '/checkout' ? undefined : path.slice('/checkout/'.length),

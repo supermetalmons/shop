@@ -4,23 +4,31 @@ import { getLegacyInjectedProvider, listInjectedEthereumProviders } from '../wal
 import { ethereumAddress, ethereumOperation, type EthereumNetwork, type EthereumTransaction } from './wallet';
 import '../drif.css';
 
-const PAYMENT_NETWORK: EthereumNetwork = {
-  chainId: 1,
-  chainName: 'Ethereum',
-  walletRpcUrl: 'https://ethereum-rpc.publicnode.com',
-  explorerUrl: 'https://etherscan.io',
+const PAYMENT_NETWORKS: Record<'mainnet' | 'devnet', EthereumNetwork> = {
+  mainnet: {
+    chainId: 1,
+    chainName: 'Ethereum',
+    walletRpcUrl: 'https://ethereum-rpc.publicnode.com',
+    explorerUrl: 'https://etherscan.io',
+  },
+  devnet: {
+    chainId: 11155111,
+    chainName: 'Sepolia',
+    walletRpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
+    explorerUrl: 'https://sepolia.etherscan.io',
+  },
 };
 
-const PAYMENT_TRANSACTION: EthereumTransaction = {
+const PAYMENT_TRANSACTION: Omit<EthereumTransaction, 'chainId'> = {
   to: '0x72D0c5623A05033F9eE4495D408BC6c05DF8367d',
   value: `0x${2300000000000000000n.toString(16)}`,
   data: '0x',
-  chainId: 1,
 };
 
 let paymentInFlight = false;
 
-export default function DirectPaymentPage() {
+export default function DirectPaymentPage({ network }: { network: 'mainnet' | 'devnet' }) {
+  const paymentNetwork = PAYMENT_NETWORKS[network];
   const mounted = useRef(false);
   const activeOperation = useRef<ReturnType<typeof ethereumOperation> | null>(null);
 
@@ -53,10 +61,10 @@ export default function DirectPaymentPage() {
       const wallet = { address, provider };
       operation = ethereumOperation(
         () => mounted.current ? wallet : { address: null, provider: null },
-        PAYMENT_NETWORK,
+        paymentNetwork,
       );
       activeOperation.current = operation;
-      await operation.send(PAYMENT_TRANSACTION, operation.assertCurrent);
+      await operation.send({ ...PAYMENT_TRANSACTION, chainId: paymentNetwork.chainId }, operation.assertCurrent);
     } catch {} finally {
       operation?.dispose();
       if (activeOperation.current === operation) activeOperation.current = null;
@@ -75,7 +83,9 @@ export default function DirectPaymentPage() {
             alt="Artwork"
             draggable={false}
           />
-          <figcaption className="drif-artwork-caption">111k reserved relic</figcaption>
+          <figcaption className="drif-artwork-caption">
+            111k reserved relic{network === 'devnet' ? ' · Sepolia testnet' : ''}
+          </figcaption>
         </figure>
       </main>
       <button type="button" className="drif-notify-btn" onClick={() => { void pay(); }}>

@@ -22,6 +22,16 @@ const OWNER = '0x1111111111111111111111111111111111111111';
 const OTHER = '0x2222222222222222222222222222222222222222';
 const HASH = `0x${'ab'.repeat(32)}`;
 type Request = Parameters<EIP1193Provider['request']>[0];
+const NETWORKS = [
+  {
+    network: 'mainnet', chain: '0x1', wrongChain: '0xaa36a7', chainName: 'Ethereum',
+    rpcUrl: 'https://ethereum-rpc.publicnode.com', explorerUrl: 'https://etherscan.io',
+  },
+  {
+    network: 'devnet', chain: '0xaa36a7', wrongChain: '0x1', chainName: 'Sepolia',
+    rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com', explorerUrl: 'https://sepolia.etherscan.io',
+  },
+] as const;
 
 beforeEach(() => {
   ({ dom } = setupFrontendDom());
@@ -88,8 +98,9 @@ function deferred() {
   return { promise, resolve };
 }
 
-function paymentView() {
-  const view = render(createElement(DirectPaymentPage), { reactStrictMode: true });
+function paymentView(network: 'mainnet' | 'devnet' = 'mainnet') {
+  window.history.replaceState(null, '', network === 'devnet' ? '/111k/relics_devnet' : '/111k/relics');
+  const view = render(createElement(DirectPaymentPage, { network }), { reactStrictMode: true });
   const button = view.getByRole('button', { name: 'Pay 2.3 ETH' }) as HTMLButtonElement;
   return { ...view, button, pay: () => fireEvent.click(button) };
 }
@@ -106,6 +117,7 @@ test('payment page only shows the home link, static artwork, and unchanged Pay b
   const artwork = view.getByRole('img', { name: 'Artwork' }) as HTMLImageElement;
   assert.equal(artwork.src, 'https://wip.lil.org/111k/artwork_placeholder.png');
   assert.equal(artwork.closest('button, a'), null);
+  assert.equal(view.container.querySelector('figcaption')?.textContent, '111k reserved relic');
   assert.equal(view.container.querySelector('canvas'), null);
   assert.equal(document.body.classList.contains('drif-body'), true);
   fireEvent.click(view.getByRole('link', { name: 'Go to mons.shop home' }));
@@ -114,50 +126,123 @@ test('payment page only shows the home link, static artwork, and unchanged Pay b
   assert.equal(document.body.classList.contains('drif-body'), false);
 });
 
-test('authorized mainnet wallet sends exactly 2.3 ETH once while a request is open', async () => {
-  const wallet = walletFixture();
-  const pending = deferred();
-  wallet.handlers.set('eth_sendTransaction', () => pending.promise);
+test('devnet payment page labels its test network and preserves the payment button', () => {
+  const wallet = walletFixture({ chain: '0xaa36a7' });
   wallet.install();
-  const view = paymentView();
-  view.pay();
-  view.pay();
-  await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
-  view.pay();
-  assert.equal(view.button.disabled, false);
+  const view = paymentView('devnet');
+  assert.ok(view.getByText('111k reserved relic · Sepolia testnet'));
   assert.equal(view.button.textContent, 'Pay 2.3 ETH');
-  assert.equal(wallet.calls('eth_requestAccounts').length, 0);
-  assert.equal(wallet.calls('wallet_switchEthereumChain').length, 0);
-  assert.deepEqual(wallet.calls('eth_sendTransaction')[0].params, [{
-    from: OWNER,
-    to: '0x72D0c5623A05033F9eE4495D408BC6c05DF8367d',
-    data: '0x', value: '0x1feb3dd067660000', chainId: '0x1',
-  }]);
-  await act(async () => pending.resolve(HASH));
-  assert.equal(wallet.calls('eth_sendTransaction').length, 1);
-  assert.equal(wallet.listenerCount(), 0);
-  wallet.handlers.delete('eth_sendTransaction');
-  view.pay();
-  await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 2));
-  assert.equal(view.queryByRole('status'), null);
-  assert.equal(view.button.textContent, 'Pay 2.3 ETH');
-  assert.equal(window.localStorage.length, 0);
-  assert.equal(window.sessionStorage.length, 0);
+  assert.deepEqual(wallet.requests, []);
 });
 
-test('disconnected wallet connects and switches to mainnet before payment', async () => {
-  const wallet = walletFixture({ accounts: [], chain: '0xaa36a7' });
-  wallet.install();
-  const view = paymentView();
-  view.pay();
-  await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
-  const methods = wallet.requests.map(request => request.method);
-  assert.equal(wallet.calls('eth_requestAccounts').length, 1);
-  assert.ok(methods.indexOf('eth_requestAccounts') < methods.indexOf('wallet_switchEthereumChain'));
-  assert.ok(methods.indexOf('wallet_switchEthereumChain') < methods.indexOf('eth_sendTransaction'));
-  assert.deepEqual(wallet.calls('wallet_switchEthereumChain')[0].params, [{ chainId: '0x1' }]);
-  assert.equal(wallet.listenerCount(), 0);
-});
+for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NETWORKS) {
+  test(`authorized ${network} wallet sends exactly 2.3 ETH on its required chain once while a request is open`, async () => {
+    const wallet = walletFixture({ chain });
+    const pending = deferred();
+    wallet.handlers.set('eth_sendTransaction', () => pending.promise);
+    wallet.install();
+    const view = paymentView(network);
+    view.pay();
+    view.pay();
+    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
+    view.pay();
+    assert.equal(view.button.disabled, false);
+    assert.equal(view.button.textContent, 'Pay 2.3 ETH');
+    assert.equal(wallet.calls('eth_requestAccounts').length, 0);
+    assert.equal(wallet.calls('wallet_switchEthereumChain').length, 0);
+    assert.deepEqual(wallet.calls('eth_sendTransaction')[0].params, [{
+      from: OWNER,
+      to: '0x72D0c5623A05033F9eE4495D408BC6c05DF8367d',
+      data: '0x', value: '0x1feb3dd067660000', chainId: chain,
+    }]);
+    await act(async () => pending.resolve(HASH));
+    assert.equal(wallet.calls('eth_sendTransaction').length, 1);
+    assert.equal(wallet.listenerCount(), 0);
+    wallet.handlers.delete('eth_sendTransaction');
+    view.pay();
+    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 2));
+    assert.equal(view.queryByRole('status'), null);
+    assert.equal(view.button.textContent, 'Pay 2.3 ETH');
+    assert.equal(window.localStorage.length, 0);
+    assert.equal(window.sessionStorage.length, 0);
+  });
+
+  test(`disconnected wallet connects and switches to ${network} before payment`, async () => {
+    const wallet = walletFixture({ accounts: [], chain: wrongChain });
+    wallet.install();
+    const view = paymentView(network);
+    view.pay();
+    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
+    const methods = wallet.requests.map(request => request.method);
+    assert.equal(wallet.calls('eth_requestAccounts').length, 1);
+    assert.ok(methods.indexOf('eth_requestAccounts') < methods.indexOf('wallet_switchEthereumChain'));
+    assert.ok(methods.indexOf('wallet_switchEthereumChain') < methods.indexOf('eth_sendTransaction'));
+    assert.deepEqual(wallet.calls('wallet_switchEthereumChain')[0].params, [{ chainId: chain }]);
+    assert.equal((wallet.calls('eth_sendTransaction')[0].params as [{ chainId: string }])[0].chainId, chain);
+    assert.equal(wallet.listenerCount(), 0);
+  });
+
+  test(`unknown ${network} network uses its fixed add-network fallback`, async () => {
+    const wallet = walletFixture({ chain: wrongChain });
+    wallet.handlers.set('wallet_switchEthereumChain', () => {
+      wallet.handlers.delete('wallet_switchEthereumChain');
+      throw { code: 4902 };
+    });
+    wallet.install();
+    paymentView(network).pay();
+    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
+    assert.deepEqual(wallet.calls('wallet_addEthereumChain')[0].params, [{
+      chainId: chain, chainName,
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: [rpcUrl], blockExplorerUrls: [explorerUrl],
+    }]);
+    assert.equal((wallet.calls('eth_sendTransaction')[0].params as [{ chainId: string }])[0].chainId, chain);
+  });
+
+  test(`${network} payment does not submit if the wallet stays on the wrong network`, async () => {
+    const wallet = walletFixture({ chain: wrongChain });
+    wallet.handlers.set('wallet_switchEthereumChain', () => null);
+    wallet.install();
+    const view = paymentView(network);
+    view.pay();
+    await waitFor(() => assert.equal(wallet.calls('wallet_switchEthereumChain').length, 1));
+    await waitFor(() => assert.equal(wallet.listenerCount(), 0));
+    assert.equal(wallet.calls('eth_sendTransaction').length, 0);
+    assert.equal(view.getAllByRole('button').length, 1);
+  });
+
+  for (const method of ['eth_requestAccounts', 'wallet_switchEthereumChain', 'eth_sendTransaction']) {
+    test(`rejecting ${method} on ${network} stays silent and allows another Pay attempt`, async () => {
+      const wallet = walletFixture({ accounts: [], chain: wrongChain });
+      wallet.handlers.set(method, () => { throw { code: 4001 }; });
+      wallet.install();
+      const view = paymentView(network);
+      view.pay();
+      await waitFor(() => assert.equal(wallet.calls(method).length, 1));
+      await waitFor(() => assert.equal(wallet.listenerCount(), 0));
+      assert.equal(wallet.calls('eth_sendTransaction').length, method === 'eth_sendTransaction' ? 1 : 0);
+      assert.equal(view.queryByRole('alert'), null);
+      assert.equal(view.queryByRole('status'), null);
+      assert.equal(view.button.textContent, 'Pay 2.3 ETH');
+      wallet.handlers.delete(method);
+      view.pay();
+      await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, method === 'eth_sendTransaction' ? 2 : 1));
+    });
+  }
+
+  test(`switching away from ${network} during preparation prevents payment`, async () => {
+    const wallet = walletFixture({ chain });
+    const pending = deferred();
+    wallet.handlers.set('eth_chainId', () => pending.promise);
+    wallet.install();
+    paymentView(network).pay();
+    await waitFor(() => assert.equal(wallet.calls('eth_chainId').length, 1));
+    wallet.emit('chainChanged', wrongChain);
+    await act(async () => pending.resolve(chain));
+    assert.equal(wallet.calls('eth_sendTransaction').length, 0);
+    assert.equal(wallet.listenerCount(), 0);
+  });
+}
 
 test('a pending payment remains guarded after leaving and remounting the page', async () => {
   const wallet = walletFixture();
@@ -179,53 +264,6 @@ test('a pending payment remains guarded after leaving and remounting the page', 
   await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 2));
   assert.equal(wallet.listenerCount(), 0);
 });
-
-test('unknown mainnet network uses the fixed mainnet add-network fallback', async () => {
-  const wallet = walletFixture({ chain: '0xaa36a7' });
-  wallet.handlers.set('wallet_switchEthereumChain', () => {
-    wallet.handlers.delete('wallet_switchEthereumChain');
-    throw { code: 4902 };
-  });
-  wallet.install();
-  paymentView().pay();
-  await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
-  assert.deepEqual(wallet.calls('wallet_addEthereumChain')[0].params, [{
-    chainId: '0x1', chainName: 'Ethereum',
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: ['https://ethereum-rpc.publicnode.com'], blockExplorerUrls: ['https://etherscan.io'],
-  }]);
-});
-
-test('payment does not submit if the wallet stays on the wrong network', async () => {
-  const wallet = walletFixture({ chain: '0xaa36a7' });
-  wallet.handlers.set('wallet_switchEthereumChain', () => null);
-  wallet.install();
-  const view = paymentView();
-  view.pay();
-  await waitFor(() => assert.equal(wallet.calls('wallet_switchEthereumChain').length, 1));
-  await waitFor(() => assert.equal(wallet.listenerCount(), 0));
-  assert.equal(wallet.calls('eth_sendTransaction').length, 0);
-  assert.equal(view.getAllByRole('button').length, 1);
-});
-
-for (const method of ['eth_requestAccounts', 'wallet_switchEthereumChain', 'eth_sendTransaction']) {
-  test(`rejecting ${method} stays silent and allows another Pay attempt`, async () => {
-    const wallet = walletFixture({ accounts: [], chain: '0xaa36a7' });
-    wallet.handlers.set(method, () => { throw { code: 4001 }; });
-    wallet.install();
-    const view = paymentView();
-    view.pay();
-    await waitFor(() => assert.equal(wallet.calls(method).length, 1));
-    await waitFor(() => assert.equal(wallet.listenerCount(), 0));
-    assert.equal(wallet.calls('eth_sendTransaction').length, method === 'eth_sendTransaction' ? 1 : 0);
-    assert.equal(view.queryByRole('alert'), null);
-    assert.equal(view.queryByRole('status'), null);
-    assert.equal(view.button.textContent, 'Pay 2.3 ETH');
-    wallet.handlers.delete(method);
-    view.pay();
-    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, method === 'eth_sendTransaction' ? 2 : 1));
-  });
-}
 
 test('default injected provider takes precedence over announced wallets', async () => {
   const wallet = walletFixture();
