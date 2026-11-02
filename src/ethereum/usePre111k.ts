@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
@@ -12,62 +12,6 @@ type Attempt = {
   controller: AbortController;
   operation?: ReturnType<typeof ethereumOperation>;
 };
-const STORAGE_PREFIX = 'mons.shop.pre111k.last-transaction:';
-const LEGACY_STORAGE_PREFIX = 'mons.shop.pre111k.pending:';
-const STORAGE_EVENT = 'mons:pre111k-transaction';
-const memory = new WeakMap<Window, Map<string, string>>();
-
-function transactionHash(value: unknown): string | null {
-  return typeof value === 'string' && /^0x[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : null;
-}
-
-function readTransaction(scope: string | null): string | null {
-  if (!scope) return null;
-  const cached = memory.get(window)?.get(scope);
-  if (cached) return cached;
-  try { return transactionHash(window.localStorage.getItem(`${STORAGE_PREFIX}${scope}`)); }
-  catch { return null; }
-}
-
-function writeTransaction(scope: string, hash: string): boolean {
-  let saved = memory.get(window);
-  if (!saved) { saved = new Map(); memory.set(window, saved); }
-  let persisted = false;
-  try {
-    window.localStorage.setItem(`${STORAGE_PREFIX}${scope}`, hash);
-    saved.delete(scope);
-    persisted = true;
-  } catch { saved.set(scope, hash); }
-  window.dispatchEvent(new window.Event(STORAGE_EVENT));
-  return persisted;
-}
-
-function migrateTransaction(scope: string) {
-  try {
-    const legacy = window.localStorage.getItem(`${LEGACY_STORAGE_PREFIX}${scope}`);
-    if (legacy === null) return;
-    let hash: string | null = null;
-    try {
-      const value: unknown = JSON.parse(legacy);
-      if (value && typeof value === 'object' && 'hash' in value) hash = transactionHash(value.hash);
-    } catch {}
-    const reference = readTransaction(scope) ?? hash;
-    if (reference && transactionHash(window.localStorage.getItem(`${STORAGE_PREFIX}${scope}`)) !== reference &&
-      !writeTransaction(scope, reference)) return;
-    window.localStorage.removeItem(`${LEGACY_STORAGE_PREFIX}${scope}`);
-  } catch {}
-}
-
-function subscribeTransaction(listener: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null) memory.get(window)?.clear();
-    else if (event.key.startsWith(STORAGE_PREFIX)) memory.get(window)?.delete(event.key.slice(STORAGE_PREFIX.length));
-    listener();
-  };
-  window.addEventListener('storage', onStorage);
-  window.addEventListener(STORAGE_EVENT, listener);
-  return () => { window.removeEventListener('storage', onStorage); window.removeEventListener(STORAGE_EVENT, listener); };
-}
 
 export function usePre111k(network: Pre111kNetwork, accessCode: string | null, onAccessRejected: (code: string) => void) {
   const wallet = useMiNoteEthereumWallet(true);
@@ -91,7 +35,11 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
   const scope = config?.contractAddress && wallet.address ? `${config.chainId}:${config.contractAddress}:${wallet.address}` : null;
   const latestScope = useRef(scope);
   latestScope.current = scope;
-  const hash = useSyncExternalStore(subscribeTransaction, useCallback(() => readTransaction(scope), [scope]), () => null);
+  const [pendingTransaction, setPendingTransaction] = useState<{ scope: string; hash: string } | null>(null);
+  const transactionHash = pendingTransaction?.scope === scope ? pendingTransaction.hash : null;
+  const confirmation = useQuery({ queryKey: ['pre111k-confirmation', network, scope, transactionHash],
+    queryFn: ({ signal }) => pre111kApi.confirm(network, wallet.address!, transactionHash!, signal),
+    enabled: approved && Boolean(transactionHash), refetchInterval: 3_000, retry: 1 });
   const [inFlight, setInFlight] = useState(false);
   const [stage, setStage] = useState<string | null>(null);
   const [error, setError] = useState<{ scope: string; message: string } | null>(null);
@@ -103,8 +51,6 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
     current.operation?.dispose();
     if (mounted.current) { setInFlight(false); setStage(null); }
   }, []);
-
-  useEffect(() => { if (scope) migrateTransaction(scope); }, [scope]);
 
   useEffect(() => {
     const opened = approved && !previouslyApproved.current;
@@ -123,6 +69,7 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
 
   useEffect(() => {
     setError(null);
+    setPendingTransaction(null);
     return () => {
       latestAttempt.current = null;
       if (attempt.current) finish(attempt.current);
@@ -130,9 +77,13 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
   }, [network, scope, wallet.address, wallet.provider, accessCode, finish]);
 
   useEffect(() => {
+    if (confirmation.data?.transactionHash === transactionHash && confirmation.data.status !== 'pending') setPendingTransaction(null);
+  }, [confirmation.data, transactionHash]);
+
+  useEffect(() => {
+    if (!statusQuery.isSuccess || statusQuery.isStale || status?.wallet !== wallet.address || status.reservedRelics === null) return;
     const current = attempt.current;
-    if (!current || current.scope !== scope || current.nonce === null || !statusQuery.isSuccess || statusQuery.isStale ||
-      status?.wallet !== wallet.address || status.reservedRelics === null || status.reservedRelics <= current.nonce) return;
+    if (!current || current.scope !== scope || current.nonce === null || status.reservedRelics <= current.nonce) return;
     finish(current);
   }, [scope, status, statusQuery.isSuccess, statusQuery.isStale, wallet.address, stage, finish]);
 
@@ -179,7 +130,7 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
         setStage('Confirm in your wallet…');
       });
       if (!isLatest()) return;
-      writeTransaction(current.scope, transactionHash);
+      setPendingTransaction({ scope: current.scope, hash: transactionHash });
       void queryClient.invalidateQueries({ queryKey: ['pre111k', network] });
     } catch (cause) {
       if (!isCurrent()) return;
@@ -190,6 +141,6 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
     }
   };
 
-  return { wallet, status, statusQuery, inFlight, stage, reserve, transactionHash: hash,
+  return { wallet, status, statusQuery, inFlight, stage, reserve, transactionHash,
     error: wallet.error || (error?.scope === scope ? error.message : null) };
 }

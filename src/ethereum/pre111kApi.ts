@@ -1,4 +1,4 @@
-import { encodePre111kReservation, PRE111K_API_PATHS, PRE111K_TREASURY, type Pre111kAccessResponse, type Pre111kConfig, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus } from '../../shared/ethereum/pre111k';
+import { encodePre111kReservation, PRE111K_API_PATHS, PRE111K_TREASURY, type Pre111kAccessResponse, type Pre111kConfig, type Pre111kConfirmResponse, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus } from '../../shared/ethereum/pre111k';
 import { EthereumApiError } from './api';
 import { ethereumAddress } from './wallet';
 import { requestEthereumJson } from './request';
@@ -74,5 +74,14 @@ export const pre111kApi = {
   },
   async prepare(network: Pre111kNetwork, wallet: string, code: string, signal?: AbortSignal): Promise<Pre111kPrepareResponse> {
     return await request(PRE111K_API_PATHS.prepare, { network, wallet, code }, signal) as Pre111kPrepareResponse;
+  },
+  async confirm(network: Pre111kNetwork, wallet: string, transactionHash: string, signal?: AbortSignal): Promise<Pre111kConfirmResponse> {
+    const value = await request(PRE111K_API_PATHS.confirm, { network, wallet, transactionHash }, signal);
+    if (!record(value) || typeof value.status !== 'string' || !['pending', 'confirmed', 'failed'].includes(value.status) ||
+      typeof value.transactionHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value.transactionHash) ||
+      value.transactionHash.toLowerCase() !== transactionHash.toLowerCase() ||
+      !Number.isSafeInteger(value.confirmations) || Number(value.confirmations) < 0 ||
+      value.reservationNonce !== null && (!count(value.reservationNonce) || value.reservationNonce >= 18)) return invalid();
+    return { ...value, transactionHash: value.transactionHash.toLowerCase() } as Pre111kConfirmResponse;
   },
 };

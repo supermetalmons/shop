@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
-import { encodePre111kReservation, resolvePre111kConfig, type Pre111kNetwork, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
+import { encodePre111kReservation, resolvePre111kConfig, type Pre111kConfirmResponse, type Pre111kNetwork, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 import { pre111kApi } from '../src/ethereum/pre111kApi.ts';
 import { EthereumApiError } from '../src/ethereum/api.ts';
@@ -34,6 +34,7 @@ let prepareError: unknown;
 let verifiedCodes: string[];
 let verifyImpl: (code: string, signal?: AbortSignal) => Promise<{ ok: true }>;
 let statusImpl: (network: Pre111kNetwork, wallet: string | null) => Promise<Pre111kStatus>;
+let confirmImpl: typeof pre111kApi.confirm;
 let listeners: Map<string, Set<EthereumProviderListener>>;
 
 function deferred<T>() {
@@ -73,8 +74,10 @@ beforeEach(context => {
   };
   Object.defineProperty(window, 'ethereum', { configurable: true, value: provider });
   statusImpl = async (network, wallet) => status(network, wallet);
+  confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'pending', confirmations: 0, transactionHash, reservationNonce: null });
   t.mock.method(pre111kApi, 'verifyAccess', (code, signal) => { verifiedCodes.push(code); return verifyImpl(code, signal); });
   t.mock.method(pre111kApi, 'status', (network, wallet) => statusImpl(network, wallet));
+  t.mock.method(pre111kApi, 'confirm', (...args) => confirmImpl(...args));
   t.mock.method(pre111kApi, 'prepare', async (network, wallet, code) => {
     preparedCodes.push(code);
     preparedNonces.push(reserved);
@@ -148,27 +151,69 @@ for (const unavailable of ['API failure', 'disabled reservations', 'sold out'] a
   });
 }
 
-test('the active request blocks duplicate clicks and returning a hash immediately enables Reserve before mining', async () => {
-  const sent = deferred<string>();
-  sendImpl = () => sent.promise;
-  const view = page(); await view.ready();
-  view.reserve(); fireEvent.click(view.primary());
-  await waitFor(() => assert.equal(sendCount, 1));
-  assert.equal(view.primary().disabled, true);
-  assert.equal(window.localStorage.getItem(pendingKey()), null);
-  assert.equal(window.localStorage.getItem(lastTransactionKey()), null);
-  await act(async () => sent.resolve(`0x${'AB'.repeat(32)}`));
+for (const network of ['mainnet', 'devnet'] as const) {
+  test(`${network} shows a new transaction only until remount while allowing another reservation before mining`, async () => {
+    const sent = deferred<string>();
+    sendImpl = () => sent.promise;
+    const view = page(network); await view.ready();
+    view.reserve(); fireEvent.click(view.primary());
+    await waitFor(() => assert.equal(sendCount, 1));
+    assert.equal(view.primary().disabled, true);
+    assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
+    await act(async () => sent.resolve(`0x${'AB'.repeat(32)}`));
+    await view.ready();
+    assert.equal(window.localStorage.getItem(lastTransactionKey(network)), null);
+    assert.equal(window.localStorage.getItem(pendingKey(network)), null);
+    assert.equal(view.queryByText('1 reserved'), null);
+    assert.equal(view.queryByText('Relic reserved.'), null);
+    assert.equal(view.queryByRole('button', { name: 'Confirming reservation…' }), null);
+    assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `${status(network, OWNER).config.explorerUrl}/tx/${HASH}`);
+    view.unmount();
+    const remounted = page(network); await remounted.ready();
+    assert.equal(remounted.queryByRole('link', { name: 'View transaction ↗' }), null);
+    assert.equal(sendCount, 1);
+  });
+
+  for (const result of ['confirmed', 'failed'] as const) {
+    test(`${network} removes the transaction link when its own receipt is ${result}`, async t => {
+      t.mock.timers.enable({ apis: ['setInterval'] });
+      const view = page(network); await view.ready(); view.reserve();
+      await waitFor(() => view.getByRole('link', { name: 'View transaction ↗' }));
+      confirmImpl = async (_network, _wallet, transactionHash) => ({ status: result, confirmations: 3, transactionHash, reservationNonce: 0 });
+      await act(async () => { t.mock.timers.tick(3_000); });
+      await waitFor(() => assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }) === null, true));
+      assert.equal(view.queryByRole('region', { name: 'Reservation messages' }), null);
+      assert.equal(window.localStorage.getItem(lastTransactionKey(network)), null);
+    });
+  }
+}
+
+test('confirming an earlier transaction cannot remove the latest pending transaction link', async () => {
+  const firstConfirmation = deferred<Pre111kConfirmResponse>();
+  let firstSignal: AbortSignal | undefined;
+  confirmImpl = async (_network, _wallet, transactionHash, signal) => {
+    if (transactionHash === HASH) { firstSignal = signal; return firstConfirmation.promise; }
+    return { status: 'pending', confirmations: 0, transactionHash, reservationNonce: null };
+  };
+  const view = page(); await view.ready(); view.reserve();
+  await waitFor(() => assert.ok(firstSignal));
   await view.ready();
-  assert.equal(window.localStorage.getItem(lastTransactionKey()), HASH);
-  assert.equal(window.localStorage.getItem(pendingKey()), null);
-  assert.equal(view.queryByText('1 reserved'), null);
-  assert.equal(view.queryByText('Relic reserved.'), null);
-  assert.equal(view.queryByRole('button', { name: 'Confirming reservation…' }), null);
-  assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${HASH}`);
-  view.unmount();
-  const remounted = page(); await remounted.ready();
-  assert.equal(remounted.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${HASH}`);
-  assert.equal(sendCount, 1);
+  sendImpl = async () => NEXT_HASH;
+  view.reserve();
+  const link = () => view.queryByRole('link', { name: 'View transaction ↗' })?.getAttribute('href');
+  await waitFor(() => assert.equal(link(), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`));
+  assert.deepEqual(preparedNonces, [0, 0]);
+  assert.equal(firstSignal?.aborted, true);
+  reserved = 1;
+  await act(async () => {
+    firstConfirmation.resolve({ status: 'confirmed', confirmations: 3, transactionHash: HASH, reservationNonce: 0 });
+    await view.client.refetchQueries({ queryKey: ['pre111k', 'devnet', OWNER] });
+  });
+  await waitFor(() => view.getByText('1 reserved'));
+  assert.equal(link(), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`);
+  confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'failed', confirmations: 3, transactionHash, reservationNonce: 0 });
+  await act(async () => { await view.client.refetchQueries({ queryKey: ['pre111k-confirmation'] }); });
+  await waitFor(() => assert.equal(link(), undefined));
 });
 
 for (const { name, error, message } of [
@@ -184,6 +229,7 @@ for (const { name, error, message } of [
     await view.ready();
     assert.equal(window.localStorage.getItem(pendingKey()), null);
     assert.equal(window.localStorage.getItem(lastTransactionKey()), HASH);
+    assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
     assert.equal(view.queryByRole('button', { name: 'Track transaction' }), null);
     assert.equal(view.queryByRole('textbox', { name: 'Transaction hash' }), null);
     sendImpl = async () => NEXT_HASH;
@@ -191,7 +237,8 @@ for (const { name, error, message } of [
     await waitFor(() => assert.equal(sendCount, 2));
     await view.ready();
     assert.equal(view.queryByRole('alert'), null);
-    assert.equal(window.localStorage.getItem(lastTransactionKey()), NEXT_HASH);
+    assert.equal(window.localStorage.getItem(lastTransactionKey()), HASH);
+    assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`);
   });
 }
 
@@ -224,12 +271,12 @@ for (const completion of ['hash', 'error'] as const) {
     assert.equal(window.localStorage.getItem(lastTransactionKey()), null);
     await act(async () => nextSend.resolve(NEXT_HASH));
     await view.ready();
-    assert.equal(window.localStorage.getItem(lastTransactionKey()), NEXT_HASH);
+    assert.equal(window.localStorage.getItem(lastTransactionKey()), null);
     assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`);
   });
 }
 
-test('a late hash still updates the informational link after its count releases Reserve', async t => {
+test('a late hash is tracked by receipt even when a count increase already released Reserve', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   const sent = deferred<string>();
   sendImpl = () => sent.promise;
@@ -241,8 +288,11 @@ test('a late hash still updates the informational link after its count releases 
   assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
   await act(async () => sent.resolve(HASH));
   assert.equal(view.primary().disabled, false);
-  assert.equal(window.localStorage.getItem(lastTransactionKey()), HASH);
-  assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${HASH}`);
+  assert.equal(window.localStorage.getItem(lastTransactionKey()), null);
+  view.getByRole('link', { name: 'View transaction ↗' });
+  confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'confirmed', confirmations: 3, transactionHash, reservationNonce: 0 });
+  await act(async () => { t.mock.timers.tick(3_000); });
+  await waitFor(() => assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }) === null, true));
   assert.equal(view.queryByRole('alert'), null);
   assert.equal(sendCount, 1);
 });
@@ -279,7 +329,7 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
     await act(async () => oldSend.resolve(HASH));
     assert.equal(current.queryByRole('alert'), null);
     assert.equal(current.primary().disabled, false);
-    assert.equal(window.localStorage.getItem(lastTransactionKey(currentNetwork, address)), NEXT_HASH);
+    assert.equal(window.localStorage.getItem(lastTransactionKey(currentNetwork, address)), null);
     assert.equal(current.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `${currentNetwork === 'mainnet' ? 'https://etherscan.io' : 'https://sepolia.etherscan.io'}/tx/${NEXT_HASH}`);
     if (interruption === 'account change' || interruption === 'network change') {
       assert.equal(window.localStorage.getItem(lastTransactionKey()), null);
@@ -287,19 +337,16 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
   });
 }
 
-for (const { name, legacy, expectedHash } of [
-  { name: 'valid hash', legacy: JSON.stringify({ hash: `0x${'AB'.repeat(32)}`, nonce: 0, submittedAt: 1 }), expectedHash: HASH },
-  { name: 'missing hash', legacy: JSON.stringify({ hash: null, nonce: 0, submittedAt: 1 }), expectedHash: null },
-  { name: 'invalid hash', legacy: JSON.stringify({ hash: 'not-a-hash', nonce: 0, submittedAt: 1 }), expectedHash: null },
-  { name: 'malformed JSON', legacy: '{', expectedHash: null },
+for (const { name, legacy } of [
+  { name: 'valid hash', legacy: JSON.stringify({ hash: `0x${'AB'.repeat(32)}`, nonce: 0, submittedAt: 1 }) },
+  { name: 'missing hash', legacy: JSON.stringify({ hash: null, nonce: 0, submittedAt: 1 }) },
+  { name: 'invalid hash', legacy: JSON.stringify({ hash: 'not-a-hash', nonce: 0, submittedAt: 1 }) },
+  { name: 'malformed JSON', legacy: '{' },
 ]) {
-  test(`a legacy pending record with ${name} is removed without locking reservations`, async () => {
+  test(`a legacy pending record with ${name} never restores a transaction link or locks reservations`, async () => {
     window.localStorage.setItem(pendingKey(), legacy);
     const view = page(); await view.ready();
-    assert.equal(window.localStorage.getItem(pendingKey()), null);
-    assert.equal(window.localStorage.getItem(lastTransactionKey()), expectedHash);
-    const link = view.queryByRole('link', { name: 'View transaction ↗' });
-    assert.equal(link?.getAttribute('href') ?? null, expectedHash ? `https://sepolia.etherscan.io/tx/${expectedHash}` : null);
+    assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
     assert.equal(view.queryByRole('button', { name: 'Confirming reservation…' }), null);
     assert.equal(view.queryByText('Relic reserved.'), null);
     assert.equal(sendCount, 0);
@@ -307,13 +354,11 @@ for (const { name, legacy, expectedHash } of [
   });
 }
 
-test('a legacy hash cannot overwrite the current last transaction', async () => {
+test('previously saved transactions never restore a link', async () => {
   window.localStorage.setItem(lastTransactionKey(), NEXT_HASH);
   window.localStorage.setItem(pendingKey(), JSON.stringify({ hash: HASH, nonce: 0, submittedAt: 1 }));
   const view = page(); await view.ready();
-  assert.equal(window.localStorage.getItem(pendingKey()), null);
-  assert.equal(window.localStorage.getItem(lastTransactionKey()), NEXT_HASH);
-  assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`);
+  assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
 });
 
 test('a count decrease removes the old count without inventing a settled success state', async t => {
@@ -327,7 +372,7 @@ test('a count decrease removes the old count without inventing a settled success
   assert.equal(view.queryByText('0 reserved'), null);
   assert.equal(view.queryByText('Relic reserved.'), null);
   assert.equal(view.primary().disabled, false);
-  assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${HASH}`);
+  assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
 });
 
 test('switching accounts clears old counts until the new address finishes loading', async () => {

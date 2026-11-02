@@ -26,13 +26,13 @@ seconds while an unlocked wallet is connected.
 The storefront is busy only during preparation and the wallet request. A returned
 hash or wallet error releases the button immediately; an increased verified count
 also releases it if the wallet response is delayed. Each new reservation still
-fetches and validates a fresh count and authorization. The UI does not wait for
-receipt confirmation or show a persistent success claim.
+fetches and validates a fresh count and authorization. The Reserve button does not
+wait for receipt confirmation, and the UI does not show a persistent success claim.
 
-The last valid transaction hash is stored per network, contract, and wallet as an
-explorer reference. Legacy pending records are imported as references and removed;
-they never restore a reservation lock. The storefront does not poll receipts or
-expose manual transaction tracking controls.
+The transaction explorer link appears only for a transaction sent from the current
+page. Its hash is checked every three seconds until the confirmation endpoint
+reports it confirmed or failed, then the link disappears. Refreshing or leaving
+the page clears the link; previously stored hashes are ignored.
 
 The API routes are:
 

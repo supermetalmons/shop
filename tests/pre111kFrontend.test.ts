@@ -115,3 +115,36 @@ test('each reservation preparation includes the saved code alongside its network
     assert.equal(result.wallet, wallet);
   }
 });
+
+test('transaction confirmation posts its network, wallet and hash and accepts pending or terminal results', async t => {
+  let expectedNetwork: Pre111kNetwork = 'mainnet';
+  let response = { status: 'pending', confirmations: 0, transactionHash: hash, reservationNonce: null as number | null };
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.match(String(url), /\/ethereum\/pre111k\/confirm$/);
+    assert.equal(options?.method, 'POST');
+    assert.equal(options?.cache, 'no-store');
+    assert.equal(new Headers(options?.headers).get('X-Mons-CSRF'), '1');
+    assert.deepEqual(JSON.parse(String(options?.body)), { network: expectedNetwork, wallet, transactionHash: hash });
+    return Response.json(response);
+  });
+  for (const network of ['mainnet', 'devnet'] as const) {
+    expectedNetwork = network;
+    for (const status of ['pending', 'confirmed', 'failed']) {
+      response = { ...response, status, confirmations: status === 'pending' ? 0 : 3, reservationNonce: status === 'pending' ? null : 2 };
+      assert.deepEqual(await pre111kApi.confirm(network, wallet, hash), response);
+    }
+  }
+});
+
+test('transaction confirmation rejects mismatched hashes and malformed responses', async t => {
+  const valid = { status: 'confirmed', confirmations: 3, transactionHash: hash, reservationNonce: 2 };
+  let response: unknown;
+  t.mock.method(globalThis, 'fetch', async () => Response.json(response));
+  for (const invalid of [null, {}, { ...valid, transactionHash: `0x${'bb'.repeat(32)}` },
+    { ...valid, transactionHash: 'invalid' }, { ...valid, status: 'success' }, { ...valid, status: ['confirmed'] },
+    { ...valid, confirmations: -1 }, { ...valid, confirmations: 1.5 },
+    { ...valid, reservationNonce: 18 }, { ...valid, reservationNonce: -1 }]) {
+    response = invalid;
+    await assert.rejects(pre111kApi.confirm('devnet', wallet, hash), /invalid response/i);
+  }
+});

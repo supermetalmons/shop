@@ -31,6 +31,9 @@ test('relic routes scope authorizations and transaction links without retaining 
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
   t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
+  t.mock.method(pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({
+    status: 'pending', confirmations: 0, transactionHash, reservationNonce: null,
+  }));
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState(null, '', '/111k/relics');
   const { act, fireEvent, getByRole, getByText, queryByRole, waitFor } = await import('@testing-library/react');
@@ -159,13 +162,13 @@ test('relic routes scope authorizations and transaction links without retaining 
     await act(async () => pendingSend!.resolve(DEVNET_HASH));
     pendingSend = null;
     await ready('devnet');
-    assert.equal(window.localStorage.getItem(transactionKey('devnet')), DEVNET_HASH);
+    assert.equal(window.localStorage.getItem(transactionKey('devnet')), null);
     assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${DEVNET_HASH}`);
     assert.equal(window.localStorage.getItem(`mons.shop.pre111k.pending:1:${contracts.mainnet}:${OWNER}`), null);
     assert.equal(window.localStorage.getItem(`mons.shop.pre111k.pending:11155111:${contracts.devnet}:${OWNER}`), null);
   });
 
-  await t.test('the same wallet keeps distinct explorer links when navigating between networks', async () => {
+  await t.test('transaction links only appear for the current visit when navigating between networks', async () => {
     await act(async () => navigate('/111k/relics'));
     await ready('mainnet');
     assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
@@ -173,14 +176,14 @@ test('relic routes scope authorizations and transaction links without retaining 
     fireEvent.click(reserveButton('mainnet'));
     await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3));
     await ready('mainnet');
-    assert.equal(window.localStorage.getItem(transactionKey('mainnet')), HASH);
+    assert.equal(window.localStorage.getItem(transactionKey('mainnet')), null);
     assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://etherscan.io/tx/${HASH}`);
     await act(async () => navigate('/111k/relics_devnet'));
     await ready('devnet');
-    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${DEVNET_HASH}`);
+    assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
     await act(async () => navigate('/111k/relics'));
     await ready('mainnet');
-    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://etherscan.io/tx/${HASH}`);
+    assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
     assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3);
   });
 });
