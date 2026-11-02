@@ -20,6 +20,12 @@ secrets.
 
 ## Frontend Worker
 
+Bundle validation requires `ETHEREUM_PRE111K_ACCESS_CODES` as the same JSON array
+configured in the API Worker's secret. Supply it through a private environment
+variable or the gitignored `cloud/workers/frontend/.env.bundle-scan` file. Only
+the validator loads that file; Vite and the frontend Worker do not. Missing or
+invalid scan configuration fails validation, and diagnostics never print codes.
+
 ```bash
 npm run check:frontend
 npm run dry-run:frontend

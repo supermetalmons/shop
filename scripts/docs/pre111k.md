@@ -103,6 +103,12 @@ includes it with every preparation request. The local
 development API uses the fixture code `LOCALRELICS`; production codes must not be
 used in test fixtures or committed assets.
 
+The browser bundle validator reads its code scan values from the private
+`ETHEREUM_PRE111K_ACCESS_CODES` environment variable. Local release checks also
+load the gitignored `cloud/workers/frontend/.env.bundle-scan` file. Keep that
+private configuration in sync with the Worker secret when changing codes;
+validation errors report only a generic category, never a code value.
+
 Use the dedicated pre111k deployment workflow; do not replace NFT111K, reset its
 commerce state, allocate relic claims, or modify its metadata. Validate the
 expected chain, constructor values, price, signer, and deployment bytecode before

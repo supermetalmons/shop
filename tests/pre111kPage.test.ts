@@ -11,7 +11,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 let { dom } = setupFrontendDom();
 const imports = registerHooks({ load(url, context, next) { return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context); } });
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
-const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+const { QueryClient, QueryClientProvider, focusManager, onlineManager } = await import('@tanstack/react-query');
 const { default: DirectPaymentPage } = await import('../src/ethereum/DirectPaymentPage.tsx');
 const { BackgroundBlurProvider } = await import('../src/components/BackgroundBlurLayer.tsx');
 imports.deregister(); dom.window.close();
@@ -81,7 +81,13 @@ beforeEach(context => {
       transaction: { to: CONTRACT, data: encodePre111kReservation(reserved, deadline, signature), value: `0x${BigInt(config.priceWei).toString(16)}`, chainId: config.chainId } };
   });
 });
-afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
+afterEach(() => {
+  cleanup();
+  clients.splice(0).forEach(client => client.clear());
+  focusManager.setFocused(undefined);
+  onlineManager.setOnline(true);
+  dom.window.close();
+});
 function page(network: Pre111kNetwork = 'devnet', restore = true) {
   if (restore) window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
@@ -398,13 +404,87 @@ test('a code rejected during preparation relocks the page before wallet submissi
   assert.equal(window.localStorage.getItem(pendingKey()), null);
 });
 
-test('pending reservations continue confirming under the locked gate without another payment', async () => {
+test('pending reservations keep confirming under the locked gate without recurring status reads', async t => {
   window.localStorage.removeItem(ACCESS_KEY);
   window.localStorage.setItem(pendingKey(), JSON.stringify({ hash: HASH, nonce: 0, submittedAt: Date.now() }));
-  confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'confirmed', confirmations: 3, reservationNonce: 0, transactionHash });
+  const firstConfirmation = deferred<Pre111kConfirmResponse>();
+  let confirmations = 0;
+  let statusReads = 0;
+  statusImpl = async (network, wallet) => { statusReads++; return status(network, wallet); };
+  confirmImpl = async (_network, _wallet, transactionHash) => {
+    confirmations++;
+    if (confirmations === 1) return firstConfirmation.promise;
+    reserved = 1;
+    return { status: 'confirmed', confirmations: 3, reservationNonce: 0, transactionHash };
+  };
   const view = page();
-  await waitFor(() => assert.equal(window.localStorage.getItem(pendingKey()), null));
+  await waitFor(() => assert.equal(confirmations, 1));
+  const initialStatusReads = statusReads;
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  await act(async () => firstConfirmation.resolve({ status: 'pending', confirmations: 1, reservationNonce: 0, transactionHash: HASH }));
+  await act(async () => { t.mock.timers.tick(3_000); });
+  assert.equal(confirmations, 2);
+  assert.equal(window.localStorage.getItem(pendingKey()), null);
+  assert.equal(statusReads, initialStatusReads + 1);
+  await act(async () => { t.mock.timers.tick(30_000); });
+  assert.equal(statusReads, initialStatusReads + 1);
+  assert.equal(confirmations, 2);
   view.getByRole('textbox', { name: 'Secret code' });
   assert.deepEqual(preparedCodes, []);
   assert.equal(sendCount, 0);
+});
+
+test('locked pages preload status once, then poll only while the gate is open', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
+  window.localStorage.removeItem(ACCESS_KEY);
+  let requests = 0;
+  statusImpl = async (network, wallet) => { requests++; return status(network, wallet); };
+  const view = page('devnet', false);
+  await waitFor(() => assert.equal(view.client.getQueryState(['pre111k', 'devnet', null])?.status, 'success'));
+  assert.equal(requests, 1);
+  await act(async () => {
+    t.mock.timers.tick(30_000);
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    onlineManager.setOnline(false);
+    onlineManager.setOnline(true);
+  });
+  assert.equal(requests, 1);
+
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => assert.equal(requests, 2));
+  assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true);
+  await act(async () => { t.mock.timers.tick(10_000); });
+  assert.equal(requests, 3);
+
+  await act(async () => {
+    window.localStorage.removeItem(ACCESS_KEY);
+    window.dispatchEvent(new dom.window.StorageEvent('storage', { key: ACCESS_KEY }));
+  });
+  view.getByRole('textbox', { name: 'Secret code' });
+  await act(async () => { t.mock.timers.tick(30_000); });
+  assert.equal(requests, 3);
+});
+
+test('a failed locked prefetch does not retry until the gate opens', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  window.localStorage.removeItem(ACCESS_KEY);
+  let requests = 0;
+  statusImpl = async () => { requests++; throw new Error('Temporarily unavailable'); };
+  const view = page('devnet', false);
+  await act(async () => {});
+  assert.equal(requests, 1);
+  assert.equal(view.client.getQueryState(['pre111k', 'devnet', null])?.status, 'error');
+  await act(async () => { t.mock.timers.tick(30_000); });
+  assert.equal(requests, 1);
+
+  statusImpl = async (network, wallet) => { requests++; return status(network, wallet); };
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await act(async () => {});
+  assert.equal(requests, 2);
+  assert.equal(view.client.getQueryState(['pre111k', 'devnet', null])?.status, 'success');
 });

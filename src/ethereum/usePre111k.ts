@@ -69,8 +69,11 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
   const attempt = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
   const queryKey = ['pre111k', network, wallet.address] as const;
+  const approved = Boolean(accessCode);
+  const previouslyApproved = useRef(approved);
   const statusQuery = useQuery({ queryKey, queryFn: ({ signal }) => pre111kApi.status(network, wallet.address, signal),
-    refetchInterval: 10_000, staleTime: 5_000, retry: 1 });
+    refetchInterval: approved ? 10_000 : false, refetchOnWindowFocus: approved, refetchOnReconnect: approved,
+    staleTime: 5_000, retry: approved ? 1 : false });
   const status = statusQuery.data;
   const config = status?.config;
   const scope = config?.contractAddress && wallet.address ? `${config.chainId}:${config.contractAddress}:${wallet.address}` : null;
@@ -81,6 +84,12 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
   const [feedback, setFeedback] = useState<{ scope: string | null; error: boolean; message: string } | null>(null);
   const feedbackForScope = feedback?.scope === scope ? feedback : null;
   const [confirmationRetry, setConfirmationRetry] = useState(0);
+
+  useEffect(() => {
+    const opened = approved && !previouslyApproved.current;
+    previouslyApproved.current = approved;
+    if (opened && statusQuery.isStale) void statusQuery.refetch();
+  }, [approved, statusQuery.isStale, statusQuery.refetch]);
 
   useEffect(() => {
     mounted.current = true;
