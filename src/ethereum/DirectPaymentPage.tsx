@@ -15,17 +15,19 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const reservationSection = useRef<HTMLElement>(null);
   const previouslyApproved = useRef(approved);
   const firstWallet = useRef<HTMLButtonElement>(null);
-  const connectButton = useRef<HTMLButtonElement>(null);
+  const reserveButton = useRef<HTMLButtonElement>(null);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [replacementHash, setReplacementHash] = useState('');
   const [confirmStop, setConfirmStop] = useState(false);
   const choosing = wallet.status === 'choosing';
   const connecting = !wallet.ready || wallet.status === 'connecting' || wallet.status === 'restoring';
+  const connected = wallet.status === 'connected' && Boolean(wallet.address);
   const count = status?.reservedRelics;
   const available = status?.config.enabled && status.remainingRelics !== null && status.remainingRelics > 0 && !model.statusQuery.isError;
   const soldOut = status?.remainingRelics === 0;
   const price = network === 'mainnet' ? '2.3' : '0.0023';
   const explorerLink = pending?.hash && status?.config.explorerUrl ? `${status.config.explorerUrl}/tx/${pending.hash}` : null;
+  const hasFeedback = Boolean(model.statusQuery.isError || status && !status.config.enabled || model.error || model.message || pending && (explorerLink || !model.inFlight));
 
   useEffect(() => {
     document.body.classList.add('relic-page-body');
@@ -42,7 +44,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
 
   useEffect(() => { if (approved && choosing) firstWallet.current?.focus(); }, [approved, choosing, wallet.wallets.length]);
   useEffect(() => { setRecoveryOpen(false); setReplacementHash(''); setConfirmStop(false); }, [network, wallet.address, pending?.hash]);
-  const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => connectButton.current?.focus()); };
+  const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => reserveButton.current?.focus()); };
 
   return (
     <div className={`relic-page${approved ? '' : ' relic-page--locked'}`}>
@@ -51,17 +53,19 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
         <main className="relic-page__main">
           <figure className="relic-page__showcase">
             <img className="relic-page__artwork" src="https://wip.lil.org/111k/artwork_placeholder.png" width={932} height={1006} alt="Artwork" draggable={false} />
-            {network === 'devnet' ? <figcaption className="relic-page__caption">Sepolia testnet</figcaption> : null}
           </figure>
         </main>
         <section ref={reservationSection} className="relic-preorder" aria-label="Reserve a relic" tabIndex={-1}>
+          <button ref={reserveButton} type="button" className="relic-preorder__reserve" disabled={!approved || connecting || choosing || model.inFlight || Boolean(pending) || (connected && !available)}
+            onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
+            {model.stage ?? (pending ? pending.hash ? 'Confirming reservation…' : 'Check your wallet…' : connecting ? 'Connecting…' : connected && soldOut ? 'All relics reserved' : `Reserve Relic · ${price} ETH`)}
+          </button>
           <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
             {wallet.address ? <div className="relic-preorder__connection">
+              {!model.statusQuery.isError && typeof count === 'number' && count > 0 ? <span aria-live="polite">{count} reserved</span> : null}
               <span className="relic-preorder__address" title={wallet.address}>{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
-              <span aria-live="polite">{model.statusQuery.isError || status?.config.contractAddress === null ? 'Reservations unavailable' : count === null || count === undefined ? 'Loading reservations…' : `${count} reserved`}</span>
-              <button type="button" className="relic-preorder__text-button" onClick={wallet.disconnect}>Disconnect</button>
-            </div> : !choosing ? <button ref={connectButton} type="button" className="relic-preorder__text-button"
-              disabled={connecting || model.inFlight} onClick={wallet.connect}>{connecting ? 'Connecting…' : 'Connect wallet'}</button> : null}
+              <button type="button" className="relic-preorder__text-button relic-preorder__disconnect" onClick={wallet.disconnect}>Disconnect</button>
+            </div> : null}
             {choosing ? <div className="relic-preorder__choices" role="group" aria-label="Select Ethereum wallet" onKeyDown={event => {
               if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelChoice(); }
             }}>
@@ -74,11 +78,8 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
               <button type="button" className="relic-preorder__text-button" onClick={cancelChoice}>Cancel</button>
             </div> : null}
           </div>
-          <button type="button" className="relic-preorder__reserve" disabled={!approved || !available || !wallet.ready || wallet.status !== 'connected' || !wallet.address || connecting || choosing || model.inFlight || Boolean(pending)}
-            onClick={() => { void model.reserve(); }}>
-            {model.stage ?? (pending ? pending.hash ? 'Confirming reservation…' : 'Check your wallet…' : soldOut ? 'All relics reserved' : `Reserve relic · ${price} ETH`)}
-          </button>
-          <div className="relic-preorder__feedback" aria-live="polite">
+          <div className="relic-preorder__feedback" aria-live="polite" tabIndex={hasFeedback ? 0 : undefined}
+            role={hasFeedback ? 'region' : undefined} aria-label={hasFeedback ? 'Reservation messages' : undefined}>
             {model.statusQuery.isError ? <p>Couldn’t load reservations. <button type="button" className="relic-preorder__text-button" onClick={() => { void model.statusQuery.refetch(); }}>Retry</button></p>
               : status && !status.config.enabled ? <p>Reservations are not open yet.</p> : null}
             {model.error ? <p role="alert">{model.error}</p> : model.message ? <p role="status">{model.message}</p> : null}

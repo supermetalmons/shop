@@ -93,8 +93,13 @@ test('relic routes scope backend authorizations and preserve wallet submissions 
     clients.forEach(client => client.clear());
     imports.deregister(); Reflect.deleteProperty(globalThis, '__directPaymentRoutingTest'); dom.window.close();
   });
-  const reserveButton = (network: Pre111kNetwork) => getByRole(document.body, 'button', { name: `Reserve relic · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement;
-  const ready = async (network: Pre111kNetwork) => { await waitFor(() => assert.equal(reserveButton(network).disabled, false), { timeout: 3_000 }); };
+  const reserveButton = (network: Pre111kNetwork) => getByRole(document.body, 'button', { name: `Reserve Relic · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement;
+  const ready = async (network: Pre111kNetwork) => {
+    await waitFor(() => {
+      getByRole(document.body, 'button', { name: 'Disconnect' });
+      assert.equal(reserveButton(network).disabled, false);
+    }, { timeout: 3_000 });
+  };
   await act(async () => { await import('../src/main.tsx'); });
   await ready('mainnet');
 
@@ -132,7 +137,7 @@ test('relic routes scope backend authorizations and preserve wallet submissions 
     fireEvent.click(reserveButton('mainnet'));
     await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 1));
     await act(async () => navigate('/111k/relics_devnet'));
-    await waitFor(() => getByText(document.body, '0 reserved'));
+    await waitFor(() => getByText(document.body, '0x1111…1111'));
     assert.equal(reserveButton('devnet').disabled, true);
     fireEvent.click(reserveButton('devnet'));
     assert.equal(prepareCalls, 3);
