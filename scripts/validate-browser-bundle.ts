@@ -15,6 +15,9 @@ const forbiddenStrings = [
   'api.mainnet-beta.solana.com',
   'api.devnet.solana.com',
   'api.testnet.solana.com',
+  'ETHEREUM_PRE111K_ACCESS_CODES',
+  'DRILADY',
+  'DRIFELLA',
 ];
 
 const forbiddenPatterns = [
@@ -40,5 +43,5 @@ if (violations.length) {
   violations.forEach(({ path, label }) => console.error(`[browser-bundle] Found ${label} in ${path}`));
   process.exitCode = 1;
 } else {
-  console.log('[browser-bundle] No direct Alchemy, OpenSea, or Helius credentials/endpoints, Solana public RPC hosts, or Google API keys found.');
+  console.log('[browser-bundle] No private credentials, relic access codes, or direct provider endpoints found.');
 }

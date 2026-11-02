@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { encodePre111kReservation, resolvePre111kConfig, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
 import { checkedPre111kReservation, pre111kApi } from '../src/ethereum/pre111kApi.ts';
+import { EthereumApiError } from '../src/ethereum/api.ts';
 
 const wallet = '0x1111111111111111111111111111111111111111';
 const contract = '0x3333333333333333333333333333333333333333';
@@ -82,5 +83,52 @@ test('confirmation validates transaction identity, finality and reservation nonc
   ]) {
     response = invalid;
     await assert.rejects(pre111kApi.confirm('devnet', wallet, hash));
+  }
+});
+
+test('access verification posts only the code with CSRF and no-cache request conventions', async t => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.match(String(url), /\/ethereum\/pre111k\/access$/);
+    assert.equal(options?.method, 'POST');
+    assert.equal(options?.cache, 'no-store');
+    assert.equal(new Headers(options?.headers).get('X-Mons-CSRF'), '1');
+    assert.deepEqual(JSON.parse(String(options?.body)), { code: 'TESTPASS' });
+    return Response.json({ ok: true });
+  });
+  assert.deepEqual(await pre111kApi.verifyAccess('TESTPASS'), { ok: true });
+});
+
+test('access verification rejects malformed success responses', async t => {
+  let response: unknown;
+  t.mock.method(globalThis, 'fetch', async () => Response.json(response));
+  for (const invalid of [{}, { ok: false }, { ok: 'true' }, null, []]) {
+    response = invalid;
+    await assert.rejects(pre111kApi.verifyAccess('TESTPASS'), /invalid response/i);
+  }
+});
+
+test('access rejection and service outages retain distinct structured API errors', async t => {
+  let status = 401;
+  let code = 'unauthenticated';
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: false, error: { code, message: 'Access unavailable.' } }, { status }));
+  for (const expected of [{ status: 401, code: 'unauthenticated' }, { status: 503, code: 'unavailable' }]) {
+    ({ status, code } = expected);
+    await assert.rejects(pre111kApi.verifyAccess('TESTPASS'), error =>
+      error instanceof EthereumApiError && error.status === status && error.code === code && error.message === 'Access unavailable.');
+  }
+});
+
+test('each reservation preparation includes the saved code alongside its network and wallet', async t => {
+  let expectedNetwork: Pre111kNetwork = 'mainnet';
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.match(String(url), /\/ethereum\/pre111k\/prepare$/);
+    assert.deepEqual(JSON.parse(String(options?.body)), { network: expectedNetwork, wallet, code: 'TESTPASS' });
+    return Response.json(prepared(expectedNetwork));
+  });
+  for (const network of ['mainnet', 'devnet'] as const) {
+    expectedNetwork = network;
+    const result = await pre111kApi.prepare(network, wallet, 'TESTPASS');
+    assert.equal(result.network, network);
+    assert.equal(result.wallet, wallet);
   }
 });

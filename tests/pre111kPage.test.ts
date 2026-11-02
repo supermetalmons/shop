@@ -5,6 +5,7 @@ import { createElement } from 'react';
 import { encodePre111kReservation, resolvePre111kConfig, type Pre111kNetwork, type Pre111kStatus, type Pre111kConfirmResponse } from '../shared/ethereum/pre111k.ts';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 import { pre111kApi } from '../src/ethereum/pre111kApi.ts';
+import { EthereumApiError } from '../src/ethereum/api.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 let { dom } = setupFrontendDom();
@@ -18,19 +19,26 @@ const OWNER = '0x1111111111111111111111111111111111111111';
 const OTHER = '0x2222222222222222222222222222222222222222';
 const CONTRACT = '0x3333333333333333333333333333333333333333';
 const HASH = `0x${'ab'.repeat(32)}`;
+const ACCESS_KEY = 'mons.shop.pre111k.access-code';
+const ACCESS_CODE = 'TESTPASS';
 const clients: InstanceType<typeof QueryClient>[] = [];
 let address = OWNER;
 let reserved = 0;
 let sendError: unknown;
 let sendCount = 0;
+let preparedCodes: string[];
+let prepareError: unknown;
+let verifiedCodes: string[];
+let verifyImpl: (code: string, signal?: AbortSignal) => Promise<{ ok: true }>;
 let statusImpl: (network: Pre111kNetwork, wallet: string | null) => Promise<Pre111kStatus>;
 let confirmImpl: (network: Pre111kNetwork, wallet: string, hash: string) => Promise<Pre111kConfirmResponse>;
 let listeners: Map<string, Set<EthereumProviderListener>>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 function status(network: Pre111kNetwork, wallet: string | null): Pre111kStatus {
   return { config: resolvePre111kConfig(network, { contractAddress: CONTRACT, enabled: true }), wallet,
@@ -42,6 +50,9 @@ beforeEach(context => {
   ({ dom } = setupFrontendDom());
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   address = OWNER; reserved = 0; sendError = null; sendCount = 0; listeners = new Map();
+  preparedCodes = []; prepareError = null; verifiedCodes = [];
+  verifyImpl = async () => ({ ok: true });
+  window.localStorage.setItem(ACCESS_KEY, ACCESS_CODE);
   let chain = '0xaa36a7';
   const provider: EIP1193Provider = {
     async request({ method, params }) {
@@ -57,9 +68,12 @@ beforeEach(context => {
   Object.defineProperty(window, 'ethereum', { configurable: true, value: provider });
   statusImpl = async (network, wallet) => status(network, wallet);
   confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'pending', confirmations: 0, reservationNonce: null, transactionHash });
+  t.mock.method(pre111kApi, 'verifyAccess', (code, signal) => { verifiedCodes.push(code); return verifyImpl(code, signal); });
   t.mock.method(pre111kApi, 'status', (network, wallet) => statusImpl(network, wallet));
   t.mock.method(pre111kApi, 'confirm', (network, wallet, hash) => confirmImpl(network, wallet, hash));
-  t.mock.method(pre111kApi, 'prepare', async (network, wallet) => {
+  t.mock.method(pre111kApi, 'prepare', async (network, wallet, code) => {
+    preparedCodes.push(code);
+    if (prepareError) throw prepareError;
     const deadline = Math.floor(Date.now() / 1000) + 600;
     const signature = `0x${'11'.repeat(65)}`;
     const config = status(network, wallet).config;
@@ -180,4 +194,217 @@ test('undeployed mainnet remains closed and never displays a fake count', async 
   assert.equal(view.queryByText('0 reserved'), null);
   assert.equal(view.queryByText('Loading reservations…'), null);
   assert.equal((view.getByRole('button', { name: 'Reserve relic · 2.3 ETH' }) as HTMLButtonElement).disabled, true);
+});
+
+for (const network of ['mainnet', 'devnet'] as const) {
+  test(`${network} hides the header and keeps reservation content inactive until code verification`, async () => {
+    window.localStorage.removeItem(ACCESS_KEY);
+    const view = page(network);
+    assert.equal(Boolean(view.queryByRole('link', { name: 'Go to mons.shop home' })), false);
+    const input = view.getByRole('textbox', { name: 'Secret code' }) as HTMLInputElement;
+    assert.equal(input.type, 'text');
+    assert.equal(input.placeholder, 'SECRET CODE');
+    assert.notEqual(document.activeElement, input);
+    assert.equal(view.queryByRole('button', { name: /Reserve relic/ }), null);
+    const content = view.container.querySelector('.relic-page__content')!;
+    assert.equal(content.getAttribute('aria-hidden'), 'true');
+    assert.equal(content.hasAttribute('inert'), true);
+    fireEvent.click(content.querySelector('.relic-preorder__reserve')!);
+    await act(async () => {});
+    assert.deepEqual(verifiedCodes, []);
+    assert.deepEqual(preparedCodes, []);
+    assert.equal(sendCount, 0);
+  });
+}
+
+for (const submitWithArrow of [false, true]) {
+  test(`a verified uppercase code unlocks the page through ${submitWithArrow ? 'the arrow' : 'form submission'}`, async () => {
+    window.localStorage.removeItem(ACCESS_KEY);
+    const verification = deferred<{ ok: true }>();
+    verifyImpl = () => verification.promise;
+    const view = page();
+    const input = view.getByRole('textbox', { name: 'Secret code' }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '  testpass  ' } });
+    assert.equal(input.value, '  TESTPASS  ');
+    if (submitWithArrow) fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+    else fireEvent.submit(input.closest('form')!);
+    await waitFor(() => assert.deepEqual(verifiedCodes, [ACCESS_CODE]));
+    assert.equal((view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled, true);
+    assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
+    assert.equal(view.queryByRole('button', { name: /Reserve relic/ }), null);
+    await act(async () => verification.resolve({ ok: true }));
+    await view.ready();
+    view.getByRole('link', { name: 'Go to mons.shop home' });
+    assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
+    assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
+    assert.equal(view.container.querySelector('.relic-page__content')!.hasAttribute('inert'), false);
+    assert.equal(sendCount, 0);
+    view.reserve();
+    await waitFor(() => assert.equal(sendCount, 1));
+    assert.deepEqual(preparedCodes, [ACCESS_CODE]);
+  });
+}
+
+test('a rejected code remains locked and can be corrected without saving the rejected value', async () => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  verifyImpl = async code => {
+    if (code !== ACCESS_CODE) throw new EthereumApiError(401, 'That code did not work. Try again.', 'unauthenticated');
+    return { ok: true };
+  };
+  const view = page();
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: 'wrong' } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => assert.match(view.getByRole('alert').textContent!, /code/i));
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
+  assert.equal(view.queryByRole('button', { name: /Reserve relic/ }), null);
+  fireEvent.change(input, { target: { value: 'testpass' } });
+  fireEvent.submit(input.closest('form')!);
+  await view.ready();
+  assert.deepEqual(verifiedCodes, ['WRONG', ACCESS_CODE]);
+  assert.equal(sendCount, 0);
+});
+
+test('a temporary verification failure keeps the input retryable without granting access', async () => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  verifyImpl = async () => { throw new TypeError('Failed to fetch'); };
+  const view = page();
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => view.getByRole('alert'));
+  assert.equal((view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled, false);
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
+  verifyImpl = async () => ({ ok: true });
+  fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  await view.ready();
+  assert.deepEqual(verifiedCodes, [ACCESS_CODE, ACCESS_CODE]);
+});
+
+test('saved approval restores immediately while background verification is pending', async () => {
+  const verification = deferred<{ ok: true }>();
+  verifyImpl = () => verification.promise;
+  const view = page();
+  assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
+  view.getByRole('button', { name: 'Reserve relic · 0.0023 ETH' });
+  await view.ready();
+  assert.deepEqual(verifiedCodes, [ACCESS_CODE]);
+  await act(async () => verification.resolve({ ok: true }));
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
+  assert.equal(sendCount, 0);
+});
+
+test('a rejected saved code relocks the page and clears persisted approval', async () => {
+  const verification = deferred<{ ok: true }>();
+  verifyImpl = () => verification.promise;
+  const view = page();
+  await view.ready();
+  await act(async () => verification.reject(new EthereumApiError(401, 'That code did not work. Try again.', 'unauthenticated')));
+  await waitFor(() => view.getByRole('textbox', { name: 'Secret code' }));
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
+  assert.equal(view.queryByRole('button', { name: /Reserve relic/ }), null);
+  assert.deepEqual(preparedCodes, []);
+});
+
+test('a background service failure preserves saved approval while reservation preparation still checks the code', async () => {
+  verifyImpl = async () => { throw new EthereumApiError(503, 'Temporarily unavailable.', 'unavailable'); };
+  const view = page();
+  await view.ready();
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
+  assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
+  view.reserve();
+  await waitFor(() => assert.equal(sendCount, 1));
+  assert.deepEqual(preparedCodes, [ACCESS_CODE]);
+});
+
+test('a verified code is reused when moving between the devnet and mainnet pages', async () => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  const devnet = page();
+  const input = devnet.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await devnet.ready();
+  devnet.unmount();
+  const mainnet = page('mainnet');
+  assert.equal(mainnet.queryByRole('textbox', { name: 'Secret code' }), null);
+  await mainnet.ready();
+  assert.deepEqual(verifiedCodes, [ACCESS_CODE, ACCESS_CODE]);
+  assert.equal(sendCount, 0);
+});
+
+test('editing a code cancels verification and a late result cannot replace the newer submitted value', async () => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  const oldVerification = deferred<{ ok: true }>();
+  let oldSignal: AbortSignal | undefined;
+  verifyImpl = (code, signal) => {
+    if (code === 'OLDVALUE') { oldSignal = signal; return oldVerification.promise; }
+    return Promise.resolve({ ok: true });
+  };
+  const view = page();
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: 'OLDVALUE' } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => assert.deepEqual(verifiedCodes, ['OLDVALUE']));
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  assert.equal(oldSignal?.aborted, true);
+  fireEvent.submit(input.closest('form')!);
+  await view.ready();
+  await act(async () => oldVerification.resolve({ ok: true }));
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
+  assert.deepEqual(verifiedCodes, ['OLDVALUE', ACCESS_CODE]);
+});
+
+test('unmounting aborts verification and its late success does not persist approval', async () => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  const verification = deferred<{ ok: true }>();
+  let signal: AbortSignal | undefined;
+  verifyImpl = (_code, verificationSignal) => { signal = verificationSignal; return verification.promise; };
+  const view = page();
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => assert.equal(verifiedCodes.length, 1));
+  view.unmount();
+  assert.equal(signal?.aborted, true);
+  await act(async () => verification.resolve({ ok: true }));
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
+});
+
+test('verification remains usable and survives a remount when localStorage is unavailable', async t => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  t.mock.method(dom.window.Storage.prototype, 'getItem', () => { throw new Error('Storage blocked'); });
+  t.mock.method(dom.window.Storage.prototype, 'setItem', () => { throw new Error('Storage blocked'); });
+  const view = page('devnet', false);
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true));
+  view.unmount();
+  const remounted = page('mainnet', false);
+  assert.equal(remounted.queryByRole('textbox', { name: 'Secret code' }), null);
+  await waitFor(() => assert.deepEqual(verifiedCodes, [ACCESS_CODE, ACCESS_CODE]));
+  assert.equal(sendCount, 0);
+});
+
+test('a code rejected during preparation relocks the page before wallet submission', async () => {
+  prepareError = new EthereumApiError(401, 'Enter a valid secret code.', 'unauthenticated');
+  const view = page();
+  await view.ready();
+  view.reserve();
+  await waitFor(() => view.getByRole('textbox', { name: 'Secret code' }));
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
+  assert.deepEqual(preparedCodes, [ACCESS_CODE]);
+  assert.equal(sendCount, 0);
+  assert.equal(window.localStorage.getItem(pendingKey()), null);
+});
+
+test('pending reservations continue confirming under the locked gate without another payment', async () => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  window.localStorage.setItem(pendingKey(), JSON.stringify({ hash: HASH, nonce: 0, submittedAt: Date.now() }));
+  confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'confirmed', confirmations: 3, reservationNonce: 0, transactionHash });
+  const view = page();
+  await waitFor(() => assert.equal(window.localStorage.getItem(pendingKey()), null));
+  view.getByRole('textbox', { name: 'Secret code' });
+  assert.deepEqual(preparedCodes, []);
+  assert.equal(sendCount, 0);
 });

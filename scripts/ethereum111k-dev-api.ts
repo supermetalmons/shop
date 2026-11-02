@@ -132,6 +132,7 @@ const config = {
   ...localEthereumRevealBindings(),
   main: resolve(root, 'cloud/workers/api/src/index.ts'),
   vars: { ...rawConfig.vars, ...emptySecrets,
+    ETHEREUM_PRE111K_ACCESS_CODES: '["LOCALRELICS"]',
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contractAddress,
     ETHEREUM_111K_DEPLOYMENT_BLOCK: String(deployment.deploymentBlock),
     ETHEREUM_111K_METADATA_BASE_URI: deployment.metadataBaseURI,

@@ -28,6 +28,8 @@ function deferred<T>() {
 test('relic routes scope backend authorizations and preserve wallet submissions across navigation', async t => {
   const { dom } = setupFrontendDom();
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
+  window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
+  t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState(null, '', '/111k/relics');
   const { act, fireEvent, getByRole, getByText, waitFor } = await import('@testing-library/react');

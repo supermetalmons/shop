@@ -132,6 +132,7 @@ function env(options: {
     ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_MAINNET_ENABLED: 'false',
     ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'false',
     ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET: '', ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: '',
+    ETHEREUM_PRE111K_ACCESS_CODES: '["TESTACCESS"]',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
@@ -273,6 +274,12 @@ test('relic preorder preparation honors commerce maintenance while status and co
   assert.equal(prepare.status, 503);
   assert.deepEqual(await prepare.json(), { ok: false, error: 'commerce-maintenance' });
   assert.equal(prepare.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
+  const access = await handleRequest(new Request('https://api.mons.shop/ethereum/pre111k/access', {
+    method: 'POST', headers, body: JSON.stringify({ code: 'TESTACCESS' }),
+  }), paused, dependencies);
+  assert.equal(access.status, 200);
+  assert.deepEqual(await access.json(), { ok: true });
+  assert.equal(access.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
   const status = await handleRequest(new Request(`https://api.mons.shop/ethereum/pre111k/status?network=devnet&wallet=${wallet}`, {
     headers,
   }), paused, dependencies);

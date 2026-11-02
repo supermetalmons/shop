@@ -28,6 +28,8 @@ beforeEach(context => {
   const t = context as TestContext;
   ({ dom } = setupFrontendDom());
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
+  window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
+  t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
   t.mock.method(pre111kApi, 'status', async (network, wallet) => ({ config: resolvePre111kConfig(network, { contractAddress: CONTRACT, enabled: true }), wallet,
     totalReserved: 0, reservedRelics: wallet ? 0 : null, remainingRelics: 18, observedBlock: 1, blockHash: HASH }));
   t.mock.method(pre111kApi, 'prepare', async (network, wallet) => {

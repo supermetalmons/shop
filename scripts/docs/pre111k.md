@@ -10,8 +10,8 @@ this contract. Existing NFT111K relic claims remain independent.
 
 ## Authorization and counts
 
-The API automatically approves any wallet while that network is enabled and
-supply remains. It signs EIP-712 `ReserveRelic(address wallet,uint256 nonce,uint256
+The API approves a wallet only when its request includes a valid secret code,
+that network is enabled, and supply remains. It signs EIP-712 `ReserveRelic(address wallet,uint256 nonce,uint256
 deadline)` using domain name `pre111k`, version `1`, the chain ID, and the deployed
 contract address. The wallet's `reservedRelics(address)` count is its next nonce.
 An authorization must be unexpired and no more than ten minutes in the future.
@@ -25,12 +25,19 @@ a submitted hash and resumes confirmation after reload.
 
 The API routes are:
 
+- `POST /ethereum/pre111k/access` with `{ "code": "..." }`; returns `{ "ok": true }` after verification.
 - `GET /ethereum/pre111k/status?network=mainnet|devnet&wallet=0x...` (`wallet` is optional).
-- `POST /ethereum/pre111k/prepare` with `{ "network": "devnet", "wallet": "0x..." }`.
+- `POST /ethereum/pre111k/prepare` with `{ "network": "devnet", "wallet": "0x...", "code": "..." }`.
 - `POST /ethereum/pre111k/confirm` with network, wallet, and `transactionHash`.
 
 Use the existing allowed storefront origin and `X-Mons-CSRF: 1` for POST requests.
 Preparation is rate limited by IP and wallet and observes commerce maintenance.
+Access verification is rate limited by IP and remains available during maintenance.
+Both access and preparation trim and uppercase the supplied code before checking
+the server allowlist. Missing or invalid codes return `401 unauthenticated`;
+missing or invalid server configuration returns `503 unavailable`. No code is
+returned in API responses or sent to the chain. Status and confirmation do not
+require a code, so submitted reservations remain recoverable.
 No wallet login signature is required: authorization is bound to `msg.sender`.
 The backend chooses the contract and price; callers cannot override them.
 
@@ -84,6 +91,17 @@ Worker receives only its corresponding signing key as a secret. To back up a
 local signer, preserve its complete keystore and its encryption password.
 Deployment records identify the public signer addresses. A disabled network
 has no direct-transfer fallback.
+
+`ETHEREUM_PRE111K_ACCESS_CODES` is a required Worker secret shared by both
+networks. Its value is a JSON array of nonempty code strings; provision it through
+Wrangler's secret input rather than frontend configuration or source files.
+Deploy the API requirement before the storefront gate. Authorizations issued
+before rollout can remain valid for up to ten minutes; no signer or contract
+change is required. The storefront stores the approved code locally, restores
+the reservation UI immediately on reload, revalidates in the background, and
+includes it with every preparation request. The local
+development API uses the fixture code `LOCALRELICS`; production codes must not be
+used in test fixtures or committed assets.
 
 Use the dedicated pre111k deployment workflow; do not replace NFT111K, reset its
 commerce state, allocate relic claims, or modify its metadata. Validate the

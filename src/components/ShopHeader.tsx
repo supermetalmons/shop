@@ -7,6 +7,7 @@ type ShopHeaderProps = {
   renderRight?: (options: { interactive: boolean }) => React.ReactNode;
   scrollHomeToTop?: boolean;
   variant?: 'default' | 'drif';
+  hidden?: boolean;
 };
 
 function ShopHeaderBrand({
@@ -60,6 +61,7 @@ export function ShopHeader({
   renderRight,
   scrollHomeToTop = false,
   variant = 'default',
+  hidden = false,
 }: ShopHeaderProps) {
   const right = renderRight?.({ interactive: true });
   const spacerRight = renderRight?.({ interactive: false });
@@ -69,6 +71,7 @@ export function ShopHeader({
       <BackgroundLayerPortal placement="leading">
         <header
           className={`top top--fixed top--shop${variant === 'drif' ? ' top--drif' : ''}`}
+          hidden={hidden}
         >
           <div className="top__backdrop" aria-hidden="true" />
           <ShopHeaderBrand

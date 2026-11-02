@@ -3,6 +3,7 @@ import type { EthereumPreparedTransaction } from './api.ts';
 import { normalizeEthereumAddress } from './protocol.ts';
 
 export const PRE111K_API_PATHS = {
+  access: '/ethereum/pre111k/access',
   status: '/ethereum/pre111k/status',
   prepare: '/ethereum/pre111k/prepare',
   confirm: '/ethereum/pre111k/confirm',
@@ -14,6 +15,7 @@ export const PRE111K_MAX_RELICS = 18;
 export const PRE111K_AUTHORIZATION_TTL_SECONDS = 600;
 
 export type Pre111kNetwork = 'mainnet' | 'devnet';
+export type Pre111kAccessResponse = { ok: true };
 export type Pre111kConfig = {
   network: Pre111kNetwork; chainId: number; chainName: string; contractAddress: string | null;
   deploymentBlock: number; enabled: boolean; priceWei: string; treasury: string;

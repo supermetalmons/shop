@@ -66,6 +66,7 @@ try {
   const env: Pre111kEnvironment = {
     ALCHEMY_MI_NOTE_API_KEY: 'local-test', ETHEREUM_111K_RPC_URL: '', PUBLIC_SHOP_RATE_LIMITER: limiter,
     PREORDER_PREPARE_RATE_LIMITER: limiter, PREORDER_PREPARE_IP_RATE_LIMITER: limiter,
+    ETHEREUM_PRE111K_ACCESS_CODES: '["TESTACCESS"]',
     ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_MAINNET_ENABLED: 'false',
     ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: contractAddress, ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: String(Number(deployment.blockNumber)),
     ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'true', ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: key,
@@ -82,7 +83,16 @@ try {
     return value as T;
   }
   const status = (owner = wallet) => api<Pre111kStatus>(`${PRE111K_API_PATHS.status}?network=devnet&wallet=${owner}`);
-  const prepare = (owner = wallet) => api<Pre111kPrepareResponse>(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: owner });
+  const prepare = (owner = wallet) => api<Pre111kPrepareResponse>(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: owner, code: 'TESTACCESS' });
+  assert.deepEqual(await api(PRE111K_API_PATHS.access, { code: ' testaccess ' }), { ok: true });
+  for (const code of [undefined, 'WRONGCODE']) {
+    const rejected = await handlePre111kRequest(new Request(`https://api.mons.shop${PRE111K_API_PATHS.prepare}`, {
+      method: 'POST', headers: { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.1',
+        'Content-Type': 'application/json', 'X-Mons-CSRF': '1' },
+      body: JSON.stringify({ network: 'devnet', wallet, code }),
+    }), env, PRE111K_API_PATHS.prepare, { fetch: async () => { throw new Error('Invalid codes must not reach the chain'); } });
+    assert.equal(rejected.status, 401);
+  }
   const initial = await status();
   assert.equal(initial.totalReserved, 0);
   assert.equal(initial.reservedRelics, 0);

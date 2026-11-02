@@ -1,4 +1,5 @@
-import { encodePre111kReservation, PRE111K_API_PATHS, PRE111K_TREASURY, type Pre111kConfig, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus, type Pre111kConfirmResponse } from '../../shared/ethereum/pre111k';
+import { encodePre111kReservation, PRE111K_API_PATHS, PRE111K_TREASURY, type Pre111kAccessResponse, type Pre111kConfig, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus, type Pre111kConfirmResponse } from '../../shared/ethereum/pre111k';
+import { EthereumApiError } from './api';
 import { ethereumAddress } from './wallet';
 import { requestEthereumJson } from './request';
 
@@ -16,7 +17,9 @@ async function request(path: string, body?: unknown, signal?: AbortSignal): Prom
   const { response, value } = await requestEthereumJson(path, { body, signal });
   if (!response.ok) {
     const detail = record(value) && record(value.error) ? value.error : value;
-    throw new Error(record(detail) && typeof detail.message === 'string' ? detail.message : 'Couldn’t reach the relic service. Please try again.');
+    throw new EthereumApiError(response.status,
+      record(detail) && typeof detail.message === 'string' ? detail.message : 'Couldn’t reach the relic service. Please try again.',
+      record(detail) && typeof detail.code === 'string' ? detail.code : null);
   }
   return value;
 }
@@ -50,6 +53,11 @@ export function checkedPre111kReservation(value: Pre111kPrepareResponse, expecte
 }
 
 export const pre111kApi = {
+  async verifyAccess(code: string, signal?: AbortSignal): Promise<Pre111kAccessResponse> {
+    const value = await request(PRE111K_API_PATHS.access, { code }, signal);
+    if (!record(value) || value.ok !== true) return invalid();
+    return { ok: true };
+  },
   async status(network: Pre111kNetwork, wallet: string | null, signal?: AbortSignal): Promise<Pre111kStatus> {
     const params = new URLSearchParams({ network });
     if (wallet) params.set('wallet', wallet);
@@ -64,8 +72,8 @@ export const pre111kApi = {
       typeof value.blockHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value.blockHash)) return invalid();
     return { ...value, wallet, config: parsed } as Pre111kStatus;
   },
-  async prepare(network: Pre111kNetwork, wallet: string, signal?: AbortSignal): Promise<Pre111kPrepareResponse> {
-    return await request(PRE111K_API_PATHS.prepare, { network, wallet }, signal) as Pre111kPrepareResponse;
+  async prepare(network: Pre111kNetwork, wallet: string, code: string, signal?: AbortSignal): Promise<Pre111kPrepareResponse> {
+    return await request(PRE111K_API_PATHS.prepare, { network, wallet, code }, signal) as Pre111kPrepareResponse;
   },
   async confirm(network: Pre111kNetwork, wallet: string, transactionHash: string, signal?: AbortSignal): Promise<Pre111kConfirmResponse> {
     const value = await request(PRE111K_API_PATHS.confirm, { network, wallet, transactionHash }, signal);

@@ -3,7 +3,7 @@ import { decodeReturn, encodeCall } from '../../../../shared/ethereum/abi.js';
 import { ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.js';
 import {
   PRE111K_API_PATHS, PRE111K_AUTHORIZATION_TTL_SECONDS, PRE111K_MAX_RELICS,
-  encodePre111kReservation, resolvePre111kConfig, type Pre111kConfig, type Pre111kConfirmResponse,
+  encodePre111kReservation, resolvePre111kConfig, type Pre111kAccessResponse, type Pre111kConfig, type Pre111kConfirmResponse,
   type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus,
 } from '../../../../shared/ethereum/pre111k.js';
 import { PRE111K_RESERVED_TOPIC, pre111kReservationDigest } from '../../../../shared/ethereum/pre111kCrypto.js';
@@ -15,18 +15,20 @@ import {
   verifyEthereumBlockSnapshot, type EthereumReadContext,
 } from './ethereumRuntime.js';
 import { jsonResponse } from './httpResponse.js';
-import { sha256Hex } from './sessionSecrets.js';
+import { matchesSha256Hex, sha256Hex } from './sessionSecrets.js';
 
 export type Pre111kEnvironment = Pick<Env,
   'ALCHEMY_MI_NOTE_API_KEY' | 'ETHEREUM_111K_RPC_URL' | 'PUBLIC_SHOP_RATE_LIMITER' | 'PREORDER_PREPARE_RATE_LIMITER' | 'PREORDER_PREPARE_IP_RATE_LIMITER' |
   'ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS' | 'ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK' | 'ETHEREUM_PRE111K_MAINNET_ENABLED' |
   'ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS' | 'ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK' | 'ETHEREUM_PRE111K_SEPOLIA_ENABLED'
-> & { ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET?: string; ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET?: string };
+> & Partial<Pick<Env, 'ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET' | 'ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET' | 'ETHEREUM_PRE111K_ACCESS_CODES'>>;
 
 type Context = EthereumReadContext & { env: Pre111kEnvironment; config: Pre111kConfig; nowMs: number };
 type State = { blockNumber: number; blockHash: string; timestamp: number; totalReserved: number; reservedRelics: number; signer: string };
 const networkSchema = z.enum(['mainnet', 'devnet']);
 const requestSchema = z.object({ network: networkSchema, wallet: z.string() }).strict();
+const accessSchema = z.object({ code: z.unknown().optional() }).strict();
+const accessCodesSchema = z.array(z.string().trim().toUpperCase().min(1).max(64)).min(1).max(32);
 const ZERO_ADDRESS = `0x${'0'.repeat(40)}`;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 
@@ -52,6 +54,19 @@ function configuredSigner(context: Context): { secret: string; address: string }
 
 function unavailable(): never {
   throw new EthereumApiError('unavailable', 'Relic reservations are temporarily unavailable.');
+}
+
+async function requireAccessCode(env: Pre111kEnvironment, value: unknown): Promise<void> {
+  let configured: unknown;
+  try { configured = JSON.parse(env.ETHEREUM_PRE111K_ACCESS_CODES || ''); } catch { return unavailable(); }
+  const codes = accessCodesSchema.safeParse(configured);
+  if (!codes.success) return unavailable();
+  if (typeof value !== 'string' || value.length > 64 || !value.trim()) {
+    throw new EthereumApiError('unauthenticated', 'Enter a valid secret code.');
+  }
+  const code = value.trim().toUpperCase();
+  const matches = await Promise.all(codes.data.map(async expected => matchesSha256Hex(code, await sha256Hex(expected))));
+  if (!matches.some(Boolean)) throw new EthereumApiError('unauthenticated', 'Enter a valid secret code.');
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -100,12 +115,13 @@ async function status(context: Context, wallet: string | null): Promise<Pre111kS
     remainingRelics: PRE111K_MAX_RELICS - current.totalReserved, observedBlock: current.blockNumber, blockHash: current.blockHash };
 }
 
-async function prepare(request: Request, context: Context, wallet: string): Promise<Pre111kPrepareResponse> {
+async function prepare(request: Request, context: Context, wallet: string, code: unknown): Promise<Pre111kPrepareResponse> {
   await limitEthereumRequest(request, context, 'pre111k:prepare', context.env.PREORDER_PREPARE_IP_RATE_LIMITER);
   const key = await sha256Hex(`pre111k:${context.config.network}:${wallet}`);
   if (!(await context.env.PREORDER_PREPARE_RATE_LIMITER.limit({ key })).success) {
     throw new EthereumApiError('resource-exhausted', 'Too many reservation requests. Try again later.');
   }
+  await requireAccessCode(context.env, code);
   if (!context.config.enabled || !context.config.contractAddress) return unavailable();
   const signer = configuredSigner(context);
   if (!signer) return unavailable();
@@ -206,9 +222,17 @@ export async function handlePre111kRequest(request: Request, env: Pre111kEnviron
     ethereumRequestOrigin(request);
     if (expectedMethod === 'POST' && request.headers.get('X-Mons-CSRF') !== '1') throw new EthereumApiError('permission-denied', 'Invalid reservation request.');
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]);
+    if (path === PRE111K_API_PATHS.access) {
+      await limitEthereumRequest(request, { signal }, 'pre111k:access', env.PREORDER_PREPARE_IP_RATE_LIMITER);
+      const body = await readEthereumBody(request, signal, accessSchema);
+      await requireAccessCode(env, body.code);
+      signal.throwIfAborted();
+      return jsonResponse({ ok: true } satisfies Pre111kAccessResponse, 200);
+    }
     let network: Pre111kNetwork;
     let wallet: string | null;
     let hash: string | null = null;
+    let code: unknown;
     if (path === PRE111K_API_PATHS.status) {
       const params = new URL(request.url).searchParams;
       if (params.getAll('network').length !== 1 || params.getAll('wallet').length > 1 || [...params.keys()].some(key => !['network', 'wallet'].includes(key))) {
@@ -219,9 +243,10 @@ export async function handlePre111kRequest(request: Request, env: Pre111kEnviron
       network = parsed.data;
       wallet = params.has('wallet') ? ethereumAddress(params.get('wallet')) : null;
     } else if (path === PRE111K_API_PATHS.prepare) {
-      const body = await readEthereumBody(request, signal, requestSchema);
+      const body = await readEthereumBody(request, signal, requestSchema.extend(accessSchema.shape));
       network = body.network;
       wallet = ethereumAddress(body.wallet);
+      code = body.code;
     } else {
       const body = await readEthereumBody(request, signal, requestSchema.extend({ transactionHash: z.string() }).strict());
       network = body.network;
@@ -232,7 +257,7 @@ export async function handlePre111kRequest(request: Request, env: Pre111kEnviron
       fetch: dependencies.fetch || ((input, init) => fetch(input, init)) };
     if (path !== PRE111K_API_PATHS.prepare) await limitEthereumRequest(request, context, path, env.PUBLIC_SHOP_RATE_LIMITER);
     const result = path === PRE111K_API_PATHS.status ? await status(context, wallet)
-      : path === PRE111K_API_PATHS.prepare ? await prepare(request, context, wallet!) : await confirm(context, wallet!, hash!);
+      : path === PRE111K_API_PATHS.prepare ? await prepare(request, context, wallet!, code) : await confirm(context, wallet!, hash!);
     return jsonResponse(result, 200, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     if (request.signal.aborted) throw request.signal.reason;

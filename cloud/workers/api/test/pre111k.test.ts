@@ -20,6 +20,8 @@ const KEY = `0x${'44'.repeat(32)}`;
 const SIGNER = ethereumSignerAddress(KEY);
 const HASH = `0x${'aa'.repeat(32)}`;
 const BLOCK_HASH = `0x${'bb'.repeat(32)}`;
+const ACCESS_CODE = 'TESTACCESS';
+const SECOND_ACCESS_CODE = 'OTHERACCESS';
 
 type RpcRequest = { id: number; method: string; params: unknown[] };
 function fixture(network: Pre111kNetwork = 'devnet') {
@@ -28,6 +30,7 @@ function fixture(network: Pre111kNetwork = 'devnet') {
   const env: Pre111kEnvironment = {
     ALCHEMY_MI_NOTE_API_KEY: 'test', ETHEREUM_111K_RPC_URL: '', PUBLIC_SHOP_RATE_LIMITER: limiter,
     PREORDER_PREPARE_RATE_LIMITER: limiter, PREORDER_PREPARE_IP_RATE_LIMITER: limiter,
+    ETHEREUM_PRE111K_ACCESS_CODES: JSON.stringify([ACCESS_CODE, SECOND_ACCESS_CODE]),
     ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: CONTRACT, ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK: '1', ETHEREUM_PRE111K_MAINNET_ENABLED: 'true',
     ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: CONTRACT, ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: '1', ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'true',
     ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET: KEY, ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: KEY,
@@ -77,7 +80,7 @@ function fixture(network: Pre111kNetwork = 'devnet') {
     return { response, body: await response.json() as Record<string, unknown> };
   }
   async function prepared() {
-    const result = await call(PRE111K_API_PATHS.prepare, { network, wallet: WALLET });
+    const result = await call(PRE111K_API_PATHS.prepare, { network, wallet: WALLET, code: ACCESS_CODE });
     assert.equal(result.response.status, 200);
     return result.body as unknown as Pre111kPrepareResponse;
   }
@@ -102,6 +105,112 @@ test('pre111k digest and calldata match the Solidity fixture', () => {
   assert.equal(signDigest(fixture.testPrivateKey, digest), fixture.signature);
   assert.equal(recoverEthereumAddress(digest, fixture.signature), fixture.signer.toLowerCase());
   assert.equal(encodePre111kReservation(fixture.nonce, fixture.deadline, fixture.signature), fixture.calldata);
+});
+
+test('pre111k verifies either access code without a wallet, signer, deployment, or RPC', async () => {
+  const f = fixture();
+  f.env.ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS = '';
+  f.env.ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS = '';
+  delete f.env.ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET;
+  delete f.env.ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET;
+  for (const code of [ACCESS_CODE, SECOND_ACCESS_CODE, ` ${ACCESS_CODE.toLowerCase()} `]) {
+    const result = await f.call(PRE111K_API_PATHS.access, { code });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
+    assert.deepEqual(result.body, { ok: true });
+  }
+  assert.equal(f.state.calls.length, 0);
+});
+
+test('pre111k rejects missing and invalid codes before chain reads or authorization', async () => {
+  for (const network of ['mainnet', 'devnet'] as const) {
+    const f = fixture(network);
+    for (const code of [undefined, null, '', ' ', 'WRONGCODE', 123, [ACCESS_CODE], {}, 'A'.repeat(65)]) {
+      for (const path of [PRE111K_API_PATHS.access, PRE111K_API_PATHS.prepare]) {
+        const result = await f.call(path, path === PRE111K_API_PATHS.access ? { code } : { network, wallet: WALLET, code });
+        assert.equal(result.response.status, 401);
+        assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
+        assert.deepEqual(result.body, { ok: false, error: { code: 'unauthenticated', message: 'Enter a valid secret code.' } });
+      }
+    }
+    assert.equal(f.state.calls.length, 0);
+    for (const code of [ACCESS_CODE, ` ${SECOND_ACCESS_CODE.toLowerCase()} `]) {
+      const result = await f.call(PRE111K_API_PATHS.prepare, { network, wallet: WALLET, code });
+      assert.equal(result.response.status, 200);
+      assert.equal(typeof result.body.signature, 'string');
+    }
+  }
+});
+
+test('pre111k accepts 64-character access codes at the input and configuration boundary', async () => {
+  const f = fixture();
+  const code = 'A'.repeat(64);
+  f.env.ETHEREUM_PRE111K_ACCESS_CODES = JSON.stringify([code]);
+  assert.equal((await f.call(PRE111K_API_PATHS.access, { code })).response.status, 200);
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code })).response.status, 200);
+  assert.equal((await f.call(PRE111K_API_PATHS.access, { code: `${code}A` })).response.status, 401);
+});
+
+test('pre111k fails closed for missing or malformed access configuration', async () => {
+  for (const configured of [undefined, '', 'invalid', 'null', '{}', '[]', '[""]', '[" "]', '[123]',
+    JSON.stringify([ACCESS_CODE, null]), JSON.stringify(['A'.repeat(65)]), JSON.stringify(['ß'.repeat(64)]),
+    JSON.stringify(Array(33).fill(ACCESS_CODE))]) {
+    const f = fixture();
+    f.env.ETHEREUM_PRE111K_ACCESS_CODES = configured;
+    for (const path of [PRE111K_API_PATHS.access, PRE111K_API_PATHS.prepare]) {
+      const result = await f.call(path, path === PRE111K_API_PATHS.access ? { code: ACCESS_CODE }
+        : { network: 'devnet', wallet: WALLET, code: ACCESS_CODE });
+      assert.equal(result.response.status, 503);
+      assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
+      assert.deepEqual(result.body, { ok: false, error: { code: 'unavailable', message: 'Relic reservations are temporarily unavailable.' } });
+    }
+    assert.equal(f.state.calls.length, 0);
+  }
+});
+
+test('pre111k access enforces origin, CSRF, method, strict body, and rate limits', async () => {
+  const f = fixture();
+  assert.equal((await f.call(PRE111K_API_PATHS.access, { code: ACCESS_CODE }, { origin: 'https://evil.example' })).response.status, 403);
+  assert.equal((await f.call(PRE111K_API_PATHS.access, { code: ACCESS_CODE }, { csrf: '' })).response.status, 403);
+  const method = await f.call(PRE111K_API_PATHS.access);
+  assert.equal(method.response.status, 405);
+  assert.equal(method.response.headers.get('Allow'), 'POST, OPTIONS');
+  assert.equal(method.response.headers.get('Cache-Control'), 'no-store');
+  for (const body of [null, [], { code: ACCESS_CODE, wallet: WALLET }, { code: ACCESS_CODE, network: 'devnet' }]) {
+    const invalid = await f.call(PRE111K_API_PATHS.access, body);
+    assert.equal(invalid.response.status, 400);
+    assert.equal(invalid.response.headers.get('Cache-Control'), 'no-store');
+  }
+  f.env.PREORDER_PREPARE_IP_RATE_LIMITER = { limit: async () => ({ success: false }) };
+  const limited = await f.call(PRE111K_API_PATHS.access, { code: ACCESS_CODE });
+  assert.equal(limited.response.status, 429);
+  assert.equal(limited.response.headers.get('Retry-After'), '60');
+  assert.equal(limited.response.headers.get('Cache-Control'), 'no-store');
+  assert.equal(f.state.calls.length, 0);
+});
+
+test('pre111k limiters run before access configuration checks and chain reads', async () => {
+  for (const binding of ['PREORDER_PREPARE_RATE_LIMITER', 'PREORDER_PREPARE_IP_RATE_LIMITER'] as const) {
+    const f = fixture();
+    f.env.ETHEREUM_PRE111K_ACCESS_CODES = 'invalid';
+    f.env[binding] = { limit: async () => ({ success: false }) };
+    assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE })).response.status, 429);
+    if (binding === 'PREORDER_PREPARE_IP_RATE_LIMITER') {
+      assert.equal((await f.call(PRE111K_API_PATHS.access, { code: ACCESS_CODE })).response.status, 429);
+      assert.equal((await f.call(PRE111K_API_PATHS.access, { extra: true })).response.status, 429);
+    }
+    assert.equal(f.state.calls.length, 0);
+  }
+});
+
+test('pre111k status and existing reservation confirmation do not require access configuration', async () => {
+  const f = fixture();
+  await f.mined();
+  delete f.env.ETHEREUM_PRE111K_ACCESS_CODES;
+  assert.equal((await f.call(`${PRE111K_API_PATHS.status}?network=devnet&wallet=${WALLET}`)).response.status, 200);
+  const result = await f.confirm();
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.status, 'confirmed');
 });
 
 for (const network of ['mainnet', 'devnet'] as const) {
@@ -150,8 +259,8 @@ test('pre111k rejects invalid networks, arbitrary contracts, quantity, origin, m
     assert.equal((await f.call(PRE111K_API_PATHS.prepare, body)).response.status, 400);
   }
   assert.equal((await f.call(`${PRE111K_API_PATHS.status}?network=devnet&network=mainnet`)).response.status, 400);
-  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET }, { origin: 'https://evil.example' })).response.status, 403);
-  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET }, { csrf: '' })).response.status, 403);
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE }, { origin: 'https://evil.example' })).response.status, 403);
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE }, { csrf: '' })).response.status, 403);
   assert.equal((await f.call(PRE111K_API_PATHS.prepare)).response.status, 405);
 });
 const ZERO_ADDRESS = `0x${'0'.repeat(40)}`;
@@ -172,21 +281,21 @@ test('pre111k refuses disabled, missing signer, mismatched immutable values, sta
   ]) {
     const f = fixture();
     mutate(f);
-    assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET })).response.status, 503);
+    assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE })).response.status, 503);
   }
   const f = fixture();
   f.state.total = 18;
-  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET })).response.status, 409);
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE })).response.status, 409);
 });
 
 test('pre111k rejects reorged reads, applies both prepare limiters, and signs one nonce for duplicate prepares', async () => {
   const f = fixture();
   f.state.afterCall = () => { f.state.canonicalHash = HASH; };
-  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET })).response.status, 503);
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE })).response.status, 503);
   for (const binding of ['PREORDER_PREPARE_RATE_LIMITER', 'PREORDER_PREPARE_IP_RATE_LIMITER'] as const) {
     const limited = fixture();
     limited.env[binding] = { limit: async () => ({ success: false }) };
-    const result = await limited.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET });
+    const result = await limited.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE });
     assert.equal(result.response.status, 429);
     assert.equal(result.response.headers.get('Retry-After'), '60');
   }
@@ -273,6 +382,7 @@ test('pre111k refuses unrelated transactions and forged reservation log identity
 
 test('pre111k prepare route participates in commerce maintenance while reads and confirmation remain available', () => {
   assert.equal(pre111kRoutes.find(route => route.path === PRE111K_API_PATHS.prepare)?.commerceMutation, true);
+  assert.equal(pre111kRoutes.find(route => route.path === PRE111K_API_PATHS.access)?.commerceMutation, false);
   assert.equal(pre111kRoutes.find(route => route.path === PRE111K_API_PATHS.status)?.commerceMutation, false);
   assert.equal(pre111kRoutes.find(route => route.path === PRE111K_API_PATHS.confirm)?.commerceMutation, false);
 });

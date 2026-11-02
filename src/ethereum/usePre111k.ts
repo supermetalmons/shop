@@ -4,6 +4,7 @@ import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { checkedPre111kReservation, pre111kApi } from './pre111kApi';
 import { ethereumOperation, ethereumWalletError } from './wallet';
+import { EthereumApiError } from './api';
 
 type Pending = { hash: string | null; nonce: number; submittedAt: number };
 const STORAGE_PREFIX = 'mons.shop.pre111k.pending:';
@@ -58,10 +59,12 @@ function parsePending(value: string | null): Pending | null {
   return null;
 }
 
-export function usePre111k(network: Pre111kNetwork) {
+export function usePre111k(network: Pre111kNetwork, accessCode: string | null, onAccessRejected: (code: string) => void) {
   const wallet = useMiNoteEthereumWallet(true);
   const latestWallet = useRef(wallet);
   latestWallet.current = wallet;
+  const latestAccess = useRef({ code: accessCode, reject: onAccessRejected });
+  latestAccess.current = { code: accessCode, reject: onAccessRejected };
   const mounted = useRef(false);
   const attempt = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
@@ -87,7 +90,7 @@ export function usePre111k(network: Pre111kNetwork) {
   useEffect(() => {
     attempt.current?.abort();
     setStage(null);
-  }, [network, wallet.address, wallet.provider]);
+  }, [network, wallet.address, wallet.provider, accessCode]);
 
   useEffect(() => {
     if (!pending?.hash || !scope || !wallet.address) return;
@@ -124,7 +127,7 @@ export function usePre111k(network: Pre111kNetwork) {
   }, [network, pending, queryClient, scope, wallet.address, confirmationRetry]);
 
   const reserve = async () => {
-    if (!mounted.current || submissionInFlight || pending || !scope || !config?.enabled || !wallet.address || !wallet.provider ||
+    if (!mounted.current || !accessCode || submissionInFlight || pending || !scope || !config?.enabled || !wallet.address || !wallet.provider ||
       !wallet.ready || wallet.status !== 'connected') return;
     const savedScope = scope;
     const savedWallet = wallet.address;
@@ -137,7 +140,11 @@ export function usePre111k(network: Pre111kNetwork) {
     let submitted = false;
     try {
       operation = ethereumOperation(() => mounted.current ? latestWallet.current : { address: null, provider: null }, config);
-      const assertCurrent = () => { controller.signal.throwIfAborted(); operation!.assertCurrent(); };
+      const assertCurrent = () => {
+        controller.signal.throwIfAborted();
+        operation!.assertCurrent();
+        if (latestAccess.current.code !== accessCode) throw new Error('Enter your secret code to continue.');
+      };
       const signal = AbortSignal.any([controller.signal, operation.signal]);
       const fresh = await pre111kApi.status(network, savedWallet, signal);
       assertCurrent();
@@ -147,7 +154,7 @@ export function usePre111k(network: Pre111kNetwork) {
       }
       queryClient.setQueryData(queryKey, fresh);
       if (fresh.remainingRelics === 0) throw new Error('All 18 relics have been reserved.');
-      const prepared = await pre111kApi.prepare(network, savedWallet, signal);
+      const prepared = await pre111kApi.prepare(network, savedWallet, accessCode, signal);
       assertCurrent();
       const transaction = checkedPre111kReservation(prepared, fresh.config, savedWallet, fresh.reservedRelics);
       setStage('Confirm in your wallet…');
@@ -159,6 +166,9 @@ export function usePre111k(network: Pre111kNetwork) {
       });
       writePending(savedScope, { hash, nonce: prepared.nonce, submittedAt: Date.now() });
     } catch (error) {
+      if (!submitted && error instanceof EthereumApiError && error.code === 'unauthenticated') {
+        latestAccess.current.reject(accessCode);
+      }
       const rejected = error && typeof error === 'object' && 'code' in error && error.code === 4001;
       if (submitted && rejected) writePending(savedScope, null);
       if (mounted.current && latestWallet.current.address === savedWallet) {

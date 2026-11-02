@@ -94,6 +94,7 @@ const EXPECTED_EXACT_ROUTES = [
   ['/ethereum/111k/checkout/prepare', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/checkout/prepare'],
   ['/ethereum/111k/checkout/submission', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/checkout/submission'],
   ['/ethereum/111k/checkout/refresh', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/checkout/refresh'],
+  ['/ethereum/pre111k/access', 'ethereum', true, 'skip', false, 'profile', '/ethereum/pre111k/access'],
   ['/ethereum/pre111k/status', 'ethereum', true, 'skip', false, 'profile', '/ethereum/pre111k/status'],
   ['/ethereum/pre111k/prepare', 'ethereum', true, 'skip', true, 'profile', '/ethereum/pre111k/prepare'],
   ['/ethereum/pre111k/confirm', 'ethereum', true, 'skip', false, 'profile', '/ethereum/pre111k/confirm'],
