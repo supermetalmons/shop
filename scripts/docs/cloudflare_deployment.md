@@ -110,6 +110,20 @@ Publish only code that uses the authoritative state tables. Earlier Workers
 that read or write removed JSON metadata are not
 rollback targets; use a compatible correction.
 
+### Drop notification segments
+
+The API Worker's `RESEND_DROP_SEGMENT_IDS` JSON variable maps canonical drop
+families to Resend segment IDs in `cloud/workers/api/wrangler.jsonc`. Before adding
+a family, create or reuse a Resend segment named with that family's key, configure
+its ID, and regenerate API types with `npm run types:api`. Mainnet and devnet
+variants use the same family segment. Signup requests do not provision segments;
+a missing mapping makes that family's signup fail without reporting success.
+
+Deploy the API before the frontend when introducing family-aware signup. The API
+continues to accept email-only requests for generic signup and older clients.
+Historical contacts with no recorded family remain unclassified; do not backfill
+them into drop segments. Adding these groups does not send a broadcast.
+
 ## Pack-status D1
 
 The API Worker binds the existing `mons-shop-data` database as `DATA_DB`.

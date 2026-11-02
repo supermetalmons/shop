@@ -2,11 +2,13 @@ import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { z } from 'zod';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { subscribeToNotifications } from '../lib/notificationSubscriptions';
+import type { SubscribeToNotificationsRequest } from '../types';
 import { FormError } from './FormError';
 
 interface NotifyFormProps {
   onSuccess: () => void;
   onCancel: () => void;
+  dropFamily?: SubscribeToNotificationsRequest['dropFamily'];
 }
 
 const NOTIFICATION_EMAIL_SCHEMA = z.string().email().max(254);
@@ -15,7 +17,7 @@ function isValidEmail(email: string): boolean {
   return NOTIFICATION_EMAIL_SCHEMA.safeParse(email).success;
 }
 
-export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
+export function NotifyForm({ onSuccess, onCancel, dropFamily }: NotifyFormProps) {
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const errorId = useId();
   const [email, setEmail] = useState('');
@@ -40,7 +42,10 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
     }
 
     await run(async () => {
-      const result = await subscribeToNotifications({ email: normalizedEmail });
+      const result = await subscribeToNotifications({
+        email: normalizedEmail,
+        ...(dropFamily ? { dropFamily } : {}),
+      });
       if (!result || result.subscribed !== true) {
         throw new Error('Unexpected subscription response.');
       }

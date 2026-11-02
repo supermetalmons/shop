@@ -8,7 +8,7 @@ test('leaving payment for a loading lazy route cancels the pending payment', asy
   const { dom } = setupFrontendDom();
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   document.body.innerHTML = '<div id="root"></div>';
-  window.history.replaceState(null, '', '/111111');
+  window.history.replaceState(null, '', '/111k/relics');
   const { act, fireEvent, getByRole, waitFor } = await import('@testing-library/react');
   const { default: ReactDOM } = await import('react-dom/client');
   const { navigate } = await import('../src/navigation.ts');

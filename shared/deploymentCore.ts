@@ -7,6 +7,7 @@ export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type DropFamily =
   | 'default'
+  | '111k'
   | 'little_swag_boxes'
   | 'poncho_drifella'
   | 'doge_day_2026'
@@ -265,6 +266,8 @@ export function normalizeDropId(dropId: string): string {
 }
 
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  '111k': '111k',
+  '111k_devnet': '111k',
   card_nft_2: 'card_nft_2',
   card_nft_binder: 'card_nft_binder',
   card_nft_binder_devnet: 'card_nft_binder',
@@ -292,6 +295,7 @@ export function defaultDropFamilyForDropId(dropId: string): DropFamily {
 export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
   const normalized = String(value ?? '').trim().toLowerCase();
   if (
+    normalized === '111k' ||
     normalized === 'little_swag_boxes' ||
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||

@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import type { SubscribeToNotificationsRequest } from '../types';
 import { Modal } from './Modal';
 import { NotifyForm } from './NotifyForm';
 
@@ -6,6 +7,7 @@ interface NotifySubscriptionProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubscribed: (announcement: string) => void;
+  dropFamily?: SubscribeToNotificationsRequest['dropFamily'];
   suspended?: boolean;
 }
 
@@ -13,6 +15,7 @@ export function NotifySubscription({
   open,
   onOpenChange,
   onSubscribed,
+  dropFamily,
   suspended = false,
 }: NotifySubscriptionProps) {
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
@@ -33,7 +36,7 @@ export function NotifySubscription({
       showCloseButton={false}
       suspended={suspended}
     >
-      <NotifyForm onSuccess={handleSuccess} onCancel={close} />
+      <NotifyForm dropFamily={dropFamily} onSuccess={handleSuccess} onCancel={close} />
     </Modal>
   );
 }

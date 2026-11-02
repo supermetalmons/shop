@@ -89,6 +89,7 @@ function env(options: {
   dataDb?: D1Database;
   opsDb?: D1Database;
   resendContactsApiKey?: string;
+  resendDropSegmentIds?: Env['RESEND_DROP_SEGMENT_IDS'];
   notificationEnqueueSecret?: string;
   notificationQueue?: Queue;
   publicNotificationRateLimiter?: RateLimit;
@@ -147,6 +148,7 @@ function env(options: {
     RESEND_CONTACTS_API_KEY: options.resendContactsApiKey === undefined
       ? 'resend-test-key'
       : options.resendContactsApiKey,
+    RESEND_DROP_SEGMENT_IDS: options.resendDropSegmentIds ?? {},
     NOTIFICATION_ENQUEUE_SECRET: options.notificationEnqueueSecret === undefined
       ? 'notification-enqueue-test-secret'
       : options.notificationEnqueueSecret,
@@ -1884,6 +1886,198 @@ test('notification subscription treats Resend conflicts as idempotent success', 
     );
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { subscribed: true });
+  }
+});
+
+test('drop notification signups add the normalized contact to the configured segment', async () => {
+  for (const contactResponse of [
+    () => Response.json({ object: 'contact', id: 'contact-1' }),
+    () => Response.json({ name: 'contact_already_exists' }, { status: 409 }),
+    () => Response.json({ name: 'duplicate_contact' }, { status: 400 }),
+  ]) {
+    const calls: Array<{ input: string; init?: RequestInit }> = [];
+    const logs: Record<string, unknown>[] = [];
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: ' Buyer+111k@Example.COM ', dropFamily: '111k' }),
+      env({ resendDropSegmentIds: { '111k': 'segment-111k' } }),
+      {
+        ...quietDependencies(fetch),
+        log: (entry) => logs.push(entry),
+        resendFetch: async (input, init) => {
+          calls.push({ input: String(input), init });
+          return calls.length === 1 ? contactResponse() : Response.json({ id: 'segment-111k' });
+        },
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { subscribed: true });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.input, 'https://api.resend.com/contacts');
+    assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), {
+      email: 'buyer+111k@example.com', unsubscribed: false,
+    });
+    assert.equal(calls[1]?.input, 'https://api.resend.com/contacts/buyer%2B111k%40example.com/segments/segment-111k');
+    assert.equal(calls[1]?.init?.method, 'POST');
+    assert.equal(calls[1]?.init?.body, undefined);
+    assert.equal(calls[1]?.init?.signal, calls[0]?.init?.signal);
+    assert.equal(logs.at(-1)?.upstreamCalls, 2);
+    assert.doesNotMatch(JSON.stringify(logs), /buyer|resend-test-key|segment-111k/);
+  }
+});
+
+test('drop notification signups can repeat and join another family after a partial failure', async () => {
+  let contactExists = false;
+  let failSegment = true;
+  const memberships = new Set<string>();
+  const dependencies = {
+    ...quietDependencies(fetch),
+    resendFetch: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://api.resend.com/contacts') {
+        const response = contactExists
+          ? Response.json({ name: 'duplicate_contact' }, { status: 400 })
+          : Response.json({ id: 'contact-1' });
+        contactExists = true;
+        return response;
+      }
+      if (failSegment) {
+        failSegment = false;
+        return Response.json({ message: 'temporary private failure' }, { status: 503 });
+      }
+      const id = url.split('/').at(-1)!;
+      memberships.add(id);
+      return Response.json({ id });
+    },
+  };
+  const configuredEnv = env({ resendDropSegmentIds: { '111k': 'segment-111k', clear_cards: 'segment-clear-cards' } });
+  for (const [dropFamily, expectedStatus] of [['111k', 502], ['111k', 200], ['111k', 200], ['clear_cards', 200]] as const) {
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: 'buyer@example.com', dropFamily }),
+      configuredEnv,
+      dependencies,
+    );
+    assert.equal(response.status, expectedStatus);
+  }
+  assert.deepEqual([...memberships], ['segment-111k', 'segment-clear-cards']);
+});
+
+test('notification signup rejects invalid families and missing segment configuration before contacting Resend', async () => {
+  const dependencies = {
+    ...quietDependencies(fetch),
+    resendFetch: async () => assert.fail('Invalid signup must not call Resend'),
+  };
+  for (const dropFamily of ['unknown', 'default', '', '111K', ' 111k ', '111k_devnet', null, 42, {}]) {
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: 'buyer@example.com', dropFamily }), env(), dependencies,
+    );
+    assert.equal(response.status, 400);
+  }
+  for (const segmentId of [undefined, '', '  ', 42]) {
+    const configuredEnv = env();
+    Reflect.set(configuredEnv.RESEND_DROP_SEGMENT_IDS, '111k', segmentId);
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: 'buyer@example.com', dropFamily: '111k' }),
+      configuredEnv, dependencies,
+    );
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
+  }
+});
+
+test('notification segment assignment validates bounded successful responses and hides provider failures', async () => {
+  for (const segmentResponse of [
+    () => Response.json({ message: 'private failure' }, { status: 503 }),
+    () => Response.json({ name: 'duplicate_contact' }, { status: 409 }),
+    () => Response.json({}),
+    () => Response.json({ id: 'wrong-segment' }),
+    () => new Response(null, { status: 204 }),
+    () => new Response('{'),
+    () => Response.json({ id: 'segment-111k', padding: 'x'.repeat(8 * 1024) }),
+    () => { throw new Error('private transport failure'); },
+  ]) {
+    let calls = 0;
+    const logs: Record<string, unknown>[] = [];
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: 'buyer@example.com', dropFamily: '111k' }),
+      env({ resendDropSegmentIds: { '111k': 'segment-111k' } }),
+      {
+        ...quietDependencies(fetch),
+        log: (entry) => logs.push(entry),
+        resendFetch: async () => ++calls === 1 ? Response.json({ id: 'contact-1' }) : segmentResponse(),
+      },
+    );
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
+    assert.equal(calls, 2);
+    assert.equal(logs.at(-1)?.upstreamCalls, 2);
+    assert.doesNotMatch(JSON.stringify(logs), /buyer|resend-test-key|private|segment-111k/);
+  }
+});
+
+test('notification segment assignment shares the request deadline and cancellation signal', async () => {
+  for (const segmentFetch of [
+    async (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return reject(new Error('missing signal'));
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+    async () => new Response(new ReadableStream<Uint8Array>({ start() {} })),
+  ]) {
+    let calls = 0;
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: 'buyer@example.com', dropFamily: '111k' }),
+      env({ resendDropSegmentIds: { '111k': 'segment-111k' } }),
+      {
+        ...quietDependencies(fetch),
+        resendTimeoutMs: 10,
+        resendFetch: async (input, init) => ++calls === 1 ? Response.json({ id: 'contact-1' }) : segmentFetch(input, init),
+      },
+    );
+    assert.equal(calls, 2);
+    assert.equal(response.status, 504);
+    assert.deepEqual(await response.json(), { ok: false, error: 'provider-timeout' });
+  }
+});
+
+test('client cancellation aborts notification segment fetches and response bodies', async () => {
+  for (const responseStarted of [false, true]) {
+    const controller = new AbortController();
+    const reason = new Error('client disconnected during segment assignment');
+    let started!: () => void;
+    const segmentStarted = new Promise<void>((resolve) => { started = resolve; });
+    let cancelled = false;
+    let calls = 0;
+    const pending = handleRequest(
+      new Request(request('/notifications/subscribe', { email: 'buyer@example.com', dropFamily: '111k' }), {
+        signal: controller.signal,
+      }),
+      env({ resendDropSegmentIds: { '111k': 'segment-111k' } }),
+      {
+        ...quietDependencies(fetch),
+        resendFetch: async (_input, init) => {
+          if (++calls === 1) return Response.json({ id: 'contact-1' });
+          if (responseStarted) {
+            return new Response(new ReadableStream<Uint8Array>({
+              pull() { started(); },
+              cancel() { cancelled = true; },
+            }, { highWaterMark: 0 }));
+          }
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              cancelled = true;
+              reject(init.signal?.reason);
+            }, { once: true });
+            started();
+          });
+        },
+      },
+    );
+    await segmentStarted;
+    controller.abort(reason);
+    const response = await pending;
+    assert.equal(response.status, 499);
+    assert.equal(cancelled, true);
+    assert.equal(calls, 2);
   }
 });
 

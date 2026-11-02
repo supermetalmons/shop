@@ -47,6 +47,16 @@ export const LEGACY_DROP_ROUTE_ALIASES = {
 
 const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
   {
+    path: '/111k',
+    dropFamily: '111k',
+    solanaCluster: 'mainnet-beta',
+    label: '111k',
+    title: '111k',
+    previewImageUrl: 'https://wip.lil.org/111k/artwork_placeholder.png',
+    previewAspectRatio: 932 / 1006,
+    boxNamePrefix: 'drop',
+  },
+  {
     path: '/doge_day_2026',
     dropFamily: 'doge_day_2026',
     solanaCluster: 'mainnet-beta',

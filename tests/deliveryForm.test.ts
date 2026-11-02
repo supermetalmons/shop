@@ -46,6 +46,7 @@ const cardNotes = {
 };
 const familyNotes: Record<DropFamily, ShippingNoteCase> = {
   default: defaultNotes,
+  '111k': defaultNotes,
   doge_day_2026: defaultNotes,
   little_swag_boxes: {
     itemsPerBox: 3,

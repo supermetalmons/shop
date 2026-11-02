@@ -114,6 +114,16 @@ const UPCOMING_ROUTES = [
     previewAspectRatio: 914 / 1280,
     boxNamePrefix: 'drop',
   },
+  {
+    path: '/111k',
+    dropFamily: '111k',
+    solanaCluster: 'mainnet-beta',
+    label: '111k',
+    title: '111k',
+    previewImageUrl: 'https://wip.lil.org/111k/artwork_placeholder.png',
+    previewAspectRatio: 932 / 1006,
+    boxNamePrefix: 'drop',
+  },
 ] as const;
 
 test('upcoming routes expose their exact preview configuration', () => {
@@ -121,6 +131,34 @@ test('upcoming routes expose their exact preview configuration', () => {
 
   for (const expected of UPCOMING_ROUTES) {
     assert.deepEqual(routesByPath.get(expected.path), expected);
+  }
+});
+
+test('111k announcement and relic payment routes stay separate from the Ethereum devnet drop', () => {
+  for (const suffix of ['', '/']) {
+    const upcoming = resolveAppRoute({ pathname: `/111k${suffix}` });
+    assert.equal(upcoming.kind, 'upcoming');
+    assert.equal(upcoming.path, '/111k');
+    assert.equal(upcoming.shopPath, '/111k');
+    assert.equal(upcoming.upcoming?.dropFamily, '111k');
+    assert.equal(upcoming.walletCluster, 'mainnet-beta');
+    assert.equal(upcoming.drop, null);
+    assert.equal(upcoming.ethereumDropId, undefined);
+    assert.equal(upcoming.replacementHref, null);
+
+    const relics = resolveAppRoute({ pathname: `/111k/relics${suffix}` });
+    assert.equal(relics.kind, 'direct-payment');
+    assert.equal(relics.path, '/111k/relics');
+    assert.equal(relics.upcoming, null);
+    assert.equal(relics.drop, null);
+    assert.equal(relics.ethereumDropId, undefined);
+    assert.equal(relics.replacementHref, null);
+    assert.equal(resolveUpcomingDropRouteByPath(`/111k/relics${suffix}`), null);
+    assert.equal(resolveFrontendDropByPath(`/111k${suffix}`), null);
+
+    const devnet = resolveAppRoute({ pathname: `/111k_devnet${suffix}` });
+    assert.equal(devnet.kind, 'ethereum-drop');
+    assert.equal(devnet.ethereumDropId, '111k_devnet');
   }
 });
 
@@ -254,6 +292,7 @@ test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi
 
 test('route aliases replace only the pathname and preserve search and hash bytes', () => {
   const cases = [
+    ['/111111', '/111k/relics', 'direct-payment'],
     ['/ff', '/fulfillment', 'fulfillment'],
     ['/fullfillment', '/fulfillment', 'fulfillment'],
     ['/notify-me', '/notify_me', 'notify'],
@@ -427,7 +466,7 @@ test('card NFT binder resolves its live mainnet deployment config', () => {
 });
 
 test('drop family names normalize and default from IDs', () => {
-  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd', 'mi_note_cards', 'doge_day_2026'] as const) {
+  for (const family of ['111k', 'card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd', 'mi_note_cards', 'doge_day_2026'] as const) {
     assert.equal(defaultDropFamilyForDropId(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeDropFamily(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeDropFamily(undefined, ` ${family.toUpperCase()} `), family);
@@ -435,4 +474,6 @@ test('drop family names normalize and default from IDs', () => {
   }
   assert.equal(defaultDropFamilyForDropId('mi_note_cards_devnet'), 'mi_note_cards');
   assert.equal(normalizeDropFamily(undefined, 'mi_note_cards_devnet'), 'mi_note_cards');
+  assert.equal(defaultDropFamilyForDropId('111k_devnet'), '111k');
+  assert.equal(normalizeDropFamily(undefined, '111k_devnet'), '111k');
 });

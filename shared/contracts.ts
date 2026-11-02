@@ -1,6 +1,7 @@
 import type { FulfillmentStatus } from './fulfillmentStatus.ts';
 import type { ShipStationPackageInput } from './shipstationPackage.ts';
 import type { ShipmentHistoryCursor, ShipmentPageRequest } from './shipmentHistory.ts';
+import type { DropFamily } from './deploymentCore.ts';
 
 export type PackStatusBreakdownItem = {
   key: 'redeemed' | 'unsealed' | 'total';
@@ -27,6 +28,7 @@ export type PackStatusBreakdown = {
 
 export type SubscribeToNotificationsRequest = {
   email: string;
+  dropFamily?: Exclude<DropFamily, 'default'>;
 };
 
 export type SubscribeToNotificationsResponse = {

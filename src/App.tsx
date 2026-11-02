@@ -77,6 +77,7 @@ function App({ route, suspended = false }: AppProps) {
   const statusUiSuspended = suspended || walletModalVisible;
   const auth = useSolanaAuth();
   const drop = useShopDrop(route);
+  const notificationDropFamily = drop.upcomingDropRoute?.dropFamily ?? drop.routeDrop?.dropFamily;
   const isNfcPage = route.kind === 'nfc';
   const commerceUiSuspended = suspended || isNfcPage;
   const isEthereum111kPage = route.ethereumDropId === '111k_devnet';
@@ -412,6 +413,7 @@ function App({ route, suspended = false }: AppProps) {
           open={notifications.notifyOpen}
           onOpenChange={notifications.handleNotifyOpenChange}
           onSubscribed={showSuccessHud}
+          dropFamily={notificationDropFamily === 'default' ? undefined : notificationDropFamily}
           suspended={isModalLayerSuspended({ activeLayer: activeModalLayer, appSuspended: suspended, layer: 'notify', open: notifications.notifyOpen })}
         />
       )}

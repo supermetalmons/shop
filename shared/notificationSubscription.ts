@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeDropFamily } from './deploymentCore.ts';
 import type {
   SubscribeToNotificationsRequest,
   SubscribeToNotificationsResponse,
@@ -28,7 +29,12 @@ export function normalizeNotificationEmailRecipient(rawEmail: unknown): string |
 export function isExactSubscribeToNotificationsRequest(
   value: unknown,
 ): value is SubscribeToNotificationsRequest {
-  return isRecord(value) && hasExactKeys(value, ['email']) && typeof value.email === 'string';
+  if (!isRecord(value) || typeof value.email !== 'string') return false;
+  if (hasExactKeys(value, ['email'])) return true;
+  return hasExactKeys(value, ['email', 'dropFamily'])
+    && typeof value.dropFamily === 'string'
+    && value.dropFamily !== 'default'
+    && normalizeDropFamily(value.dropFamily) === value.dropFamily;
 }
 
 export function isExactSubscribeToNotificationsResponse(

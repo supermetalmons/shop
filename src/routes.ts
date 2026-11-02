@@ -43,6 +43,7 @@ type RouteAlias = {
 };
 
 const APP_ROUTE_ALIASES: Readonly<Record<string, RouteAlias>> = {
+  '/111111': { targetPath: '/111k/relics', replaceUrl: true },
   '/ff': { targetPath: '/fulfillment', replaceUrl: true },
   '/fullfillment': { targetPath: '/fulfillment', replaceUrl: true },
   '/notify-me': { targetPath: '/notify_me', replaceUrl: true },
@@ -134,7 +135,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/') return createRoute('home', path, replacementHref);
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
-  if (path === '/111111') return createRoute('direct-payment', path, replacementHref);
+  if (path === '/111k/relics') return createRoute('direct-payment', path, replacementHref);
   if (path === '/checkout' || path.startsWith('/checkout/')) {
     return createRoute('checkout', path, replacementHref, {
       checkoutId: path === '/checkout' ? undefined : path.slice('/checkout/'.length),

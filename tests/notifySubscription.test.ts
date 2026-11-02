@@ -1,6 +1,7 @@
 import test, { after, afterEach, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement, useState } from 'react';
+import type { SubscribeToNotificationsRequest } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
@@ -19,9 +20,10 @@ afterEach(() => {
 });
 after(() => dom.window.close());
 
-function Subscription({ suspended = false, onSubscribed = () => undefined }: {
+function Subscription({ suspended = false, onSubscribed = () => undefined, dropFamily }: {
   suspended?: boolean;
   onSubscribed?: (message: string) => void;
+  dropFamily?: SubscribeToNotificationsRequest['dropFamily'];
 }) {
   const [open, setOpen] = useState(false);
   const hud = useSuccessHud(suspended);
@@ -31,6 +33,7 @@ function Subscription({ suspended = false, onSubscribed = () => undefined }: {
       open,
       onOpenChange: setOpen,
       suspended,
+      dropFamily,
       onSubscribed: (message) => {
         onSubscribed(message);
         hud.show(message);
@@ -109,6 +112,38 @@ test('invalid email and failed requests leave the form usable without announcing
   assert.equal(email.disabled, false);
   assert.equal(view.getByRole('button', { name: 'OK' }).getAttribute('aria-busy'), 'false');
   assert.equal(view.getByRole('status').textContent, '');
+});
+
+test('drop notification signup keeps its family when retrying a failed request', async () => {
+  const requests: unknown[] = [];
+  const announcements: string[] = [];
+  respond = async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return requests.length === 1
+      ? Response.json({ error: 'provider-unavailable' }, { status: 502 })
+      : Response.json({ subscribed: true });
+  };
+  const view = render(createElement(Subscription, {
+    dropFamily: '111k',
+    onSubscribed: (message) => announcements.push(message),
+  }));
+  openSubscription(view);
+  fireEvent.change(view.getByRole('textbox', { name: 'Email' }), {
+    target: { value: ' person@example.com ' },
+  });
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'OK' })); });
+  assert.deepEqual(requests, [{ email: 'person@example.com', dropFamily: '111k' }]);
+  assert.deepEqual(announcements, []);
+  assert.equal(view.getByRole('alert').textContent, 'Unable to subscribe. Please try again.');
+  assert.equal(view.getByRole('status').textContent, '');
+
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'OK' })); });
+  assert.deepEqual(requests, [
+    { email: 'person@example.com', dropFamily: '111k' },
+    { email: 'person@example.com', dropFamily: '111k' },
+  ]);
+  assert.equal(view.queryByRole('dialog'), null);
+  assert.deepEqual(announcements, ['You’re on the list.']);
 });
 
 test('suspended notification overlays ignore dismissal and resume Escape handling when active', () => {

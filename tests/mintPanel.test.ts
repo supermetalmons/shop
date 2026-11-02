@@ -97,64 +97,87 @@ test('clear cards keep a single pack preview as mint quantity changes', () => {
   assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
 });
 
-test('Doge Day 2026 displays its cover and opens the standard notification dialog without purchase controls', () => {
-  const route = resolveAppRoute({ pathname: '/doge_day_2026/' });
-  const unexpectedPurchase = () => assert.fail('An upcoming drop must not initiate a purchase');
-  function Announcement() {
-    const drop = useShopDrop(route);
-    const notifications = useShopNotifications(drop.normalizedCurrentPath, Boolean(drop.upcomingDropRoute), false);
-    return createElement('div', null,
-      createElement(ShopPurchaseSection, {
-        ...drop,
-        minting: false,
-        discountMinting: false,
-        stripePaymentLoading: false,
-        successfulMintToken: 0,
-        discountAvailable: false,
-        discountRemainingCount: 0,
-        handleMint: unexpectedPurchase,
-        handleDiscountMint: unexpectedPurchase,
-        handleStripePayment: unexpectedPurchase,
-        mintStatsReady: false,
-        packStatusDropId: null,
-        packStatusBreakdown: undefined,
-        packStatusDisplayLabels: undefined,
-        effectiveMintStats: undefined,
-        connectedWallet: undefined,
-        publicKey: null,
-        walletBusy: false,
-        showToast: unexpectedPurchase,
-        handleOpenNotify: notifications.handleOpenNotify,
-      }),
-      createElement(NotifySubscription, {
-        open: notifications.notifyOpen,
-        onOpenChange: notifications.handleNotifyOpenChange,
-        onSubscribed: () => undefined,
-      }),
-    );
-  }
+for (const { path, family, title, image } of [
+  { path: '/doge_day_2026', family: 'doge_day_2026', title: 'Doge Day 2026', image: '/drops/doge_day_2026/cover.jpg' },
+  { path: '/111k', family: '111k', title: '111k', image: 'https://wip.lil.org/111k/artwork_placeholder.png' },
+]) {
+  test(`${title} displays its cover and subscribes to its family without purchase controls`, async t => {
+    const route = resolveAppRoute({ pathname: `${path}/` });
+    const requests: unknown[] = [];
+    const announcements: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
+      assert.match(String(input), /\/notifications\/subscribe$/);
+      assert.equal(init?.method, 'POST');
+      requests.push(JSON.parse(String(init?.body)));
+      return Response.json({ subscribed: true });
+    });
+    const unexpectedPurchase = () => assert.fail('An upcoming drop must not initiate a purchase');
+    function Announcement() {
+      const drop = useShopDrop(route);
+      const dropFamily = drop.upcomingDropRoute?.dropFamily ?? drop.routeDrop?.dropFamily;
+      const notifications = useShopNotifications(drop.normalizedCurrentPath, Boolean(drop.upcomingDropRoute), false);
+      return createElement('div', null,
+        createElement(ShopPurchaseSection, {
+          ...drop,
+          minting: false,
+          discountMinting: false,
+          stripePaymentLoading: false,
+          successfulMintToken: 0,
+          discountAvailable: false,
+          discountRemainingCount: 0,
+          handleMint: unexpectedPurchase,
+          handleDiscountMint: unexpectedPurchase,
+          handleStripePayment: unexpectedPurchase,
+          mintStatsReady: false,
+          packStatusDropId: null,
+          packStatusBreakdown: undefined,
+          packStatusDisplayLabels: undefined,
+          effectiveMintStats: undefined,
+          connectedWallet: undefined,
+          publicKey: null,
+          walletBusy: false,
+          showToast: unexpectedPurchase,
+          handleOpenNotify: notifications.handleOpenNotify,
+        }),
+        createElement(NotifySubscription, {
+          open: notifications.notifyOpen,
+          onOpenChange: notifications.handleNotifyOpenChange,
+          onSubscribed: (announcement) => { announcements.push(announcement); },
+          dropFamily: dropFamily === 'default' ? undefined : dropFamily,
+        }),
+      );
+    }
 
-  const view = render(createElement(Announcement));
-  assert.ok(view.getByText('Doge Day 2026'));
-  assert.ok(view.getByText('Soon'));
-  const cover = view.container.querySelector<HTMLImageElement>('.mint-panel__preview img');
-  assert.equal(cover?.getAttribute('src'), '/drops/doge_day_2026/cover.jpg');
-  assert.ok(cover?.closest('.mint-panel__preview--doge-day-2026'));
-  assert.equal(view.queryByRole('slider'), null);
-  assert.equal(view.queryByRole('button', { name: /Mint|Checkout|Pay/i }), null);
-  assert.equal(view.container.querySelector('form'), null);
-  assert.equal(view.queryByRole('dialog'), null);
+    const view = render(createElement(Announcement));
+    assert.ok(view.getByText(title));
+    assert.ok(view.getByText('Soon'));
+    const cover = view.container.querySelector<HTMLImageElement>('.mint-panel__preview img');
+    assert.equal(cover?.getAttribute('src'), image);
+    if (path === '/doge_day_2026') assert.ok(cover?.closest('.mint-panel__preview--doge-day-2026'));
+    assert.equal(view.queryByRole('slider'), null);
+    assert.equal(view.queryByRole('button', { name: /Mint|Checkout|Pay/i }), null);
+    assert.equal(view.container.querySelector('form'), null);
+    assert.equal(view.queryByRole('dialog'), null);
 
-  fireEvent.click(view.getByRole('button', { name: 'Notify Me' }));
-  assert.ok(view.getByRole('dialog', { name: 'Notify me' }));
-  assert.ok(view.getByRole('textbox', { name: 'Email' }));
-  fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
-  assert.equal(view.queryByRole('dialog'), null);
-});
+    fireEvent.click(view.getByRole('button', { name: 'Notify Me' }));
+    assert.ok(view.getByRole('dialog', { name: 'Notify me' }));
+    assert.ok(view.getByRole('textbox', { name: 'Email' }));
+    fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
+    assert.equal(view.queryByRole('dialog'), null);
 
-test('Doge Day 2026 remains accessible by URL without adding a home grid tile', () => {
+    fireEvent.click(view.getByRole('button', { name: 'Notify Me' }));
+    fireEvent.change(view.getByRole('textbox', { name: 'Email' }), { target: { value: 'person@example.com' } });
+    await act(async () => { fireEvent.click(view.getByRole('button', { name: 'OK' })); });
+    assert.deepEqual(requests, [{ email: 'person@example.com', dropFamily: family }]);
+    assert.deepEqual(announcements, ['You’re on the list.']);
+    assert.equal(view.queryByRole('dialog'), null);
+  });
+}
+
+test('announcement pages remain accessible by URL without adding home grid tiles', () => {
   const view = render(createElement(DropsPanel));
   assert.equal(view.queryByRole('link', { name: 'Doge Day 2026' }), null);
+  assert.equal(view.queryByRole('link', { name: '111k' }), null);
   assert.ok(view.getByRole('link', { name: 'Poncho Drifella' }));
 });
 

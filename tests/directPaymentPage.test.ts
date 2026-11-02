@@ -26,7 +26,7 @@ type Request = Parameters<EIP1193Provider['request']>[0];
 beforeEach(() => {
   ({ dom } = setupFrontendDom());
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
-  window.history.replaceState(null, '', '/111111');
+  window.history.replaceState(null, '', '/111k/relics');
 });
 afterEach(() => {
   cleanup();

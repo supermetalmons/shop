@@ -86,6 +86,7 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
     COSIGNER_SECRET: bs58.encode(signer.secretKey),
     RESEND_API_KEY: '',
     RESEND_CONTACTS_API_KEY: '',
+    RESEND_DROP_SEGMENT_IDS: {},
     NOTIFICATION_ENQUEUE_SECRET: '',
     ADDRESS_DECRYPTION_SECRET: '',
     SHIPSTATION_API_KEY: '',

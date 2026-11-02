@@ -15,6 +15,19 @@
 		"mode": "smart"
 	},
 	"vars": {
+		"RESEND_DROP_SEGMENT_IDS": {
+			"111k": "576784c5-af45-4b8f-bf76-110aeef33126",
+			"card_nft_2": "70093451-15ee-4c4c-88b8-592bb985ac1f",
+			"card_nft_binder": "d7285a39-f123-4881-8f97-facd4054dd6e",
+			"clear_cards": "2e526ae2-d75e-475f-99b4-44006eab01ae",
+			"doge_day_2026": "d7892659-1a71-482d-a6fe-66c481717658",
+			"drifella_shirt": "ad7fa4db-adb2-4398-9492-2b34b26179b0",
+			"little_swag_boxes": "22f7f674-fbd1-40c2-944d-ab809776385b",
+			"little_swag_hoodies": "1a65a410-edc6-4278-a8c0-8762c3062ca2",
+			"mi_note_cards": "b90966b7-fbe8-4f25-982d-70dc54dad4f4",
+			"poncho_drifella": "5fb2b9b7-05bf-4885-b37f-cb7f46e7d672",
+			"tbd": "da83ebcc-f5fa-4146-a84b-64ce861cdc82"
+		},
 		"STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED": "true",
 		"ETHEREUM_111K_CHAIN_ID": "11155111",
 		"ETHEREUM_111K_CONTRACT_ADDRESS": "0x320cf00a3606350821ed90ea435e93955b180874",

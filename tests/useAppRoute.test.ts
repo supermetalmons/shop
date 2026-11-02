@@ -16,12 +16,12 @@ afterEach(cleanup);
 after(() => dom.window.close());
 
 test('direct payment loads and remounts at its standalone route without URL replacement', () => {
-  const href = 'https://mons.shop/111111/?from=direct#artwork';
+  const href = 'https://mons.shop/111k/relics/?from=direct#artwork';
   window.history.replaceState({ retained: true }, '', href);
   for (let load = 0; load < 2; load += 1) {
     const view = renderHook(useAppRoute);
     assert.equal(view.result.current.kind, 'direct-payment');
-    assert.equal(view.result.current.path, '/111111');
+    assert.equal(view.result.current.path, '/111k/relics');
     assert.equal(view.result.current.drop, null);
     assert.equal(view.result.current.ethereumDropId, undefined);
     assert.equal(view.result.current.replacementHref, null);
@@ -33,17 +33,29 @@ test('direct payment loads and remounts at its standalone route without URL repl
 
 test('navigation can enter and leave the direct payment route', () => {
   const view = renderHook(useAppRoute);
-  act(() => navigate('/111111'));
+  act(() => navigate('/111k/relics'));
   assert.equal(view.result.current.kind, 'direct-payment');
   act(() => navigate('/notify_me'));
   assert.equal(view.result.current.kind, 'notify');
   act(() => {
-    window.history.replaceState(null, '', '/111111');
+    window.history.replaceState(null, '', '/111k/relics');
     window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
   });
   assert.equal(view.result.current.kind, 'direct-payment');
   act(() => navigate('/'));
   assert.equal(view.result.current.kind, 'home');
+});
+
+test('the old payment path replaces its URL with relics while preserving search, hash, and history state', () => {
+  for (const suffix of ['', '/']) {
+    window.history.replaceState({ retained: true }, '', `/111111${suffix}?from=a%2Fb#artwork`);
+    const view = renderHook(useAppRoute);
+    assert.equal(view.result.current.kind, 'direct-payment');
+    assert.equal(view.result.current.path, '/111k/relics');
+    assert.equal(window.location.href, 'https://mons.shop/111k/relics?from=a%2Fb#artwork');
+    assert.deepEqual(window.history.state, { retained: true });
+    view.unmount();
+  }
 });
 
 test('checkout entries and sessions remain standalone and track query and history changes', () => {

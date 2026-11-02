@@ -205,6 +205,7 @@ const env: Env = {
   OPENSEA_API_KEY: '',
   RESEND_API_KEY: '',
   RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',
+  RESEND_DROP_SEGMENT_IDS: {},
   NOTIFICATION_ENQUEUE_SECRET: 'memory-notification-enqueue-secret',
   ADDRESS_DECRYPTION_SECRET: '',
   COSIGNER_SECRET: '',
