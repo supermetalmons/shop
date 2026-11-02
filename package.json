@@ -61,6 +61,7 @@
     "test:ethereum:contracts": "node scripts/check-all.mjs ethereum",
     "test:ethereum:fork": "node scripts/check-all.mjs fork",
     "test:ethereum:e2e": "node --import tsx cloud/workers/api/runtime-test/ethereum111k-e2e.ts",
+    "test:pre111k:e2e": "node --import tsx cloud/workers/api/runtime-test/pre111k-e2e.ts",
     "test:onchain:sbf": "node scripts/check-all.mjs sbf",
     "check": "npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run check:api && npm run typecheck:tools && npm run check:dead-code && npm test && npm run test:onchain && npm run build && npm run validate:browser-bundle",
     "check:all": "node scripts/check-all.mjs",

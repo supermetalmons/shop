@@ -1,0 +1,27 @@
+{
+  "etherscan": {
+    "error": "Daily limit of 500 source code submissions reached"
+  },
+  "routescan": {
+    "verificationId": "36924455-df36-5ebd-aa9e-2737b5a6fd18",
+    "statusUrl": "https://api.routescan.io/v2/network/testnet/evm/11155111/etherscan/api?module=contract&action=checkverifystatus&chainid=11155111&guid=36924455-df36-5ebd-aa9e-2737b5a6fd18",
+    "explorerUrl": "https://routescan.io/address/0x8dFDE3c4A82AB6322Ca5bd0306EB8cD2e75674B6?chainid=11155111",
+    "contractApiUrl": "https://api.routescan.io/v2/network/testnet/evm/11155111/etherscan/api?module=contract&action=getabi&chainid=11155111&address=0x8dFDE3c4A82AB6322Ca5bd0306EB8cD2e75674B6",
+    "status": {
+      "status": "1",
+      "message": "OK",
+      "result": "Pass - Verified"
+    }
+  },
+  "blockscout": {
+    "verificationId": "8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b66ae86850",
+    "statusUrl": "https://eth-sepolia.blockscout.com/api?module=contract&action=checkverifystatus&chainid=11155111&guid=8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b66ae86850",
+    "explorerUrl": "https://eth-sepolia.blockscout.com//address/0x8dFDE3c4A82AB6322Ca5bd0306EB8cD2e75674B6",
+    "contractApiUrl": "https://eth-sepolia.blockscout.com/api?module=contract&action=getabi&chainid=11155111&address=0x8dFDE3c4A82AB6322Ca5bd0306EB8cD2e75674B6",
+    "status": {
+      "message": "OK",
+      "result": "Pass - Verified",
+      "status": "1"
+    }
+  }
+}

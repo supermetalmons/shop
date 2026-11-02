@@ -129,6 +129,9 @@ function env(options: {
     ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
     ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
     ETHEREUM_111K_RPC_URL: '', ETHEREUM_111K_SIGNER_SECRET: '', ETHEREUM_111K_DELIVERY_CONFIG_ID: '1',
+    ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_MAINNET_ENABLED: 'false',
+    ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'false',
+    ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: '',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
@@ -257,6 +260,29 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
     },
   );
   assert.deepEqual(calls.sort(), ['ethereum', 'ethereumReveal', 'notifications', 'ops', 'packStatus', 'receiptClaimNotifications', 'receiptClaims', 'shippedNotifications', 'stripe', 'stripeNotifications']);
+});
+
+test('relic preorder preparation honors commerce maintenance while status and confirmation remain accessible', async () => {
+  const paused = env({ commerceState: 'paused' });
+  const wallet = `0x${'22'.repeat(20)}`;
+  const headers = { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.1', 'Content-Type': 'application/json', 'X-Mons-CSRF': '1' };
+  const dependencies = quietDependencies(async () => { throw new Error('No RPC should be requested'); });
+  const prepare = await handleRequest(new Request('https://api.mons.shop/ethereum/pre111k/prepare', {
+    method: 'POST', headers, body: JSON.stringify({ network: 'devnet', wallet }),
+  }), paused, dependencies);
+  assert.equal(prepare.status, 503);
+  assert.deepEqual(await prepare.json(), { ok: false, error: 'commerce-maintenance' });
+  assert.equal(prepare.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
+  const status = await handleRequest(new Request(`https://api.mons.shop/ethereum/pre111k/status?network=devnet&wallet=${wallet}`, {
+    headers,
+  }), paused, dependencies);
+  assert.equal(status.status, 200);
+  assert.equal((await status.json() as { config: { enabled: boolean } }).config.enabled, false);
+  const confirm = await handleRequest(new Request('https://api.mons.shop/ethereum/pre111k/confirm', {
+    method: 'POST', headers, body: JSON.stringify({ network: 'devnet', wallet, transactionHash: `0x${'11'.repeat(32)}` }),
+  }), paused, dependencies);
+  assert.equal(confirm.status, 503);
+  assert.deepEqual(await confirm.json(), { ok: false, error: { code: 'unavailable', message: 'Relic reservations are temporarily unavailable.' } });
 });
 
 test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {

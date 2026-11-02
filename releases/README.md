@@ -7,6 +7,7 @@ and committed deployment registry for current behavior.
 
 | Area | Evidence |
 | --- | --- |
+| pre111k relic preorders | [Sepolia v1 contract and storefront](pre111k-sepolia-v1/README.md) |
 | Mi Note mainnet launch | [Deployment and launch](mi-note-cards/README.md), [completed preorder conversion](mi-note-cards/preorder-upgrade/README.md) |
 | Mi Note devnet rehearsal | [Deployment, activation, and conversion](mi-note-cards-devnet/README.md) |
 | Mi Note metadata | [Public metadata](mi-note-cards-mainnet/README.md), [1396–1398](mi-note-cards-1396-1398/README.md), [1399–1400](mi-note-cards-1399-1400/README.md), [1409–1413](mi-note-cards-1409-1413/README.md), [1414–1419](mi-note-cards-1414-1419/README.md), [1420–1430](mi-note-cards-1420-1430/README.md) |

@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-11-02T11:21:32.576Z",
+  "apiVersion": "b1b2b323-34ff-4c77-9638-5822878c501c",
+  "contractChanged": false,
+  "frontendChanged": false,
+  "fixes": [
+    "Reject malformed receipt statuses without classifying a reservation as failed",
+    "Resubmit partial source verification when creation or runtime matching is incomplete"
+  ],
+  "apiAndRoutingTestsPassed": 203,
+  "scriptTestsPassed": 12,
+  "apiTypecheck": "passed",
+  "apiDryRunAndBundleCheck": "passed",
+  "liveStatusAndConfirmationCheck": "passed",
+  "sourceSha256": {
+    "cloud/workers/api/src/pre111k.ts": "e7ab42f89e7dcbc378c15d382e0e358bace045cae18de0bc50668dffa777ce8f",
+    "onchain/ethereum/scripts/pre111k-sourcify.mjs": "efaf58bcec50fed688d3f4501e889ba301a51a65d438be338e298463311f45a5"
+  }
+}

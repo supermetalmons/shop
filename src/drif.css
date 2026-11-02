@@ -149,6 +149,129 @@ header.top--shop.top--drif .top__backdrop {
   --fg: #fff;
 }
 
+.drif-page--relics {
+  gap: 20px;
+  touch-action: pan-y;
+}
+
+.drif-page--relics .drif-main {
+  padding-bottom: 0;
+}
+
+.drif-page--relics .drif-card-showcase {
+  transform: none;
+}
+
+.relic-preorder {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding-bottom: 12px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.55);
+  touch-action: pan-y;
+}
+
+.relic-preorder__connection {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.relic-preorder__address {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.relic-preorder .relic-preorder__text-button {
+  display: inline-block;
+  padding: 4px 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: inherit;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.65);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.relic-preorder .relic-preorder__reserve {
+  padding: 14px 28px;
+  background: #0b84ff;
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.relic-preorder__choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(280px, 80vw);
+  max-height: 30svh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.relic-preorder__choices > button {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.relic-preorder__choices img {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.relic-preorder__feedback p,
+.relic-preorder__recovery p {
+  margin: 0;
+}
+
+.relic-preorder__feedback p + p {
+  margin-top: 6px;
+}
+
+.relic-preorder__feedback a {
+  margin-right: 12px;
+  color: inherit;
+}
+
+.relic-preorder__recovery {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 30svh;
+  overflow-y: auto;
+  touch-action: pan-y;
+}
+
+.relic-preorder__recovery form,
+.relic-preorder__recovery label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.relic-preorder__recovery input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
 @media (max-width: 480px), (max-height: 760px) {
   .drif-card-showcase {
     width: min(100%, 340px);

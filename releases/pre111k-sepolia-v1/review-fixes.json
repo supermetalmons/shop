@@ -1,0 +1,25 @@
+{
+  "checkedAt": "2026-11-02T11:09:21.319Z",
+  "frontendVersion": "331c4b21-76ee-47f8-84cf-fb3947c34bb5",
+  "contractChanged": false,
+  "apiChanged": false,
+  "scriptTestsPassed": 9,
+  "frontendTestsPassed": 28,
+  "build": "passed",
+  "browserBundleCheck": "passed",
+  "liveStylesheetCheck": "passed",
+  "chooserBrowserCheck": {
+    "viewport": {
+      "width": 844,
+      "height": 303
+    },
+    "providers": 6,
+    "cancelReachableAfterScrolling": true,
+    "cancelClickReturnedToConnect": true
+  },
+  "sourceSha256": {
+    "src/drif.css": "25568630b41ddde4573c09fb978ea39f818d69d4545f7ce29c9d5b2639804c00",
+    "onchain/ethereum/scripts/pre111k-deployment.mjs": "387430e7af1b39ebed3082457fbf7cdc4536fa4d4db72ae638c3754fa34bdecd",
+    "onchain/ethereum/scripts/pre111k-sourcify.mjs": "855ad26642c4f2b2c9162c4a1f6dc8ff32d2ce273cbb8b90f728247ebad79375"
+  }
+}

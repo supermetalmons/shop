@@ -1,0 +1,54 @@
+{
+  "checkedAt": "2026-11-02T10:45:04.611Z",
+  "chainId": 11155111,
+  "contractAddress": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+  "mainnet": {
+    "config": {
+      "network": "mainnet",
+      "chainId": 1,
+      "chainName": "Ethereum",
+      "contractAddress": null,
+      "deploymentBlock": 0,
+      "enabled": false,
+      "priceWei": "2300000000000000000",
+      "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "explorerUrl": "https://etherscan.io",
+      "walletRpcUrl": "https://ethereum-rpc.publicnode.com",
+      "confirmationBlocks": 3,
+      "maxRelics": 18
+    },
+    "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "totalReserved": null,
+    "reservedRelics": null,
+    "remainingRelics": null,
+    "observedBlock": null,
+    "blockHash": null
+  },
+  "devnet": {
+    "config": {
+      "network": "devnet",
+      "chainId": 11155111,
+      "chainName": "Sepolia",
+      "contractAddress": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+      "deploymentBlock": 12047599,
+      "enabled": true,
+      "priceWei": "2300000000000000",
+      "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "explorerUrl": "https://sepolia.etherscan.io",
+      "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+      "confirmationBlocks": 3,
+      "maxRelics": 18
+    },
+    "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "totalReserved": 0,
+    "reservedRelics": 0,
+    "remainingRelics": 18,
+    "observedBlock": 12047636,
+    "blockHash": "0x7344596e90ac258c019bb51b905112d9bb7cb7806a1f5363d045ad7f840463d3"
+  },
+  "liveBackendSignatureVerified": true,
+  "authorizedReservationSimulation": "passed",
+  "reservationTransactionBroadcast": false,
+  "totalReservedAfterSimulation": 0,
+  "balanceWeiAfterSimulation": "0"
+}

@@ -40,6 +40,7 @@ import { commerceRoutes } from './workerRoutes/commerce.js';
 import { profileRoutes } from './workerRoutes/profile.js';
 import { staffRoutes } from './workerRoutes/staff.js';
 import { ethereumRoutes } from './ethereumRoutes.js';
+import { pre111kRoutes } from './pre111kRoutes.js';
 import { ETHEREUM_SESSION_HEADER } from '../../../../shared/ethereum/api.js';
 import { applyEthereumCheckoutStatusCors } from './ethereumCheckoutOrigin.js';
 import { applyEthereumRevealCors } from './ethereumReveal.js';
@@ -57,6 +58,7 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
   ...profileRoutes,
   ...staffRoutes,
   ...ethereumRoutes,
+  ...pre111kRoutes,
 ];
 
 function compileExactRoutes(entries: readonly ExactWorkerRoute[]): ReadonlyMap<string, MatchedWorkerRoute> {

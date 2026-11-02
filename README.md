@@ -99,6 +99,7 @@ Release evidence describes the recorded verification time, not live service stat
 | Solana deployments and metadata compatibility | [Solana deployment](scripts/docs/solana_deployment.md) |
 | New drop configuration | [Typed drop templates](scripts/newDrops/README.md) |
 | Mi Note inventory, deployment, pack layouts | [Inventory](scripts/docs/mi_note_public_inventory.md), [deployment](scripts/docs/mi_note_drop_deployment.md), [pack layouts](scripts/docs/mi_note_pack_setups.md) |
+| Ethereum relic reservations and withdrawals | [pre111k](scripts/docs/pre111k.md) |
 | Ethereum checkout | [111K checkout](scripts/docs/111k_checkout.md) |
 | Ethereum metadata and CDN | [111K metadata](scripts/docs/111k_metadata.md) |
 | Ethereum unpack reveals and VVV integration | [111K reveals](scripts/docs/111k_reveal.md) |

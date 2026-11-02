@@ -1,0 +1,73 @@
+{
+  "checkedAt": "2026-11-02T10:46:50.016Z",
+  "suites": [
+    {
+      "command": "npm test",
+      "passed": 4837,
+      "failed": 0
+    },
+    {
+      "command": "npm run test:api",
+      "passed": 2923,
+      "failed": 0
+    },
+    {
+      "command": "npm run test:api:runtime",
+      "passed": 51,
+      "failed": 0
+    },
+    {
+      "command": "node --import tsx --test tests/ethereum*.test.ts tests/ethereum/*.test.ts",
+      "passed": 785,
+      "failed": 0
+    },
+    {
+      "command": "npm run test:pre111k:e2e",
+      "status": "passed",
+      "scenarios": [
+        "API signature to reservation",
+        "three-block confirmation",
+        "wallet and total count refresh",
+        "replay rejection",
+        "18-reservation cap race",
+        "public full-balance withdrawal"
+      ]
+    },
+    {
+      "command": "npm test (onchain/ethereum)",
+      "passed": 253,
+      "failed": 0,
+      "skipped": 4
+    },
+    {
+      "command": "Pre111K actual Safe mainnet-fork test",
+      "passed": 1,
+      "failed": 0,
+      "block": 26326516
+    }
+  ],
+  "checks": {
+    "frontendTypes": "passed",
+    "apiTypes": "passed",
+    "toolTypes": "passed",
+    "generatedDatabaseSchemas": "passed",
+    "workerGeneratedTypes": "passed",
+    "frontendWorkerTests": "passed",
+    "frontendBuild": "passed",
+    "browserBundleCredentialScan": "passed",
+    "apiDryRunAndCredentialScan": "passed",
+    "apiStartupProfile": "passed",
+    "deadCode": "passed",
+    "packStatusD1": "passed",
+    "opsD1": "passed",
+    "commerceD1ForDeployment": "passed",
+    "diffWhitespace": "passed"
+  },
+  "dependenciesAdded": false,
+  "publicReservationTransactionsSent": 0,
+  "mainnetTransactionsSent": 0,
+  "resolvedDuringValidation": [
+    "Updated exact route inventory for the three preorder endpoints; 190 routing/Worker tests passed.",
+    "Replaced obsolete direct-transfer tests with contract-reservation behavior; clean complete frontend and API suites passed afterward."
+  ]
+}

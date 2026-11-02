@@ -1,0 +1,26 @@
+{
+  "recordedAt": "2026-11-02T10:46:50.004Z",
+  "baseRevision": "9bf367036004c6774f1fac22150ef49d589b9898",
+  "apiWorker": "mons-shop-api",
+  "apiVersion": "c3ef7b39-5f86-4546-8011-74c80d3807d3",
+  "frontendWorker": "mons-shop",
+  "frontendVersion": "384f4c6c-c129-42f2-a24b-ca7addd26b2d",
+  "sepoliaContract": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+  "sepoliaEnabled": true,
+  "mainnetEnabled": false,
+  "noDatabaseMigrations": true,
+  "sourceSha256": {
+    "cloud/workers/api/src/pre111k.ts": "ca23dd854cdeaa9ff6887df2730d685b672a6d7e0124f781e759f1d7be47c424",
+    "cloud/workers/api/src/pre111kRoutes.ts": "29bcabd5ee3675654c02a79779579d1d1b9099e08a9d3d93504a7428a4680769",
+    "cloud/workers/api/src/workerRoutes.ts": "f6a0e9a1c56fd50c4ed108cac45d76f04d977e805062c922495e546b93fb7bd2",
+    "cloud/workers/api/worker-configuration.d.ts": "8ad81a1db8994fbc2b91333a34013b75ee73ac040b0f7bce046fc6a2d3ae1926",
+    "cloud/workers/api/wrangler.jsonc": "aeffcb468674849bd9ac952ccb541b9e66dfeb9db2185a4220ed0a2df41e83a0",
+    "package.json": "f818fce9cbc32ead9529a8e268a3d673e22325ccab84a83a38687eb6d3b18dd1",
+    "shared/ethereum/pre111k.ts": "ac2b67f4d73ab26067f364bee7f175125230f2b41845facdd1c8a3690bfa2c5a",
+    "shared/ethereum/pre111kCrypto.ts": "fdd3aee12b0a5c21c23f3b331aed181444a3672e42d1769064fcd8e32115bfb1",
+    "src/drif.css": "d23baea9c42bcb042c9f458bd355f3dae05e5c1875c78a6036bc2ee017dac8d3",
+    "src/ethereum/DirectPaymentPage.tsx": "f95e19318e70c02e46ea88b78ed82ad2c4a444b1fc264e95778d3236e24d7b14",
+    "src/ethereum/pre111kApi.ts": "ab58b8bb74e470d25006960e53499e2b0b5c320af4870b11cad00da8651f1ec1",
+    "src/ethereum/usePre111k.ts": "d04b13edeb8d1f0762afc7eaa9fc8f5c3208d583ca62f118cbe49e7880b20c5a"
+  }
+}

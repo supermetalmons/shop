@@ -1,0 +1,36 @@
+{
+  "checkedAt": "2026-11-02T10:41:35.301Z",
+  "contractSuite": {
+    "command": "npm test",
+    "passed": 253,
+    "failed": 0,
+    "skipped": 4,
+    "log": "contracts-test.log"
+  },
+  "pre111kFocused": {
+    "command": "npm run test:pre111k",
+    "passed": 19,
+    "failed": 0,
+    "skipped": 1,
+    "fuzzRuns": 256
+  },
+  "deploymentTool": {
+    "command": "node --test scripts/pre111k-deployment.test.mjs",
+    "passed": 4,
+    "failed": 0
+  },
+  "mainnetSafeFork": {
+    "command": "forge test --offline --match-contract ^Pre111KSafeForkTest$ --fork-url https://ethereum-rpc.publicnode.com --fork-block-number 26326516 --gas-snapshot-emit=false",
+    "chainId": 1,
+    "block": 26326516,
+    "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+    "safeVersion": "1.5.0",
+    "threshold": 2,
+    "withdrawalWei": "41400000000000000000",
+    "safeReceivedEvent": true,
+    "contractBalanceAfter": "0",
+    "passed": 1,
+    "failed": 0,
+    "publicTransactionSent": false
+  }
+}
