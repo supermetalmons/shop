@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { matchingRuntime, PRE111K_SEPOLIA } from './pre111k-deployment.mjs';
+import { matchingRuntime } from './pre111k-deployment.mjs';
 
 const [mode, directoryArg] = process.argv.slice(2);
 assert.ok(['submit', 'status', 'verify'].includes(mode) && directoryArg, 'Use submit|status|verify DEPLOYMENT_DIRECTORY');
@@ -15,13 +15,15 @@ const manifest = read('manifest.json');
 const deployment = read('deployment.json');
 const input = read('Pre111K.standard-input.json');
 const artifact = read('Pre111K.artifact.json');
-assert.equal(deployment.chainId, PRE111K_SEPOLIA.chainId);
+const chainId = manifest.chainId;
+assert.ok([1, 11155111].includes(chainId), 'Unsupported pre111k verification chain');
+assert.equal(deployment.chainId, chainId, 'Deployment chain does not match manifest');
 assert.equal(deployment.contractAddress, manifest.contractAddress);
 assert.equal(sha256(json(input)), manifest.standardInputSha256);
 assert.equal(sha256(json(artifact)), manifest.artifactSha256);
 assert.ok(deployment.confirmations >= 3);
 const base = 'https://sourcify.dev/server/v2';
-const contractUrl = base + '/contract/11155111/' + deployment.contractAddress;
+const contractUrl = base + '/contract/' + chainId + '/' + deployment.contractAddress;
 const request = async (url, init = {}) => {
   const response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   return { status: response.status, value: await response.json() };
@@ -36,7 +38,7 @@ if (mode === 'submit') {
     const body = { stdJsonInput: input, compilerVersion: artifact.metadata.compiler.version,
       contractIdentifier: 'src/Pre111K.sol:Pre111K', creationTransactionHash: deployment.transactionHash };
     save('Pre111K.sourcify-request.json', body);
-    const result = await request(base + '/verify/11155111/' + deployment.contractAddress, {
+    const result = await request(base + '/verify/' + chainId + '/' + deployment.contractAddress, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     save('Pre111K.sourcify-submission.json', result);
@@ -60,7 +62,7 @@ if (mode === 'submit') {
   const result = await request(apiUrl);
   assert.equal(result.status, 200, 'Verified sources not published yet');
   const published = result.value;
-  assert.equal(published.chainId, '11155111');
+  assert.equal(published.chainId, String(chainId), 'Published chain does not match release');
   assert.equal(published.address.toLowerCase(), deployment.contractAddress);
   for (const field of ['match', 'creationMatch', 'runtimeMatch']) {
     assert.ok(['match', 'exact_match'].includes(published[field]), 'Source verification incomplete: ' + field);
@@ -81,12 +83,12 @@ if (mode === 'submit') {
     assert.ok(matchingRuntime(artifact.deployedBytecode.object, code, artifact.deployedBytecode.immutableReferences));
   }
   save('Pre111K.sourcify-published.json', published);
-  const report = { chainId: 11155111, contractAddress: deployment.contractAddress, transactionHash: deployment.transactionHash,
+  const report = { chainId, contractAddress: deployment.contractAddress, transactionHash: deployment.transactionHash,
     match: published.match, creationMatch: published.creationMatch, runtimeMatch: published.runtimeMatch,
     compilerVersion: artifact.metadata.compiler.version, metadataHash: input.settings.metadata.bytecodeHash,
     verifiedAt: published.verifiedAt, checkedAt: new Date().toISOString(), sourceSha256,
     creationBytecodeMatch: true, runtimeBytecodeMatch: true, frozenSourcesMatch: true,
-    url: 'https://repo.sourcify.dev/11155111/' + deployment.contractAddress, apiUrl };
+    url: 'https://repo.sourcify.dev/' + chainId + '/' + deployment.contractAddress, apiUrl };
   save('Pre111K.sourcify-verification.json', report);
   save('source-manifest.json', { compilerVersion: artifact.metadata.compiler.version, settings: input.settings,
     fullyQualifiedName: 'src/Pre111K.sol:Pre111K', sources: sourceSha256,

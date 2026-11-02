@@ -1,0 +1,23 @@
+{
+  "recordedAt": "2026-11-02T12:11:27.108Z",
+  "baseRevision": "f961060eb5ad88a13ef3fd4f925a54e344f57e1e",
+  "apiWorker": "mons-shop-api",
+  "apiVersion": "c6014070-3196-4b67-9aa0-80c61cd7023d",
+  "mainnetContract": "0x0a00d0a121cf14632845a16651d43941e8107f08",
+  "mainnetEnabled": true,
+  "sepoliaContract": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+  "sepoliaConfigurationUnchanged": true,
+  "nft111kConfigurationUnchanged": true,
+  "frontendPublicationNeeded": false,
+  "databaseMigrationsNeeded": false,
+  "sourceSha256": {
+    "cloud/workers/api/wrangler.jsonc": "c1e4b76d2cef5edfeabb5a0f7f109eb619deabeb9eec87c79f07fdb1c17dcd82",
+    "cloud/workers/api/worker-configuration.d.ts": "2e5c234c0fd44dacc8ec9cbedc642aa3dda9551d3bcc490ecd33ea8ea9d84e58",
+    "cloud/workers/api/src/pre111k.ts": "e7ab42f89e7dcbc378c15d382e0e358bace045cae18de0bc50668dffa777ce8f",
+    "cloud/workers/api/src/pre111kRoutes.ts": "29bcabd5ee3675654c02a79779579d1d1b9099e08a9d3d93504a7428a4680769",
+    "shared/ethereum/pre111k.ts": "ac2b67f4d73ab26067f364bee7f175125230f2b41845facdd1c8a3690bfa2c5a",
+    "shared/ethereum/pre111kCrypto.ts": "fdd3aee12b0a5c21c23f3b331aed181444a3672e42d1769064fcd8e32115bfb1",
+    "onchain/ethereum/scripts/pre111k-deployment.mjs": "1f38e11278a970dafe7166edee33c17cb92d7bcd20413abc69461f5bf7034b00",
+    "onchain/ethereum/scripts/pre111k-sourcify.mjs": "7337c6c573ef684a84e5b33eec2f24bc5ebe464c5454b065b8103e413389b39c"
+  }
+}

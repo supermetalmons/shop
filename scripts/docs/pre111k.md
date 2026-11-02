@@ -78,8 +78,12 @@ Withdrawal remains permissionless regardless of backend availability.
 The API has independent `ETHEREUM_PRE111K_MAINNET_*` and
 `ETHEREUM_PRE111K_SEPOLIA_*` settings: `CONTRACT_ADDRESS`, `DEPLOYMENT_BLOCK`,
 `ENABLED`, and `SIGNER_SECRET`. RPC reads reuse `ALCHEMY_MI_NOTE_API_KEY`.
-Only the Sepolia signer secret is required while mainnet is undeployed.
-Mainnet status remains disabled, with no direct-transfer fallback.
+Both network signer secrets are required for the deployed API. Each signer has
+its own encrypted local keystore and a password stored in macOS Keychain; the
+Worker receives only its corresponding signing key as a secret. To back up a
+local signer, preserve its complete keystore and its encryption password.
+Deployment records identify the public signer addresses. A disabled network
+has no direct-transfer fallback.
 
 Use the dedicated pre111k deployment workflow; do not replace NFT111K, reset its
 commerce state, allocate relic claims, or modify its metadata. Validate the
@@ -87,5 +91,5 @@ expected chain, constructor values, price, signer, and deployment bytecode befor
 activating an address. Estimate gas against the target chain. Preserve the
 deployment transaction, block, source verification, and validation evidence in
 the release record. Public acceptance must leave all eighteen initial slots
-available; purchase and withdrawal transactions run locally, and Sepolia
+available; purchase and withdrawal transactions run locally, and public-network
 reservation acceptance uses simulation.

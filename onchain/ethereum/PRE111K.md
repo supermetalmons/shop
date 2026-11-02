@@ -30,9 +30,21 @@ forge test --offline --match-contract '^Pre111KSafeForkTest$' --fork-url https:/
 
 The fork test pays the complete 41.4 ETH sellout balance to the actual mainnet Safe in a local fork and checks its `SafeReceived` event and balance increase. No mainnet transaction is broadcast. Ordinary offline runs explicitly skip that fork-only test. Other tests cover signature scopes and expiry, exact payments, sequential nonces, the lifetime supply cap, signer rotation, failed payouts, gas-intensive receivers, reentrancy and reservation/payment conservation. `fixtures/pre111k.json` is a deterministic Solidity authorization and calldata vector for application tests.
 
-## Sepolia deployment
+## Deployment
 
-The dedicated JavaScript deployment tool only permits Sepolia and pins the configuration above. It uses the existing encrypted deployer keystore and a temporary password file. Provide either `ETHEREUM_PRE111K_RPC_URL` or `ALCHEMY_API_KEY` to select the Sepolia RPC. Credentials are never written to public reports.
+The dedicated JavaScript deployment tool supports Ethereum mainnet and Sepolia and pins the configuration above. The deploying wallet is `0xd58d143ca63d9baccc33fdf69ea203f59c58ae93` on both networks; mainnet assigns administration directly to the treasury Safe. It uses the existing encrypted deployer keystore and a temporary password file. Provide either `ETHEREUM_PRE111K_RPC_URL` or `ALCHEMY_API_KEY`; the RPC must match the selected network. Credentials are never written to public reports.
+
+Mainnet preparation requires an explicit authorization signer, separate from the Sepolia signer. Subsequent steps use the frozen signer in the manifest. The transaction fee ceiling is 0.001 ETH on mainnet and 0.005 ETH on Sepolia; preparation also requires enough deployer balance for the actual buffered fee. Omitting `--network` selects Sepolia.
+
+```sh
+forge build --offline
+npm run pre111k:deploy -- prepare --network mainnet --directory .local/pre111k-mainnet-v1 --quote-signer MAINNET_SIGNER_ADDRESS
+npm run pre111k:deploy -- sign --network mainnet --directory .local/pre111k-mainnet-v1 --keystore /path/to/encrypted-keystore --password-file /path/to/temporary-password
+npm run pre111k:deploy -- broadcast --network mainnet --directory .local/pre111k-mainnet-v1
+npm run pre111k:deploy -- verify --network mainnet --directory .local/pre111k-mainnet-v1
+```
+
+The original Sepolia workflow remains supported:
 
 ```sh
 forge build --offline
@@ -52,6 +64,6 @@ node scripts/pre111k-sourcify.mjs status .local/pre111k-sepolia-v1
 node scripts/pre111k-sourcify.mjs verify .local/pre111k-sepolia-v1
 ```
 
-The submission is asynchronous; run `verify` after the status reports completion. `Pre111K.sourcify-verification.json` records matching sources, creation/runtime bytecode and constructor arguments. Since the compiler omits its source metadata hash, Sourcify reports `match` rather than `exact_match`. `Pre111K.standard-input.json` and the constructor arguments also support explorer verification with the exact Solidity 0.8.38 compiler version. Connect the verified address to the backend only after these deployment checks pass. The release's reservation count starts at zero; acceptance tests use local chain or RPC simulation and must not consume public reservation slots.
+For mainnet, use `.local/pre111k-mainnet-v1` instead. The verifier reads the chain from the frozen manifest and rejects a mismatched deployment report. The submission is asynchronous; run `verify` after the status reports completion. `Pre111K.sourcify-verification.json` records matching sources, creation/runtime bytecode and constructor arguments. Since the compiler omits its source metadata hash, Sourcify reports `match` rather than `exact_match`. `Pre111K.standard-input.json` and the constructor arguments also support explorer verification with the exact Solidity 0.8.38 compiler version. Connect the verified address to the backend only after these deployment checks pass. The release's reservation count starts at zero; acceptance tests use local chain or RPC simulation and must not consume public reservation slots.
 
-`script/DeployPre111K.s.sol` provides a separate Foundry deployment path for a future explicitly authorized mainnet release. It selects the exact network price and fixed admin/treasury and reads `ETHEREUM_PRE111K_DEPLOYER_KEY` and `ETHEREUM_PRE111K_QUOTE_SIGNER`. Mainnet deployment is not part of the Sepolia JavaScript tool.
+`script/DeployPre111K.s.sol` also provides a Foundry deployment path. It selects the exact network price and fixed admin/treasury and reads `ETHEREUM_PRE111K_DEPLOYER_KEY` and `ETHEREUM_PRE111K_QUOTE_SIGNER`. The JavaScript workflow above preserves the encrypted-keystore signing and resumable transaction journal used by the releases.

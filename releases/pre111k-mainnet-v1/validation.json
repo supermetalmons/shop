@@ -1,0 +1,60 @@
+{
+  "checkedAt": "2026-11-02T12:11:27.127Z",
+  "contractSuite": {
+    "command": "npm run test:pre111k",
+    "passed": 19,
+    "failed": 0,
+    "skipped": 1,
+    "fuzzRuns": 256
+  },
+  "mainnetSafeFork": {
+    "command": "forge test --offline --match-contract ^Pre111KSafeForkTest$ --fork-url https://ethereum-rpc.publicnode.com --gas-snapshot-emit=false",
+    "chainId": 1,
+    "block": 26326936,
+    "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+    "withdrawalWei": "41400000000000000000",
+    "passed": 1,
+    "failed": 0,
+    "publicTransactionSent": false
+  },
+  "deploymentAndSourceVerificationTools": {
+    "command": "npm run test:pre111k-deployment",
+    "passed": 33,
+    "failed": 0
+  },
+  "api": {
+    "command": "npm run check:api",
+    "generatedSchemas": "passed",
+    "generatedTypes": "passed",
+    "typecheck": "passed",
+    "tests": {
+      "passed": 2924,
+      "failed": 0
+    },
+    "runtimeTests": {
+      "passed": 51,
+      "failed": 0
+    },
+    "dryRun": "passed",
+    "bundleValidation": "passed",
+    "startupProfile": "passed"
+  },
+  "remoteIntegrity": {
+    "packStatus": "passed",
+    "ops": "passed",
+    "commerceForDeployment": "passed"
+  },
+  "sameCompiledArtifactAndCompilerInputAsSepolia": true,
+  "liveAcceptance": "live-acceptance.json",
+  "databaseMigrationsApplied": false,
+  "frontendRedeployed": false,
+  "browser": {
+    "url": "https://mons.shop/111k/relics",
+    "artworkLoaded": true,
+    "priceText": "Reserve relic · 2.3 ETH",
+    "reservationsClosedMessageAbsent": true,
+    "disconnectedWalletKeepsReservationDisabled": true,
+    "connectControl": "graceful no-wallet message in browser without a wallet provider",
+    "screenshot": "browser-mainnet.png"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-11-02T12:42:40.128Z",
+  "chainId": 1,
+  "contractAddress": "0x0a00d0a121cf14632845a16651d43941e8107f08",
+  "url": "https://etherscan.io/address/0x0a00d0a121cf14632845a16651d43941e8107f08#code",
+  "contractName": "Pre111K",
+  "compilerVersion": "v0.8.38+commit.1835d247",
+  "optimizationRuns": 500,
+  "constructorArgsMatch": true,
+  "frozenSourcesMatch": true,
+  "sourceCount": 15,
+  "verified": true,
+  "match": "exact_match",
+  "evmVersion": "prague",
+  "metadataBytecodeHash": "none",
+  "optimizerSettingsMatch": true,
+  "abiMatches": true
+}

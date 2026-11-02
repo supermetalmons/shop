@@ -1,0 +1,73 @@
+{
+  "checkedAt": "2026-11-02T12:09:29.912Z",
+  "chainId": 1,
+  "contractAddress": "0x0a00d0a121cf14632845a16651d43941e8107f08",
+  "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "quoteSigner": "0x43c829cbb3648cc5eb8ebaa15fb7cfab21ecc2ea",
+  "mainnet": {
+    "config": {
+      "network": "mainnet",
+      "chainId": 1,
+      "chainName": "Ethereum",
+      "contractAddress": "0x0a00d0a121cf14632845a16651d43941e8107f08",
+      "deploymentBlock": 26326977,
+      "enabled": true,
+      "priceWei": "2300000000000000000",
+      "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "explorerUrl": "https://etherscan.io",
+      "walletRpcUrl": "https://ethereum-rpc.publicnode.com",
+      "confirmationBlocks": 3,
+      "maxRelics": 18
+    },
+    "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "totalReserved": 0,
+    "reservedRelics": 0,
+    "remainingRelics": 18,
+    "observedBlock": 26327003,
+    "blockHash": "0x62a00084d66d110a39899624262180e7ff6914f7138e397379c5c35e96ee3a28"
+  },
+  "devnet": {
+    "config": {
+      "network": "devnet",
+      "chainId": 11155111,
+      "chainName": "Sepolia",
+      "contractAddress": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+      "deploymentBlock": 12047599,
+      "enabled": true,
+      "priceWei": "2300000000000000",
+      "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "explorerUrl": "https://sepolia.etherscan.io",
+      "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+      "confirmationBlocks": 3,
+      "maxRelics": 18
+    },
+    "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "totalReserved": 1,
+    "reservedRelics": 0,
+    "remainingRelics": 17,
+    "observedBlock": 12048053,
+    "blockHash": "0x967a5e15810bb4d54237418af99576c9aab96d9612e77e8777a0ac4bd5ad8c59"
+  },
+  "sepoliaConfigurationUnchanged": true,
+  "liveBackendSignatureVerified": true,
+  "authorizedReservationSimulation": "passed",
+  "simulationStateOverride": {
+    "account": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "balanceWei": "3000000000000000000"
+  },
+  "walletTransactionSigned": false,
+  "reservationTransactionBroadcast": false,
+  "stateBeforeSimulation": {
+    "totalReserved": "0",
+    "reservedRelics": "0",
+    "balanceWei": "0"
+  },
+  "stateAfterSimulation": {
+    "totalReserved": "0",
+    "reservedRelics": "0",
+    "balanceWei": "0"
+  },
+  "totalReservedAfterSimulation": 0,
+  "remainingRelicsAfterSimulation": 18,
+  "balanceWeiAfterSimulation": "0"
+}
