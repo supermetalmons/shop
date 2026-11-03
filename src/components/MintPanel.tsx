@@ -1,4 +1,4 @@
-import { type ComponentProps, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, type ReactNode, type RefObject, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { FaCircleQuestion } from 'react-icons/fa6';
 import { LuInfo } from 'react-icons/lu';
 import type { PackStatusBreakdown, PackStatusDisplayLabels } from '../types';
@@ -147,7 +147,35 @@ export function MintPanelFrame({
   );
 }
 
-export function MintPanelTitle({ title, dropId }: Pick<MintPanelPresentationProps, 'title' | 'dropId'>) {
+function MintPanelTitleHelp({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const popoverId = useId();
+  useDismissiblePopover(open, rootRef, setOpen);
+
+  return (
+    <div className="mint-panel__title-info-wrap" ref={rootRef}>
+      <button
+        type="button"
+        className="mint-panel__title-info"
+        aria-label={`${title} info`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls={open ? popoverId : undefined}
+        onClick={() => setOpen(prev => !prev)}
+      >
+        <FaCircleQuestion aria-hidden="true" focusable="false" size={16} />
+      </button>
+      {open ? (
+        <div id={popoverId} className="mint-panel__title-popover" role="dialog" aria-label={`${title} info`}>
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function MintPanelTitle({ title, dropId, helpContent }: Pick<MintPanelPresentationProps, 'title' | 'dropId'> & { helpContent?: ReactNode }) {
   const mintTitle = title || 'Little Swag Boxes';
   const dropXProfile = resolveDropXProfile(dropId);
   const dropXProfileLink = dropXProfile ? (
@@ -165,6 +193,7 @@ export function MintPanelTitle({ title, dropId }: Pick<MintPanelPresentationProp
     <div className="mint-panel__price">
       <span className="mint-panel__drop-name">{mintTitle}</span>
       {dropXProfileLink}
+      {helpContent ? <MintPanelTitleHelp title={mintTitle}>{helpContent}</MintPanelTitleHelp> : null}
     </div>
   );
 }

@@ -97,7 +97,11 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
             previewContent={<div className="mint-panel__preview relic-preorder__preview">{artwork}</div>}>
             <MintPanelPurchaseFooter hasControls={false}
               info={<>
-                <MintPanelTitle title="111K Relics" />
+                <MintPanelTitle title="111K Relics" helpContent={<>
+                  <p>Reserve a relic now.</p>
+                  <p>Select a specific one and claim it on 11/11 when the 111k mint starts.</p>
+                  <p>First come, first served.</p>
+                </>} />
                 <div className="mint-panel__remaining mint-panel__availability">
                   <span className="mint-panel__remaining-count" style={{ minWidth: '2ch' }}>
                     {remaining != null ? formatRemainingCount(remaining, PRE111K_MAX_RELICS) : model.statusQuery.isPending ? <span role="status" aria-label="Loading availability">
