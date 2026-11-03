@@ -75,7 +75,7 @@ function deferred() { let resolve!: (value: unknown) => void; const promise = ne
 function page(network: Pre111kNetwork = 'mainnet') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }); clients.push(client);
   const view = render(createElement(QueryClientProvider, { client }, createElement(DirectPaymentPage, { network })), { reactStrictMode: true });
-  const button = () => view.getByRole('button', { name: `Premint · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement;
+  const button = () => view.getByRole('button', { name: `Reserve Relic · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement;
   return { ...view, button, reserve: () => fireEvent.click(button()),
     async connect() {
       await waitFor(() => assert.equal(button().disabled, false));
@@ -91,7 +91,7 @@ function page(network: Pre111kNetwork = 'mainnet') {
 }
 
 for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NETWORKS) {
-  test(`${network} requires a second Premint click after connecting before authorizing payment`, async () => {
+  test(`${network} requires a second Reserve Relic click after connecting before authorizing payment`, async () => {
     const wallet = walletFixture(chain); wallet.install();
     const view = page(network);
     assert.equal(view.queryByRole('button', { name: 'Connect wallet' }), null);
@@ -165,7 +165,7 @@ test('multiple announced wallets require an explicit choice instead of sending t
   assert.equal(first.requests.length, 0);
 });
 
-test('a cancelled wallet connection can be retried through Premint without submitting payment', async () => {
+test('a cancelled wallet connection can be retried through Reserve Relic without submitting payment', async () => {
   const wallet = walletFixture();
   wallet.handlers.set('eth_requestAccounts', () => { throw { code: 4001 }; });
   wallet.install();
@@ -194,7 +194,7 @@ test('a cancelled wallet connection can be retried through Premint without submi
 });
 
 for (const cancelWithEscape of [false, true]) {
-  test(`cancelling wallet choice with ${cancelWithEscape ? 'Escape' : 'Cancel'} restores focus to Premint`, async () => {
+  test(`cancelling wallet choice with ${cancelWithEscape ? 'Escape' : 'Cancel'} restores focus to Reserve Relic`, async () => {
     const first = walletFixture(); const second = walletFixture(); first.announce('first'); second.announce('second');
     const view = page();
     await waitFor(() => assert.equal(view.button().disabled, false));

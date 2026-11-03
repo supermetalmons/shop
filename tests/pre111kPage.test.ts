@@ -111,15 +111,15 @@ function page(network: Pre111kNetwork = 'devnet', restore = true) {
     }, async ready() {
     await waitFor(() => {
       view.getByRole('button', { name: 'Disconnect' });
-      assert.equal((view.getByRole('button', { name: `Premint · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement).disabled, false);
+      assert.equal((view.getByRole('button', { name: `Reserve Relic · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement).disabled, false);
     }, { timeout: 3_000 });
-  }, reserve() { fireEvent.click(view.getByRole('button', { name: `Premint · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` })); } };
+  }, reserve() { fireEvent.click(view.getByRole('button', { name: `Reserve Relic · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` })); } };
 }
 
-test('Premint connects, shows positive reservations before the address and disconnects without requesting payment', async () => {
+test('Reserve Relic connects, shows positive reservations before the address and disconnects without requesting payment', async () => {
   reserved = 3;
   const view = page('devnet', false);
-  const reserve = () => view.getByRole('button', { name: 'Premint · 0.0023 ETH' }) as HTMLButtonElement;
+  const reserve = () => view.getByRole('button', { name: 'Reserve Relic · 0.0023 ETH' }) as HTMLButtonElement;
   await waitFor(() => assert.equal(reserve().disabled, false));
   assert.equal(view.queryByRole('button', { name: 'Connect wallet' }), null);
   assert.equal(view.queryByText('3 reserved'), null);
@@ -142,10 +142,10 @@ for (const unavailable of ['API failure', 'disabled reservations'] as const) {
     if (unavailable === 'API failure') statusImpl = async () => { throw new Error('Unavailable'); };
     else statusImpl = async (network, wallet) => ({ ...status(network, wallet), config: resolvePre111kConfig(network) });
     const view = page('devnet', false);
-    await waitFor(() => assert.equal((view.getByRole('button', { name: 'Premint · 0.0023 ETH' }) as HTMLButtonElement).disabled, false));
+    await waitFor(() => assert.equal((view.getByRole('button', { name: 'Reserve Relic · 0.0023 ETH' }) as HTMLButtonElement).disabled, false));
     view.reserve();
     await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
-    const label = 'Premint · 0.0023 ETH';
+    const label = 'Reserve Relic · 0.0023 ETH';
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, true));
     fireEvent.click(view.getByRole('button', { name: label }));
     assert.deepEqual(preparedCodes, []);
@@ -386,7 +386,7 @@ for (const completion of ['hash', 'error'] as const) {
   });
 }
 
-test('a late hash is tracked by receipt even when a count increase already released Premint', async t => {
+test('a late hash is tracked by receipt even when a count increase already released Reserve Relic', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   const sent = deferred<string>();
   sendImpl = () => sent.promise;
@@ -508,7 +508,7 @@ test('undeployed mainnet remains closed and never displays a fake count', async 
   assert.equal(view.queryByText('Reservations unavailable'), null);
   assert.equal(view.queryByText('0 reserved'), null);
   assert.equal(view.queryByText('Loading reservations…'), null);
-  assert.equal((view.getByRole('button', { name: 'Premint · 2.3 ETH' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Reserve Relic · 2.3 ETH' }) as HTMLButtonElement).disabled, true);
 });
 
 for (const network of ['mainnet', 'devnet'] as const) {
@@ -520,7 +520,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     assert.equal(input.type, 'text');
     assert.equal(input.placeholder, 'SECRET CODE');
     assert.notEqual(document.activeElement, input);
-    assert.equal(view.queryByRole('button', { name: /Premint|Reserve Relic|Preorders ended/ }), null);
+    assert.equal(view.queryByRole('button', { name: /Reserve Relic|Preorders ended/ }), null);
     const content = view.container.querySelector('.relic-page__content')!;
     assert.equal(content.getAttribute('aria-hidden'), 'true');
     assert.equal(content.hasAttribute('inert'), true);
@@ -557,7 +557,7 @@ for (const submitWithArrow of [false, true]) {
     assert.equal(scroll.mock.callCount(), 0);
     assert.equal((view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled, true);
     assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
-    assert.equal(view.queryByRole('button', { name: /Premint|Reserve Relic|Preorders ended/ }), null);
+    assert.equal(view.queryByRole('button', { name: /Reserve Relic|Preorders ended/ }), null);
     await act(async () => verification.resolve({ ok: true }));
     await view.ready();
     view.getByRole('link', { name: 'Go to mons.shop home' });
@@ -615,7 +615,7 @@ test('a rejected code remains locked and can be corrected without saving the rej
   assert.equal(document.activeElement, input);
   assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
-  assert.equal(view.queryByRole('button', { name: /Premint|Reserve Relic|Preorders ended/ }), null);
+  assert.equal(view.queryByRole('button', { name: /Reserve Relic|Preorders ended/ }), null);
   fireEvent.change(input, { target: { value: 'testpass' } });
   fireEvent.submit(input.closest('form')!);
   await view.ready();
@@ -666,7 +666,7 @@ test('a rejected saved code relocks without focusing the input and clears persis
   await waitFor(() => view.getByRole('textbox', { name: 'Secret code' }));
   assert.equal(document.activeElement, document.body);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
-  assert.equal(view.queryByRole('button', { name: /Premint|Reserve Relic|Preorders ended/ }), null);
+  assert.equal(view.queryByRole('button', { name: /Reserve Relic|Preorders ended/ }), null);
   assert.deepEqual(preparedCodes, []);
 });
 
