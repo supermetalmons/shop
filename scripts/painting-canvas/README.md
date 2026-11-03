@@ -4,8 +4,10 @@ This is the sole approved canvas setup, selected as **1 — A Light**. Use it wh
 asked to render paintings or artworks on canvases. Do not recreate the earlier
 experiments or change its appearance unless explicitly requested.
 
-The look uses a straight-on stretched canvas, folded edges, a white background,
-and photographic weave at 35% strength. Output PNGs keep the upright artwork's dimensions.
+The look uses a straight-on stretched canvas, folded edges, and photographic weave
+at 35% strength. The default output is transparent WebP at quality 85, capped at
+1400 pixels on the longest side without upscaling. Use `--format png` for the
+original full-resolution PNG with a white background.
 The outer approximately 1.2% of the artwork continues around the canvas sides.
 
 ## Render
@@ -39,10 +41,38 @@ Paths are relative to the manifest. Optional `width` and `height` fields are
 checked against the upright image. Existing output files require `--overwrite`;
 symbolic and hard-linked output files are rejected even when overwriting is enabled.
 The equivalent direct entrypoint is `node scripts/painting-canvas/render.mjs`.
-Use `--help` for all input options. There are no variant or quality switches.
+Use `--help` for all input and export options. Canvas geometry, materials, lighting,
+and render sampling remain fixed to the approved setup.
 
 The ten IDs used when approving this look were
 `1,3,7,79,275,336,1883,12345,64000,85556`.
+
+## Export options
+
+The normal command produces transparent WebP at quality 85, capped at 1400 pixels:
+
+```sh
+npm run render:canvases -- --input /absolute/path/images --output output/canvas
+```
+
+For the original high-resolution PNG output, retaining the upright source dimensions
+and white background:
+
+```sh
+npm run render:canvases -- --input /absolute/path/images --format png --output output/canvas-png
+```
+
+- `--format webp|png` selects the export defaults described above.
+- `--transparent` enables alpha outside the canvas for PNG; WebP is transparent by
+  default. Antialiased edges retain alpha, and white areas within the artwork remain opaque.
+- `--quality` sets integer WebP encoding quality from 0 through 100, defaulting to 85.
+  Explicit quality is rejected for PNG; this does not change Cycles sampling.
+- `--max-side` is a positive integer pixel cap on the longest output side. Images
+  render directly at the capped size, preserve aspect ratio to the nearest pixel,
+  and never upscale. The default cap is 1400 for WebP; PNG has no cap unless specified.
+
+Blender writes WebP natively; no extra encoder is required. Import normalization
+still composites transparent source artwork over white before applying it to the canvas.
 
 ## Verify the approved look
 
@@ -57,6 +87,8 @@ difference in at most 0.01% of channels: even the unchanged original renderer
 occasionally varies by one level in a few pixels on Metal. Larger differences fail.
 Using `--verify --output` with a custom destination requires `--overwrite` to
 replace existing files, just like a normal render.
+Export options cannot be combined with `--verify`; verification always uses the
+original full-size, white-background PNG settings and approved fixture.
 
 ## Requirements and fixed settings
 
@@ -79,9 +111,11 @@ provenance. They do not depend on Desktop files, earlier outputs, reference-phot
 processing, a Python environment, or the previous web renderer. Blender supplies
 the Python runtime and the NumPy used by verification.
 
-Each run writes `<id>.png`, `render-report.json`, and `render.log`. Reports include
-source/output hashes, preset/code hashes, Blender/device details, and per-image
-timing. Catalog downloads are cached under `.cache/painting-canvas/sources/`.
+Each run writes `<id>.png` or `<id>.webp`, `render-report.json`, and `render.log`.
+Reports include source/output hashes, preset/code hashes, Blender/device details,
+export settings, and per-image timing. Record `width`/`height` describe the actual
+output; `source_width`/`source_height` describe the upright source artwork.
+Catalog downloads are cached under `.cache/painting-canvas/sources/`.
 The cache and default generated output are ignored by Git.
 Image intermediates are kept beside the outputs and removed after each render.
 Cancellation stops the batch without publishing the interrupted frame, preserves

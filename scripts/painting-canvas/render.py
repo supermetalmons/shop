@@ -18,7 +18,13 @@ from geometry import create_canvas
 from material import create_material
 
 
-def arguments():
+def unsigned_integer(value):
+    if not re.fullmatch(r'[0-9]+', value) or int(value) > 2 ** 53 - 1:
+        raise argparse.ArgumentTypeError('Expected a nonnegative safe integer.')
+    return int(value)
+
+
+def arguments(argv=None):
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--manifest', type=Path)
@@ -27,7 +33,36 @@ def arguments():
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--cancel-file', type=Path)
     parser.add_argument('--work-dir', type=Path)
-    return parser.parse_args(sys.argv[sys.argv.index('--') + 1:])
+    parser.add_argument('--format', choices=['png', 'webp'])
+    parser.add_argument('--transparent', action='store_true', default=None)
+    parser.add_argument('--quality', type=unsigned_integer)
+    parser.add_argument('--max-side', type=unsigned_integer)
+    settings = parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if argv is None else argv)
+    if settings.verify and any(getattr(settings, key) is not None
+                               for key in ['format', 'transparent', 'quality', 'max_side']):
+        parser.error('Export options cannot be combined with --verify.')
+    settings.format = settings.format or ('png' if settings.verify else 'webp')
+    if settings.quality is not None:
+        if settings.format != 'webp':
+            parser.error('--quality applies only to WebP.')
+        if settings.quality > 100:
+            parser.error('--quality must be an integer from 0 through 100.')
+    elif settings.format == 'webp':
+        settings.quality = 85
+    if settings.max_side is not None and settings.max_side < 1:
+        parser.error('--max-side must be a positive integer.')
+    if settings.max_side is None and settings.format == 'webp':
+        settings.max_side = 1400
+    if settings.transparent is None:
+        settings.transparent = settings.format == 'webp'
+    return settings
+
+
+def output_dimensions(width, height, max_side):
+    if max_side is None or max(width, height) <= max_side:
+        return width, height
+    longest = max(width, height)
+    return tuple(max(1, (2 * side * max_side + longest) // (2 * longest)) for side in (width, height))
 
 
 def checksum(path):
@@ -118,7 +153,7 @@ def sources_for(settings):
     return result
 
 
-def preflight_outputs(samples, output, overwrite):
+def preflight_outputs(samples, output, overwrite, image_format='png'):
     def identity(path):
         if not path.exists():
             return None
@@ -130,7 +165,7 @@ def preflight_outputs(samples, output, overwrite):
         raise ValueError('Artwork IDs must be unique ignoring case.')
     sources = {Path(sample['path']).resolve() for sample in samples}
     source_files = {identity(path) for path in sources} - {None}
-    targets = [output / f"{sample['id']}.png" for sample in samples]
+    targets = [output / f"{sample['id']}.{image_format}" for sample in samples]
     targets += [output / 'render-report.json', output / 'render-report.pending.json']
     paths, files = set(), set()
     for target in targets:
@@ -165,7 +200,7 @@ def light(name, position, power, size):
     point_at(item, (0, 0, 0))
 
 
-def prepare_scene(sample, preset, image_path):
+def prepare_scene(sample, preset, image_path, export):
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
     for collection in (bpy.data.meshes, bpy.data.cameras, bpy.data.lights, bpy.data.materials):
@@ -195,14 +230,22 @@ def prepare_scene(sample, preset, image_path):
     scene.cycles.glossy_bounces = 1
     scene.cycles.seed = preset['seed']
     scene.render.use_persistent_data = True
-    scene.render.resolution_x = width_px
-    scene.render.resolution_y = height_px
-    scene.render.resolution_percentage = 100
+    output_width, output_height = output_dimensions(width_px, height_px, export['max_side'])
+    resolution_scale = 4 if min(output_width, output_height) < 4 else 1
+    scene.render.resolution_x = output_width * resolution_scale
+    scene.render.resolution_y = output_height * resolution_scale
+    scene.render.resolution_percentage = 100 // resolution_scale
+    if (scene.render.resolution_x, scene.render.resolution_y) != (output_width * resolution_scale,
+                                                                 output_height * resolution_scale):
+        raise ValueError('Output dimensions exceed Blender resolution limits; use a smaller --max-side.')
     scene.render.film_transparent = True
-    scene.render.image_settings.file_format = 'PNG'
-    scene.render.image_settings.color_mode = 'RGB'
-    scene.render.image_settings.color_depth = '8'
-    scene.render.image_settings.compression = 15
+    scene.render.image_settings.file_format = export['format'].upper()
+    scene.render.image_settings.color_mode = 'RGBA' if export['transparent'] else 'RGB'
+    if export['format'] == 'png':
+        scene.render.image_settings.color_depth = '8'
+        scene.render.image_settings.compression = 15
+    else:
+        scene.render.image_settings.quality = export['quality']
     scene.render.filter_size = .8
     scene.render.dither_intensity = 0
     scene.view_settings.view_transform = 'Standard'
@@ -218,12 +261,15 @@ def prepare_scene(sample, preset, image_path):
     nodes, links = scene.node_tree.nodes, scene.node_tree.links
     nodes.clear()
     render = nodes.new('CompositorNodeRLayers')
-    over = nodes.new('CompositorNodeAlphaOver')
-    over.inputs[0].default_value = 1
-    over.inputs[1].default_value = (1, 1, 1, 1)
-    links.new(render.outputs['Image'], over.inputs[2])
+    image_output = render.outputs['Image']
+    if not export['transparent']:
+        over = nodes.new('CompositorNodeAlphaOver')
+        over.inputs[0].default_value = 1
+        over.inputs[1].default_value = (1, 1, 1, 1)
+        links.new(image_output, over.inputs[2])
+        image_output = over.outputs[0]
     composite = nodes.new('CompositorNodeComposite')
-    links.new(over.outputs[0], composite.inputs[0])
+    links.new(image_output, composite.inputs[0])
     width, height = 2 * width_px / height_px, 2
     config = preset['configuration']
     canvas = create_canvas(width, height, config)
@@ -279,14 +325,14 @@ def check_cancel(cancel_file):
         raise RenderCancelled('Canvas rendering cancelled.')
 
 
-def render_sample(sample, preset, normalizer, output, work_dir, cancel_file):
+def render_sample(sample, preset, normalizer, output, work_dir, cancel_file, export):
     check_cancel(cancel_file)
     before = time.perf_counter()
-    path = output / f"{sample['id']}.png"
+    path = output / f"{sample['id']}.{export['format']}"
     with tempfile.TemporaryDirectory(prefix='canvas-image-', dir=work_dir) as temporary:
         image_path, normalization = normalize_artwork(sample['path'],
             Path(temporary) / 'artwork.png', normalizer)
-        scene = prepare_scene(sample, preset, image_path)
+        scene = prepare_scene(sample, preset, image_path, export)
         source_hash = checksum(Path(sample['path']))
         prepared = time.perf_counter()
         scene.render.filepath = str(path)
@@ -296,14 +342,17 @@ def render_sample(sample, preset, normalizer, output, work_dir, cancel_file):
         check_cancel(cancel_file)
         if 'FINISHED' not in result:
             raise RenderCancelled('Blender cancelled the render.')
-        staged = Path(temporary) / 'render.png'
+        staged = Path(temporary) / f"render.{export['format']}"
         bpy.data.images['Render Result'].save_render(str(staged), scene=scene)
         check_cancel(cancel_file)
         staged.replace(path)
         output_hash = checksum(path)
         done = time.perf_counter()
     return {'id': sample['id'], 'source': sample['path'], 'source_sha256': source_hash,
-            'width': sample['width'], 'height': sample['height'], 'output': str(path),
+            'width': scene.render.resolution_x * scene.render.resolution_percentage // 100,
+            'height': scene.render.resolution_y * scene.render.resolution_percentage // 100,
+            'source_width': sample['width'], 'source_height': sample['height'], 'output': str(path),
+            'export': export,
             'output_sha256': output_hash, 'normalization': normalization,
             'setup_seconds': prepared - before, 'render_seconds': rendered - prepared,
             'save_seconds': done - rendered, 'seconds': done - before}
@@ -311,27 +360,28 @@ def render_sample(sample, preset, normalizer, output, work_dir, cancel_file):
 
 def main():
     settings = arguments()
+    export = {key: getattr(settings, key) for key in ['format', 'transparent', 'quality', 'max_side']}
     preset = json.loads((DIRECTORY / 'preset.json').read_text())
     devices = setup_device(preset)
     samples = sources_for(settings)
     output = settings.output.resolve()
-    preflight_outputs(samples, output, settings.overwrite)
+    preflight_outputs(samples, output, settings.overwrite, settings.format)
     report_path = output / 'render-report.json'
     output.mkdir(parents=True, exist_ok=True)
     normalizer = image_normalizer()
     print('CANVAS_READY', flush=True)
     report = {'preset': preset['name'], 'blender_version': bpy.app.version_string,
               'blender_build_hash': bpy.app.build_hash.decode(), 'device': devices,
-              'configuration': preset, 'source_hashes': {name: checksum(DIRECTORY / name)
+              'configuration': preset, 'export': export, 'source_hashes': {name: checksum(DIRECTORY / name)
                   for name in ['preset.json', 'render.py', 'render.mjs', 'geometry.py', 'material.py', 'normalize-image.swift']},
               'records': [], 'status': 'rendering',
-              'timing_scope': 'Source decode, scene/material setup, rendering, white compositing, PNG writing and checksums; startup excluded.'}
+              'timing_scope': 'Source decode, scene/material setup, rendering, compositing, image encoding and checksums; startup excluded.'}
     started = time.perf_counter()
     save_report(report_path, report)
     try:
         for sample in samples:
             record = render_sample(sample, preset, normalizer, output,
-                                   settings.work_dir or output, settings.cancel_file)
+                                   settings.work_dir or output, settings.cancel_file, export)
             report['records'].append(record)
             print('CANVAS_RESULT ' + json.dumps(record), flush=True)
         report['batch_seconds'] = time.perf_counter() - started

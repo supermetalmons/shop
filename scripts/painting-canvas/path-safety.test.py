@@ -17,13 +17,15 @@ with patch.dict(sys.modules, stubs), patch.object(sys, 'path', sys.path.copy()):
 
 
 class OutputSafetyTests(unittest.TestCase):
+    image_format = 'png'
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='canvas-path-test-')
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.output = self.root / 'output'
         self.output.mkdir()
-        self.sources = [self.root / 'first.png', self.root / 'second.png']
+        self.sources = [self.root / f'{name}.{self.image_format}' for name in ['first', 'second']]
         for index, source in enumerate(self.sources):
             source.write_bytes(f'original-{index}'.encode())
         self.samples = [{'id': name, 'path': str(source)}
@@ -32,24 +34,24 @@ class OutputSafetyTests(unittest.TestCase):
     def reject(self, samples=None, output=None, overwrite=True):
         before = [source.read_bytes() for source in self.sources]
         with self.assertRaises(ValueError):
-            renderer.preflight_outputs(samples or self.samples, output or self.output, overwrite)
+            renderer.preflight_outputs(samples or self.samples, output or self.output, overwrite, self.image_format)
         self.assertEqual(before, [source.read_bytes() for source in self.sources])
 
     def test_direct_source_destination(self):
         self.reject(output=self.root)
 
     def test_output_symlink_to_source(self):
-        (self.output / 'first.png').symlink_to(self.sources[0])
+        (self.output / f'first.{self.image_format}').symlink_to(self.sources[0])
         self.reject()
 
     def test_output_hardlink_to_another_source(self):
-        os.link(self.sources[1], self.output / 'first.png')
+        os.link(self.sources[1], self.output / f'first.{self.image_format}')
         self.reject()
 
     def test_output_hardlink_to_unlisted_approved_reference(self):
         approved = self.root / 'approved.png'
         approved.write_bytes(b'approved reference outside this batch')
-        os.link(approved, self.output / 'first.png')
+        os.link(approved, self.output / f'first.{self.image_format}')
         self.reject()
         self.assertEqual(approved.read_bytes(), b'approved reference outside this batch')
 
@@ -71,14 +73,14 @@ class OutputSafetyTests(unittest.TestCase):
     def test_output_aliases_collide(self):
         shared = self.root / 'shared.png'
         shared.write_bytes(b'previous render')
-        for target in ['first.png', 'second.png']:
+        for target in [f'first.{self.image_format}', f'second.{self.image_format}']:
             (self.output / target).symlink_to(shared)
         self.reject()
 
     def test_output_hardlinks_collide(self):
-        first = self.output / 'first.png'
+        first = self.output / f'first.{self.image_format}'
         first.write_bytes(b'previous render')
-        os.link(first, self.output / 'second.png')
+        os.link(first, self.output / f'second.{self.image_format}')
         self.reject()
 
     def test_report_paths_cannot_alias_sources(self):
@@ -90,20 +92,24 @@ class OutputSafetyTests(unittest.TestCase):
                 target.unlink()
 
     def test_existing_output_requires_overwrite(self):
-        (self.output / 'first.png').write_bytes(b'previous render')
+        (self.output / f'first.{self.image_format}').write_bytes(b'previous render')
         self.reject(overwrite=False)
 
     def test_safe_overwrite_does_not_modify_files_during_preflight(self):
-        target = self.output / 'first.png'
+        target = self.output / f'first.{self.image_format}'
         target.write_bytes(b'previous render')
-        renderer.preflight_outputs(self.samples, self.output, True)
+        renderer.preflight_outputs(self.samples, self.output, True, self.image_format)
         self.assertEqual(target.read_bytes(), b'previous render')
         self.assertEqual(self.sources[0].read_bytes(), b'original-0')
 
     def test_new_output_directory_is_allowed_without_creating_it(self):
         output = self.root / 'new-output'
-        renderer.preflight_outputs(self.samples, output, False)
+        renderer.preflight_outputs(self.samples, output, False, self.image_format)
         self.assertFalse(output.exists())
+
+
+class WebPOutputSafetyTests(OutputSafetyTests):
+    image_format = 'webp'
 
 
 if __name__ == '__main__':

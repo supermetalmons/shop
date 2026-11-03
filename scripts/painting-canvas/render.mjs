@@ -13,6 +13,7 @@ const help = `Render artwork with the approved A Light canvas setup, entirely he
 Usage:
   node scripts/painting-canvas/render.mjs --ids 1,3,7 --output output/canvas
   node scripts/painting-canvas/render.mjs --input /path/to/artwork.webp
+  node scripts/painting-canvas/render.mjs --input /path/to/artwork.webp --format png
   node scripts/painting-canvas/render.mjs --input /path/to/images --output output/canvas
   node scripts/painting-canvas/render.mjs --manifest /path/to/samples.json
   node scripts/painting-canvas/render.mjs --verify
@@ -25,10 +26,15 @@ Choose exactly one input mode: --ids, --input, --manifest, or --verify.
   --verify      Reproduce and compare the approved reference image.
   --output      Destination directory; defaults to this repository's output/canvas.
   --overwrite   Replace existing outputs in the destination.
+  --format      webp (default: transparent, max 1400px) or png (full-size, white background).
+  --transparent Preserve transparency outside the canvas; already enabled for WebP.
+  --quality     WebP encoding quality, an integer from 0 through 100; defaults to 85.
+  --max-side    Maximum output side in pixels; defaults to 1400 for WebP, uncapped for PNG.
   --blender     Blender executable; defaults to BLENDER_BIN or the installed Mac app.
   --help        Show this help.
 
-The look and rendering quality are fixed to the approved preset.
+The canvas look and sampling are fixed to the approved preset.
+Export options cannot be combined with --verify.
 Default verification replaces its results in .cache/painting-canvas/verification.
 Custom verification destinations require --overwrite to replace existing files.
 `;
@@ -103,11 +109,27 @@ async function main() {
     ids: { type: 'string' }, input: { type: 'string', multiple: true }, manifest: { type: 'string' },
     verify: { type: 'boolean', default: false }, output: { type: 'string' }, overwrite: { type: 'boolean', default: false },
     blender: { type: 'string' }, help: { type: 'boolean', default: false },
+    format: { type: 'string' }, transparent: { type: 'boolean' }, quality: { type: 'string' },
+    'max-side': { type: 'string' },
   }, strict: true, allowPositionals: false });
   if (values.help) { console.log(help); return; }
   const modeCount = Number(values.ids !== undefined) + Number(values.input !== undefined)
     + Number(values.manifest !== undefined) + Number(values.verify);
   if (modeCount !== 1) throw new Error('Choose exactly one of --ids, --input, --manifest, or --verify. Use --help for examples.');
+  const exportOptions = ['format', 'transparent', 'quality', 'max-side'];
+  if (values.verify && exportOptions.some(key => values[key] !== undefined)) {
+    throw new Error('Export options cannot be combined with --verify.');
+  }
+  const format = values.format ?? (values.verify ? 'png' : 'webp');
+  if (!['png', 'webp'].includes(format)) throw new Error('--format must be png or webp.');
+  if (values.quality !== undefined && format !== 'webp') throw new Error('--quality applies only to WebP.');
+  for (const [key, minimum, maximum] of [['quality', 0, 100], ['max-side', 1, Number.MAX_SAFE_INTEGER]]) {
+    const value = values[key];
+    if (value !== undefined && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))
+        || Number(value) < minimum || Number(value) > maximum)) {
+      throw new Error(`--${key} must be an integer from ${minimum} through ${maximum}.`);
+    }
+  }
   const output = resolve(values.output ?? join(root, values.verify ? '.cache/painting-canvas/verification' : 'output/canvas'));
   const overwrite = values.overwrite || (values.verify && values.output === undefined);
   const requestedBlender = values.blender ?? process.env.BLENDER_BIN ?? '/Applications/Blender.app/Contents/MacOS/Blender';
@@ -146,7 +168,7 @@ async function main() {
     : samples.map(sample => String(sample.id));
   if (new Set(ids.map(id => id.toLowerCase())).size !== ids.length) throw new Error('Duplicate artwork IDs would overwrite each other; use filenames or manifest IDs that differ beyond letter case');
   if (!overwrite) {
-    for (const name of [...ids.map(id => `${id}.png`), 'render-report.json', 'render.log']) {
+    for (const name of [...ids.map(id => `${id}.${format}`), 'render-report.json', 'render.log']) {
       if (existsSync(join(output, name))) throw new Error(`Output already exists: ${join(output, name)}. Choose another --output or use --overwrite.`);
     }
   }
@@ -165,6 +187,8 @@ async function main() {
     join(root, 'scripts/painting-canvas/render.py'), '--',
     ...(values.verify ? ['--verify'] : ['--manifest', manifestPath]), '--output', output,
     '--cancel-file', cancelPath, '--work-dir', temporary,
+    ...exportOptions.flatMap(key => values[key] === undefined ? []
+      : key === 'transparent' ? ['--transparent'] : [`--${key}`, values[key]]),
     ...(overwrite ? ['--overwrite'] : [])];
   const log = createWriteStream(logPath, { flags: overwrite ? 'w' : 'wx' });
   const started = performance.now();

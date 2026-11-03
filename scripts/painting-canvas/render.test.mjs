@@ -19,8 +19,9 @@ function workspace(t) {
   writeFileSync(blender, `#!/usr/bin/env node
 const fs = require('node:fs'), path = require('node:path');
 const args = process.argv.slice(2), output = args[args.indexOf('--output') + 1];
+const format = args.includes('--format') ? args[args.indexOf('--format') + 1] : args.includes('--verify') ? 'png' : 'webp';
 fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify(args));
-fs.writeFileSync(path.join(output, '1.png'), 'replacement');
+fs.writeFileSync(path.join(output, '1.' + format), 'replacement');
 fs.writeFileSync(path.join(output, 'render-report.json'), JSON.stringify({status:'complete',records:[]}));
 console.log('CANVAS_READY');
 `, { mode: 0o755 });
@@ -40,8 +41,10 @@ test('relative Blender overrides resolve from the caller directory', t => {
   assert.equal(args[args.indexOf('--output') + 1], output);
 });
 
-for (const [signal, expectedCode] of [['SIGINT', 130], ['SIGTERM', 143]]) {
-  test(`${signal} cancels the batch and preserves only completed records`, { timeout: 10000 }, async t => {
+for (const [format, signal, expectedCode] of [
+  ['png', 'SIGINT', 130], ['png', 'SIGTERM', 143], ['webp', 'SIGINT', 130], ['webp', 'SIGTERM', 143],
+]) {
+  test(`${format}: ${signal} cancels the batch and preserves only completed records`, { timeout: 10000 }, async t => {
     const { directory, marker, blender } = workspace(t);
     const output = join(directory, 'rendered');
     const observed = join(directory, 'cancel-observed.json');
@@ -49,7 +52,7 @@ for (const [signal, expectedCode] of [['SIGINT', 130], ['SIGTERM', 143]]) {
 const fs = require('node:fs'), path = require('node:path');
 const args = process.argv.slice(2), value = key => args[args.indexOf(key) + 1];
 const output = value('--output'), work = value('--work-dir'), cancel = value('--cancel-file');
-const record = {id:'first',output:path.join(output,'first.png')};
+const record = {id:'first',output:path.join(output,'first.${format}')};
 fs.writeFileSync(record.output,'completed image');
 fs.writeFileSync(path.join(work,'normalized.png'),'temporary pixels');
 fs.writeFileSync(path.join(output,'render-report.json'),JSON.stringify({status:'rendering',records:[]}));
@@ -63,7 +66,8 @@ if (${JSON.stringify(signal)} === 'SIGINT') process.on('SIGINT',()=>{
 fs.writeFileSync(${JSON.stringify(marker)},'ready');
 setInterval(()=>{},1000);
 `, { mode: 0o755 });
-    const child = spawn(process.execPath, [script, '--verify', '--output', output, '--blender', blender],
+    const child = spawn(process.execPath, [script, '--input', artwork, '--format', format,
+      '--output', output, '--blender', blender],
       { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} });
     let stdout = '', stderr = '';
@@ -83,11 +87,95 @@ setInterval(()=>{},1000);
     assert.equal(report.verification, undefined);
     assert.equal(report.records.length, 1);
     assert.equal(report.records[0].id, 'first');
-    assert.equal(readFileSync(join(output, 'first.png'), 'utf8'), 'completed image');
+    assert.equal(readFileSync(join(output, `first.${format}`), 'utf8'), 'completed image');
     assert.equal(readdirSync(output).some(name => name.startsWith('.canvas-work-')), false);
     if (signal === 'SIGINT') assert.equal(JSON.parse(readFileSync(observed, 'utf8')).marker, signal);
   });
 }
+
+test('export options reach headless Blender', t => {
+  const { directory, marker, blender } = workspace(t);
+  const output = join(directory, 'rendered');
+  const options = ['--format', 'webp', '--transparent', '--quality', '85', '--max-side', '1400'];
+  const result = run(blender, ['--input', artwork, '--output', output, ...options]);
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(readFileSync(marker, 'utf8'));
+  assert.ok(args.includes('-b'));
+  assert.ok(args.includes('--transparent'));
+  for (const [key, value] of [['--format', 'webp'], ['--quality', '85'], ['--max-side', '1400']]) {
+    assert.equal(args[args.indexOf(key) + 1], value);
+  }
+  assert.ok(existsSync(join(output, '1.webp')));
+});
+
+test('invalid export options fail before output creation or Blender startup', t => {
+  const { directory, marker, blender } = workspace(t);
+  const output = join(directory, 'rendered');
+  for (const options of [
+    ['--format', 'jpeg'], ['--format', 'png', '--quality', '85'], ['--format', 'webp', '--quality', '-1'],
+    ['--format', 'webp', '--quality', '101'], ['--format', 'webp', '--quality', '85.5'],
+    ['--max-side', '0'], ['--max-side', '-2'], ['--max-side', '1.2'],
+    ['--max-side', '1e3'], ['--max-side', '9007199254740992'],
+  ]) {
+    const result = run(blender, ['--input', artwork, '--output', output, ...options]);
+    assert.equal(result.status, 1, options.join(' '));
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(output), false);
+  }
+});
+
+test('each export option is rejected with verification, including default-valued options', t => {
+  const { directory, marker, blender } = workspace(t);
+  const output = join(directory, 'rendered');
+  for (const options of [['--format', 'png'], ['--transparent'], ['--quality', '85'], ['--max-side', '1400']]) {
+    const result = run(blender, ['--verify', '--output', output, ...options]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /cannot be combined with --verify/);
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(output), false);
+  }
+});
+
+test('default WebP output requires explicit overwrite and preserves the PNG', t => {
+  const { directory, marker, blender } = workspace(t);
+  const output = join(directory, 'existing');
+  const source = join(directory, '1.png');
+  copyFileSync(approved, source);
+  mkdirSync(output);
+  writeFileSync(join(output, '1.webp'), 'previous WebP');
+  writeFileSync(join(output, '1.png'), 'previous PNG');
+  const options = ['--input', source, '--output', output];
+  const denied = run(blender, options);
+  assert.equal(denied.status, 1);
+  assert.match(denied.stderr, /Output already exists:.*1\.webp/);
+  assert.equal(existsSync(marker), false);
+  assert.equal(readFileSync(join(output, '1.webp'), 'utf8'), 'previous WebP');
+  const replaced = run(blender, [...options, '--overwrite']);
+  assert.equal(replaced.status, 0, replaced.stderr);
+  assert.equal(readFileSync(join(output, '1.webp'), 'utf8'), 'replacement');
+  assert.equal(readFileSync(join(output, '1.png'), 'utf8'), 'previous PNG');
+});
+
+test('explicit PNG output requires overwrite when a high-resolution PNG exists', t => {
+  const { directory, marker, blender } = workspace(t);
+  const output = join(directory, 'existing');
+  const source = join(directory, '1.png');
+  copyFileSync(approved, source);
+  mkdirSync(output);
+  writeFileSync(join(output, '1.png'), 'previous PNG');
+  const options = ['--input', source, '--format', 'png', '--output', output];
+  const denied = run(blender, options);
+  assert.equal(denied.status, 1);
+  assert.match(denied.stderr, /Output already exists:.*1\.png/);
+  assert.equal(existsSync(marker), false);
+  const replaced = run(blender, [...options, '--overwrite']);
+  assert.equal(replaced.status, 0, replaced.stderr);
+  const args = JSON.parse(readFileSync(marker, 'utf8'));
+  assert.equal(args[args.indexOf('--format') + 1], 'png');
+  assert.equal(args.includes('--max-side'), false);
+  assert.equal(args.includes('--transparent'), false);
+  assert.equal(readFileSync(join(output, '1.png'), 'utf8'), 'replacement');
+});
 
 test('custom verification output preserves existing artwork without --overwrite', t => {
   const { directory, marker, blender } = workspace(t);
