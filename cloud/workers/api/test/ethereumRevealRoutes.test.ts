@@ -53,7 +53,7 @@ function fixture() {
       ...(method === 'GET' ? {} : { body: JSON.stringify(body) }) }), env, path,
     { fetch: async () => assert.fail('Reveal routes must not call the chain provider') });
   };
-  const register = (state: EthereumRevealDeployment['state'] = 'active', catalogVersion = '111k-v2') => database.prepare(`INSERT INTO ethereum_reveal_deployments
+  const register = (state: EthereumRevealDeployment['state'] = 'active', catalogVersion = '111k-v3') => database.prepare(`INSERT INTO ethereum_reveal_deployments
     (deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,deployment_block,catalog_version,template_json,
       template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
     VALUES('test-sepolia','111k_devnet',11155111,?,'https://cdn.mons.shop/111k-sepolia/',100,?,?,?,?,3,1,1,1,1)`)
@@ -134,10 +134,10 @@ for (const method of ['transaction', 'tokens'] as const) {
     ? { ...responseScope, status: 'pending', artworks: [], retryAfterMs: 2000 }
     : { ...responseScope, artworks: [], unresolved: [{ tokenId: '1', status: 'recovering' }], retryAfterMs: 2000 };
 
-  test(`${method} retired catalogs return 409 without touching the reveal object or admitting work`, async t => {
+  for (const catalogVersion of ['111k-v1', '111k-v2']) test(`${method} retired catalog ${catalogVersion} returns 409 without touching the reveal object or admitting work`, async t => {
     const f = fixture();
     t.after(() => f.database.close());
-    f.register('paused', '111k-v1');
+    f.register('paused', catalogVersion);
     const response = await f.request(body, { path });
     assert.equal(response.status, 409);
     assert.deepEqual(await response.json(), { ok: false, error: { code: 'failed-precondition', message: 'Reveal is retired for this collection.' } });

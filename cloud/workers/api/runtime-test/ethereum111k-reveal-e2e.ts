@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { createTestHarness } from 'wrangler';
 import { encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
-import { ETHEREUM_REVEAL_PATHS, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
+import { ETHEREUM_REVEAL_PATHS, type EthereumRevealedArtwork, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from '../../../../scripts/shared/ethereum111kLocalReveal.ts';
 
 export async function runEthereumRevealE2E(input: {
@@ -42,7 +42,11 @@ export async function runEthereumRevealE2E(input: {
       DELETE FROM free_slots WHERE category='3d' AND slot=999;
       UPDATE free_slots SET asset_id=1000 WHERE category='3d' AND slot=0;
       UPDATE pools SET available=available-1 WHERE category='3d';
-      INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('3d',1,'111112',0)`);
+      INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('3d',1,'111112',0);
+      DELETE FROM free_slots WHERE category='animated' AND slot>=100;
+      UPDATE free_slots SET asset_id=101 WHERE category='animated' AND slot=0;
+      UPDATE pools SET available=available-2 WHERE category='animated';
+      INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('animated',1,'111112',1),('animated',102,'111112',2)`);
     const scope = { chainId: 31337, contractAddress: input.contractAddress };
     async function request<T>(path: string, body: object): Promise<T> {
       const response = await worker.fetch(`https://api.mons.shop${path}`, {
@@ -91,30 +95,44 @@ export async function runEthereumRevealE2E(input: {
       category: '3d', image: 'https://wip.lil.org/111k/3d/1.webp',
       animation_url: 'https://wip.lil.org/111k/3d/1.glb', aspectRatio: { width: 1, height: 1 },
     });
+    for (const [index, assetId] of [[1, 1], [2, 102]]) {
+      const artwork: EthereumRevealedArtwork = revealed.artworks[index];
+      assert.deepEqual({ category: artwork.category, image: artwork.image,
+        animation_url: artwork.animation_url, aspectRatio: artwork.aspectRatio, attributes: artwork.attributes }, {
+        category: 'animated', image: `https://wip.lil.org/111k/animated/${assetId}.webp`,
+        animation_url: `https://wip.lil.org/111k/animated/${assetId}.mp4`, aspectRatio: { width: 466, height: 503 },
+        attributes: [{ trait_type: 'type', value: 'animated' }],
+      });
+    }
     assert.deepEqual(revealed.artworks.map(artwork => artwork.tokenId), Array.from({ length: 20 }, (_, index) => String(index + 1)));
     assert.equal(new Set(revealed.artworks.map(artwork => artwork.image)).size, 20);
     assert.ok(revealed.artworks.every(artwork => artwork.aspectRatio.width > 0 && artwork.aspectRatio.height > 0));
     const receipt = await input.rpc<{ blockNumber: string; blockHash: string }>('eth_getTransactionReceipt', [transactionHash]);
     assert.equal(await input.rpc<string>('eth_blockNumber'), receipt.blockNumber);
     assert.ok(revealed.artworks.every(artwork => artwork.observation.blockHash === receipt.blockHash));
-    const key = `${new URL(input.metadataBaseUri).pathname.slice(1)}1.json`;
-    let published: string | null = null;
-    for (let attempt = 0; attempt < 80; attempt++) {
-      const object = await env.ETHEREUM_REVEAL_METADATA.get(key);
-      if (object) { published = await object.text(); break; }
-      await new Promise(done => setTimeout(done, 100));
+    const publishedMetadata = new Map<string, string>();
+    for (const artwork of revealed.artworks.slice(0, 3)) {
+      const key = `${new URL(input.metadataBaseUri).pathname.slice(1)}${artwork.tokenId}.json`;
+      let published: string | null = null;
+      for (let attempt = 0; attempt < 80; attempt++) {
+        const object = await env.ETHEREUM_REVEAL_METADATA.get(key);
+        if (object) { published = await object.text(); break; }
+        await new Promise(done => setTimeout(done, 100));
+      }
+      assert.ok(published);
+      const metadata = JSON.parse(published);
+      assert.equal(metadata.image, artwork.image);
+      assert.equal(metadata.animation_url, artwork.animation_url);
+      assert.equal(metadata.category, artwork.category);
+      assert.equal(metadata.revealStatus, 'revealed');
+      assert.deepEqual(metadata.attributes, artwork.attributes);
+      assert.deepEqual(metadata.aspectRatio, artwork.aspectRatio);
+      publishedMetadata.set(key, published);
     }
-    assert.ok(published);
-    assert.equal(JSON.parse(published).image, revealed.artworks[0].image);
-    assert.equal(JSON.parse(published).animation_url, 'https://wip.lil.org/111k/3d/1.glb');
-    assert.equal(JSON.parse(published).category, '3d');
-    assert.equal(JSON.parse(published).revealStatus, 'revealed');
-    assert.deepEqual(JSON.parse(published).attributes, [{ trait_type: 'type', value: '3d' }]);
-    assert.deepEqual(JSON.parse(published).aspectRatio, revealed.artworks[0].aspectRatio);
     assert.equal(await input.rpc('evm_revert', [snapshot]), true);
-    const afterReorg = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1'] });
-    assert.deepEqual(afterReorg.artworks, [revealed.artworks[0]]);
-    assert.equal(await (await env.ETHEREUM_REVEAL_METADATA.get(key))!.text(), published);
+    const afterReorg = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1', '2', '3'] });
+    assert.deepEqual(afterReorg.artworks, revealed.artworks.slice(0, 3));
+    for (const [key, published] of publishedMetadata) assert.equal(await (await env.ETHEREUM_REVEAL_METADATA.get(key))!.text(), published);
     const mint = { from: input.buyer, to: input.contractAddress, value: '0x5af3107a4000',
       data: encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]) };
     await input.rpc('eth_sendTransaction', [{ ...mint, gas: await input.rpc<string>('eth_estimateGas', [mint]) }]);
@@ -133,7 +151,7 @@ export async function runEthereumRevealE2E(input: {
     assert.deepEqual(healed.unresolved, [{ tokenId: '111111', status: 'unminted' }]);
     return { deploymentId: deployment.deploymentId, contractAddress: input.contractAddress, transactionHash, recoveryHash,
       pendingMediaHidden: true, firstConfirmationArtworkCount: revealed.artworks.length, metadataStorage: 'isolated-local-r2',
-      deterministic3dReveal: true, immutableAfterReorg: true, tokenRecovery: true };
+      deterministic3dReveal: true, deterministicAnimatedReveal: true, immutableAfterReorg: true, tokenRecovery: true };
   } finally {
     await runtime.close();
     await rm(directory, { recursive: true, force: true });

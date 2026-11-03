@@ -29,7 +29,7 @@ export function EthereumArtworkMedia({ item, viewer = false }: { item: EthereumI
   const [modelAttempt, setModelAttempt] = useState(0);
   const [readyModel, setReadyModel] = useState<object | null>(null);
   const [failedModel, setFailedModel] = useState<object | null>(null);
-  const animation = item.category === 'video' ? item.animation_url : undefined;
+  const animation = item.category === 'video' || item.category === 'animated' ? item.animation_url : undefined;
   const model = item.category === '3d' && viewer ? item.animation_url : undefined;
   const modelKey = `${model}:${item.name}:${modelAttempt}`;
   const modelSession = useMemo(() => ({}), [modelKey]);

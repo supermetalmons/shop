@@ -62,7 +62,8 @@ function parseMetadata(value: unknown): EthereumMetadata {
     throw new EthereumApiError('unavailable', 'Invalid Ethereum metadata.');
   }
   return { name: value.name, image: value.image,
-    ...('category' in value && (value.category === 'egg' || value.category === 'painting' || value.category === 'video' || value.category === '3d')
+    ...('category' in value && (value.category === 'egg' || value.category === 'painting' || value.category === 'video' ||
+      value.category === '3d' || value.category === 'animated')
       ? { category: value.category } : {}),
     ...('revealStatus' in value && (value.revealStatus === 'unrevealed' || value.revealStatus === 'revealed')
       ? { revealStatus: value.revealStatus } : {}),

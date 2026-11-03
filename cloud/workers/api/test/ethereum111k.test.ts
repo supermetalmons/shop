@@ -65,7 +65,7 @@ function fixture(controlActive = true) {
     ops.prepare(`INSERT INTO ethereum_reveal_deployments
       (deployment_id, drop_id, chain_id, contract_address, metadata_base_uri, deployment_block, catalog_version,
         template_json, template_sha256, state, revision, created_at_ms, updated_at_ms)
-      VALUES (?, '111k_devnet', ?, ?, ?, 2, '111k-v2', ?, ?, ?, 1, ?, ?)`)
+      VALUES (?, '111k_devnet', ?, ?, ?, 2, '111k-v3', ?, ?, ?, 1, ?, ?)`)
       .run(id, chainId, contractAddress, `https://cdn.mons.shop/${chainId === 1 ? '111k' : '111k-sepolia'}/${id}/`,
         JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
         '0'.repeat(64), state, NOW, NOW);
@@ -3470,13 +3470,13 @@ test('all six metadata kinds preserve HTTPS images, empty descriptions and a sin
   } finally { f.close(); }
 });
 
-for (const category of ['video', '3d'] as const) test(`artwork metadata preserves ${category} media and exact aspect ratios without unsafe URLs`, async () => {
+for (const category of ['video', '3d', 'animated'] as const) test(`artwork metadata preserves ${category} media and exact aspect ratios without unsafe URLs`, async () => {
   const f = fixture();
   try {
-    const directory = category === 'video' ? 'videos' : '3d';
+    const directory = category === 'video' ? 'videos' : category;
     const metadata = { name: '1', image: `https://wip.lil.org/111k/${directory}/1.webp`,
-      animation_url: `https://wip.lil.org/111k/${directory}/1.${category === 'video' ? 'mp4' : 'glb'}`,
-      aspectRatio: category === 'video' ? { width: 16, height: 9 } : { width: 1, height: 1 },
+      animation_url: `https://wip.lil.org/111k/${directory}/1.${category === '3d' ? 'glb' : 'mp4'}`,
+      aspectRatio: category === 'video' ? { width: 16, height: 9 } : category === 'animated' ? { width: 466, height: 503 } : { width: 1, height: 1 },
       category, revealStatus: 'revealed' as const };
     f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}1.json`, metadata);
     const result = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);

@@ -9,7 +9,7 @@ function fixture(count: number, failId?: string) {
     deployment_id: `test-${index.toString().padStart(3, '0')}`, drop_id: '111k_devnet', chain_id: 11155111,
     contract_address: `0x${(index + 1).toString(16).padStart(40, '0')}`,
     metadata_base_uri: `https://cdn.mons.shop/111k-sepolia/test-${index.toString().padStart(3, '0')}/`,
-    deployment_block: 100, catalog_version: '111k-v2',
+    deployment_block: 100, catalog_version: '111k-v3',
     template_json: JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
     template_sha256: 'a'.repeat(64), state: 'active', revision: 3, created_at_ms: index,
     updated_at_ms: index, provisioned_at_ms: 1, activated_at_ms: 2, last_error: null,
@@ -25,7 +25,7 @@ function fixture(count: number, failId?: string) {
           return {
             async all<T>() {
               assert.match(sql, /WHERE catalog_version=\? ORDER BY updated_at_ms ASC LIMIT 100/);
-              assert.deepEqual(values, ['111k-v2']);
+              assert.deepEqual(values, ['111k-v3']);
               return { results: rows.filter(row => row.catalog_version === values[0])
                 .sort((a, b) => a.updated_at_ms - b.updated_at_ms).slice(0, 100).map(row => ({ ...row })) as T[] };
             },
@@ -70,9 +70,9 @@ test('watchdog rotates a bounded page so later deployments are not starved', asy
   assert.equal(peak(), 4);
 });
 
-test('watchdog excludes retired catalogs before its bounded page without changing historical rows', async () => {
+for (const catalogVersion of ['111k-v1', '111k-v2']) test(`watchdog excludes retired catalog ${catalogVersion} before its bounded page without changing historical rows`, async () => {
   const { env, visited, rows } = fixture(130);
-  for (const row of rows.slice(0, 125)) row.catalog_version = '111k-v1';
+  for (const row of rows.slice(0, 125)) row.catalog_version = catalogVersion;
   const historical = structuredClone(rows.slice(0, 125));
   const summary = await reconcileEthereumReveals(env, new AbortController().signal);
   assert.deepEqual(summary, { attempted: 5, completed: 5, deferred: 0, skipped: 0, failed: 0 });

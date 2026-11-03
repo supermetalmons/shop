@@ -1,0 +1,21 @@
+{
+  "manifestSha256": "942ea5b610492118d3153f1bf8b40c03f4e71c73d40dee48c34da33210b154bc",
+  "chainId": 11155111,
+  "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+  "sourceInputSha256": "52e4df80e9a86cd5eb8793077119d27448ae04cdbef7706863aa042f0b4c0b48",
+  "requestSha256": "858c39a56bd54dfd5ab9d7ba73a0bc28f81b2b8e2730365f7052cd4049db9db7",
+  "sourceVerified": true,
+  "match": "exact",
+  "etherscanExactMatch": true,
+  "claimRelicWriteAvailable": true,
+  "frozenSourcesMatch": true,
+  "constructorArgumentsMatch": true,
+  "sourceCount": 22,
+  "methodId": "0xd4137c78",
+  "compilerVersion": "v0.8.38+commit.1835d247",
+  "optimizerRuns": 500,
+  "verificationUrl": "https://sepolia.etherscan.io/address/0x6d194e6cc762424e408b84907c25d60f0db29d12#code",
+  "writeUrl": "https://sepolia.etherscan.io/address/0x6d194e6cc762424e408b84907c25d60f0db29d12#writeContract",
+  "verifiedAt": "2026-11-03T10:23:39.123Z",
+  "verificationMethod": "Etherscan V2 API frozen-source and published write-ABI verification"
+}

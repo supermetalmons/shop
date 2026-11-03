@@ -1,0 +1,12 @@
+{
+  "manifestSha256": "942ea5b610492118d3153f1bf8b40c03f4e71c73d40dee48c34da33210b154bc",
+  "contracts": {
+    "NFT111K": {
+      "requestSha256": "552825fe0652e400ca56b9bb9f7c78f8a9e0ef3d5f98b8ef153b74c8e938a6d5",
+      "attemptedAt": "2026-11-03T10:22:40.419Z",
+      "verificationId": "324c63ea-63b3-412f-b050-05bb06376438",
+      "verifiedAt": "2026-11-03T10:23:23.862Z",
+      "report": "NFT111K.sourcify-verification.json"
+    }
+  }
+}

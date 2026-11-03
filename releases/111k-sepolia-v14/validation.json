@@ -1,0 +1,95 @@
+{
+  "checkedAt": "2026-11-03T10:12:53.956Z",
+  "manifestSha256": "942ea5b610492118d3153f1bf8b40c03f4e71c73d40dee48c34da33210b154bc",
+  "catalogVersion": "111k-v3",
+  "catalogCounts": {
+    "egg": 22222,
+    "painting": 84454,
+    "video": 3333,
+    "3d": 1000,
+    "animated": 102
+  },
+  "totalArtworks": 111111,
+  "checks": [
+    {
+      "command": "npm run check:frontend",
+      "passed": true,
+      "unitTests": 4903
+    },
+    {
+      "command": "npm run check:api",
+      "passed": true,
+      "unitTests": 2944,
+      "runtimeTests": 52
+    },
+    {
+      "command": "npm run test:ethereum:contracts",
+      "passed": true,
+      "contractTests": 264,
+      "skippedContractTests": 4
+    },
+    {
+      "command": "npm run typecheck:tools",
+      "passed": true
+    },
+    {
+      "command": "npm run test:ethereum:e2e",
+      "passed": true,
+      "report": "reveal-e2e-results.json",
+      "metadataSource": "generated-files",
+      "deterministicAnimatedReveal": true,
+      "deterministic3dReveal": true
+    },
+    {
+      "command": "node --import tsx --test .cache/111k-v14-release/release-helpers.test.cjs",
+      "passed": true,
+      "tests": 13
+    }
+  ],
+  "initialParallelRunRetries": [
+    {
+      "test": "restoration repairs missing objects, damaged metadata and headers from both snapshot versions",
+      "initial": "90000 ms timeout under concurrent full frontend/API suites",
+      "finalFullFrontendSuite": "passed"
+    }
+  ],
+  "mediaValidation": {
+    "file": "animated-media-validation.json",
+    "objects": 204,
+    "complete": true
+  },
+  "browser": {
+    "environment": "Local Vite fixture using production media components and public CDN assets",
+    "assets": [
+      1,
+      102
+    ],
+    "evidence": [
+      "browser-animated-playback.json",
+      "browser-animated-fallback.json",
+      "browser-animated-reduced-motion.json"
+    ],
+    "viewerSpecificReducedMotionCheck": "Not completed; browser work stopped at user request. Component unit coverage passed."
+  },
+  "publicQaTransactions": {
+    "minted": 0,
+    "unpacked": 0,
+    "relicClaims": 0
+  },
+  "liveAcceptance": {
+    "preopening": "http-preopening.json",
+    "opening": "deployment-open.json",
+    "final": "http-open.json",
+    "revealApi": "live-reveal-check.json",
+    "mainnetUnchanged": "mainnet-approved-diff.json",
+    "totalSupplyAtVerification": 0,
+    "relicClaimsUsedAtVerification": 0,
+    "all18ClaimSlotsPreserved": true
+  },
+  "remoteIntegrityChecks": {
+    "pendingMigrations": 0,
+    "packStatus": "passed",
+    "opsD1": "passed",
+    "commerceD1AfterScopedReset": "passed"
+  }
+}

@@ -7,7 +7,7 @@ Show **Relic #1–#18** using `https://wip.lil.org/111k/relics/{id}.webp`. Alway
 ## Read availability and wallet allowance
 
 ```text
-GET https://api.mons.shop/ethereum/111k/relics?chainId=11155111&contractAddress=0x8ef2789bc22098749a8ca746263fd85442949eff&owner=0xYOUR_WALLET
+GET https://api.mons.shop/ethereum/111k/relics?chainId=11155111&contractAddress=0x6d194e6cc762424e408b84907c25d60f0db29d12&owner=0xYOUR_WALLET
 ```
 
 `chainId` and `contractAddress` are required. Omit `owner` before connecting. Mainnet uses `chainId=1` and the registered contract supplied by Mons; the example is Sepolia.

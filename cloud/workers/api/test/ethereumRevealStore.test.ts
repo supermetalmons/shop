@@ -7,6 +7,7 @@ import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORY_COUNTS,
   revealCrateSize, revealRandomInteger, validateRevealCatalog } from '../src/ethereumRevealCatalog.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import type { EthereumRevealObservation } from '../../../../shared/ethereum/reveal.ts';
+import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 
 const REVEAL_TRANSIENT_TRANSACTION_LIMIT = 10_000;
 const REVEAL_TRANSIENT_TRANSACTION_TTL_MS = 15 * 60_000;
@@ -14,7 +15,7 @@ const templateJson = JSON.stringify({ name: '{{tokenId}}', description: 'Preserv
   image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }, { trait_type: 'series', value: '111K' }] });
 const deployment: EthereumRevealDeployment = { deploymentId: 'test-sepolia-1', dropId: '111k_devnet', chainId: 11155111,
   contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/test-sepolia-1/',
-  deploymentBlock: 100, catalogVersion: '111k-v2', templateJson,
+  deploymentBlock: 100, catalogVersion: '111k-v3', templateJson,
   templateSha256: createHash('sha256').update(templateJson).digest('hex'), state: 'active', revision: 3,
   createdAtMs: 1, updatedAtMs: 3, provisionedAtMs: 2, activatedAtMs: 3, lastError: null };
 const crateId = (index: number) => String(111_112 + index);
@@ -84,6 +85,10 @@ test('catalog preserves all category counts, exact ratios, posters, and immutabl
         assert.equal(media.image, `https://wip.lil.org/111k/3d/${assetId}.webp`);
         assert.equal(media.animation_url, `https://wip.lil.org/111k/3d/${assetId}.glb`);
         assert.deepEqual(media.aspectRatio, { width: 1, height: 1 });
+      } else if (category === 'animated') {
+        assert.equal(media.image, `https://wip.lil.org/111k/animated/${assetId}.webp`);
+        assert.equal(media.animation_url, `https://wip.lil.org/111k/animated/${assetId}.mp4`);
+        assert.deepEqual(media.aspectRatio, { width: 466, height: 503 });
       } else assert.equal(media.animation_url, undefined);
     }
   }
@@ -109,7 +114,19 @@ test('catalog preserves all category counts, exact ratios, posters, and immutabl
     assert.equal(model.placeholderJson, result.placeholderJson);
   }
   for (const assetId of [0, 1001]) assert.throws(() => mediaFor('3d', assetId), /Invalid reveal asset/);
-  assert.throws(() => mediaFor('painting', 84557), /Invalid reveal asset/);
+  for (const assetId of [1, 102]) {
+    const animated = buildRevealedArtwork({ ...input, category: 'animated', assetId });
+    assert.deepEqual(JSON.parse(animated.metadataJson), {
+      name: '71', description: 'Preserved description', image: `https://wip.lil.org/111k/animated/${assetId}.webp`,
+      animation_url: `https://wip.lil.org/111k/animated/${assetId}.mp4`, aspectRatio: { width: 466, height: 503 },
+      attributes: [{ trait_type: 'series', value: '111K' }, { trait_type: 'type', value: 'animated' }],
+      category: 'animated', revealStatus: 'revealed',
+    });
+    assert.equal(animated.placeholderJson, result.placeholderJson);
+  }
+  for (const assetId of [0, 103]) assert.throws(() => mediaFor('animated', assetId), /Invalid reveal asset/);
+  assert.equal(mediaFor('painting', 84454).image, 'https://wip.lil.org/111k/paintings/84454.webp');
+  assert.throws(() => mediaFor('painting', 84455), /Invalid reveal asset/);
   assert.equal(revealCrateSize('116666'), 31);
   for (const id of ['0111112', '111111', '116667', '1.0']) assert.throws(() => revealCrateSize(id));
   for (const max of [0, -1, 1.5, 0x1_0000_0001]) assert.throws(() => revealRandomInteger(max));
@@ -117,6 +134,34 @@ test('catalog preserves all category counts, exact ratios, posters, and immutabl
     const value = revealRandomInteger(max);
     assert.ok(Number.isInteger(value) && value >= 0 && value < max);
   }
+});
+
+test('animated metadata resolves future ratios by asset ID and validates the ratio index', () => {
+  const original = structuredClone(catalog.categories.animated);
+  const animated = catalog.categories.animated;
+  try {
+    animated.aspectRatioPalette.push([16, 9]);
+    animated.aspectRatioIndexById[101] = 1;
+    validateRevealCatalog();
+    const media = (assetId: number) => buildRevealedArtwork({ templateJson, tokenId: '71', crateTokenId: crateId(0),
+      category: 'animated', assetId, observation: observation(1) });
+    assert.deepEqual(media(1).artwork.aspectRatio, { width: 466, height: 503 });
+    assert.deepEqual(media(102).artwork.aspectRatio, { width: 16, height: 9 });
+    assert.deepEqual(JSON.parse(media(102).metadataJson).aspectRatio, { width: 16, height: 9 });
+    for (const index of [-1, 0.5, 2]) {
+      animated.aspectRatioIndexById[101] = index;
+      assert.throws(validateRevealCatalog, /Invalid reveal asset catalog/);
+    }
+    animated.aspectRatioIndexById[101] = 1;
+    for (const pair of [[], [1], [1, 2, 3], [0, 1], [1, -1], [1.5, 1], [Infinity, 1]]) {
+      animated.aspectRatioPalette[1] = pair;
+      assert.throws(validateRevealCatalog, /Invalid reveal asset catalog/);
+    }
+    animated.aspectRatioPalette[1] = [16, 9];
+    animated.aspectRatioIndexById.pop();
+    assert.throws(validateRevealCatalog, /Invalid reveal asset catalog/);
+  } finally { catalog.categories.animated = original; }
+  validateRevealCatalog();
 });
 
 test('provisioning is resumable and deployment identity cannot be replaced', t => {
@@ -137,7 +182,7 @@ test('provisioning is resumable and deployment identity cannot be replaced', t =
 });
 
 test('category selection uses initial weights while asset draws use current remaining counts', t => {
-  const choices = [0, 999, 1_000, 23_221, 23_222, 107_777, 107_778, 111_110];
+  const choices = [0, 999, 1_000, 1_101, 1_102, 23_323, 23_324, 107_777, 107_778, 111_110];
   const maxima: number[] = [];
   let call = 0;
   const { store } = fixture(t, maximum => {
@@ -147,9 +192,10 @@ test('category selection uses initial weights while asset draws use current rema
   });
   store.reserve([crateId(0)]);
   store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
-  assert.deepEqual(store.frozen(ids(1, 8)).map(value => value.category), ['3d', '3d', 'egg', 'egg', 'painting', 'painting', 'video', 'video']);
-  assert.deepEqual(maxima.slice(0, 16), [111111, 1000, 111111, 999, 111111, 22222, 111111, 22221,
-    111111, 84556, 111111, 84555, 111111, 3333, 111111, 3332]);
+  assert.deepEqual(store.frozen(ids(1, 10)).map(value => value.category),
+    ['3d', '3d', 'animated', 'animated', 'egg', 'egg', 'painting', 'painting', 'video', 'video']);
+  assert.deepEqual(maxima.slice(0, 20), [111111, 1000, 111111, 999, 111111, 102, 111111, 101,
+    111111, 22222, 111111, 22221, 111111, 84454, 111111, 84453, 111111, 3333, 111111, 3332]);
 });
 
 test('all 111111 assets remain unique through depletion, reordering, reused token IDs and reservation reclamation', { timeout: 120_000 }, t => {
@@ -159,7 +205,8 @@ test('all 111111 assets remain unique through depletion, reordering, reused toke
   assert.equal(store.summary().reserved, REVEAL_ARTWORK_COUNT);
   assert.equal(store.summary().available, 0);
   assert.deepEqual(rows('SELECT category,COUNT(*) AS count FROM assignments GROUP BY category ORDER BY category'), [
-    { category: '3d', count: 1000 }, { category: 'egg', count: 22222 }, { category: 'painting', count: 84556 }, { category: 'video', count: 3333 },
+    { category: '3d', count: 1000 }, { category: 'animated', count: 102 }, { category: 'egg', count: 22222 },
+    { category: 'painting', count: 84454 }, { category: 'video', count: 3333 },
   ].map(value => Object.assign(Object.create(null), value)));
   store.freeze(deployment, observation(1), [{ crateTokenId: crates[0], tokenIds: ids(1) }], 1);
   const original = store.frozen(ids(1));

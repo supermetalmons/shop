@@ -7,7 +7,7 @@ import { EthereumRevealStore, type RevealPublicationResult, type RevealSql } fro
 const deployment: EthereumRevealDeployment = {
   deploymentId: 'publication-test', dropId: '111k_devnet', chainId: 11155111,
   contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/publication-test/',
-  deploymentBlock: 100, catalogVersion: '111k-v2',
+  deploymentBlock: 100, catalogVersion: '111k-v3',
   templateJson: JSON.stringify({ name: '{{tokenId}}', description: '',
     image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
   templateSha256: '0'.repeat(64), state: 'active', revision: 3, createdAtMs: 1, updatedAtMs: 3,

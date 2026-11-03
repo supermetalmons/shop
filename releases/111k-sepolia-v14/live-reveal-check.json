@@ -1,0 +1,38 @@
+{
+  "checkedAt": "2026-11-03T10:37:04.132Z",
+  "retired": {
+    "status": 409,
+    "body": {
+      "ok": false,
+      "error": {
+        "code": "failed-precondition",
+        "message": "Reveal is retired for this collection."
+      }
+    }
+  },
+  "current": {
+    "status": 200,
+    "body": {
+      "deploymentId": "v14",
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+      "artworks": [],
+      "unresolved": [
+        {
+          "tokenId": "1",
+          "status": "unminted"
+        },
+        {
+          "tokenId": "111111",
+          "status": "unminted"
+        }
+      ],
+      "retryAfterMs": 0
+    }
+  },
+  "attempts": 1,
+  "noPublicTransactionsSubmitted": true,
+  "artworksMinted": 0,
+  "relicsMinted": 0
+}

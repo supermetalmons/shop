@@ -11,7 +11,7 @@ For the relic selection and claim page, use the [relic claims guide](111k_relic_
 - Allowed VVV origins: `https://vvv.so` and `https://www.vvv.so`. Browsers set `Origin` automatically; backend callers must supply it.
 - No API key, wallet session, or signature is required.
 
-Examples use the current Sepolia collection. Mons supplies the chain ID and contract for other collections. Send only the fields shown.
+Examples target the newly deployed Sepolia v14 collection; the [release record](../../releases/111k-sepolia-v14/README.md) records its cutover and activation status. Mons supplies the chain ID and contract for other collections. Send only the fields shown.
 
 ## Unrevealed artwork
 
@@ -32,7 +32,7 @@ POST /ethereum/111k/reveal/transaction
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+  "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
   "transactionHash": "<wallet-returned 0x-prefixed 64-hex-digit hash>"
 }
 ```
@@ -63,7 +63,7 @@ POST /ethereum/111k/reveal/tokens
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+  "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
   "tokenIds": ["1", "21"]
 }
 ```
@@ -103,15 +103,15 @@ Each artwork has this shape (illustrative values):
   "aspectRatio": { "width": 16, "height": 9 },
   "observation": {
     "transactionHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
-    "blockNumber": 12051126,
+    "blockNumber": 12054660,
     "blockHash": "0x2222222222222222222222222222222222222222222222222222222222222222"
   }
 }
 ```
 
-- `category`: `egg`, `painting`, `video`, or `3d`.
-- `image`: the artwork image, video poster, or square 3D preview.
-- `animation_url`: present for videos (MP4) and 3D models (GLB). Choose the renderer from `category`; a GLB URL is not a video source. Eggs and paintings have no `animation_url`.
+- `category`: `egg`, `painting`, `video`, `3d`, or `animated`.
+- `image`: the artwork image, video or animated poster, or square 3D preview.
+- `animation_url`: present for videos and animated artworks (MP4), and 3D models (GLB). Choose the renderer from `category`; a GLB URL is not a video source. Eggs and paintings have no `animation_url`.
 - `aspectRatio`: proportions, **not pixel dimensions**. Use CSS `aspect-ratio: width / height`.
 - Optional `description` and `attributes`; each attribute has `trait_type` and a string or number `value`.
 - `observation`: the first transaction/block that authorized reveal; it does not prove ownership or finality.
@@ -134,8 +134,28 @@ or error fallback; load the GLB in an interactive model viewer when opening the
 artwork. The 1:1 ratio describes the preview frame, not the model's geometry.
 Media IDs are local to each category and do not have to match the onchain token ID.
 
-The v2 catalog contains 22,222 eggs, 84,556 paintings, 3,333 videos, and 1,000 3D
-models: 111,111 artworks total. The token-ID range and request limits are unchanged.
+For an animated artwork, the media fields are:
+
+```json
+{
+  "category": "animated",
+  "image": "https://wip.lil.org/111k/animated/1.webp",
+  "animation_url": "https://wip.lil.org/111k/animated/1.mp4",
+  "aspectRatio": { "width": 466, "height": 503 },
+  "attributes": [{ "trait_type": "type", "value": "animated" }]
+}
+```
+
+Animated artworks use the same MP4 playback and WEBP fallback as videos, with a
+distinct `animated` category and type trait. IDs 1–102 currently have a 932 × 1006
+frame, represented by the reduced ratio 466:503. Always use the returned
+`aspectRatio`: animated artworks support per-asset ratios, as paintings do, and
+future assets may differ. The fragment has the same surrounding artwork fields
+as the complete example above.
+
+The v3 catalog contains 22,222 eggs, 84,454 paintings, 3,333 videos, 1,000 3D
+models, and 102 animated artworks: 111,111 artworks total. Animated assets replace
+painting IDs 84,455–84,556. The token-ID range and request limits are unchanged.
 
 Cache media by `(chainId, contractAddress, tokenId)`. Revealed artwork stays unchanged through reorgs and remints. Use inventory data for ownership.
 

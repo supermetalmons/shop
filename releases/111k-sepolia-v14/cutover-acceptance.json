@@ -1,0 +1,20 @@
+{
+  "acceptanceHelper": {
+    "file": ".cache/111k-v14-release/accept-scoped.ts",
+    "sha256": "e445b6654cc4a6898c14d3b20c26bcc328253225057d6234c7050d93213160ae"
+  },
+  "releaseId": "111k-v14-2026-11-03T10-12-34-190Z-0d230b34",
+  "manifestSha256": "942ea5b610492118d3153f1bf8b40c03f4e71c73d40dee48c34da33210b154bc",
+  "chainId": 11155111,
+  "deploymentId": "v14",
+  "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v14/",
+  "previousContract": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+  "mainnetChainUnchanged": true,
+  "mainnetRegistryUnchanged": true,
+  "approvedCdnDiffVerified": true,
+  "revealActive": true,
+  "matchingIds": true,
+  "commerceEnabled": true,
+  "checkedAt": "2026-11-03T10:37:28.412Z"
+}

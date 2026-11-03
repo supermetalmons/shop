@@ -60,7 +60,9 @@ async function waitWithRenders(milliseconds: number) {
 function artwork(tokenId = '1', category: EthereumRevealedArtwork['category'] = 'painting'): EthereumRevealedArtwork {
   return { tokenId, crateTokenId: '111112', category, name: `Artwork ${tokenId}`,
     image: `https://wip.lil.org/reveal-test/${tokenId}.webp`, aspectRatio: { width: 1080, height: 1920 },
-    ...(category === 'video' ? { animation_url: `https://wip.lil.org/reveal-test/${tokenId}.mp4` } :
+    ...(category === 'animated' ? { image: `https://wip.lil.org/111k/animated/${tokenId}.webp`,
+      animation_url: `https://wip.lil.org/111k/animated/${tokenId}.mp4`, aspectRatio: { width: 466, height: 503 } } :
+      category === 'video' ? { animation_url: `https://wip.lil.org/reveal-test/${tokenId}.mp4` } :
       category === '3d' ? { animation_url: `https://wip.lil.org/111k/3d/${tokenId}.glb`, aspectRatio: { width: 1, height: 1 } } : {}),
     attributes: [{ trait_type: 'type', value: category }], observation: { transactionHash: hash, blockNumber: 101, blockHash } };
 }
@@ -132,6 +134,20 @@ test('3D reveal metadata survives inventory parsing and never becomes a video pr
   assert.deepEqual(preview.imageDimensions, { width: 1, height: 1 });
 });
 
+test('animated reveals preserve their category and per-asset ratios through inventory and video previews', async t => {
+  const animated = [artwork('1', 'animated'), { ...artwork('102', 'animated'), aspectRatio: { width: 4, height: 3 } }];
+  t.mock.method(globalThis, 'fetch', async () => Response.json(transactionResponse('revealed', animated)));
+  assert.deepEqual((await ethereumRevealApi.transaction(config, hash)).artworks, animated);
+  for (const asset of animated) {
+    const inventory = parseEthereumInventoryItem({ ...item(asset.tokenId), ...asset, revealStatus: 'revealed' }, config, owner);
+    const preview = ethereumInventoryView(inventory);
+    assert.equal(preview.ethereum.category, 'animated');
+    assert.deepEqual(preview.imageDimensions, asset.aspectRatio);
+    assert.deepEqual(preview.previewVideo, { sources: [{ src: asset.animation_url }], posterSrc: asset.image });
+    assert.deepEqual(preview.attributes, [{ trait_type: 'type', value: 'animated' }]);
+  }
+});
+
 for (const status of ['pending', 'reverted', 'not_unpack'] as const) test(`${status} artwork responses cannot smuggle media into the client`, async t => {
   t.mock.method(globalThis, 'fetch', async () => Response.json(transactionResponse(status, [artwork()])));
   await assert.rejects(ethereumRevealApi.transaction(config, hash), /invalid response/);
@@ -145,6 +161,9 @@ test('artwork response validation rejects foreign scopes, unsafe media, malforme
     { artworks: [{ ...artwork(), image: 'http://wip.lil.org/art.webp' }] },
     { artworks: [{ ...artwork('1', 'video'), animation_url: 'https://user:secret@wip.lil.org/a.mp4' }] },
     { artworks: [{ ...artwork('1', 'video'), animation_url: undefined }] },
+    { artworks: [{ ...artwork('1', 'animated'), animation_url: undefined }] },
+    { artworks: [{ ...artwork('1', 'animated'), animation_url: 'https://user:secret@wip.lil.org/a.mp4' }] },
+    { artworks: [{ ...artwork('1', 'animated'), animation_url: 'javascript:alert(1)' }] },
     { artworks: [{ ...artwork('1', '3d'), animation_url: undefined }] },
     { artworks: [{ ...artwork('1', '3d'), animation_url: 'javascript:alert(1)' }] },
     { artworks: [{ ...artwork(), aspectRatio: { width: 0, height: 12 } }] },
@@ -828,8 +847,8 @@ for (const kind of ['warehouse', 'relic'] as const) test(`${kind} opening does n
   assert.equal(readEthereumRevealJobs(scope).length, 0);
 });
 
-test('shared inventory media preserves confirmed dimensions and video while rejecting unsafe optional media', () => {
-  const video = { ...item(), ...artwork('1', 'video'), revealStatus: 'revealed' as const };
+for (const category of ['video', 'animated'] as const) test(`shared inventory preserves ${category} dimensions and playback while rejecting unsafe media`, () => {
+  const video = { ...item(), ...artwork('1', category), revealStatus: 'revealed' as const };
   const parsed = parseEthereumInventoryItem(video, config, owner);
   const preview = ethereumInventoryView(parsed);
   assert.deepEqual(preview.imageDimensions, video.aspectRatio);
@@ -906,27 +925,59 @@ test('local inventory verifies media against its own ledger even when shared CDN
   assert.equal(recovery.mock.callCount(), 1);
 });
 
-test('artwork video reserves its dimensions before loading and falls back to the poster on failure', async () => {
-  const video = { ...item(), ...artwork('1', 'video'), revealStatus: 'revealed' as const };
+for (const category of ['video', 'animated'] as const) test(`${category} reserves its dimensions before loading and falls back to the poster on failure`, async () => {
+  const video = { ...item(), ...artwork('1', category), revealStatus: 'revealed' as const };
   const view = render(createElement(EthereumArtworkMedia, { item: video, viewer: true }));
   const frame = view.container.querySelector<HTMLElement>('.ethereum111k__artwork-media')!;
-  assert.equal(Number.parseFloat(frame.style.aspectRatio), 1080 / 1920);
+  assert.equal(Number.parseFloat(frame.style.aspectRatio), video.aspectRatio.width / video.aspectRatio.height);
   const image = view.container.querySelector('img')!;
-  assert.equal(image.getAttribute('width'), '1080');
-  assert.equal(image.getAttribute('height'), '1920');
+  assert.equal(image.getAttribute('width'), String(video.aspectRatio.width));
+  assert.equal(image.getAttribute('height'), String(video.aspectRatio.height));
   const media = view.container.querySelector('video')!;
   assert.equal(media.getAttribute('src'), video.animation_url);
-  assert.equal(media.getAttribute('height'), '1920');
+  assert.equal(media.getAttribute('height'), String(video.aspectRatio.height));
+  assert.equal(media.autoplay, true);
+  assert.equal(media.loop, true);
+  assert.equal(media.muted, true);
+  assert.equal(media.playsInline, true);
   fireEvent.error(media);
   assert.equal(view.container.querySelector('video'), null);
   assert.equal(image.hidden, false);
   assert.equal(image.getAttribute('src'), video.image);
 });
 
-test('reduced motion prevents playback on the first viewer mount', t => {
+test('animated tiles load only near the viewport and preserve future per-asset ratios', t => {
+  let intersect: (visible: boolean) => void = () => {};
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver');
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, 'IntersectionObserver', original);
+    else Reflect.deleteProperty(globalThis, 'IntersectionObserver');
+  });
+  Object.defineProperty(globalThis, 'IntersectionObserver', { configurable: true, value: class {
+    constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+      intersect = visible => callback([{ isIntersecting: visible }]);
+    }
+    observe() {}
+    disconnect() {}
+  } });
+  const animated = { ...item(), ...artwork('1', 'animated'), aspectRatio: { width: 4, height: 3 } };
+  const view = render(createElement(EthereumArtworkMedia, { item: animated }));
+  assert.equal(view.container.querySelector('video'), null);
+  const frame = view.container.querySelector<HTMLElement>('.ethereum111k__artwork-media')!;
+  assert.equal(Number.parseFloat(frame.style.aspectRatio), 4 / 3);
+  act(() => intersect(true));
+  const media = view.container.querySelector('video')!;
+  assert.equal(media.getAttribute('src'), animated.animation_url);
+  assert.equal(media.controls, false);
+  act(() => intersect(false));
+  assert.equal(view.container.querySelector('video'), null);
+  assert.equal(view.container.querySelector('img')!.hidden, false);
+});
+
+for (const category of ['video', 'animated'] as const) test(`reduced motion prevents ${category} playback on the first viewer mount`, t => {
   environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
   const play = t.mock.method(environment.dom.window.HTMLMediaElement.prototype, 'play', async () => {});
-  const video = { ...item(), ...artwork('1', 'video') };
+  const video = { ...item(), ...artwork('1', category) };
   const view = render(createElement(EthereumArtworkMedia, { item: video, viewer: true }));
   const media = view.container.querySelector('video')!;
   assert.equal(media.autoplay, false);
@@ -935,9 +986,9 @@ test('reduced motion prevents playback on the first viewer mount', t => {
   assert.equal(play.mock.callCount(), 0);
 });
 
-test('reduced motion leaves reveal tiles on their poster while keeping viewer playback controls', () => {
+for (const category of ['video', 'animated'] as const) test(`reduced motion leaves ${category} tiles on their poster while keeping viewer controls`, () => {
   environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
-  const video = { ...item(), ...artwork('1', 'video'), revealStatus: 'revealed' as const };
+  const video = { ...item(), ...artwork('1', category), revealStatus: 'revealed' as const };
   const view = render(createElement(EthereumArtworkMedia, { item: video }));
   assert.equal(view.container.querySelector('video'), null);
   view.rerender(createElement(EthereumArtworkMedia, { item: video, viewer: true }));
@@ -947,7 +998,7 @@ test('reduced motion leaves reveal tiles on their poster while keeping viewer pl
 });
 
 test('reduced aspect-ratio pairs never become pixel-size limits in the artwork viewer', () => {
-  for (const ratio of [{ width: 1, height: 1 }, { width: 16, height: 9 }]) {
+  for (const ratio of [{ width: 1, height: 1 }, { width: 16, height: 9 }, { width: 466, height: 503 }, { width: 4, height: 3 }]) {
     const view = render(createElement(EthereumArtworkMedia, { item: { ...item(), ...artwork(), aspectRatio: ratio }, viewer: true }));
     const frame = view.container.querySelector<HTMLElement>('.ethereum111k__artwork-media')!;
     assert.doesNotMatch(frame.style.width, /\b\d+px/);

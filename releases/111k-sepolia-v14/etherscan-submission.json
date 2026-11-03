@@ -1,0 +1,15 @@
+{
+  "manifestSha256": "942ea5b610492118d3153f1bf8b40c03f4e71c73d40dee48c34da33210b154bc",
+  "chainId": 11155111,
+  "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+  "sourceInputSha256": "52e4df80e9a86cd5eb8793077119d27448ae04cdbef7706863aa042f0b4c0b48",
+  "requestSha256": "858c39a56bd54dfd5ab9d7ba73a0bc28f81b2b8e2730365f7052cd4049db9db7",
+  "attemptedAt": "2026-11-03T10:23:00.539Z",
+  "attempt": 1,
+  "receivedAt": "2026-11-03T10:23:02.072Z",
+  "result": {
+    "status": "1",
+    "message": "OK",
+    "result": "n8zarbfbydfqfmf2rvakw5tivcupuuf6evqy1maazrrhymqwwc"
+  }
+}

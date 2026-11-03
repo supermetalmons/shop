@@ -23,7 +23,7 @@ const scope = { chainId: 11155111, contractAddress: `0x${'ab'.repeat(20)}` };
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }] });
 const registration = { deploymentId: 'sepolia-test-2', dropId: '111k_devnet', ...scope,
   metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/sepolia-test-2/', deploymentBlock: 12005467,
-  catalogVersion: '111k-v2', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
+  catalogVersion: '111k-v3', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
 
 async function fixture(t: TestContext) {
   const database = new DatabaseSync(':memory:');
@@ -75,9 +75,9 @@ test('registry lookup is scoped to chain and normalized contract', async t => {
   assert.equal(await readEthereumRevealDeployment(db, { ...scope, chainId: 1 }), null);
 });
 
-test('retired catalog records remain inspectable and pausable but cannot register or activate', async t => {
+for (const catalogVersion of ['111k-v1', '111k-v2']) test(`${catalogVersion} records remain inspectable and pausable but cannot register or activate`, async t => {
   const { database, query } = await fixture(t);
-  const legacy = { ...registration, catalogVersion: '111k-v1' };
+  const legacy = { ...registration, catalogVersion };
   query(buildEthereumRevealRegistration(legacy));
   database.exec("UPDATE ethereum_reveal_deployments SET state='active', provisioned_at_ms=1, revision=3");
   const manifest = await controlManifest(t, { ...registrationIdentity(legacy),
@@ -85,20 +85,20 @@ test('retired catalog records remain inspectable and pausable but cannot registe
   const before = query('SELECT * FROM ethereum_reveal_deployments')[0];
   const status = await runEthereumRevealControl(['status', '--manifest', manifest], { query });
   assert.ok('deployments' in status);
-  assert.equal(status.deployments[0].catalogVersion, '111k-v1');
+  assert.equal(status.deployments[0].catalogVersion, catalogVersion);
   assert.deepEqual(query('SELECT * FROM ethereum_reveal_deployments')[0], before);
   const { catalogVersion: _catalogVersion, ...identity } = registrationIdentity(legacy);
   const withoutVersion = await controlManifest(t, identity);
   const defaultStatus = await runEthereumRevealControl(['status', '--manifest', withoutVersion], { query });
   assert.ok('deployments' in defaultStatus);
-  assert.equal(defaultStatus.deployments[0].catalogVersion, '111k-v1');
+  assert.equal(defaultStatus.deployments[0].catalogVersion, catalogVersion);
   const paused = await runEthereumRevealControl(['pause', '--manifest', withoutVersion, '--expected-revision', '3', '--write'], { query });
   assert.ok('deployment' in paused && 'state' in paused.deployment);
   assert.equal(paused.deployment.state, 'paused');
-  assert.equal(paused.deployment.catalogVersion, '111k-v1');
+  assert.equal(paused.deployment.catalogVersion, catalogVersion);
   await assert.rejects(runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '4', '--write'], { query }), /Retired reveal catalogs/);
   await assert.rejects(runEthereumRevealControl(['register', '--manifest', manifest, '--write'], { query }), /current catalog version/);
-  assert.equal(query('SELECT catalog_version FROM ethereum_reveal_deployments')[0].catalog_version, '111k-v1');
+  assert.equal(query('SELECT catalog_version FROM ethereum_reveal_deployments')[0].catalog_version, catalogVersion);
   assert.equal(query('SELECT state FROM ethereum_reveal_deployments')[0].state, 'paused');
 });
 

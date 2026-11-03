@@ -77,7 +77,7 @@ beforeEach(context => {
   confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'pending', confirmations: 0, transactionHash, reservationNonce: null });
   t.mock.method(pre111kApi, 'verifyAccess', (code, signal) => { verifiedCodes.push(code); return verifyImpl(code, signal); });
   t.mock.method(pre111kApi, 'status', (network, wallet) => statusImpl(network, wallet));
-  t.mock.method(pre111kApi, 'confirm', (...args) => confirmImpl(...args));
+  t.mock.method(pre111kApi, 'confirm', (...args: Parameters<typeof pre111kApi.confirm>) => confirmImpl(...args));
   t.mock.method(pre111kApi, 'prepare', async (network, wallet, code) => {
     preparedCodes.push(code);
     preparedNonces.push(reserved);

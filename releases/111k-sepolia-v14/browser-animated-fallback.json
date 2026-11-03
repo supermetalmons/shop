@@ -1,0 +1,78 @@
+{
+  "mode": "fallback",
+  "reducedMotionSimulated": false,
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15",
+  "checkedAt": "2026-11-03T10:07:53.044Z",
+  "before": [
+    {
+      "assetId": 1,
+      "frame": {
+        "width": 399.70587158203125,
+        "height": 431.4338073730469,
+        "ratio": 0.9264593194858708,
+        "cssAspectRatio": "0.926441 / 1"
+      },
+      "image": {
+        "src": "https://wip.lil.org/111k/animated/1.webp",
+        "loaded": true,
+        "naturalWidth": 932,
+        "naturalHeight": 1006,
+        "hidden": false
+      },
+      "video": null
+    },
+    {
+      "assetId": 102,
+      "frame": {
+        "width": 399.70587158203125,
+        "height": 431.4338073730469,
+        "ratio": 0.9264593194858708,
+        "cssAspectRatio": "0.926441 / 1"
+      },
+      "image": {
+        "src": "https://wip.lil.org/111k/animated/102.webp",
+        "loaded": true,
+        "naturalWidth": 932,
+        "naturalHeight": 1006,
+        "hidden": false
+      },
+      "video": null
+    }
+  ],
+  "after": [
+    {
+      "assetId": 1,
+      "frame": {
+        "width": 399.70587158203125,
+        "height": 431.4338073730469,
+        "ratio": 0.9264593194858708,
+        "cssAspectRatio": "0.926441 / 1"
+      },
+      "image": {
+        "src": "https://wip.lil.org/111k/animated/1.webp",
+        "loaded": true,
+        "naturalWidth": 932,
+        "naturalHeight": 1006,
+        "hidden": false
+      },
+      "video": null
+    },
+    {
+      "assetId": 102,
+      "frame": {
+        "width": 399.70587158203125,
+        "height": 431.4338073730469,
+        "ratio": 0.9264593194858708,
+        "cssAspectRatio": "0.926441 / 1"
+      },
+      "image": {
+        "src": "https://wip.lil.org/111k/animated/102.webp",
+        "loaded": true,
+        "naturalWidth": 932,
+        "naturalHeight": 1006,
+        "hidden": false
+      },
+      "video": null
+    }
+  ]
+}

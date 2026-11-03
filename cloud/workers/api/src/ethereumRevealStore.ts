@@ -29,7 +29,7 @@ export type RevealSearchRange = { fromBlock: number; toBlock?: number };
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), deployment_json TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS reveal_migrations (name TEXT PRIMARY KEY)`,
-  `CREATE TABLE IF NOT EXISTS pools (category TEXT PRIMARY KEY CHECK(category IN ('egg','painting','video','3d')),
+  `CREATE TABLE IF NOT EXISTS pools (category TEXT PRIMARY KEY CHECK(category IN ('egg','painting','video','3d','animated')),
     total INTEGER NOT NULL, seeded INTEGER NOT NULL DEFAULT 0, available INTEGER NOT NULL DEFAULT 0,
     CHECK(available >= 0 AND available <= seeded AND seeded <= total))`,
   `CREATE TABLE IF NOT EXISTS free_slots (category TEXT NOT NULL, slot INTEGER NOT NULL, asset_id INTEGER NOT NULL,
