@@ -21,9 +21,9 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const connecting = !wallet.ready || wallet.status === 'connecting' || wallet.status === 'restoring';
   const connected = wallet.status === 'connected' && Boolean(wallet.address);
   const count = status?.reservedRelics;
-  const remaining = model.statusQuery.isError ? null : status?.remainingRelics;
-  const available = status?.config.enabled && status.remainingRelics !== null && status.remainingRelics > 0 && !model.statusQuery.isError;
-  const soldOut = status?.remainingRelics === 0;
+  const remaining = model.statusQuery.isError || status?.remainingRelics == null ? null : Math.max(0, status.remainingRelics - 1);
+  const available = status?.config.enabled && remaining !== null && remaining > 0;
+  const soldOut = remaining === 0;
   const price = network === 'mainnet' ? '2.3' : '0.0023';
   const explorerLink = model.transactionHash && status?.config.explorerUrl ? `${status.config.explorerUrl}/tx/${model.transactionHash}` : null;
   const hasFeedback = Boolean(model.statusQuery.isError || status && !status.config.enabled || model.error || explorerLink);
@@ -45,11 +45,11 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => reserveButton.current?.focus()); };
 
   const artwork = <img className="relic-page__artwork" src="https://wip.lil.org/111k/artwork_placeholder.png" width={932} height={1006} alt="Artwork" draggable={false} />;
-  const reserveLabel = model.stage ?? (connected && soldOut ? 'All relics reserved' : null);
+  const reserveLabel = model.stage ?? (soldOut ? 'Preorders ended' : null);
   const reserve = <button ref={reserveButton} type="button"
     className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
     aria-label={reserveLabel ?? `${approved ? 'Preorder' : 'Reserve Relic'} · ${price} ETH`}
-    disabled={!approved || connecting || choosing || model.inFlight || (connected && !available)}
+    disabled={!approved || connecting || choosing || model.inFlight || soldOut || (connected && !available)}
     onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
     {approved ? reserveLabel ? <span className="mint-panel__submit-text">{reserveLabel}</span> : <>
       <span className="mint-panel__submit-text">Preorder</span>

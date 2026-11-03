@@ -27,6 +27,7 @@ let address = OWNER;
 let reserved = 0;
 let sendError: unknown;
 let sendCount = 0;
+let connectCount = 0;
 let sendImpl: () => Promise<string>;
 let preparedCodes: string[];
 let preparedNonces: number[];
@@ -55,7 +56,7 @@ beforeEach(context => {
   const t = context as TestContext;
   ({ dom } = setupFrontendDom());
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
-  address = OWNER; reserved = 0; sendError = null; sendCount = 0; listeners = new Map();
+  address = OWNER; reserved = 0; sendError = null; sendCount = 0; connectCount = 0; listeners = new Map();
   preparedCodes = []; preparedNonces = []; prepareError = null; verifiedCodes = [];
   sendImpl = async () => { if (sendError) throw sendError; return HASH; };
   verifyImpl = async () => ({ ok: true });
@@ -63,6 +64,7 @@ beforeEach(context => {
   let chain = '0xaa36a7';
   const provider: EIP1193Provider = {
     async request({ method, params }) {
+      if (method === 'eth_requestAccounts') connectCount++;
       if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [address];
       if (method === 'eth_chainId') return chain;
       if (method === 'wallet_switchEthereumChain') { chain = (params as [{ chainId: string }])[0].chainId; return null; }
@@ -102,6 +104,7 @@ function page(network: Pre111kNetwork = 'devnet', restore = true) {
   clients.push(client);
   const view = render(createElement(QueryClientProvider, { client }, createElement(BackgroundBlurProvider, null, createElement(DirectPaymentPage, { network }))));
   return { ...view, client, primary: () => view.container.querySelector('.relic-preorder__reserve') as HTMLButtonElement,
+    availability: () => view.container.querySelector('.mint-panel__availability')?.textContent,
     rerenderNetwork(next: Pre111kNetwork) {
       network = next;
       view.rerender(createElement(QueryClientProvider, { client }, createElement(BackgroundBlurProvider, null, createElement(DirectPaymentPage, { network }))));
@@ -134,16 +137,15 @@ test('Preorder connects, shows positive reservations before the address and disc
   assert.deepEqual(preparedCodes, []);
 });
 
-for (const unavailable of ['API failure', 'disabled reservations', 'sold out'] as const) {
+for (const unavailable of ['API failure', 'disabled reservations'] as const) {
   test(`${unavailable} still allows wallet connection but blocks reservation`, async () => {
     if (unavailable === 'API failure') statusImpl = async () => { throw new Error('Unavailable'); };
-    else if (unavailable === 'disabled reservations') statusImpl = async (network, wallet) => ({ ...status(network, wallet), config: resolvePre111kConfig(network) });
-    else reserved = 18;
+    else statusImpl = async (network, wallet) => ({ ...status(network, wallet), config: resolvePre111kConfig(network) });
     const view = page('devnet', false);
     await waitFor(() => assert.equal((view.getByRole('button', { name: 'Preorder · 0.0023 ETH' }) as HTMLButtonElement).disabled, false));
     view.reserve();
     await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
-    const label = unavailable === 'sold out' ? 'All relics reserved' : 'Preorder · 0.0023 ETH';
+    const label = 'Preorder · 0.0023 ETH';
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, true));
     fireEvent.click(view.getByRole('button', { name: label }));
     assert.deepEqual(preparedCodes, []);
@@ -152,6 +154,114 @@ for (const unavailable of ['API failure', 'disabled reservations', 'sold out'] a
 }
 
 for (const network of ['mainnet', 'devnet'] as const) {
+  for (const remaining of [18, 2]) {
+    test(`${network} displays one fewer than ${remaining} remaining while preserving purchase counts and nonce`, async () => {
+      reserved = 18 - remaining;
+      const view = page(network); await view.ready();
+      assert.equal(view.availability(), `${remaining - 1} / 18 left`);
+      const cached = () => view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])!;
+      assert.equal(cached().remainingRelics, remaining);
+      assert.equal(cached().totalReserved, reserved);
+      assert.equal(cached().reservedRelics, reserved);
+      assert.equal(cached().config.maxRelics, 18);
+      if (reserved > 0) view.getByText(`${reserved} reserved`);
+      view.reserve();
+      await waitFor(() => assert.equal(sendCount, 1));
+      assert.deepEqual(preparedNonces, [reserved]);
+      assert.deepEqual(preparedCodes, [ACCESS_CODE]);
+      assert.equal(cached().remainingRelics, remaining);
+      assert.equal(cached().reservedRelics, reserved);
+    });
+  }
+
+  for (const remaining of [1, 0]) {
+    for (const connected of [false, true]) {
+      test(`${network} ends preorders at ${remaining} remaining with the wallet ${connected ? 'connected' : 'disconnected'}`, async () => {
+        reserved = 18 - remaining;
+        const view = page(network, connected);
+        if (connected) await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+        await waitFor(() => {
+          view.getByRole('button', { name: 'Preorders ended' });
+          assert.equal(view.availability(), '0 / 18 left');
+          assert.equal(view.primary().disabled, true);
+        });
+        await act(async () => { fireEvent.click(view.primary()); });
+        assert.equal(connectCount, 0);
+        assert.deepEqual(preparedCodes, []);
+        assert.equal(sendCount, 0);
+        if (!connected) assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+      });
+    }
+
+    test(`${network} blocks preparation when a fresh read falls from two to ${remaining} remaining`, async () => {
+      reserved = 16;
+      const view = page(network); await view.ready();
+      assert.equal(view.availability(), '1 / 18 left');
+      reserved = 18 - remaining;
+      view.reserve();
+      await waitFor(() => assert.equal(view.getByRole('alert').textContent, 'Preorders ended'));
+      const ended = view.getByRole('button', { name: 'Preorders ended' }) as HTMLButtonElement;
+      assert.equal(ended.disabled, true);
+      assert.equal(view.availability(), '0 / 18 left');
+      assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])?.remainingRelics, remaining);
+      assert.deepEqual(preparedCodes, []);
+      assert.equal(sendCount, 0);
+    });
+  }
+
+  for (const connected of [false, true]) {
+    test(`${network} polling updates availability and the ended button while ${connected ? 'connected' : 'disconnected'}`, async t => {
+      t.mock.timers.enable({ apis: ['setInterval'] });
+      reserved = 15;
+      const view = page(network, connected);
+      if (connected) await view.ready();
+      await waitFor(() => assert.equal(view.availability(), '2 / 18 left'));
+      for (const remaining of [2, 1, 0, 2]) {
+        reserved = 18 - remaining;
+        await act(async () => { t.mock.timers.tick(connected ? 3_000 : 10_000); });
+        await waitFor(() => {
+          assert.equal(view.availability(), `${Math.max(0, remaining - 1)} / 18 left`);
+          assert.equal(view.primary().disabled, remaining <= 1);
+          assert.equal(Boolean(view.queryByRole('button', { name: 'Preorders ended' })), remaining <= 1);
+        });
+        assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, connected ? OWNER : null])?.remainingRelics, remaining);
+      }
+      assert.equal(connectCount, 0);
+      assert.deepEqual(preparedCodes, []);
+      assert.equal(sendCount, 0);
+    });
+  }
+
+  test(`${network} preserves pending, unknown, and failed availability without inventing zero`, async () => {
+    const pending = deferred<void>();
+    statusImpl = async (requestedNetwork, wallet) => {
+      await pending.promise;
+      return { config: resolvePre111kConfig(requestedNetwork), wallet, totalReserved: null, reservedRelics: null,
+        remainingRelics: null, observedBlock: null, blockHash: null };
+    };
+    const view = page(network);
+    await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+    view.getByRole('status', { name: 'Loading availability' });
+    assert.notEqual(view.availability(), '0 / 18 left');
+    assert.equal(view.primary().disabled, true);
+    await act(async () => pending.resolve());
+    await waitFor(() => assert.equal(view.availability(), '— / 18 left'));
+    assert.equal(view.queryByRole('button', { name: 'Preorders ended' }), null);
+    statusImpl = async (requestedNetwork, wallet) => status(requestedNetwork, wallet);
+    reserved = 17;
+    await act(async () => { await view.client.refetchQueries({ queryKey: ['pre111k', network, OWNER] }); });
+    await waitFor(() => view.getByRole('button', { name: 'Preorders ended' }));
+    statusImpl = async () => { throw new Error('Unavailable'); };
+    await act(async () => { await view.client.refetchQueries({ queryKey: ['pre111k', network, OWNER] }); });
+    await waitFor(() => assert.equal(view.availability(), '— / 18 left'));
+    view.getByRole('button', { name: 'Retry' });
+    assert.equal(view.primary().disabled, true);
+    assert.equal(view.queryByRole('button', { name: 'Preorders ended' }), null);
+    assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])?.remainingRelics, 1);
+    assert.deepEqual(preparedCodes, []);
+    assert.equal(sendCount, 0);
+  });
+
   test(`${network} shows a new transaction only until remount while allowing another reservation before mining`, async () => {
     const sent = deferred<string>();
     sendImpl = () => sent.promise;
@@ -387,14 +497,6 @@ test('switching accounts clears old counts until the new address finishes loadin
   assert.equal(view.queryByText('2 reserved'), null);
   await act(async () => newStatus.resolve({ ...status('devnet', OTHER), reservedRelics: 1 }));
   await waitFor(() => view.getByText('1 reserved'));
-});
-
-test('a sold-out fresh read prevents authorization and wallet submission', async () => {
-  const view = page(); await view.ready();
-  reserved = 18;
-  view.reserve();
-  await waitFor(() => view.getByRole('button', { name: 'All relics reserved' }));
-  assert.equal(sendCount, 0);
 });
 
 test('undeployed mainnet remains closed and never displays a fake count', async () => {

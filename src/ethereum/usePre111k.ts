@@ -119,7 +119,7 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
         throw new Error('Reservations are unavailable. Please refresh and try again.');
       }
       queryClient.setQueryData(queryKey, fresh);
-      if (fresh.remainingRelics === 0) throw new Error('All 18 relics have been reserved.');
+      if (fresh.remainingRelics <= 1) throw new Error('Preorders ended');
       const prepared = await pre111kApi.prepare(network, savedWallet, accessCode, signal);
       assertCurrent();
       const transaction = checkedPre111kReservation(prepared, fresh.config, savedWallet, fresh.reservedRelics);
