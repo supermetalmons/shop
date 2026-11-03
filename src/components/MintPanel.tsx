@@ -4,6 +4,7 @@ import { LuInfo } from 'react-icons/lu';
 import type { PackStatusBreakdown, PackStatusDisplayLabels } from '../types';
 import { resolveDropSizeGuide } from '../lib/dropSizeGuide';
 import { resolveDropXProfile } from '../lib/dropSocialLinks';
+import { formatRemainingCount } from '../lib/formatRemainingCount';
 import { getFrontendDrop, secondaryMarketplaceLinksForDropId } from '../config/deployment';
 import { useMintPanelForm, type MintPanelFormOptions } from '../shop/purchase/useMintPanelForm';
 import { MintPanelActions } from './MintPanelActions';
@@ -366,7 +367,7 @@ function PurchaseMintPanel({
                 className="mint-panel__remaining-count"
                 style={{ minWidth: `${String(total).length}ch` }}
               >
-                {remainingReady ? remaining : (
+                {remainingReady ? formatRemainingCount(remaining, total) : (
                   <span role="status" aria-label="Loading availability">
                     {Array.from(String(total), (_, index) => (
                       <span key={index} className="mint-panel__digit-placeholder" aria-hidden="true" />

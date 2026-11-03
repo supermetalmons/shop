@@ -1,6 +1,7 @@
 import { type EthereumContainerKind, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle, MintQuantityControl } from '../components/MintPanel';
 import { MintPanelActions } from '../components/MintPanelActions';
+import { formatRemainingCount } from '../lib/formatRemainingCount';
 import type { PrimaryMediaControls } from '../components/MediaWithFallback';
 import { EthereumContainerPreview } from './EthereumContainerPreview';
 import { EthereumContainerIcon } from './EthereumContainerIcon';
@@ -72,7 +73,7 @@ export function EthereumMintPanel({
         <div className="mint-panel__remaining mint-panel__availability">
           {statusText ? <span role="status">{statusText}</span> : <>
             <span className="mint-panel__remaining-count" style={{ minWidth: `${String(total).length}ch` }}>
-              {remaining !== undefined ? remaining : <span role="status" aria-label="Loading availability">
+              {remaining !== undefined ? formatRemainingCount(remaining, total) : <span role="status" aria-label="Loading availability">
                 {Array.from(String(total), (_, index) => <span key={index} className="mint-panel__digit-placeholder" aria-hidden="true" />)}
               </span>}
             </span>

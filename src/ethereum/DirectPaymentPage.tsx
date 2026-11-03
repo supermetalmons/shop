@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { PRE111K_MAX_RELICS, type Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle } from '../components/MintPanel';
 import { ShopHeader } from '../components/ShopHeader';
+import { formatRemainingCount } from '../lib/formatRemainingCount';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import { Pre111kAccessGate } from './Pre111kAccessGate';
 import { usePre111k } from './usePre111k';
@@ -48,11 +49,11 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const reserveLabel = model.stage ?? (soldOut ? 'Preorders ended' : null);
   const reserve = <button ref={reserveButton} type="button"
     className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
-    aria-label={reserveLabel ?? `${approved ? 'Preorder' : 'Reserve Relic'} · ${price} ETH`}
+    aria-label={reserveLabel ?? `${approved ? 'Reserve' : 'Reserve Relic'} · ${price} ETH`}
     disabled={!approved || connecting || choosing || model.inFlight || soldOut || (connected && !available)}
     onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
     {approved ? reserveLabel ? <span className="mint-panel__submit-text">{reserveLabel}</span> : <>
-      <span className="mint-panel__submit-text">Preorder</span>
+      <span className="mint-panel__submit-text">Reserve</span>
       <span className="mint-panel__submit-price">{price} ETH</span>
     </> : reserveLabel ?? `Reserve Relic · ${price} ETH`}
   </button>;
@@ -99,7 +100,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
                 <MintPanelTitle title="111K Relics" />
                 <div className="mint-panel__remaining mint-panel__availability">
                   <span className="mint-panel__remaining-count" style={{ minWidth: '2ch' }}>
-                    {remaining != null ? remaining : model.statusQuery.isPending ? <span role="status" aria-label="Loading availability">
+                    {remaining != null ? formatRemainingCount(remaining, PRE111K_MAX_RELICS) : model.statusQuery.isPending ? <span role="status" aria-label="Loading availability">
                       <span className="mint-panel__digit-placeholder" aria-hidden="true" /><span className="mint-panel__digit-placeholder" aria-hidden="true" />
                     </span> : '—'}
                   </span>

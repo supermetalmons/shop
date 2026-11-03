@@ -111,15 +111,15 @@ function page(network: Pre111kNetwork = 'devnet', restore = true) {
     }, async ready() {
     await waitFor(() => {
       view.getByRole('button', { name: 'Disconnect' });
-      assert.equal((view.getByRole('button', { name: `Preorder · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement).disabled, false);
+      assert.equal((view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement).disabled, false);
     }, { timeout: 3_000 });
-  }, reserve() { fireEvent.click(view.getByRole('button', { name: `Preorder · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` })); } };
+  }, reserve() { fireEvent.click(view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` })); } };
 }
 
-test('Preorder connects, shows positive reservations before the address and disconnects without requesting payment', async () => {
+test('Reserve connects, shows positive reservations before the address and disconnects without requesting payment', async () => {
   reserved = 3;
   const view = page('devnet', false);
-  const reserve = () => view.getByRole('button', { name: 'Preorder · 0.0023 ETH' }) as HTMLButtonElement;
+  const reserve = () => view.getByRole('button', { name: 'Reserve · 0.0023 ETH' }) as HTMLButtonElement;
   await waitFor(() => assert.equal(reserve().disabled, false));
   assert.equal(view.queryByRole('button', { name: 'Connect wallet' }), null);
   assert.equal(view.queryByText('3 reserved'), null);
@@ -142,10 +142,10 @@ for (const unavailable of ['API failure', 'disabled reservations'] as const) {
     if (unavailable === 'API failure') statusImpl = async () => { throw new Error('Unavailable'); };
     else statusImpl = async (network, wallet) => ({ ...status(network, wallet), config: resolvePre111kConfig(network) });
     const view = page('devnet', false);
-    await waitFor(() => assert.equal((view.getByRole('button', { name: 'Preorder · 0.0023 ETH' }) as HTMLButtonElement).disabled, false));
+    await waitFor(() => assert.equal((view.getByRole('button', { name: 'Reserve · 0.0023 ETH' }) as HTMLButtonElement).disabled, false));
     view.reserve();
     await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
-    const label = 'Preorder · 0.0023 ETH';
+    const label = 'Reserve · 0.0023 ETH';
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, true));
     fireEvent.click(view.getByRole('button', { name: label }));
     assert.deepEqual(preparedCodes, []);
@@ -154,11 +154,11 @@ for (const unavailable of ['API failure', 'disabled reservations'] as const) {
 }
 
 for (const network of ['mainnet', 'devnet'] as const) {
-  for (const remaining of [18, 2]) {
+  for (const [remaining, availability] of [[18, '17 / 18 left'], [2, '01 / 18 left']] as const) {
     test(`${network} displays one fewer than ${remaining} remaining while preserving purchase counts and nonce`, async () => {
       reserved = 18 - remaining;
       const view = page(network); await view.ready();
-      assert.equal(view.availability(), `${remaining - 1} / 18 left`);
+      assert.equal(view.availability(), availability);
       const cached = () => view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])!;
       assert.equal(cached().remainingRelics, remaining);
       assert.equal(cached().totalReserved, reserved);
@@ -182,7 +182,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
         if (connected) await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
         await waitFor(() => {
           view.getByRole('button', { name: 'Preorders ended' });
-          assert.equal(view.availability(), '0 / 18 left');
+          assert.equal(view.availability(), '00 / 18 left');
           assert.equal(view.primary().disabled, true);
         });
         await act(async () => { fireEvent.click(view.primary()); });
@@ -196,13 +196,13 @@ for (const network of ['mainnet', 'devnet'] as const) {
     test(`${network} blocks preparation when a fresh read falls from two to ${remaining} remaining`, async () => {
       reserved = 16;
       const view = page(network); await view.ready();
-      assert.equal(view.availability(), '1 / 18 left');
+      assert.equal(view.availability(), '01 / 18 left');
       reserved = 18 - remaining;
       view.reserve();
       await waitFor(() => assert.equal(view.getByRole('alert').textContent, 'Preorders ended'));
       const ended = view.getByRole('button', { name: 'Preorders ended' }) as HTMLButtonElement;
       assert.equal(ended.disabled, true);
-      assert.equal(view.availability(), '0 / 18 left');
+      assert.equal(view.availability(), '00 / 18 left');
       assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])?.remainingRelics, remaining);
       assert.deepEqual(preparedCodes, []);
       assert.equal(sendCount, 0);
@@ -215,12 +215,12 @@ for (const network of ['mainnet', 'devnet'] as const) {
       reserved = 15;
       const view = page(network, connected);
       if (connected) await view.ready();
-      await waitFor(() => assert.equal(view.availability(), '2 / 18 left'));
-      for (const remaining of [2, 1, 0, 2]) {
+      await waitFor(() => assert.equal(view.availability(), '02 / 18 left'));
+      for (const [remaining, availability] of [[2, '01 / 18 left'], [1, '00 / 18 left'], [0, '00 / 18 left'], [2, '01 / 18 left']] as const) {
         reserved = 18 - remaining;
         await act(async () => { t.mock.timers.tick(connected ? 3_000 : 10_000); });
         await waitFor(() => {
-          assert.equal(view.availability(), `${Math.max(0, remaining - 1)} / 18 left`);
+          assert.equal(view.availability(), availability);
           assert.equal(view.primary().disabled, remaining <= 1);
           assert.equal(Boolean(view.queryByRole('button', { name: 'Preorders ended' })), remaining <= 1);
         });
@@ -242,7 +242,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     const view = page(network);
     await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
     view.getByRole('status', { name: 'Loading availability' });
-    assert.notEqual(view.availability(), '0 / 18 left');
+    assert.notEqual(view.availability(), '00 / 18 left');
     assert.equal(view.primary().disabled, true);
     await act(async () => pending.resolve());
     await waitFor(() => assert.equal(view.availability(), '— / 18 left'));
@@ -508,7 +508,7 @@ test('undeployed mainnet remains closed and never displays a fake count', async 
   assert.equal(view.queryByText('Reservations unavailable'), null);
   assert.equal(view.queryByText('0 reserved'), null);
   assert.equal(view.queryByText('Loading reservations…'), null);
-  assert.equal((view.getByRole('button', { name: 'Preorder · 2.3 ETH' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Reserve · 2.3 ETH' }) as HTMLButtonElement).disabled, true);
 });
 
 for (const network of ['mainnet', 'devnet'] as const) {
@@ -520,7 +520,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     assert.equal(input.type, 'text');
     assert.equal(input.placeholder, 'SECRET CODE');
     assert.notEqual(document.activeElement, input);
-    assert.equal(view.queryByRole('button', { name: /Preorder|Reserve Relic/ }), null);
+    assert.equal(view.queryByRole('button', { name: /Reserve|Preorders ended/ }), null);
     const content = view.container.querySelector('.relic-page__content')!;
     assert.equal(content.getAttribute('aria-hidden'), 'true');
     assert.equal(content.hasAttribute('inert'), true);
@@ -557,7 +557,7 @@ for (const submitWithArrow of [false, true]) {
     assert.equal(scroll.mock.callCount(), 0);
     assert.equal((view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled, true);
     assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
-    assert.equal(view.queryByRole('button', { name: /Preorder|Reserve Relic/ }), null);
+    assert.equal(view.queryByRole('button', { name: /Reserve|Preorders ended/ }), null);
     await act(async () => verification.resolve({ ok: true }));
     await view.ready();
     view.getByRole('link', { name: 'Go to mons.shop home' });
@@ -615,7 +615,7 @@ test('a rejected code remains locked and can be corrected without saving the rej
   assert.equal(document.activeElement, input);
   assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
-  assert.equal(view.queryByRole('button', { name: /Preorder|Reserve Relic/ }), null);
+  assert.equal(view.queryByRole('button', { name: /Reserve|Preorders ended/ }), null);
   fireEvent.change(input, { target: { value: 'testpass' } });
   fireEvent.submit(input.closest('form')!);
   await view.ready();
@@ -666,7 +666,7 @@ test('a rejected saved code relocks without focusing the input and clears persis
   await waitFor(() => view.getByRole('textbox', { name: 'Secret code' }));
   assert.equal(document.activeElement, document.body);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
-  assert.equal(view.queryByRole('button', { name: /Preorder|Reserve Relic/ }), null);
+  assert.equal(view.queryByRole('button', { name: /Reserve|Preorders ended/ }), null);
   assert.deepEqual(preparedCodes, []);
 });
 

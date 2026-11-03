@@ -656,7 +656,7 @@ test('the mint panel shares the drop frame and previews the selected crate quant
   const previewStyle = (view.container.querySelector('.mint-panel__boxes') as HTMLElement).style;
   assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1218 / 833)}px`);
   assert.equal(previewStyle.getPropertyValue('--box-height'), '120px');
-  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+  await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
   const frame = view.container.querySelector('.drop-page-frame--active')!;
   assert.ok(frame.contains(view.getByText('Shop header')));
   assert.ok(frame.contains(view.getByText('111K')));
@@ -702,7 +702,7 @@ test('switching containers preserves quantity unless it exceeds the available su
   const view = page();
   const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
   await waitFor(() => assert.equal(quantity.max, '12'));
-  assert.match(view.container.querySelector('.mint-panel')!.textContent!, /12\s*\/\s*5555 left/);
+  assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '0012 / 5555 left');
   fireEvent.change(quantity, { target: { value: '2' } });
   fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
   assert.equal(quantity.value, '2');
@@ -716,7 +716,7 @@ test('switching containers preserves quantity unless it exceeds the available su
   const previewStyle = (view.container.querySelector('.mint-panel__boxes') as HTMLElement).style;
   assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1254 / 1104)}px`);
   assert.equal(previewStyle.getPropertyValue('--box-height'), '120px');
-  assert.match(view.container.querySelector('.mint-panel')!.textContent!, /3\s*\/\s*505 left/);
+  assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '003 / 505 left');
   assert.ok(view.getByRole('button', { name: /Mint\s*2 warehouses.*0.0022 ETH/ }));
   fireEvent.click(view.getByRole('radio', { name: 'Crate' }));
   assert.equal(quantity.value, '2');
@@ -730,7 +730,7 @@ test('switching containers preserves quantity unless it exceeds the available su
   })));
   await waitFor(() => assert.equal(quantity.value, '2'));
   assert.equal(quantity.max, '2');
-  assert.match(view.container.querySelector('.mint-panel')!.textContent!, /2\s*\/\s*505 left/);
+  assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '002 / 505 left');
   fireEvent.click(view.getByRole('radio', { name: 'Crate' }));
   assert.equal(quantity.value, '2');
   assert.equal(quantity.max, '12');
@@ -742,9 +742,9 @@ test('switching containers preserves quantity unless it exceeds the available su
 test('a sold-out container does not block switching to one still available', async t => {
   t.mock.method(ethereumApi, 'stats', async () => stats({ allocatedCrates: 5545, remainingCrates: 10, remainingWarehouses: 0 }));
   const view = page();
-  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /10\s*\/\s*5555 left/));
+  await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '0010 / 5555 left'));
   fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
-  assert.match(view.container.querySelector('.mint-panel')!.textContent!, /0\s*\/\s*505 left/);
+  assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '000 / 505 left');
   assert.equal((view.getByRole('button', { name: /Mint.*0.0011 ETH/ }) as HTMLButtonElement).disabled, true);
   const crate = view.getByRole('radio', { name: 'Crate' });
   assert.equal(crate.matches(':disabled'), false);
@@ -877,7 +877,7 @@ for (const source of ['configuration', 'availability'] as const) {
       t.mock.method(ethereumApi, 'stats', async () => stats());
       await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] }); });
     }
-    await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+    await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
     await waitFor(() => assert.equal(view.queryAllByRole('alert').length, 0));
     assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, false);
     assert.equal(view.transactions.length, 0);
@@ -948,7 +948,7 @@ test('a queued mint disables existing selection actions and cancellation restore
   assert.equal(window.location.pathname, '/checkout');
   assert.equal(window.location.search, '?drop=111k_devnet&ids=111112');
   await act(async () => { view.availability.resolve(stats()); });
-  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+  await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
   assert.equal(view.queryByRole('dialog'), null);
   assert.equal(view.transactions.length, 0);
 });
@@ -966,7 +966,7 @@ test('a claim link waits for a queued mint to be cancelled before opening its fo
   await waitFor(() => assert.ok(view.getByRole('dialog', { name: 'Crate receipt #1' })));
   assert.equal((view.getByLabelText('Crate claim code') as HTMLInputElement).value, 'ABCDEF123456');
   await act(async () => { view.availability.resolve(stats()); });
-  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+  await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
   assert.ok(view.getByRole('dialog', { name: 'Crate receipt #1' }));
   assert.equal((view.getByLabelText('Crate claim code') as HTMLInputElement).value, 'ABCDEF123456');
   assert.equal(view.transactions.length, 0);
@@ -1027,7 +1027,7 @@ for (const ending of ['wallet cancellation', 'suspension'] as const) {
     await act(async () => { view.configuration.resolve(config); });
     await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress, owner])?.fetchStatus, 'fetching'));
     await act(async () => { view.availability.resolve(stats()); });
-    await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+    await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
     assert.equal((view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement).disabled, false);
     assert.equal(view.transactions.length, 0);
   });
@@ -1720,7 +1720,7 @@ test('completing a transaction clears recovery state before the next transaction
     return [owner];
   } } };
   const view = page({ wallet: sendingWallet });
-  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+  await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
   fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate/ }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
   fireEvent.click(view.getByRole('button', { name: 'Transaction changed?' }));

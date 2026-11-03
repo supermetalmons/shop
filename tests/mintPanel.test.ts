@@ -518,14 +518,14 @@ test('pending Stripe checkout blocks minting and reports a fallback error before
 });
 
 test('drop title and accessible X profile stay grouped separately from availability', () => {
-  const view = render(createElement(MintPanel, stripeOnlyProps()));
+  const view = render(createElement(MintPanel, stripeOnlyProps({ stats: { minted: 6, total: 15, remaining: 9, maxPerTx: 1 } })));
   const title = view.getByText('Card NFT Binder');
   const profile = view.getByRole('link', { name: 'Open @bis__cut on X' });
   assert.equal(profile.getAttribute('href'), 'https://x.com/bis__cut/status/2082471519683326394');
   const titleGroup = title.closest('.mint-panel__price');
   assert.ok(titleGroup?.contains(profile));
   const availability = view.container.querySelector('.mint-panel__availability');
-  assert.equal(availability?.textContent, '15 / 15 left');
+  assert.equal(availability?.textContent, '09 / 15 left');
   assert.equal(titleGroup.contains(availability), false);
 });
 
