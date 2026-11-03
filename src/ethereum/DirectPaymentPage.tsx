@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
+import { PRE111K_MAX_RELICS, type Pre111kNetwork } from '../../shared/ethereum/pre111k';
+import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle } from '../components/MintPanel';
 import { ShopHeader } from '../components/ShopHeader';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import { Pre111kAccessGate } from './Pre111kAccessGate';
@@ -20,6 +21,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const connecting = !wallet.ready || wallet.status === 'connecting' || wallet.status === 'restoring';
   const connected = wallet.status === 'connected' && Boolean(wallet.address);
   const count = status?.reservedRelics;
+  const remaining = model.statusQuery.isError ? null : status?.remainingRelics;
   const available = status?.config.enabled && status.remainingRelics !== null && status.remainingRelics > 0 && !model.statusQuery.isError;
   const soldOut = status?.remainingRelics === 0;
   const price = network === 'mainnet' ? '2.3' : '0.0023';
@@ -42,45 +44,75 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   useEffect(() => { if (approved && choosing) firstWallet.current?.focus(); }, [approved, choosing, wallet.wallets.length]);
   const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => reserveButton.current?.focus()); };
 
+  const artwork = <img className="relic-page__artwork" src="https://wip.lil.org/111k/artwork_placeholder.png" width={932} height={1006} alt="Artwork" draggable={false} />;
+  const reserveLabel = model.stage ?? (connected && soldOut ? 'All relics reserved' : null);
+  const reserve = <button ref={reserveButton} type="button"
+    className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
+    aria-label={reserveLabel ?? `${approved ? 'Preorder' : 'Reserve Relic'} · ${price} ETH`}
+    disabled={!approved || connecting || choosing || model.inFlight || (connected && !available)}
+    onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
+    {approved ? reserveLabel ? <span className="mint-panel__submit-text">{reserveLabel}</span> : <>
+      <span className="mint-panel__submit-text">Preorder</span>
+      <span className="mint-panel__submit-price">{price} ETH</span>
+    </> : reserveLabel ?? `Reserve Relic · ${price} ETH`}
+  </button>;
+  const walletControls = <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
+    {wallet.address ? <div className="relic-preorder__connection">
+      {!model.statusQuery.isError && typeof count === 'number' && count > 0 ? <span aria-live="polite">{count} reserved</span> : null}
+      <span className="relic-preorder__address" title={wallet.address}>{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
+      <button type="button" className="relic-preorder__text-button relic-preorder__disconnect" onClick={wallet.disconnect}>Disconnect</button>
+    </div> : null}
+    {choosing ? <div className="relic-preorder__choices" role="group" aria-label="Select Ethereum wallet" onKeyDown={event => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelChoice(); }
+    }}>
+      {wallet.wallets.map((choice, index) => {
+        const icon = getInjectedWalletIconSrc(choice.info.icon);
+        return <button key={choice.info.uuid} ref={index === 0 ? firstWallet : undefined} type="button" onClick={() => wallet.selectWallet(choice)}>
+          {icon ? <img src={icon} alt="" /> : null}<span>{choice.info.name}</span>
+        </button>;
+      })}
+      <button type="button" className="relic-preorder__text-button" onClick={cancelChoice}>Cancel</button>
+    </div> : null}
+  </div>;
+  const feedback = <div className="relic-preorder__feedback" aria-live="polite" tabIndex={hasFeedback ? 0 : undefined}
+    role={hasFeedback ? 'region' : undefined} aria-label={hasFeedback ? 'Reservation messages' : undefined}>
+    {model.statusQuery.isError ? <p>Couldn’t load reservations. <button type="button" className="relic-preorder__text-button" onClick={() => { void model.statusQuery.refetch(); }}>Retry</button></p>
+      : status && !status.config.enabled ? <p>Reservations are not open yet.</p> : null}
+    {model.error ? <p role="alert">{model.error}</p> : null}
+    {explorerLink ? <p><a href={explorerLink} target="_blank" rel="noopener noreferrer">View transaction ↗</a></p> : null}
+  </div>;
+
   return (
-    <div className={`relic-page${approved ? '' : ' relic-page--locked'}`}>
+    <div className={`relic-page ${approved ? 'relic-page--unlocked' : 'relic-page--locked'}`}>
       <ShopHeader scrollHomeToTop hidden={!approved} showXLink />
-      <div className="relic-page__content" inert={!approved || undefined} aria-hidden={!approved || undefined}>
-        <main className="relic-page__main">
+      <div className="relic-page__content" role={approved ? 'main' : undefined} inert={!approved || undefined} aria-hidden={!approved || undefined}>
+        {!approved ? <main className="relic-page__main">
           <figure className="relic-page__showcase">
-            <img className="relic-page__artwork" src="https://wip.lil.org/111k/artwork_placeholder.png" width={932} height={1006} alt="Artwork" draggable={false} />
+            {artwork}
           </figure>
-        </main>
+        </main> : null}
         <section ref={reservationSection} className="relic-preorder" aria-label="Reserve a relic" tabIndex={-1}>
-          <button ref={reserveButton} type="button" className="relic-preorder__reserve" disabled={!approved || connecting || choosing || model.inFlight || (connected && !available)}
-            onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
-            {model.stage ?? (connected && soldOut ? 'All relics reserved' : `Reserve Relic · ${price} ETH`)}
-          </button>
-          <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
-            {wallet.address ? <div className="relic-preorder__connection">
-              {!model.statusQuery.isError && typeof count === 'number' && count > 0 ? <span aria-live="polite">{count} reserved</span> : null}
-              <span className="relic-preorder__address" title={wallet.address}>{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
-              <button type="button" className="relic-preorder__text-button relic-preorder__disconnect" onClick={wallet.disconnect}>Disconnect</button>
-            </div> : null}
-            {choosing ? <div className="relic-preorder__choices" role="group" aria-label="Select Ethereum wallet" onKeyDown={event => {
-              if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelChoice(); }
-            }}>
-              {wallet.wallets.map((choice, index) => {
-                const icon = getInjectedWalletIconSrc(choice.info.icon);
-                return <button key={choice.info.uuid} ref={index === 0 ? firstWallet : undefined} type="button" onClick={() => wallet.selectWallet(choice)}>
-                  {icon ? <img src={icon} alt="" /> : null}<span>{choice.info.name}</span>
-                </button>;
-              })}
-              <button type="button" className="relic-preorder__text-button" onClick={cancelChoice}>Cancel</button>
-            </div> : null}
-          </div>
-          <div className="relic-preorder__feedback" aria-live="polite" tabIndex={hasFeedback ? 0 : undefined}
-            role={hasFeedback ? 'region' : undefined} aria-label={hasFeedback ? 'Reservation messages' : undefined}>
-            {model.statusQuery.isError ? <p>Couldn’t load reservations. <button type="button" className="relic-preorder__text-button" onClick={() => { void model.statusQuery.refetch(); }}>Retry</button></p>
-              : status && !status.config.enabled ? <p>Reservations are not open yet.</p> : null}
-            {model.error ? <p role="alert">{model.error}</p> : null}
-            {explorerLink ? <p><a href={explorerLink} target="_blank" rel="noopener noreferrer">View transaction ↗</a></p> : null}
-          </div>
+          {approved ? <MintPanelFrame quantity={1} quantityLabel="Relic"
+            previewContent={<div className="mint-panel__preview relic-preorder__preview">{artwork}</div>}>
+            <MintPanelPurchaseFooter hasControls={false}
+              info={<>
+                <MintPanelTitle title="111K Relics" />
+                <div className="mint-panel__remaining mint-panel__availability">
+                  <span className="mint-panel__remaining-count" style={{ minWidth: '2ch' }}>
+                    {remaining != null ? remaining : model.statusQuery.isPending ? <span role="status" aria-label="Loading availability">
+                      <span className="mint-panel__digit-placeholder" aria-hidden="true" /><span className="mint-panel__digit-placeholder" aria-hidden="true" />
+                    </span> : '—'}
+                  </span>
+                  <span> / {PRE111K_MAX_RELICS} left</span>
+                </div>
+              </>}
+              controls={<div className="relic-preorder__support" data-empty={!wallet.address && !choosing && !hasFeedback}>
+                {walletControls}
+                {feedback}
+              </div>}
+              actions={<div className="mint-panel__cta">{reserve}</div>}
+            />
+          </MintPanelFrame> : <>{reserve}{walletControls}{feedback}</>}
         </section>
       </div>
       <Pre111kAccessGate open={!approved} input={access.input} setInput={access.setInput}

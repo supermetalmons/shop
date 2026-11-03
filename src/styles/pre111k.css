@@ -197,6 +197,104 @@ body:has(.relic-page--locked) {
   color: inherit;
 }
 
+.relic-page--unlocked {
+  height: auto;
+  min-height: calc(100svh - var(--page-padding-top) - var(--page-padding-bottom));
+  max-width: 980px;
+  margin-inline: auto;
+}
+
+body:has(.relic-page--unlocked) {
+  --page-padding-bottom: clamp(8px, 1.4svh, 14px);
+}
+
+.relic-page--unlocked .relic-page__content {
+  justify-content: flex-start;
+  gap: 0;
+}
+
+.relic-page--unlocked .relic-preorder,
+.relic-page--unlocked .mint-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.relic-page--unlocked .relic-preorder {
+  align-items: stretch;
+  text-align: left;
+}
+
+.relic-page--unlocked .relic-preorder__preview {
+  flex: 1 1 auto;
+  position: relative;
+  height: auto;
+  min-height: clamp(280px, 38svh, 390px);
+  padding: 0;
+}
+
+.relic-preorder__preview .relic-page__artwork {
+  position: absolute;
+  inset: 0;
+  max-height: none;
+  padding: clamp(8px, 1.5vw, 14px) 0 clamp(40px, 6svh, 72px);
+}
+
+.relic-page--unlocked .mint-panel__footer {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.relic-preorder__support {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  text-align: center;
+}
+
+.relic-preorder__support[data-empty='true'] {
+  display: none;
+}
+
+.relic-page--unlocked .relic-preorder__wallet,
+.relic-page--unlocked .relic-preorder__feedback {
+  min-height: 0;
+}
+
+.relic-page--unlocked .relic-preorder__feedback {
+  width: 100%;
+  padding: 0;
+}
+
+.relic-page--unlocked .relic-preorder__wallet:empty,
+.relic-page--unlocked .relic-preorder__feedback:empty {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  body:has(.relic-page--unlocked) {
+    --page-padding-bottom: var(--page-padding-top);
+  }
+
+  .relic-page--unlocked .mint-panel__footer {
+    grid-template-columns: 1fr;
+  }
+
+  .relic-page--unlocked .relic-preorder__preview {
+    min-height: clamp(220px, 32svh, 300px);
+  }
+
+  .relic-preorder__support {
+    grid-column: auto;
+    text-align: left;
+  }
+
+  .relic-page--unlocked .relic-preorder__connection {
+    justify-content: flex-start;
+  }
+}
+
 .relic-access {
   position: fixed;
   z-index: 100;
