@@ -425,7 +425,8 @@ contract NFT111KFreeMintTest is TestSupport {
             keccak256(bytes.concat(keccak256(abi.encode(ALICE)))),
             _proceedsRecipients(),
             _proceedsSharesBps(),
-            allocations
+            allocations,
+            5555
         );
     }
 

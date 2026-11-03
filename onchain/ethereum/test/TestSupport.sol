@@ -48,6 +48,27 @@ interface Vm {
     function stopBroadcast() external;
 }
 
+interface NFT111KStats {
+    struct Stats {
+        uint256 allocatedCrates_;
+        uint256 warehousesMinted_;
+        uint256 artworksMinted_;
+        uint256 cratePrice_;
+        uint256 warehousePrice_;
+        bool saleActive_;
+        bytes32 discountMerkleRoot_;
+        uint256 discountCratePrice_;
+        uint256 discountAllowance_;
+        uint256 discountUsed_;
+        uint256 relicsAllocated_;
+        uint256 relicsMinted_;
+        uint256 maxDiscountedMints_;
+        uint256 totalDiscountedMints_;
+    }
+
+    function stats(address wallet) external view returns (Stats memory);
+}
+
 abstract contract TestSupport {
     Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 

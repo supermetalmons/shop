@@ -1,7 +1,7 @@
 pragma solidity 0.8.38;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {TestSupport, Vm} from "./TestSupport.sol";
+import {TestSupport, Vm, NFT111KStats} from "./TestSupport.sol";
 
 contract RelicReceiver {
     NFT111K private immutable token;
@@ -75,7 +75,8 @@ contract NFT111KRelicTest is TestSupport {
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps(),
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
         vm.deal(address(this), 100 ether);
         vm.deal(ALICE, 100 ether);
@@ -186,7 +187,9 @@ contract NFT111KRelicTest is TestSupport {
         assertEq(token.ownerOf(117175), BOB);
         assertEq(token.allocatedCrates(), 222);
         assertEq(token.totalMintReceived(), 23);
-        (,,,,,,,,,, uint256 allocated, uint256 minted) = token.stats(ALICE);
+        NFT111KStats.Stats memory snapshot1 = NFT111KStats(address(token)).stats(ALICE);
+        uint256 allocated = snapshot1.relicsAllocated_;
+        uint256 minted = snapshot1.relicsMinted_;
         assertEq(allocated, 2);
         assertEq(minted, 2);
         vm.prank(ALICE);

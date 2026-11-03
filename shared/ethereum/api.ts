@@ -20,6 +20,7 @@ export type EthereumStats = {
   cratePriceWei: string; warehousePriceWei: string; saleActive: boolean;
   remainingCrates: number; remainingWarehouses: number; remainingRelics: number;
   discountMerkleRoot: string; discountCratePriceWei: string; discountAllowance: number; discountUsed: number;
+  maxDiscountedMints?: number; totalDiscountedMints?: number;
 };
 export type EthereumRelicStatus = {
   chainId: number; contractAddress: string; owner: string | null; observedBlock: number; blockHash: string;

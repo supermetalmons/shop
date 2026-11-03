@@ -128,6 +128,9 @@ export const ethereumApi = {
       !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.discountCratePriceWei) ||
       typeof value.discountMerkleRoot !== 'string' || !/^0x[0-9a-f]{64}$/.test(value.discountMerkleRoot) ||
       !['discountAllowance', 'discountUsed'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 10) ||
+      (Object.hasOwn(value, 'maxDiscountedMints') || Object.hasOwn(value, 'totalDiscountedMints')) &&
+        (!['maxDiscountedMints', 'totalDiscountedMints'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 5555) ||
+          Number(value.totalDiscountedMints) > Number(value.maxDiscountedMints)) ||
       Number(value.relicsAllocated) > ETHEREUM_MAX_RELICS || Number(value.relicsMinted) > Number(value.relicsAllocated) ||
       Number(value.remainingRelics) !== Number(value.relicsAllocated) - Number(value.relicsMinted) ||
       typeof value.saleActive !== 'boolean') return invalid();

@@ -130,6 +130,33 @@ contract Deploy111K {
         }
     }
 
+    function _discountCap(string memory json, uint256 chainId) internal pure returns (uint256 maximum) {
+        string[] memory keys = vm.parseJsonKeys(json, ".");
+        if (keys.length != 3) revert NFT111K.InvalidDiscountConfig();
+        bytes32 network;
+        if (chainId == 1) network = keccak256("mainnet");
+        else if (chainId == 11155111) network = keccak256("sepolia");
+        else if (chainId == 31337) network = keccak256("local");
+        else revert NFT111K.InvalidDiscountConfig();
+        for (uint256 i; i < keys.length; ++i) {
+            bytes32 key = keccak256(bytes(keys[i]));
+            if (key != keccak256("mainnet") && key != keccak256("sepolia") && key != keccak256("local")) {
+                revert NFT111K.InvalidDiscountConfig();
+            }
+            string memory path = string.concat(".", keys[i]);
+            bytes memory encoded = vm.parseJson(json, path);
+            uint256 value = vm.parseJsonUint(json, path);
+            bytes memory text = bytes(vm.parseJsonString(json, path));
+            if (encoded.length != 32 || value > 5555 || keccak256(encoded) != keccak256(abi.encode(value))) {
+                revert NFT111K.InvalidDiscountConfig();
+            }
+            for (uint256 j; j < text.length; ++j) {
+                if (text[j] < "0" || text[j] > "9") revert NFT111K.InvalidDiscountConfig();
+            }
+            if (key == network) maximum = value;
+        }
+    }
+
     function _metadataBaseURI() internal returns (string memory uri) {
         if (block.chainid == 31337) {
             return vm.envOr("ETHEREUM_111K_METADATA_BASE_URI", "https://cdn.mons.shop/111k-sepolia/v9/");
@@ -192,9 +219,20 @@ contract Deploy111K {
         NFT111K.FreeMintAllocation[] memory freeMints = _freeMintAllocations(
             vm.readFile(vm.envOr("ETHEREUM_111K_FREE_MINT_CONFIG", "config/free-mints.json")), collection
         );
+        uint256 maxDiscountedMints = _discountCap(
+            vm.readFile(vm.envOr("ETHEREUM_111K_DISCOUNT_CAP_CONFIG", "config/discount-caps.json")), block.chainid
+        );
         vm.startBroadcast(privateKey);
         token = new NFT111K(
-            owner, signer, initialDeliveryReceiver, metadataBaseURI, discountRoot, recipients, shares, freeMints
+            owner,
+            signer,
+            initialDeliveryReceiver,
+            metadataBaseURI,
+            discountRoot,
+            recipients,
+            shares,
+            freeMints,
+            maxDiscountedMints
         );
         vm.stopBroadcast();
     }

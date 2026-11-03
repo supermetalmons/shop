@@ -2,7 +2,7 @@ pragma solidity 0.8.38;
 
 import {NFT111K} from "../src/NFT111K.sol";
 import {DeliveryAccounting} from "./DeliveryAccounting.sol";
-import {TestSupport, Vm} from "./TestSupport.sol";
+import {TestSupport, Vm, NFT111KStats} from "./TestSupport.sol";
 
 contract RejectingDeliveryReceiver {
     bool public rejecting = true;
@@ -103,7 +103,8 @@ contract NFT111KTest is TestSupport {
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps(),
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
         token.setSaleActive(true);
     }
@@ -117,7 +118,8 @@ contract NFT111KTest is TestSupport {
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps(),
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
         token.allocateRelics{value: quantity * 0.0088 ether}(quantity);
         address[] memory wallets = new address[](2);
@@ -341,7 +343,7 @@ contract NFT111KTest is TestSupport {
         _info(1111112, 4, 111112, alice);
         _info(1111131, 4, 111131, alice);
         _missingToken(1);
-        (,, uint256 artworksBefore,,,,,,,,,) = token.stats(address(0));
+        uint256 artworksBefore = NFT111KStats(address(token)).stats(address(0)).artworksMinted_;
         assertEq(artworksBefore, 0);
         assertEq(token.tokenURI(1111112), "https://cdn.mons.shop/111k-sepolia/1111112.json");
         vm.prank(alice);
@@ -354,7 +356,7 @@ contract NFT111KTest is TestSupport {
         _info(1111112, 4, 111112, alice);
         assertEq(token.tokenURI(1000001), "https://cdn.mons.shop/111k-sepolia/1000001.json");
         assertEq(token.totalSupply(), 40);
-        (,, uint256 artworksAfter,,,,,,,,,) = token.stats(address(0));
+        uint256 artworksAfter = NFT111KStats(address(token)).stats(address(0)).artworksMinted_;
         assertEq(artworksAfter, 20);
     }
 
@@ -951,7 +953,10 @@ contract NFT111KTest is TestSupport {
         for (uint256 displayId = 222192; displayId <= 222222; ++displayId) {
             _info(1_000_000 + displayId, 4, displayId, alice);
         }
-        (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,,,) = token.stats(address(0));
+        NFT111KStats.Stats memory snapshot3 = NFT111KStats(address(token)).stats(address(0));
+        uint256 allocated = snapshot3.allocatedCrates_;
+        uint256 warehouses = snapshot3.warehousesMinted_;
+        uint256 artworks = snapshot3.artworksMinted_;
         assertEq(allocated, 5555);
         assertEq(warehouses, 504);
         assertEq(artworks, 111080);

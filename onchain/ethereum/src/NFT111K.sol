@@ -102,6 +102,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public warehousePrice = 0.0011 ether;
     uint256 public discountCratePrice = 0.00005 ether;
     uint256 public discountAllowance = 1;
+    uint256 public maxDiscountedMints;
+    uint256 public totalDiscountedMints;
     bytes32 public discountMerkleRoot;
     bool public saleActive;
     bool private saleStarted;
@@ -150,6 +152,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     error DiscountInactive();
     error InvalidDiscountProof();
     error DiscountAllowanceExceeded();
+    error DiscountCapExceeded();
     error InvalidDiscountConfig();
     error InvalidFreeMintConfig();
     error FreeMintAllowanceExceeded();
@@ -202,9 +205,12 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         bytes32 discountRoot,
         address[] memory mintRecipients_,
         uint256[] memory mintSharesBps_,
-        FreeMintAllocation[] memory freeMintAllocations_
+        FreeMintAllocation[] memory freeMintAllocations_,
+        uint256 maxDiscountedMints_
     ) ERC721A("111K", "111K") Ownable(initialOwner) EIP712("111K", "2") {
         if (signer == address(0)) revert InvalidAddress();
+        if (maxDiscountedMints_ > MAX_CRATES) revert InvalidDiscountConfig();
+        maxDiscountedMints = maxDiscountedMints_;
         _validateBaseURI(baseURI_);
         uint256 count = mintRecipients_.length;
         if (count < 2 || count > MAX_MINT_RECIPIENTS || mintSharesBps_.length != count) revert InvalidMintSplit();
@@ -252,7 +258,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (!MerkleProof.verifyCalldata(proof, discountMerkleRoot, leaf)) revert InvalidDiscountProof();
         uint256 used = discountUsed[msg.sender] + quantity;
         if (used > discountAllowance) revert DiscountAllowanceExceeded();
+        uint256 total = totalDiscountedMints + quantity;
+        if (total > maxDiscountedMints) revert DiscountCapExceeded();
         discountUsed[msg.sender] = used;
+        totalDiscountedMints = total;
         _mintCrates(quantity);
     }
 
@@ -496,9 +505,12 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             uint256 discountAllowance_,
             uint256 discountUsed_,
             uint256 relicsAllocated_,
-            uint256 relicsMinted_
+            uint256 relicsMinted_,
+            uint256 maxDiscountedMints_,
+            uint256 totalDiscountedMints_
         )
     {
+        discountUsed_ = _discountUsage(wallet);
         allocatedCrates_ = allocatedCrates;
         warehousesMinted_ = warehousesMinted;
         artworksMinted_ = _nextTokenId() - 1;
@@ -508,9 +520,14 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         discountMerkleRoot_ = discountMerkleRoot;
         discountCratePrice_ = discountCratePrice;
         discountAllowance_ = discountAllowance;
-        discountUsed_ = discountUsed[wallet];
         relicsAllocated_ = relicsAllocated;
         relicsMinted_ = relicsMinted;
+        maxDiscountedMints_ = maxDiscountedMints;
+        totalDiscountedMints_ = totalDiscountedMints;
+    }
+
+    function _discountUsage(address wallet) private view returns (uint256) {
+        return discountUsed[wallet];
     }
 
     function remainingCrates() external view returns (uint256) {

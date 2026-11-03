@@ -810,7 +810,8 @@ contract NFT111KProceedsTest is TestSupport {
             bytes32(0),
             recipients,
             shares,
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
     }
 

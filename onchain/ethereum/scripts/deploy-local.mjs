@@ -3,6 +3,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseInitialDeliveryReceiver, parseProceedsConfig } from './proceeds-config.mjs';
 import { parseFreeMintConfigJson } from './free-mint-config.mjs';
+import { parseDiscountCapConfigJson } from './discount-cap-config.mjs';
 
 const root = new URL('../', import.meta.url);
 const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v13/';
@@ -37,6 +38,7 @@ const fixture = JSON.parse(await readFile(new URL('fixtures/eip712.json', root),
 const discounts = JSON.parse(await readFile(new URL('../../src/ethereum/discounts/111k.json', root), 'utf8'));
 const discountRoot = process.env.ETHEREUM_111K_LOCAL_DISCOUNT_ROOT || discounts.root;
 if (!/^0x[0-9a-fA-F]{64}$/.test(discountRoot)) throw new Error('Invalid discount Merkle root.');
+const maxDiscountedMints = parseDiscountCapConfigJson(await readFile(new URL('config/discount-caps.json', root), 'utf8'), 31337);
 const owner = process.env.ETHEREUM_111K_LOCAL_OWNER || deployer;
 const signer = process.env.ETHEREUM_111K_LOCAL_QUOTE_SIGNER || fixture.signer;
 const proceeds = parseProceedsConfig(JSON.parse(await readFile(new URL('config/proceeds.json', root), 'utf8')));
@@ -61,11 +63,12 @@ const send = creation => JSON.parse(run('cast', [
   'send', '--rpc-url', rpcUrl.href, '--unlocked', '--from', deployer, '--create', creation, '--json',
 ]));
 const constructor = run('cast', [
-  'abi-encode', 'constructor(address,address,address,string,bytes32,address[],uint256[],(address,uint16,uint16,uint16)[])',
+  'abi-encode', 'constructor(address,address,address,string,bytes32,address[],uint256[],(address,uint16,uint16,uint16)[],uint256)',
   owner, signer, initialDeliveryReceiver, metadataBaseURI, discountRoot,
   `[${mintRecipients.join(',')}]`, `[${mintSharesBps.join(',')}]`,
   `[${freeMintAllocations.map(({ wallet, crateLimit, warehouseLimit, relicLimit }) =>
     `(${wallet},${crateLimit},${warehouseLimit},${relicLimit})`).join(',')}]`,
+  String(maxDiscountedMints),
 ]);
 const collection = send((await artifact('NFT111K')).bytecode.object + constructor.slice(2));
 if (!collection.contractAddress || Number(collection.status) !== 1) throw new Error('Collection deployment failed.');
@@ -76,6 +79,7 @@ const result = {
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, initialDeliveryReceiver, deliveryConfigId: 1, mintRecipients, mintSharesBps, discountRoot, freeMintAllocations,
+  maxDiscountedMints,
   collectionTransactionHash: collection.transactionHash,
 };
 const outputDirectory = new URL('.local/', root);

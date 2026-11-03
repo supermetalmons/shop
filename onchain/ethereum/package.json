@@ -27,7 +27,7 @@
     "discounts:snapshot": "node scripts/generate-discounts.mjs --snapshot",
     "discounts:generate": "node scripts/generate-discounts.mjs",
     "discounts:check": "node scripts/generate-discounts.mjs --check",
-    "test:discounts": "node --test scripts/generate-discounts.test.mjs",
+    "test:discounts": "node --test scripts/generate-discounts.test.mjs scripts/discount-cap-config.test.mjs",
     "test:invariants:extended": "FOUNDRY_INVARIANT_RUNS=512 FOUNDRY_INVARIANT_DEPTH=128 forge test --offline --match-contract '^NFT111K.*InvariantTest$' --gas-snapshot-emit=false",
     "chain:local": "anvil --host 127.0.0.1 --chain-id 31337 --block-time 1",
     "deploy:local": "node scripts/deploy-local.mjs"

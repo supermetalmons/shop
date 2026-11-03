@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import dataset from '../src/ethereum/discounts/111k.json';
-import { ethereumDiscounts } from '../src/ethereum/discounts.ts';
+import { ethereumDiscounts, ethereumMintQuote } from '../src/ethereum/discounts.ts';
 import { ethereumApi } from '../src/ethereum/api.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { verifyEthereumDiscountProof } from '../shared/ethereum/discounts.ts';
@@ -58,6 +58,9 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
   for (const changed of [
     { owner: other }, { owner: null }, { chainId: 31337 }, { contractAddress: other },
     { discountMerkleRoot: '0x1234' }, { discountAllowance: 11 }, { discountUsed: -1 }, { discountCratePriceWei: '-1' },
+    { maxDiscountedMints: 500 }, { totalDiscountedMints: 0 },
+    ...[-1, 5556, 0.5, '500', null].map(maxDiscountedMints => ({ maxDiscountedMints, totalDiscountedMints: 0 })),
+    ...[-1, 501, 0.5, '1', null].map(totalDiscountedMints => ({ maxDiscountedMints: 500, totalDiscountedMints })),
     { relicsAllocated: -1 }, { relicsAllocated: 19 }, { relicsMinted: 1 }, { remainingRelics: 1 }, { relicsMinted: -1 }, { remainingRelics: -1 },
   ]) {
     value = { ...valid, ...changed };
@@ -66,7 +69,29 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
   value = { ...valid, owner: null };
   assert.deepEqual(await ethereumApi.stats(config, null), value);
   assert.equal(new URL(urls.at(-1)!, 'https://mons.shop').searchParams.has('owner'), false);
+  for (const [maxDiscountedMints, totalDiscountedMints] of [[0, 0], [500, 499], [500, 500], [5555, 5555]]) {
+    value = { ...valid, maxDiscountedMints, totalDiscountedMints };
+    assert.deepEqual(await ethereumApi.stats(config, owner), value);
+  }
   const count = urls.length;
   await assert.rejects(ethereumApi.stats(config, 'invalid'), /invalid response/);
   assert.equal(urls.length, count);
+});
+
+test('mint quotes require the full quantity to fit wallet and total discounted allowances', () => {
+  const stats = {
+    chainId: config.chainId, contractAddress: config.contractAddress!, owner,
+    allocatedCrates: 499, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 0,
+    cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true,
+    remainingCrates: 5056, remainingWarehouses: 459, remainingRelics: 0,
+    discountMerkleRoot: dataset.root, discountCratePriceWei: '50000000000000', discountAllowance: 3, discountUsed: 0,
+  };
+  assert.equal(ethereumMintQuote('crate', 3, stats, true).discounted, true);
+  const capped = { ...stats, maxDiscountedMints: 500, totalDiscountedMints: 499 };
+  assert.equal(ethereumMintQuote('crate', 1, capped, true).discounted, true);
+  assert.equal(ethereumMintQuote('crate', 2, capped, true).unitPriceWei, stats.cratePriceWei);
+  assert.equal(ethereumMintQuote('crate', 1, { ...capped, totalDiscountedMints: 500 }, true).discounted, false);
+  assert.equal(ethereumMintQuote('crate', 1, { ...capped, maxDiscountedMints: 0, totalDiscountedMints: 0 }, true).discounted, false);
+  assert.equal(ethereumMintQuote('crate', 1, { ...capped, discountUsed: 3 }, true).discounted, false);
+  assert.equal(ethereumMintQuote('warehouse', 1, capped, true).discounted, false);
 });

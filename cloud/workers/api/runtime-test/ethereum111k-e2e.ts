@@ -163,10 +163,10 @@ try {
   };
   const proceeds = parseProceedsConfig(JSON.parse(await readFile(resolve(project, 'config/proceeds.json'), 'utf8')));
   const constructorTypes = ['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]',
-    '(address,uint16,uint16,uint16)[]'];
+    '(address,uint16,uint16,uint16)[]', 'uint256'];
   const deployment = await deploy('NFT111K', admin, constructorTypes,
     [admin, signer, initialDeliveryReceiver, metadataBaseURI, discounts.root,
-      proceeds.mintRecipients, proceeds.mintSharesBps, []]);
+      proceeds.mintRecipients, proceeds.mintSharesBps, [], 5555]);
   const contract = deployment.contractAddress!;
   assert.deepEqual(await call(contract, 'baseURI()', [], [], ['string']), [metadataBaseURI]);
   assert.deepEqual(await call(contract, 'deliveryConfigCount()', [], [], ['uint256']), [1n]);
@@ -260,6 +260,8 @@ try {
     assert.equal(initial.discountCratePriceWei, '50000000000000');
     assert.equal(initial.discountAllowance, 1);
     assert.equal(initial.discountUsed, 0);
+    assert.equal(initial.maxDiscountedMints, 5555);
+    assert.equal(initial.totalDiscountedMints, 0);
     await assert.rejects(transact(buyer, ETHEREUM_FUNCTIONS.mintCratesDiscounted,
       ['uint256', 'bytes32[]'], [1, discountProof], 50000000000000n));
     const data = encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, discountProof]);
@@ -286,6 +288,7 @@ try {
     await transact(discountWallet, ETHEREUM_FUNCTIONS.mintCratesDiscounted,
       ['uint256', 'bytes32[]'], [2, discountProof], 100000000000000n);
     assert.equal((await stats()).discountUsed, 3);
+    assert.equal((await stats()).totalDiscountedMints, 3);
     await assert.rejects(send(discountWallet, data, contract, 50000000000000n));
     assert.deepEqual(await call(contract, 'totalMintReceived()', [], [], ['uint256']), [1450000000000000n]);
     assert.deepEqual((await call(contract, 'deliveryConfigs(uint256)', ['uint256'], [1],
@@ -716,7 +719,7 @@ try {
   const freeMintWallets = [buyer, secondBuyer, ...Array.from({ length: 30 }, () => reserveAddress())];
   const freeMintAllocations = freeMintWallets.map(wallet => [wallet, 5555, 505, 18]);
   const maxSplit = await deploy('NFT111K', admin, constructorTypes,
-    [admin, signer, initialDeliveryReceiver, metadataBaseURI, discounts.root, maxRecipients, maxShares, freeMintAllocations], false);
+    [admin, signer, initialDeliveryReceiver, metadataBaseURI, discounts.root, maxRecipients, maxShares, freeMintAllocations, 5555], false);
   const maxContract = maxSplit.contractAddress!;
   await send(admin, encodeCall(ETHEREUM_FUNCTIONS.allocateRelics, ['uint256'], [1]), maxContract);
   await send(admin, encodeCall('setSaleActive(bool)', ['bool'], [true]), maxContract);
@@ -764,7 +767,7 @@ try {
   });
   const mixedCaseDeployment = await deploy('NFT111K', admin, constructorTypes,
     [admin, signer, initialDeliveryReceiver, metadataBaseURI, discounts.root,
-      mixedCaseProceeds.mintRecipients, mixedCaseProceeds.mintSharesBps, []]);
+      mixedCaseProceeds.mintRecipients, mixedCaseProceeds.mintSharesBps, [], 5555]);
   const mixedCaseContract = mixedCaseDeployment.contractAddress!;
   await send(buyer, encodeCall('mintCrates(uint256)', ['uint256'], [1]), mixedCaseContract, 100000000000000n);
   for (const [index, recipient] of mixedCaseProceeds.mintRecipients.entries()) {
@@ -779,7 +782,7 @@ try {
 
   const relicDeployment = await deploy('NFT111K', admin, constructorTypes,
     [admin, signer, initialDeliveryReceiver, metadataBaseURI, discounts.root,
-      proceeds.mintRecipients, proceeds.mintSharesBps, []], false);
+      proceeds.mintRecipients, proceeds.mintSharesBps, [], 5555], false);
   const relicContract = relicDeployment.contractAddress!;
   const relicPreorderRevenue = 26400000000000000n;
   const relicDatabase = new DatabaseSync(':memory:');

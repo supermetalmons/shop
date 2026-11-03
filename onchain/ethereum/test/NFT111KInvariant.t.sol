@@ -2,7 +2,7 @@ pragma solidity 0.8.38;
 
 import {NFT111K} from "../src/NFT111K.sol";
 import {DeliveryAccounting} from "./DeliveryAccounting.sol";
-import {TestSupport} from "./TestSupport.sol";
+import {TestSupport, NFT111KStats} from "./TestSupport.sol";
 
 contract NFT111KInvariantHandler is TestSupport {
     struct ModelToken {
@@ -26,6 +26,7 @@ contract NFT111KInvariantHandler is TestSupport {
     uint256 private constant SIGNER_KEY = 0xA11CE;
     uint256 private constant MODELED_CRATE_LIMIT = 444;
     uint256 private constant MODELED_RELIC_LIMIT = 3;
+    uint256 private constant MODELED_DISCOUNT_LIMIT = 4;
     uint256 private constant DELIVERY_FEE = 0.0001 ether;
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -49,6 +50,7 @@ contract NFT111KInvariantHandler is TestSupport {
     uint256[] private consumedOrders;
     bytes32[] private consumedClaims;
     uint256 private allocations;
+    uint256 private totalDiscountedPurchases;
     uint256 private warehouseCount;
     uint256 private relicCount;
     uint256 private artworkCount;
@@ -75,7 +77,8 @@ contract NFT111KInvariantHandler is TestSupport {
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps(),
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            MODELED_DISCOUNT_LIMIT
         );
         assertEq(token.deliveryConfigCount(), 1);
         assertEq(token.registerDeliveryConfig(_deliveryReceiver(1), address(0), 0), 2);
@@ -187,6 +190,8 @@ contract NFT111KInvariantHandler is TestSupport {
         uint256 index = actorSeed % 2;
         address wallet = actors[index];
         uint256 remaining = 3 - discountedPurchases[wallet];
+        uint256 totalRemaining = MODELED_DISCOUNT_LIMIT - totalDiscountedPurchases;
+        if (remaining > totalRemaining) remaining = totalRemaining;
         if (remaining > MODELED_CRATE_LIMIT - allocations) remaining = MODELED_CRATE_LIMIT - allocations;
         if (remaining == 0) return;
         uint256 quantity = quantitySeed % remaining + 1;
@@ -197,6 +202,7 @@ contract NFT111KInvariantHandler is TestSupport {
         vm.prank(wallet);
         token.mintCratesDiscounted{value: cost}(quantity, proof);
         discountedPurchases[wallet] += quantity;
+        totalDiscountedPurchases += quantity;
         allocations += quantity;
         mintRevenue += cost;
         for (uint256 i; i < quantity; ++i) {
@@ -399,12 +405,15 @@ contract NFT111KInvariantHandler is TestSupport {
 
     function assertState() external view {
         assertEq(token.allocatedCrates(), allocations);
+        assertEq(token.totalDiscountedMints(), totalDiscountedPurchases);
+        assertEq(token.maxDiscountedMints(), MODELED_DISCOUNT_LIMIT);
+        assertTrue(totalDiscountedPurchases <= MODELED_DISCOUNT_LIMIT);
         assertEq(token.warehousesMinted(), warehouseCount);
         assertEq(token.relicsAllocated(), MODELED_RELIC_LIMIT);
         assertEq(token.relicsMinted(), relicCount);
         assertTrue(relicCount <= MODELED_RELIC_LIMIT);
         assertEq(token.remainingCrates(), 5555 - allocations);
-        (,, uint256 minted,,,,,,,,,) = token.stats(address(0));
+        uint256 minted = NFT111KStats(address(token)).stats(address(0)).artworksMinted_;
         assertEq(minted, artworkCount);
         uint256 released;
         address[] memory recipients = _proceedsRecipients();

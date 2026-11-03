@@ -38,7 +38,7 @@ export async function ethereumRelics(request: Request, context: Pick<EthereumCon
     encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]),
     encodeCall(ETHEREUM_FUNCTIONS.freeMintAllowances, ['address'], [owner ?? ZERO_ADDRESS]),
   ], snapshot.blockHash);
-  if (maskData.length !== 66 || statsData.length !== 770 || allowanceData.length !== 386) {
+  if (maskData.length !== 66 || (statsData.length !== 2 + 64 * 12 && statsData.length !== 2 + 64 * 14) || allowanceData.length !== 386) {
     throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic availability.');
   }
   const claimedMask = Number(decodeReturn(['uint256'], maskData)[0]);

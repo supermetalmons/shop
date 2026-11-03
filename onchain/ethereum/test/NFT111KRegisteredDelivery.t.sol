@@ -408,12 +408,14 @@ contract NFT111KRegisteredDeliveryTest {
             shares[i] = i < 16 ? 313 : 312;
             allocations[i] = NFT111K.FreeMintAllocation(address(uint160(0xD00001 + i)), 5555, 505, 18);
         }
-        bytes memory arguments =
-            abi.encode(address(this), vm.addr(SIGNER_KEY), FIRST, uri, bytes32(0), recipients, shares, allocations);
-        _eq(arguments.length, 6656);
+        bytes memory arguments = abi.encode(
+            address(this), vm.addr(SIGNER_KEY), FIRST, uri, bytes32(0), recipients, shares, allocations, 5555
+        );
+        _eq(arguments.length, 6688);
         require(type(NFT111K).creationCode.length + arguments.length <= 49_152);
-        NFT111K maximum =
-            new NFT111K(address(this), vm.addr(SIGNER_KEY), FIRST, uri, bytes32(0), recipients, shares, allocations);
+        NFT111K maximum = new NFT111K(
+            address(this), vm.addr(SIGNER_KEY), FIRST, uri, bytes32(0), recipients, shares, allocations, 5555
+        );
         require(address(maximum).code.length <= 24_576);
         _eq(maximum.mintRecipientCount(), 32);
     }
@@ -433,7 +435,8 @@ contract NFT111KRegisteredDeliveryTest {
             bytes32(0),
             recipients,
             shares,
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
         deployed.setSaleActive(true);
         deployed.setPrices(0, 0, 0);

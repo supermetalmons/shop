@@ -624,26 +624,28 @@ test('a failed discount proof blocks crate minting while warehouses remain avail
   assert.equal(BigInt(view.transactions[0].value), BigInt(config.warehousePriceWei));
 });
 
-test('an exhausted allowance clears a prior proof error and restores public crate minting', async t => {
-  const discount = stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` });
-  t.mock.method(ethereumDiscounts, 'proof', async () => { throw new Error('Wrong discount root'); });
-  const view = await delayedMintPage(t);
-  await act(async () => {
-    view.configuration.resolve(config);
-    view.availability.resolve(discount);
+for (const exhaustedAllowance of [{ discountUsed: 1 }, { maxDiscountedMints: 500, totalDiscountedMints: 500 }]) {
+  test(`an exhausted allowance clears a prior proof error and restores public crate minting: ${JSON.stringify(exhaustedAllowance)}`, async t => {
+    const discount = stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` });
+    t.mock.method(ethereumDiscounts, 'proof', async () => { throw new Error('Wrong discount root'); });
+    const view = await delayedMintPage(t);
+    await act(async () => {
+      view.configuration.resolve(config);
+      view.availability.resolve(discount);
+    });
+    await waitFor(() => assert.ok(view.getByRole('alert').textContent?.includes('Couldn’t check your mint discount.')));
+    const exhausted = { ...discount, ...exhaustedAllowance };
+    t.mock.method(ethereumApi, 'stats', async () => exhausted);
+    act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], exhausted));
+    await waitFor(() => assert.equal(view.queryAllByRole('alert').length, 0));
+    const button = view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ }) as HTMLButtonElement;
+    assert.equal(button.disabled, false);
+    await act(async () => { fireEvent.click(button); });
+    await waitFor(() => assert.equal(view.transactions.length, 1));
+    assert.equal(view.transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]));
+    assert.equal(BigInt(view.transactions[0].value), BigInt(config.cratePriceWei));
   });
-  await waitFor(() => assert.ok(view.getByRole('alert').textContent?.includes('Couldn’t check your mint discount.')));
-  const exhausted = { ...discount, discountUsed: 1 };
-  t.mock.method(ethereumApi, 'stats', async () => exhausted);
-  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], exhausted));
-  await waitFor(() => assert.equal(view.queryAllByRole('alert').length, 0));
-  const button = view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ }) as HTMLButtonElement;
-  assert.equal(button.disabled, false);
-  await act(async () => { fireEvent.click(button); });
-  await waitFor(() => assert.equal(view.transactions.length, 1));
-  assert.equal(view.transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]));
-  assert.equal(BigInt(view.transactions[0].value), BigInt(config.cratePriceWei));
-});
+}
 
 test('the mint panel shares the drop frame and previews the selected crate quantity', async () => {
   const view = page({ header: createElement('header', {}, 'Shop header') });

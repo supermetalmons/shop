@@ -117,6 +117,7 @@ function fixture(controlActive = true) {
     claimedMask: 0n, relicMaskInterface: true, saleActive: true,
     freeMintAllowances: new Map<string, number[]>(),
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
+    discountTotals: [] as number[],
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 7, owner: WALLET }]]),
     receipts: new Map<string, EthereumReceipt>(), canonical: new Map<number, string>(),
@@ -217,9 +218,11 @@ function fixture(controlActive = true) {
       if (selector === functionSelector('isValidSignature(bytes32,bytes)')) return encodeAbi(['bytes4'], [state.magic]);
       if (selector === functionSelector('stats(address)')) {
         const [owner] = decodeReturn(['address'], argumentsHex) as [string];
-        return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
+        return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256',
+          ...state.discountTotals.map(() => 'uint256')],
           [state.allocatedCrates, 2, 20, '100000000000000', '1100000000000000', state.saleActive, state.discountRoot,
-            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.relicsAllocated, state.relicsMinted]);
+            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.relicsAllocated, state.relicsMinted,
+            ...state.discountTotals]);
       }
     }
     throw new Error(`Unexpected mocked RPC: ${payload.method}`);
@@ -1514,6 +1517,37 @@ test('public stats verify the relic interface then read wallet discount usage wi
     assert.equal(reduced.body.discountAllowance, 1);
     assert.equal(reduced.body.discountUsed, 3);
     assert.equal(f.databaseCalls.requests, 0);
+  } finally { f.close(); }
+});
+
+test('stats expose total discounted usage and preserve free relic allowance reads', async () => {
+  const f = fixture();
+  try {
+    f.state.allocatedCrates = 500;
+    f.state.discountTotals = [500, 499];
+    for (const owner of [null, WALLET, OTHER_WALLET]) {
+      const result = await f.request<EthereumStats>(`${paths.stats}${owner ? `?owner=${owner}` : ''}`);
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body.maxDiscountedMints, 500);
+      assert.equal(result.body.totalDiscountedMints, 499);
+    }
+    f.state.discountTotals = [500, 500];
+    f.state.relicsAllocated = 1;
+    f.state.freeMintAllowances.set(WALLET, [0, 0, 1, 0, 0, 0]);
+    const relics = await f.request<EthereumRelicStatus>(relicPath(WALLET));
+    assert.equal(relics.response.status, 200);
+    assert.equal(relics.body.remainingAllowance, 1);
+  } finally { f.close(); }
+});
+
+test('stats reject incomplete or impossible discounted totals instead of treating them as uncapped', async () => {
+  const f = fixture();
+  try {
+    for (const totals of [[500], [500, 0, 0], [5556, 0], [500, 501], [500, 26]]) {
+      f.state.discountTotals = totals;
+      const result = await f.request(paths.stats);
+      assert.equal(result.response.status, 503, JSON.stringify(totals));
+    }
   } finally { f.close(); }
 });
 

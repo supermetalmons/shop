@@ -43,9 +43,15 @@ export const ethereumDiscounts = {
   },
 };
 
+export function ethereumDiscountRemaining(stats: EthereumStats): number {
+  const walletRemaining = Math.max(0, stats.discountAllowance - stats.discountUsed);
+  return stats.maxDiscountedMints === undefined && stats.totalDiscountedMints === undefined ? walletRemaining :
+    Math.min(walletRemaining, Math.max(0, (stats.maxDiscountedMints ?? 0) - (stats.totalDiscountedMints ?? 0)));
+}
+
 export function ethereumMintQuote(kind: EthereumMintKind, quantity: number, stats: EthereumStats, eligible: boolean): EthereumMintQuote {
   const discounted = kind === 'crate' && eligible && stats.discountMerkleRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT &&
-    quantity <= Math.max(0, stats.discountAllowance - stats.discountUsed);
+    quantity <= ethereumDiscountRemaining(stats);
   return {
     discounted,
     unitPriceWei: discounted ? stats.discountCratePriceWei : ethereumMintPrice(kind, stats),

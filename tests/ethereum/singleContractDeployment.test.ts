@@ -18,6 +18,7 @@ test('local deployment rejects current-address payees and deploys one collection
   mkdirSync(project, { recursive: true });
   for (const path of ['onchain/ethereum/scripts/deploy-local.mjs', 'onchain/ethereum/scripts/proceeds-config.mjs',
     'onchain/ethereum/scripts/free-mint-config.mjs', 'onchain/ethereum/config/free-mints.json',
+    'onchain/ethereum/scripts/discount-cap-config.mjs', 'onchain/ethereum/config/discount-caps.json',
     'onchain/ethereum/fixtures/free-mints.json',
     'onchain/ethereum/foundry.toml', 'onchain/ethereum/fixtures/eip712.json',
     'onchain/ethereum/config/proceeds.json', 'onchain/ethereum/config/delivery-routing.json', 'src/ethereum/discounts/111k.json']) {
@@ -65,6 +66,8 @@ test('local deployment rejects current-address payees and deploys one collection
     const proceedsPath = join(project, 'config/proceeds.json');
     const deliveryRoutingPath = join(project, 'config/delivery-routing.json');
     const freeMintsPath = join(project, 'config/free-mints.json');
+    const discountCapsPath = join(project, 'config/discount-caps.json');
+    const discountCaps = JSON.parse(readFileSync(discountCapsPath, 'utf8'));
     const freeMints = JSON.parse(readFileSync(join(project, 'fixtures/free-mints.json'), 'utf8'));
     const proceeds = JSON.parse(readFileSync(proceedsPath, 'utf8'));
     const deliveryRouting = JSON.parse(readFileSync(deliveryRoutingPath, 'utf8'));
@@ -116,12 +119,22 @@ test('local deployment rejects current-address payees and deploys one collection
       assert.equal(await rpc('eth_getTransactionCount', [deployer, 'latest']), '0x5');
     }
     writeFileSync(freeMintsPath, JSON.stringify(freeMints));
+    for (const invalid of [5556, -1, '500']) {
+      writeFileSync(discountCapsPath, JSON.stringify({ ...discountCaps, local: invalid }));
+      const invalidResult = run();
+      assert.ifError(invalidResult.error);
+      assert.equal(invalidResult.status, 1);
+      assert.match(invalidResult.stderr, /Discounted mint caps/);
+      assert.equal(await rpc('eth_getTransactionCount', [deployer, 'latest']), '0x5');
+    }
+    writeFileSync(discountCapsPath, JSON.stringify(discountCaps));
     const result = run();
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(result.stdout);
     assert.deepEqual(manifest, JSON.parse(readFileSync(join(project, '.local/deployment.json'), 'utf8')));
     assert.equal(manifest.protocolVersion, 15);
+    assert.equal(manifest.maxDiscountedMints, 5555);
     assert.equal(manifest.initialDeliveryReceiver, deliveryRouting.initialReceiver.toLowerCase());
     assert.equal(manifest.deliveryConfigId, 1);
     const encodedConfig = await rpc<string>('eth_call', [{ to: manifest.contractAddress,
@@ -144,7 +157,11 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.deepEqual(decodeReturn(['bool'], encodedSale as `0x${string}`), [false]);
     const encodedSupply = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('totalSupply()', [], []) }, 'latest']);
     assert.deepEqual(decodeReturn(['uint256'], encodedSupply as `0x${string}`), [0n]);
-    for (const getter of ['relicsAllocated()', 'relicsMinted()', 'allocatedCrates()', 'totalMintReceived()', 'getRelicClaimedMask()']) {
+    const encodedDiscountCap = await rpc<string>('eth_call', [{ to: manifest.contractAddress,
+      data: encodeCall('maxDiscountedMints()', [], []) }, 'latest']);
+    assert.deepEqual(decodeReturn(['uint256'], encodedDiscountCap), [5555n]);
+    for (const getter of ['relicsAllocated()', 'relicsMinted()', 'allocatedCrates()', 'totalMintReceived()', 'getRelicClaimedMask()',
+      'totalDiscountedMints()']) {
       const encoded = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall(getter, [], []) }, 'latest']);
       assert.deepEqual(decodeReturn(['uint256'], encoded), [0n]);
     }

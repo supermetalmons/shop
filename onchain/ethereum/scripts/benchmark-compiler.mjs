@@ -126,7 +126,7 @@ contract ${harnessName} is NFT111KGasTest {
     {
         return NFT111K(_deployCandidate("NFT111K", abi.encode(
             address(this), vm.addr(SIGNER_KEY), address(0xBEEF), "${metadataBaseURI}", bytes32(0), recipients, shares,
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0), 5555
         )));
     }
 
@@ -178,9 +178,9 @@ function collectionArguments(owner, recipientCount = 4, freeMintRecipientCount =
   const freeMints = Array.from({ length: freeMintRecipientCount }, (_, index) =>
     [`0x${(0xF00001 + index).toString(16).padStart(40, '0')}`, 5555, 505, 18]);
   return Buffer.from(encode(['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]',
-    '(address,uint16,uint16,uint16)[]'],
+    '(address,uint16,uint16,uint16)[]', 'uint256'],
     [owner, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', '0x000000000000000000000000000000000000beef',
-      baseURI, `0x${'0'.repeat(64)}`, recipients, shares, freeMints])).toString('hex');
+      baseURI, `0x${'0'.repeat(64)}`, recipients, shares, freeMints, 5555])).toString('hex');
 }
 
 const maximumCollectionArgumentBytes = collectionArguments(

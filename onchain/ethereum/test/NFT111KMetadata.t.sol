@@ -229,7 +229,8 @@ contract NFT111KMetadataTest is TestSupport {
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps(),
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
     }
 

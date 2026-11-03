@@ -221,10 +221,20 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
     if (!await ethereumRelicInterfaceAvailable(context)) {
       throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
     }
+    const statsData = await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]));
+    if (statsData.length !== 2 + 64 * 12 && statsData.length !== 2 + 64 * 14) {
+      throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid statistics.');
+    }
+    const capped = statsData.length === 2 + 64 * 14;
     const values = decodeReturn(
-      ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
-      await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? `0x${'0'.repeat(40)}`])),
-    );
+      ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256',
+        ...(capped ? ['uint256', 'uint256'] : [])], statsData);
+    const maxDiscountedMints = Number(values[12]);
+    const totalDiscountedMints = Number(values[13]);
+    if (capped && (![maxDiscountedMints, totalDiscountedMints].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 5555) ||
+      totalDiscountedMints > maxDiscountedMints || totalDiscountedMints > Number(values[0]))) {
+      throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid discount usage.');
+    }
     const allocatedCrates = Number(values[0]);
     const relicsAllocated = Number(values[10]);
     const relicsMinted = Number(values[11]);
@@ -239,6 +249,7 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
       remainingCrates: 5555 - allocatedCrates, remainingWarehouses: Math.floor((5555 - allocatedCrates) / 11),
       discountMerkleRoot: values[6], discountCratePriceWei: String(values[7]),
       discountAllowance: Number(values[8]), discountUsed: Number(values[9]),
+      ...(capped ? { maxDiscountedMints, totalDiscountedMints } : {}),
       relicsAllocated, relicsMinted, remainingRelics: relicsAllocated - relicsMinted };
   }
   if (path.endsWith('/metadata')) {

@@ -19,7 +19,7 @@ import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletErro
 import { checkedEthereumClaim, checkedEthereumDelivery } from './prepared';
 import { recoverEthereumTransaction, readEthereumSubmittedTransaction } from './recovery';
 import { ethereumAddressEncryptionKey } from './addressEncryption';
-import { EMPTY_ETHEREUM_DISCOUNT_ROOT, ethereumDiscounts, ethereumMintQuote, type EthereumMintQuote } from './discounts';
+import { EMPTY_ETHEREUM_DISCOUNT_ROOT, ethereumDiscountRemaining, ethereumDiscounts, ethereumMintQuote, type EthereumMintQuote } from './discounts';
 import { checkoutReservesItems } from './checkoutReservations';
 import { useEthereumReveals } from './useEthereumReveals';
 
@@ -151,7 +151,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     queryFn: ({ signal }) => ethereumApi.relicMetadata(config, signal), enabled: relicsEnabled,
     retry: false, staleTime: Infinity, gcTime: Infinity });
   const discountRoot = stats.data?.discountMerkleRoot;
-  const discountRemaining = Math.max(0, (stats.data?.discountAllowance ?? 0) - (stats.data?.discountUsed ?? 0));
+  const discountRemaining = stats.data ? ethereumDiscountRemaining(stats.data) : 0;
   const discountCheckRequired = Boolean(config.enabled && owner && discountRoot &&
     discountRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT && discountRemaining > 0);
   const discountProof = useQuery({
@@ -415,7 +415,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
         throw new Error('Your mint terms changed. Check the updated price and try again.');
       }
       const proof = kind === 'crate' && current.discountMerkleRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT &&
-        current.discountAllowance > current.discountUsed ? await ethereumDiscounts.proof(operation.address, current.discountMerkleRoot) : null;
+        ethereumDiscountRemaining(current) > 0 ? await ethereumDiscounts.proof(operation.address, current.discountMerkleRoot) : null;
       operation.assertCurrent();
       const latest = ethereumMintQuote(kind, quantity, current, proof !== null);
       if (latest.discounted !== expected.discounted || latest.unitPriceWei !== expected.unitPriceWei) {

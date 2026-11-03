@@ -2,7 +2,7 @@ pragma solidity 0.8.38;
 
 import {NFT111K} from "../src/NFT111K.sol";
 import {DeliveryAccounting} from "./DeliveryAccounting.sol";
-import {TestSupport} from "./TestSupport.sol";
+import {TestSupport, NFT111KStats} from "./TestSupport.sol";
 
 interface SecurityVm {
     function expectEmit(bool, bool, bool, bool, address) external;
@@ -31,7 +31,8 @@ contract SecurityCollection is NFT111K {
             bytes32(0),
             recipients_,
             shares_,
-            new FreeMintAllocation[](0)
+            new FreeMintAllocation[](0),
+            5555
         )
     {}
 
@@ -182,11 +183,14 @@ contract SecurityReceiver {
             require(DeliveryAccounting.received(token) == expectedProceeds[1], "callback delivery proceeds mismatch");
         }
         if (checkRelics) {
-            (,,,,,,,,,,, uint256 relics) = token.stats(address(0));
+            uint256 relics = NFT111KStats(address(token)).stats(address(0)).relicsMinted_;
             require(relics == expectedRelics && token.relicsMinted() == expectedRelics, "callback relic count mismatch");
         }
         if (checkPurchaseTotals) {
-            (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,,,) = token.stats(address(0));
+            NFT111KStats.Stats memory snapshot2 = NFT111KStats(address(token)).stats(address(0));
+            uint256 allocated = snapshot2.allocatedCrates_;
+            uint256 warehouses = snapshot2.warehousesMinted_;
+            uint256 artworks = snapshot2.artworksMinted_;
             require(token.allocatedCrates() == expectedPurchaseTotals[0], "callback allocation mismatch");
             require(token.warehousesMinted() == expectedPurchaseTotals[1], "callback warehouse count mismatch");
             require(allocated == expectedPurchaseTotals[0], "callback stats allocation mismatch");
@@ -1191,7 +1195,10 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _assertPurchaseTotals(uint256 allocated, uint256 warehouses, uint256 artworks) internal view {
-        (uint256 actualAllocated, uint256 actualWarehouses, uint256 actualArtworks,,,,,,,,,) = token.stats(address(0));
+        NFT111KStats.Stats memory snapshot3 = NFT111KStats(address(token)).stats(address(0));
+        uint256 actualAllocated = snapshot3.allocatedCrates_;
+        uint256 actualWarehouses = snapshot3.warehousesMinted_;
+        uint256 actualArtworks = snapshot3.artworksMinted_;
         assertEq(token.allocatedCrates(), allocated);
         assertEq(token.warehousesMinted(), warehouses);
         assertEq(actualAllocated, allocated);
@@ -1310,7 +1317,7 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _artworksMinted() internal view returns (uint256 value) {
-        (,, value,,,,,,,,,) = token.stats(address(0));
+        value = NFT111KStats(address(token)).stats(address(0)).artworksMinted_;
     }
 
     function _info(uint256 tokenId, uint8 kind, uint256 displayId, address holder) internal view {

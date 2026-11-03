@@ -205,11 +205,12 @@ test('one mint transaction is captured, confirmed and reconciled through expecte
 
 for (const change of [
   { discountUsed: 1 },
+  { maxDiscountedMints: 500, totalDiscountedMints: 500 },
   { discountCratePriceWei: '40000000000000' },
   { discountMerkleRoot: `0x${'34'.repeat(32)}` },
 ]) {
   test(`discounted mint rejects changed terms instead of sending at public price: ${JSON.stringify(change)}`, async t => {
-    let current = { ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}` };
+    let current = { ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}`, maxDiscountedMints: 500, totalDiscountedMints: 499 };
     t.mock.method(ethereumApi, 'stats', async () => current);
     t.mock.method(ethereumDiscounts, 'proof', async () => []);
     const connected = wallet();

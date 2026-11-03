@@ -90,7 +90,8 @@ contract NFT111KPayoutInvariantHandler is TestSupport {
             bytes32(0),
             mintRecipients,
             _proceedsSharesBps(),
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
         for (uint256 i; i < receivers.length; ++i) {
             receivers[i].initialize(address(token));

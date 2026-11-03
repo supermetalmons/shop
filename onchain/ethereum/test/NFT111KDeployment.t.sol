@@ -3,7 +3,7 @@ pragma solidity 0.8.38;
 import {Deploy111K} from "../script/Deploy111K.s.sol";
 import {NFT111K} from "../src/NFT111K.sol";
 import {DeliveryAccounting} from "./DeliveryAccounting.sol";
-import {TestSupport, Vm} from "./TestSupport.sol";
+import {TestSupport, Vm, NFT111KStats} from "./TestSupport.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 interface DeploymentVm {
@@ -14,6 +14,10 @@ interface DeploymentVm {
 contract DeploymentMetadataHarness is Deploy111K {
     function validate(string memory uri, uint256 chainId) external pure {
         _validateDeploymentMetadataBaseURI(uri, chainId);
+    }
+
+    function discountCap(string memory json, uint256 chainId) external pure returns (uint256) {
+        return _discountCap(json, chainId);
     }
 
     function freeMints(string memory json, address collection)
@@ -37,8 +41,51 @@ contract NFT111KDeploymentTest is TestSupport {
     function setUp() public {
         harness = new DeploymentMetadataHarness();
         DeploymentVm(address(vm)).setEnv("ETHEREUM_111K_FREE_MINT_CONFIG", "config/free-mints.json");
+        DeploymentVm(address(vm)).setEnv("ETHEREUM_111K_DISCOUNT_CAP_CONFIG", "config/discount-caps.json");
         DeploymentVm(address(vm))
             .setEnv("ETHEREUM_111K_INITIAL_DELIVERY_RECEIVER", Strings.toHexString(INITIAL_DELIVERY_RECEIVER));
+    }
+
+    function testDiscountCapConfigurationUsesNetworkDefaultsAndAcceptsBounds() public view {
+        string memory config = vm.readFile("config/discount-caps.json");
+        assertEq(harness.discountCap(config, 1), 500);
+        assertEq(harness.discountCap(config, 11155111), 5555);
+        assertEq(harness.discountCap(config, 31337), 5555);
+        config = '{"mainnet":0,"sepolia":123,"local":5555}';
+        assertEq(harness.discountCap(config, 1), 0);
+        assertEq(harness.discountCap(config, 11155111), 123);
+        assertEq(harness.discountCap(config, 31337), 5555);
+    }
+
+    function testDiscountCapConfigurationRejectsInvalidShapeAndUnsupportedChains() public {
+        string[5] memory invalid = [
+            '{"mainnet":500,"sepolia":5555}',
+            '{"mainnet":500,"sepolia":5555,"unknown":5555}',
+            '{"mainnet":500,"sepolia":5555,"local":5555,"extra":1}',
+            "[]",
+            "null"
+        ];
+        for (uint256 i; i < invalid.length; ++i) {
+            vm.expectRevert();
+            harness.discountCap(invalid[i], 1);
+        }
+        vm.expectRevert(NFT111K.InvalidDiscountConfig.selector);
+        harness.discountCap('{"mainnet":500,"sepolia":5555,"local":5555}', 10);
+    }
+
+    function testDiscountCapConfigurationMatchesSharedNormalizationFixture() public view {
+        string memory config = vm.readFile("fixtures/discount-caps.json");
+        assertEq(harness.discountCap(config, 1), 0);
+        assertEq(harness.discountCap(config, 11155111), 500);
+        assertEq(harness.discountCap(config, 31337), 5555);
+    }
+
+    function testDiscountCapConfigurationRejectsInvalidNumbersEvenOnAnotherNetwork() public {
+        string[11] memory invalid = ["-1", "1.5", "5556", '"500"', "true", "false", "null", "[]", "{}", '"0x01"', "1e2"];
+        for (uint256 i; i < invalid.length; ++i) {
+            vm.expectRevert();
+            harness.discountCap(string.concat('{"mainnet":500,"sepolia":', invalid[i], ',"local":5555}'), 1);
+        }
     }
 
     function testMaximumDeploymentConfigurationFitsRuntimeAndInitcodeLimits() public {
@@ -55,12 +102,14 @@ contract NFT111KDeploymentTest is TestSupport {
             shares[i] = i < 16 ? 313 : 312;
             allocations[i] = NFT111K.FreeMintAllocation(address(uint160(0xD00001 + i)), 5555, 505, 18);
         }
-        bytes memory arguments =
-            abi.encode(address(this), SIGNER, address(0xBEEF), uri, DISCOUNT_ROOT, recipients, shares, allocations);
-        assertEq(arguments.length, 6656);
+        bytes memory arguments = abi.encode(
+            address(this), SIGNER, address(0xBEEF), uri, DISCOUNT_ROOT, recipients, shares, allocations, 5555
+        );
+        assertEq(arguments.length, 6688);
         assertTrue(type(NFT111K).creationCode.length + arguments.length <= 49_152);
-        NFT111K token =
-            new NFT111K(address(this), SIGNER, address(0xBEEF), uri, DISCOUNT_ROOT, recipients, shares, allocations);
+        NFT111K token = new NFT111K(
+            address(this), SIGNER, address(0xBEEF), uri, DISCOUNT_ROOT, recipients, shares, allocations, 5555
+        );
         assertTrue(address(token).code.length <= 24_576);
         assertEq(token.mintRecipientCount(), 32);
         assertEq(token.baseURI(), uri);
@@ -401,6 +450,8 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(initialConfig.receiver2Bps, 0);
         assertEq(initialConfig.totalReceived + initialConfig.released1 + initialConfig.released2, 0);
         assertEq(token.discountMerkleRoot(), DISCOUNT_ROOT);
+        assertEq(token.maxDiscountedMints(), chainId == 1 ? 500 : 5555);
+        assertEq(token.totalDiscountedMints(), 0);
         assertEq(token.baseURI(), prefix);
         assertTrue(address(token).code.length <= 24576);
         assertTrue(token.isApprovedForAll(BUYER, token.SEAPORT()));
@@ -473,7 +524,7 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(token.warehousesMinted(), 0);
         assertEq(token.relicsMinted(), 0);
         assertEq(token.remainingCrates(), 5555);
-        (,, uint256 artworks,,,,,,,,,) = token.stats(BUYER);
+        uint256 artworks = NFT111KStats(address(token)).stats(BUYER).artworksMinted_;
         assertEq(artworks, 0);
         assertEq(token.discountUsed(BUYER), 0);
         assertEq(token.totalMintReceived(), 0);
@@ -512,7 +563,9 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(token.allocatedCrates(), 1998);
         assertEq(token.remainingCrates(), 3557);
         assertEq(token.relicFirstCrate(18), 1888);
-        (,,,,,,,,,, uint256 allocated, uint256 minted) = token.stats(BUYER);
+        NFT111KStats.Stats memory snapshot2 = NFT111KStats(address(token)).stats(BUYER);
+        uint256 allocated = snapshot2.relicsAllocated_;
+        uint256 minted = snapshot2.relicsMinted_;
         assertEq(minted, 18);
         assertEq(allocated, 18);
         _assertToken(token, 117189, 6, 18, BUYER);

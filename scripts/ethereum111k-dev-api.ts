@@ -15,7 +15,7 @@ const root = resolve(import.meta.dirname, '..');
 const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
-  initialDeliveryReceiver: string; deliveryConfigId: number;
+  initialDeliveryReceiver: string; deliveryConfigId: number; maxDiscountedMints?: number;
 };
 if (deployment.protocolVersion !== 15) throw new Error('The local deployment does not support relic claim availability. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
@@ -77,9 +77,18 @@ const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, reli
 if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBaseURI)[0] !== deployment.metadataBaseURI) {
   throw new Error('The local collection metadata base URI does not match its deployment manifest.');
 }
-const statsValues = typeof collectionStats === 'string' && collectionStats.length === 2 + 64 * 12
+const cappedDiscounts = typeof collectionStats === 'string' && collectionStats.length === 2 + 64 * 14;
+const statsValues = typeof collectionStats === 'string' && (collectionStats.length === 2 + 64 * 12 || cappedDiscounts)
   ? decodeReturn(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
-    'uint256', 'uint256', 'uint256', 'uint256', 'uint256'], collectionStats) : [];
+    'uint256', 'uint256', 'uint256', 'uint256', 'uint256', ...(cappedDiscounts ? ['uint256', 'uint256'] : [])], collectionStats) : [];
+if (cappedDiscounts && (typeof statsValues[12] !== 'bigint' || statsValues[12] > 5555n ||
+  typeof statsValues[13] !== 'bigint' || statsValues[13] > statsValues[12] || statsValues[13] > (statsValues[0] as bigint))) {
+  throw new Error('The local collection returned invalid discount usage.');
+}
+if (cappedDiscounts ? !Number.isSafeInteger(deployment.maxDiscountedMints) || deployment.maxDiscountedMints !== Number(statsValues[12]) :
+  deployment.maxDiscountedMints !== undefined) {
+  throw new Error('The local collection discount cap does not match its deployment manifest.');
+}
 const claimedMask = typeof relicClaimedMask === 'string' && relicClaimedMask.length === 66
   ? decodeReturn(['uint256'], relicClaimedMask)[0] as bigint : -1n;
 const claimedCount = claimedMask >= 0n ? claimedMask.toString(2).replaceAll('0', '').length : -1;

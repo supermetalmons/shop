@@ -1,7 +1,7 @@
 pragma solidity 0.8.38;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {TestSupport, Vm} from "./TestSupport.sol";
+import {TestSupport, Vm, NFT111KStats} from "./TestSupport.sol";
 
 contract NFT111KBatchTest is TestSupport {
     NFT111K private token;
@@ -23,7 +23,8 @@ contract NFT111KBatchTest is TestSupport {
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps(),
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
         token.setSaleActive(true);
     }
@@ -78,7 +79,7 @@ contract NFT111KBatchTest is TestSupport {
             assertEq(token.totalSupply(), supply + 311 - 15);
             assertEq(token.allocatedCrates(), 5555);
             assertEq(token.warehousesMinted(), 503);
-            (,, uint256 artworks,,,,,,,,,) = token.stats(address(0));
+            uint256 artworks = NFT111KStats(address(token)).stats(address(0)).artworksMinted_;
             assertEq(artworks, 331);
             _assertSummary(logs[logs.length - 1], ids, 21, 311);
             assertTrue(vm.revertToState(snapshot));
@@ -287,7 +288,10 @@ contract NFT111KBatchTest is TestSupport {
     }
 
     function _state() private view returns (bytes32) {
-        (uint256 allocations, uint256 warehouses, uint256 artworks,,,,,,,,,) = token.stats(address(0));
+        NFT111KStats.Stats memory snapshot2 = NFT111KStats(address(token)).stats(address(0));
+        uint256 allocations = snapshot2.allocatedCrates_;
+        uint256 warehouses = snapshot2.warehousesMinted_;
+        uint256 artworks = snapshot2.artworksMinted_;
         return keccak256(abi.encode(allocations, warehouses, artworks, token.totalSupply(), token.balanceOf(ALICE)));
     }
 

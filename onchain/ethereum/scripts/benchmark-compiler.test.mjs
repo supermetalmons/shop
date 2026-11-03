@@ -39,7 +39,7 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
       const oversize = variant => variant.artifacts.NFT111K.runtimeBytes > 24576 ||
         variant.artifacts.NFT111K.creationBytes + report.reproduction.maximumCollectionArgumentBytes > 49152;
       assert.equal(result.status, report.variants.some(oversize) ? 1 : 0, `${result.stdout}\n${result.stderr}`);
-      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 6656);
+      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 6688);
       assert.equal(report.writeBenchmarkCount,
         Object.keys(report.variants[0].gas).filter(name => /^(allocateRelics|mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name)).length);
       for (const variant of report.variants) {
@@ -58,7 +58,7 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
         }
         assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);
         assert.deepEqual(Object.keys(variant.deploymentTransactions), ['collection']);
-        assert.equal(variant.deploymentTransactions.collection.constructorArgumentBytes, 704);
+        assert.equal(variant.deploymentTransactions.collection.constructorArgumentBytes, 736);
         assert.ok(variant.deploymentTransactions.collection.gasUsed > 0);
         assert.equal(variant.comparison.withinDeploymentSizeLimits, true);
       }

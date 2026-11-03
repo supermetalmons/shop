@@ -63,6 +63,11 @@ export const nft111KAbi = [
             "internalType": "uint16"
           }
         ]
+      },
+      {
+        "name": "maxDiscountedMints_",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "nonpayable"
@@ -828,6 +833,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "maxDiscountedMints",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "mintCrates",
     "inputs": [
       {
@@ -1576,6 +1594,16 @@ export const nft111KAbi = [
         "name": "relicsMinted_",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "maxDiscountedMints_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "totalDiscountedMints_",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1627,6 +1655,19 @@ export const nft111KAbi = [
         "name": "",
         "type": "string",
         "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "totalDiscountedMints",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -2618,6 +2659,11 @@ export const nft111KAbi = [
   {
     "type": "error",
     "name": "DiscountAllowanceExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DiscountCapExceeded",
     "inputs": []
   },
   {

@@ -1,7 +1,7 @@
 pragma solidity 0.8.38;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {TestSupport} from "./TestSupport.sol";
+import {TestSupport, NFT111KStats} from "./TestSupport.sol";
 
 interface GasMeasurementVm {
     function snapshotValue(string calldata name, uint256 value) external;
@@ -341,7 +341,8 @@ contract NFT111KGasTest is TestSupport {
             bytes32(0),
             recipients,
             shares,
-            new NFT111K.FreeMintAllocation[](0)
+            new NFT111K.FreeMintAllocation[](0),
+            5555
         );
     }
 
@@ -1038,14 +1039,13 @@ contract NFT111KGasTest is TestSupport {
     function testGasStats() public {
         _buyCrates(alice, 1);
         _buyWarehouses(alice, 1);
-        (
-            uint256 allocated,
-            uint256 warehouses,
-            uint256 artworks,
-            uint256 cratePrice,
-            uint256 warehousePrice,
-            bool saleActive,,,,,,
-        ) = token.stats(alice);
+        NFT111KStats.Stats memory snapshot1 = NFT111KStats(address(token)).stats(alice);
+        uint256 allocated = snapshot1.allocatedCrates_;
+        uint256 warehouses = snapshot1.warehousesMinted_;
+        uint256 artworks = snapshot1.artworksMinted_;
+        uint256 cratePrice = snapshot1.cratePrice_;
+        uint256 warehousePrice = snapshot1.warehousePrice_;
+        bool saleActive = snapshot1.saleActive_;
         vm.snapshotGasLastCall("stats");
         assertEq(allocated, 12);
         assertEq(warehouses, 1);
@@ -1206,7 +1206,7 @@ contract NFT111KGasTest is TestSupport {
             token.unboxCrates(ids);
             vm.snapshotGasLastCall(name);
         }
-        (,, uint256 count,,,,,,,,,) = token.stats(address(0));
+        uint256 count = NFT111KStats(address(token)).stats(address(0)).artworksMinted_;
         assertEq(count, quantity * 20 + (bonus ? 11 : 0));
         (uint8 kind, uint256 displayId, address holder) = token.getTokenInfo(count);
         assertEq(kind, 1);

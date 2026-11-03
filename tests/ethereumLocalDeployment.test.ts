@@ -83,11 +83,11 @@ test('the local API probes relic constants and the extended stats before initial
   const proceeds = JSON.parse(readFileSync('onchain/ethereum/config/proceeds.json', 'utf8'));
   const metadataBaseURI = 'https://cdn.mons.shop/111k-sepolia/probe/';
   const { initialReceiver: initialDeliveryReceiver } = JSON.parse(readFileSync('onchain/ethereum/config/delivery-routing.json', 'utf8'));
-  writeFileSync(deploymentFile, JSON.stringify({ ...proceeds, protocolVersion: 15, chainId: 31337,
+  const manifest = { ...proceeds, protocolVersion: 15, chainId: 31337,
     rpcUrl: 'http://127.0.0.1:8545', contractAddress: `0x${'7'.repeat(40)}`, deploymentBlock: 0,
-    quoteSigner: fixture.signer, metadataBaseURI, initialDeliveryReceiver, deliveryConfigId: 1 }));
+    quoteSigner: fixture.signer, metadataBaseURI, initialDeliveryReceiver, deliveryConfigId: 1 };
   const types = ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
-    'uint256', 'uint256', 'uint256', 'uint256', 'uint256'];
+    'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'];
   const stats = [111n, 0n, 0n, 100n, 1100n, true, `0x${'0'.repeat(64)}`, 50n, 1n, 0n, 1n, 0n];
   try {
     for (const scenario of [
@@ -103,7 +103,19 @@ test('the local API probes relic constants and the extended stats before initial
       { name: 'mask count mismatch', values: stats, limit: 18, crates: 111, mask: 1, valid: false },
       { name: 'nonsequential claimed mask', values: [...stats.slice(0, 11), 1n], limit: 18, crates: 111, mask: 1 << 17, valid: true },
       { name: 'current interface', values: stats, limit: 18, crates: 111, valid: true },
+      { name: 'capped interface', values: [...stats, 500n, 0n], limit: 18, crates: 111, valid: true },
+      { name: 'disabled discounts', values: [...stats, 0n, 0n], limit: 18, crates: 111, valid: true },
+      { name: 'partial discount totals', values: [...stats, 500n], limit: 18, crates: 111, valid: false },
+      { name: 'invalid discount cap', values: [...stats, 5556n, 0n], limit: 18, crates: 111, valid: false, discountError: true },
+      { name: 'discount cap exceeded', values: [...stats, 1n, 2n], limit: 18, crates: 111, valid: false, discountError: true },
+      { name: 'discount supply exceeded', values: [...stats, 500n, 112n], limit: 18, crates: 111, valid: false, discountError: true },
+      { name: 'discount manifest mismatch', values: [...stats, 500n, 0n], limit: 18, crates: 111, valid: false, manifestCap: 499, manifestError: true },
+      { name: 'discount manifest missing', values: [...stats, 500n, 0n], limit: 18, crates: 111, valid: false, manifestCap: null, manifestError: true },
+      { name: 'legacy manifest with cap', values: stats, limit: 18, crates: 111, valid: false, manifestCap: 500, manifestError: true },
     ]) {
+      const maxDiscountedMints = scenario.manifestCap === null ? undefined : scenario.manifestCap ??
+        (scenario.values.length === 14 ? Number(scenario.values[12]) : undefined);
+      writeFileSync(deploymentFile, JSON.stringify({ ...manifest, maxDiscountedMints }));
       const responses = {
         [encodeCall('quoteSigner()', [], [])]: encodeAbi(['address'], [fixture.signer]),
         [encodeCall('MAX_UNBOX_QUANTITY()', [], [])]: encodeAbi(['uint256'], [15]),
@@ -132,7 +144,8 @@ test('the local API probes relic constants and the extended stats before initial
       });
       assert.ifError(result.error);
       assert.equal(result.status, 1, scenario.name);
-      assert.match(result.stderr, scenario.valid ? /RELIC_PROBE_ACCEPTED/ : /current relic claim availability interface/, scenario.name);
+      assert.match(result.stderr, scenario.valid ? /RELIC_PROBE_ACCEPTED/ : scenario.discountError
+        ? /invalid discount usage/ : scenario.manifestError ? /discount cap does not match/ : /current relic claim availability interface/, scenario.name);
     }
   } finally {
     rmSync(directory, { force: true, recursive: true });
