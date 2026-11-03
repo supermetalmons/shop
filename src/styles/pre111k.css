@@ -1,5 +1,6 @@
 .relic-page-body {
   --background-blur-background: var(--bg);
+  min-height: 100svh;
   background: var(--bg);
   color: var(--fg);
 }
@@ -199,11 +200,12 @@ body:has(.relic-page--locked) {
 .relic-access {
   position: fixed;
   z-index: 100;
-  top: var(--relic-gate-viewport-top, 0px);
+  top: 0;
   left: 0;
   width: 100%;
-  height: var(--relic-gate-viewport-height, 100svh);
-  overflow: hidden;
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: color-mix(in srgb, var(--bg) 78%, transparent);
   color: var(--fg);
   visibility: hidden;
@@ -229,7 +231,7 @@ body:has(.relic-page--locked) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  height: 100%;
+  min-height: 100%;
   gap: 32px;
   padding: max(env(safe-area-inset-top), clamp(88px, 14svh, 150px))
     max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
@@ -361,18 +363,20 @@ body:has(.relic-page--locked) {
   }
 }
 
-.relic-access--compact .relic-access__composition {
-  gap: 12px;
-  padding-top: max(env(safe-area-inset-top), clamp(8px, calc(var(--relic-gate-viewport-height, 100svh) * .1), 60px));
-}
+@media (max-height: 540px) {
+  .relic-access__composition {
+    gap: 12px;
+    padding-top: max(env(safe-area-inset-top), clamp(8px, 10svh, 60px));
+  }
 
-.relic-access--compact .relic-access__logo {
-  height: auto;
-}
+  .relic-access__logo {
+    height: auto;
+  }
 
-.relic-access--compact .relic-access__feedback {
-  min-height: 0;
-  margin-top: 8px;
+  .relic-access__feedback {
+    min-height: 0;
+    margin-top: 8px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

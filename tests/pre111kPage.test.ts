@@ -431,17 +431,28 @@ for (const network of ['mainnet', 'devnet'] as const) {
 }
 
 for (const submitWithArrow of [false, true]) {
-  test(`a verified uppercase code unlocks the page through ${submitWithArrow ? 'the arrow' : 'form submission'}`, async () => {
+  test(`a verified uppercase code unlocks the page through ${submitWithArrow ? 'the arrow' : 'form submission'}`, async t => {
     window.localStorage.removeItem(ACCESS_KEY);
     const verification = deferred<{ ok: true }>();
-    verifyImpl = () => verification.promise;
     const view = page();
     const input = view.getByRole('textbox', { name: 'Secret code' }) as HTMLInputElement;
+    const reservation = view.container.querySelector<HTMLElement>('.relic-preorder')!;
+    const focus = t.mock.method(reservation, 'focus');
+    const scroll = t.mock.method(window, 'scrollTo');
+    verifyImpl = () => {
+      assert.notEqual(document.activeElement, input);
+      return verification.promise;
+    };
     fireEvent.change(input, { target: { value: '  testpass  ' } });
+    act(() => input.focus());
     assert.equal(input.value, '  TESTPASS  ');
+    assert.equal(document.activeElement, input);
     if (submitWithArrow) fireEvent.click(view.getByRole('button', { name: 'Continue' }));
     else fireEvent.submit(input.closest('form')!);
+    assert.notEqual(document.activeElement, input);
     await waitFor(() => assert.deepEqual(verifiedCodes, [ACCESS_CODE]));
+    assert.equal(focus.mock.callCount(), 0);
+    assert.equal(scroll.mock.callCount(), 0);
     assert.equal((view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled, true);
     assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
     assert.equal(view.queryByRole('button', { name: /Reserve Relic/ }), null);
@@ -451,6 +462,10 @@ for (const submitWithArrow of [false, true]) {
     assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
     assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
     assert.equal(view.container.querySelector('.relic-page__content')!.hasAttribute('inert'), false);
+    assert.equal(document.activeElement, reservation);
+    assert.equal(focus.mock.callCount(), 1);
+    assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
+    assert.equal(scroll.mock.callCount(), 0);
     assert.equal(sendCount, 0);
     view.reserve();
     await waitFor(() => assert.equal(sendCount, 1));
@@ -458,7 +473,30 @@ for (const submitWithArrow of [false, true]) {
   });
 }
 
-test('a rejected code remains locked and can be corrected without saving the rejected value', async () => {
+test('empty and in-progress code submissions leave the focused input in place', async () => {
+  window.localStorage.removeItem(ACCESS_KEY);
+  const verification = deferred<{ ok: true }>();
+  verifyImpl = () => verification.promise;
+  const view = page();
+  const input = view.getByRole('textbox', { name: 'Secret code' }) as HTMLInputElement;
+  fireEvent.change(input, { target: { value: '   ' } });
+  act(() => input.focus());
+  fireEvent.submit(input.closest('form')!);
+  assert.equal(document.activeElement, input);
+  assert.deepEqual(verifiedCodes, []);
+
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => assert.deepEqual(verifiedCodes, [ACCESS_CODE]));
+  act(() => input.focus());
+  fireEvent.submit(input.closest('form')!);
+  assert.equal(document.activeElement, input);
+  assert.deepEqual(verifiedCodes, [ACCESS_CODE]);
+  await act(async () => verification.resolve({ ok: true }));
+  await view.ready();
+});
+
+test('a rejected code remains locked and can be corrected without saving the rejected value', async t => {
   window.localStorage.removeItem(ACCESS_KEY);
   verifyImpl = async code => {
     if (code !== ACCESS_CODE) throw new EthereumApiError(401, 'That code did not work. Try again.', 'unauthenticated');
@@ -467,8 +505,13 @@ test('a rejected code remains locked and can be corrected without saving the rej
   const view = page();
   const input = view.getByRole('textbox', { name: 'Secret code' });
   fireEvent.change(input, { target: { value: 'wrong' } });
+  act(() => input.focus());
+  const focus = t.mock.method(input, 'focus');
   fireEvent.submit(input.closest('form')!);
+  assert.notEqual(document.activeElement, input);
   await waitFor(() => assert.match(view.getByRole('alert').textContent!, /code/i));
+  assert.equal(document.activeElement, input);
+  assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
   assert.equal(view.queryByRole('button', { name: /Reserve Relic/ }), null);
   fireEvent.change(input, { target: { value: 'testpass' } });
@@ -478,14 +521,19 @@ test('a rejected code remains locked and can be corrected without saving the rej
   assert.equal(sendCount, 0);
 });
 
-test('a temporary verification failure keeps the input retryable without granting access', async () => {
+test('a temporary verification failure keeps the input retryable without granting access', async t => {
   window.localStorage.removeItem(ACCESS_KEY);
   verifyImpl = async () => { throw new TypeError('Failed to fetch'); };
   const view = page();
   const input = view.getByRole('textbox', { name: 'Secret code' });
   fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  act(() => input.focus());
+  const focus = t.mock.method(input, 'focus');
   fireEvent.submit(input.closest('form')!);
+  assert.notEqual(document.activeElement, input);
   await waitFor(() => view.getByRole('alert'));
+  assert.equal(document.activeElement, input);
+  assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
   assert.equal((view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled, false);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
   verifyImpl = async () => ({ ok: true });
@@ -507,13 +555,14 @@ test('saved approval restores immediately while background verification is pendi
   assert.equal(sendCount, 0);
 });
 
-test('a rejected saved code relocks the page and clears persisted approval', async () => {
+test('a rejected saved code relocks without focusing the input and clears persisted approval', async () => {
   const verification = deferred<{ ok: true }>();
   verifyImpl = () => verification.promise;
   const view = page();
   await view.ready();
   await act(async () => verification.reject(new EthereumApiError(401, 'That code did not work. Try again.', 'unauthenticated')));
   await waitFor(() => view.getByRole('textbox', { name: 'Secret code' }));
+  assert.equal(document.activeElement, document.body);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
   assert.equal(view.queryByRole('button', { name: /Reserve Relic/ }), null);
   assert.deepEqual(preparedCodes, []);
