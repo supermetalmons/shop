@@ -544,6 +544,7 @@ export default function FulfillmentApp({
     <div className="page fulfillment-page">
       <ShopStatus feedback={feedback} suspended={headerSuspended} toastAboveModal={false} />
       <ShopHeader
+        showXLink={false}
         scrollHomeToTop
         renderRight={({ interactive }) => <ShopWalletControl interactive={interactive} model={walletControl} />}
       />

@@ -603,10 +603,15 @@ header.top--shop {
   --top-settings-width: 32px;
   --top-actions-gap: 6px;
   --top-side-reserve: var(--top-wallet-width);
+  --top-social-space: 0px;
   padding: 8px 0;
   border: none;
   border-radius: 0;
   overflow: visible;
+}
+
+header.top--shop.top--with-x {
+  --top-social-space: calc(var(--top-settings-width) + var(--top-actions-gap));
 }
 
 header.top--shop.top--fixed {
@@ -678,7 +683,7 @@ header.top--shop.top--spacer {
 }
 
 .top--shop .top__actions > .top__submenu {
-  right: calc(-1 * (var(--top-settings-width) + var(--top-actions-gap)));
+  right: calc(-1 * (var(--top-settings-width) + var(--top-actions-gap) + var(--top-social-space)));
 }
 
 .top--shop .top__settings {

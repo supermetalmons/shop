@@ -396,9 +396,10 @@ function App({ route, suspended = false }: AppProps) {
     <ShopHeader
       onNavigateHome={drop.restoreHomeOnNextNavigation}
       scrollHomeToTop={dropsPanelFrameActive}
-      renderRight={({ interactive }) => <ShopHeaderActions
+      renderRight={({ interactive, xLink }) => <ShopHeaderActions
         {...account}
         interactive={interactive}
+        xLink={xLink}
         walletControl={walletControl}
         adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
       />}

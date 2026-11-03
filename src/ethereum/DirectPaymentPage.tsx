@@ -44,7 +44,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
 
   return (
     <div className={`relic-page${approved ? '' : ' relic-page--locked'}`}>
-      <ShopHeader scrollHomeToTop hidden={!approved} />
+      <ShopHeader scrollHomeToTop hidden={!approved} showXLink />
       <div className="relic-page__content" inert={!approved || undefined} aria-hidden={!approved || undefined}>
         <main className="relic-page__main">
           <figure className="relic-page__showcase">

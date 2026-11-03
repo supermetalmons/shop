@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { FaTableCellsLarge } from 'react-icons/fa6';
 import {
   getFrontendDrop,
@@ -45,6 +45,7 @@ type ShopHeaderActionsProps = Pick<ShopAccount,
   | 'owner'
 > & {
   interactive: boolean;
+  xLink?: ReactNode;
   walletControl: HeaderWallet;
   adminMenuDevnetDrops: FrontendDeploymentConfig[];
 };
@@ -71,6 +72,7 @@ export function ShopHeaderActions({
   deliveryOrderOwnersError,
   owner,
   interactive,
+  xLink,
   walletControl,
   adminMenuDevnetDrops,
 }: ShopHeaderActionsProps) {
@@ -284,6 +286,7 @@ export function ShopHeaderActions({
   return (
     <>
       {adminMenu}
+      {xLink}
       <ShopWalletControl interactive={interactive} model={walletControl} />
     </>
   );

@@ -78,7 +78,7 @@ export default function DrifApp() {
       <ShopHeader
         scrollHomeToTop
         variant="drif"
-        renderRight={({ interactive }) => <ShopWalletControl interactive={interactive} model={walletControl} />}
+        renderRight={({ interactive, xLink }) => <>{xLink}<ShopWalletControl interactive={interactive} model={walletControl} /></>}
       />
       <main className="drif-main">
         <div className="drif-card-showcase">

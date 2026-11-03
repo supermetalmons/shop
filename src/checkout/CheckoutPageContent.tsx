@@ -34,14 +34,14 @@ export function CheckoutPageContent({ wallet, ...location }: CheckoutLocation & 
   useEffect(() => { if (choosing) firstWallet.current?.focus(); }, [choosing]);
 
   return <div className="page">
-    <ShopHeader renderRight={({ interactive }) => <div className="shipping-checkout__header-wallet">
+    <ShopHeader renderRight={({ interactive, xLink }) => <>{xLink}<div className="shipping-checkout__header-wallet">
       {wallet.address ? <span title={wallet.address}>{shortAddress(wallet.address)}</span> : null}
       <button type="button" className="ghost" disabled={!interactive || Boolean(model.busy) || walletBusy}
         tabIndex={interactive ? undefined : -1}
         onClick={() => { walletSection.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); wallet.chooseWallet(); }}>
         {wallet.address ? 'Change wallet' : 'Connect Ethereum'}
       </button>
-    </div>} />
+    </div></>} />
     <main className="shipping-checkout">
       <div className="shipping-checkout__heading">
         <h2>Shipping checkout</h2>

@@ -1,14 +1,31 @@
 import type React from 'react';
+import { FaXTwitter } from 'react-icons/fa6';
 import { navigate } from '../navigation';
 import { BackgroundLayerPortal } from './BackgroundBlurLayer';
 
 type ShopHeaderProps = {
   onNavigateHome?: () => void;
-  renderRight?: (options: { interactive: boolean }) => React.ReactNode;
+  renderRight?: (options: { interactive: boolean; xLink: React.ReactNode }) => React.ReactNode;
   scrollHomeToTop?: boolean;
   variant?: 'default' | 'drif';
   hidden?: boolean;
+  showXLink?: boolean;
 };
+
+function ShopHeaderXLink({ interactive }: { interactive: boolean }) {
+  return (
+    <a
+      href={interactive ? 'https://x.com/monsdotshop' : undefined}
+      className="top__settings"
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={interactive ? 'mons.shop on X' : undefined}
+      tabIndex={interactive ? undefined : -1}
+    >
+      <FaXTwitter size={16} aria-hidden />
+    </a>
+  );
+}
 
 function ShopHeaderBrand({
   interactive,
@@ -62,15 +79,21 @@ export function ShopHeader({
   scrollHomeToTop = false,
   variant = 'default',
   hidden = false,
+  showXLink = Boolean(renderRight),
 }: ShopHeaderProps) {
-  const right = renderRight?.({ interactive: true });
-  const spacerRight = renderRight?.({ interactive: false });
+  const renderControls = (interactive: boolean) => {
+    const xLink = showXLink ? <ShopHeaderXLink interactive={interactive} /> : null;
+    return renderRight ? renderRight({ interactive, xLink }) : xLink;
+  };
+  const right = renderControls(true);
+  const spacerRight = renderControls(false);
+  const headerClassName = `top--shop${variant === 'drif' ? ' top--drif' : ''}${showXLink ? ' top--with-x' : ''}`;
 
   return (
     <>
       <BackgroundLayerPortal placement="leading">
         <header
-          className={`top top--fixed top--shop${variant === 'drif' ? ' top--drif' : ''}`}
+          className={`top top--fixed ${headerClassName}`}
           hidden={hidden}
         >
           <div className="top__backdrop" aria-hidden="true" />
@@ -83,7 +106,7 @@ export function ShopHeader({
         </header>
       </BackgroundLayerPortal>
       <header
-        className={`top top--spacer top--shop${variant === 'drif' ? ' top--drif' : ''}`}
+        className={`top top--spacer ${headerClassName}`}
         aria-hidden="true"
       >
         <ShopHeaderBrand interactive={false} scrollHomeToTop={false} />
