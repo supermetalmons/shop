@@ -96,7 +96,7 @@ test('relic routes scope authorizations and transaction links without retaining 
     clients.forEach(client => client.clear());
     imports.deregister(); Reflect.deleteProperty(globalThis, '__directPaymentRoutingTest'); dom.window.close();
   });
-  const reserveButton = (network: Pre111kNetwork) => getByRole(document.body, 'button', { name: `Reserve · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement;
+  const reserveButton = (network: Pre111kNetwork) => getByRole(document.body, 'button', { name: `Premint · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement;
   const transactionKey = (network: Pre111kNetwork) => `mons.shop.pre111k.last-transaction:${config(network).chainId}:${contracts[network]}:${OWNER}`;
   const ready = async (network: Pre111kNetwork) => {
     await waitFor(() => {

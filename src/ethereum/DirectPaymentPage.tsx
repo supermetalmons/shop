@@ -49,11 +49,11 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const reserveLabel = model.stage ?? (soldOut ? 'Preorders ended' : null);
   const reserve = <button ref={reserveButton} type="button"
     className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
-    aria-label={reserveLabel ?? `${approved ? 'Reserve' : 'Reserve Relic'} · ${price} ETH`}
+    aria-label={reserveLabel ?? `${approved ? 'Premint' : 'Reserve Relic'} · ${price} ETH`}
     disabled={!approved || connecting || choosing || model.inFlight || soldOut || (connected && !available)}
     onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
     {approved ? reserveLabel ? <span className="mint-panel__submit-text">{reserveLabel}</span> : <>
-      <span className="mint-panel__submit-text">Reserve</span>
+      <span className="mint-panel__submit-text">Premint</span>
       <span className="mint-panel__submit-price">{price} ETH</span>
     </> : reserveLabel ?? `Reserve Relic · ${price} ETH`}
   </button>;
