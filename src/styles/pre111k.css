@@ -40,7 +40,9 @@ body:has(.relic-page--locked) {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  justify-content: center;
+  justify-content: safe center;
+  gap: clamp(20px, 3.5svh, 32px);
   opacity: 1;
   filter: blur(0);
   transition: opacity 260ms ease, filter 260ms ease;
@@ -55,8 +57,9 @@ body:has(.relic-page--locked) {
 }
 
 .relic-page__main {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 1 420px;
+  min-height: 120px;
+  max-height: 46svh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -93,7 +96,6 @@ body:has(.relic-page--locked) {
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding-bottom: 12px;
   text-align: center;
   font-size: 13px;
   line-height: 1.5;
@@ -112,7 +114,7 @@ body:has(.relic-page--locked) {
 .relic-preorder__wallet {
   position: relative;
   width: 100%;
-  min-height: 56px;
+  min-height: 28px;
 }
 
 .relic-preorder .relic-preorder__text-button {
@@ -178,11 +180,9 @@ body:has(.relic-page--locked) {
 
 .relic-preorder__feedback {
   width: min(100%, 420px);
-  height: 72px;
+  min-height: 56px;
   padding: 3px;
-  overflow-y: auto;
   overflow-wrap: anywhere;
-  overscroll-behavior: contain;
 }
 
 .relic-preorder__feedback p {
@@ -231,9 +231,10 @@ body:has(.relic-page--locked) {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   min-height: 100%;
-  gap: 32px;
-  padding: max(env(safe-area-inset-top), clamp(88px, 14svh, 150px))
+  gap: clamp(20px, 3.5svh, 32px);
+  padding: max(24px, env(safe-area-inset-top))
     max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
 }
 
@@ -346,11 +347,6 @@ body:has(.relic-page--locked) {
 }
 
 @media (max-width: 600px) {
-  .relic-access__composition {
-    gap: 24px;
-    padding-top: max(env(safe-area-inset-top), clamp(88px, 12svh, 112px));
-  }
-
   .relic-access__logo {
     height: 128px;
   }
@@ -366,7 +362,6 @@ body:has(.relic-page--locked) {
 @media (max-height: 540px) {
   .relic-access__composition {
     gap: 12px;
-    padding-top: max(env(safe-area-inset-top), clamp(8px, 10svh, 60px));
   }
 
   .relic-access__logo {
@@ -374,7 +369,7 @@ body:has(.relic-page--locked) {
   }
 
   .relic-access__feedback {
-    min-height: 0;
+    min-height: 20px;
     margin-top: 8px;
   }
 }
