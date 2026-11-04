@@ -6,20 +6,29 @@ Render clips 10, 11, and 12 with both bamboo frames from the repository root.
 npm run render:video-frames
 ```
 
-The command renders headlessly and writes six MP4s and a midpoint comparison sheet
-to `output/video-frames/`. Each MP4 is 1440 × 1440 at 24 fps on white, with the
-full landscape picture and original AAC audio.
+Use the animated collection for clips 3, 27, and 102.
+
+```sh
+npm run render:video-frames -- --collection animated
+```
+
+Each run writes six 1440 × 1440 MP4s on white and a midpoint comparison sheet.
+The original 16:9 clips retain their 24 fps timing and AAC audio in
+`output/video-frames/`. The 932 × 1006 animated clips retain all 360 frames
+at 60 fps and have no audio track. Their outputs go in `output/video-frames/animated/`.
 
 | Comparison order | Folder | Camera | Frame |
 | --- | --- | --- | --- |
 | 1 | `01-wide-border` | 15° left, 8° above | Wide bamboo border |
 | 2 | `02-front` | Straight on | Standard honey bamboo bezel |
 
-`studio.py` builds the geometry, bamboo grain, lights, camera and shadow from
-scratch. `encode.py` holds the screen projection and H.264 settings.
-`render.py` pins the three source files by SHA-256 and fetches them from
-`https://wip.lil.org/111k/videos/{id}.mp4` using curl. For offline rendering,
-place matching copies named `10.mp4`, `11.mp4`, and `12.mp4` in `.cache/video-frames/sources/`.
+`studio.py` sizes the screen opening and bamboo enclosure for each display
+aspect ratio. Both presets keep their camera angles, depth, material and lights.
+`encode.py` projects the complete source picture into the opening.
+`render.py` pins the source files by SHA-256 and fetches them from
+`https://wip.lil.org/111k/{collection}/{id}.mp4` using curl. For offline rendering,
+place matching copies named `{id}.mp4` in `.cache/video-frames/sources/` for
+the videos collection or `.cache/video-frames/animated/sources/` for animated.
 `verify.py` checks square pixels, every frame timestamp, audio, format and file
 sizes. It compares each source midpoint with the picture at the reviewed screen
 position for that variant before publication.

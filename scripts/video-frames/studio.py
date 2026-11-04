@@ -99,12 +99,13 @@ def rounded_rect(width, height, radius, depth):
     return vertices
 
 
-def frame(location, slug, wood, lip):
-    width, height = ASPECT + 0.2, 1.2
-    border = 0.18 if slug == '01-wide-border' else 0.10
-    screen_h = height / (1 + 2 * border)
-    screen_w = screen_h * ASPECT
-    outer = (width, height)
+def frame(location, slug, wood, lip, aspect=ASPECT):
+    # The original 16:9 display is one unit high. Keep its long edge for every orientation.
+    front_w = ASPECT * min(aspect, 1)
+    front_h = ASPECT / max(aspect, 1)
+    outer = (front_w + 0.2, front_h + 0.2)
+    scale = 1.2 / 1.36 if slug == '01-wide-border' else 1
+    screen_w, screen_h = front_w * scale, front_h * scale
     screen = (screen_w, screen_h)
     recess = 0.011
     profiles = [
@@ -196,10 +197,13 @@ def projected(scene, point):
     return [uv.x * SIZE, (1 - uv.y) * SIZE]
 
 
-def shadow_sweep(scene, obj, half_height):
+def shadow_sweep(scene, obj):
     # A level front camera sees a real floor edge-on. Paint its soft penumbra into the sweep.
     y, x = np.ogrid[:SIZE, :SIZE]
-    base = [projected(scene, obj.matrix_world @ Vector((i, 0.06, -half_height))) for i in (-0.99, 0.99)]
+    half_width = round(max(v.co.x for v in obj.data.vertices), 2)
+    half_height = max(v.co.z for v in obj.data.vertices)
+    base = [projected(scene, obj.matrix_world @ Vector((i, 0.06, -half_height)))
+            for i in (-half_width, half_width)]
     (lx, ly), (rx, ry) = base
     span = rx - lx
     cx, cy = (lx + rx) / 2, (ly + ry) / 2
@@ -245,7 +249,7 @@ def write_screen_mask(path, outline):
                      chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
 
 
-def render_variant(path, slug):
+def render_variant(path, slug, aspect=ASPECT):
     scene = setup_scene()
     lip = bpy.data.materials.new('Graphite display gasket')
     lip.diffuse_color = (0.012, 0.014, 0.016, 1)
@@ -260,9 +264,9 @@ def render_variant(path, slug):
     scene.camera = camera
     basis = camera.rotation_euler.to_quaternion()
     location = (basis @ Vector((0, 1, 0))) * 0.03
-    obj, screen_points = frame(location, slug, bamboo_material(), lip)
+    obj, screen_points = frame(location, slug, bamboo_material(), lip, aspect)
     bpy.context.view_layer.update()
-    shadow_sweep(scene, obj, max(vertex.co.z for vertex in obj.data.vertices))
+    shadow_sweep(scene, obj)
     path.mkdir(exist_ok=True, parents=True)
     scene.render.filepath = str(path / 'plate.png')
     if 'FINISHED' not in bpy.ops.render.render(write_still=True):
@@ -279,6 +283,13 @@ def render_variant(path, slug):
 
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    output, = sys.argv[sys.argv.index('--') + 1:]
+    output, *options = sys.argv[sys.argv.index('--') + 1:]
+    aspect = ASPECT
+    if options:
+        ratio, = options
+        width, height = map(int, ratio.split(':'))
+        if min(width, height) <= 0:
+            raise ValueError('Display aspect dimensions must be positive')
+        aspect = width / height
     for variant in CAMERA_ANGLES:
-        render_variant(Path(output).resolve() / variant, variant)
+        render_variant(Path(output).resolve() / variant, variant, aspect)

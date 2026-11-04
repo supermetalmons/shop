@@ -32,15 +32,17 @@ def encode(source, studio, output):
     screens = json.loads((studio / "screens.json").read_text())
     probe = subprocess.check_output([
         "ffprobe", "-v", "error", "-show_entries",
-        "stream=codec_type,avg_frame_rate,duration,bit_rate", "-of", "json", source,
+        "stream=codec_type,avg_frame_rate,duration,bit_rate,color_transfer", "-of", "json", source,
     ])
     streams = json.loads(probe)["streams"]
     video = next(stream for stream in streams if stream["codec_type"] == "video")
-    audio = next(stream for stream in streams if stream["codec_type"] == "audio")
+    audio = next((stream for stream in streams if stream["codec_type"] == "audio"), None)
     fps = video["avg_frame_rate"]
+    transfer = "iec61966-2-1" if video.get("color_transfer") == "iec61966-2-1" else "bt709"
     duration = float(video["duration"])
     # Reserve space for muxing, audio, and the encoder's initial VBV buffer.
-    maxrate = int((9_800_000 * 8 - float(audio["duration"]) * int(audio["bit_rate"])) / (duration + 1))
+    audio_bits = float(audio["duration"]) * int(audio["bit_rate"]) if audio else 0
+    maxrate = int((9_800_000 * 8 - audio_bits) / (duration + 1))
     inputs = ["-i", source, "-framerate", fps, "-i", studio / "plate.png"]
     filters = [
         "[1:v]scale=out_color_matrix=bt709:out_range=tv,format=yuv444p,"
@@ -53,7 +55,7 @@ def encode(source, studio, output):
         filters.extend(screen_filters(index, corners))
     filters.append(
         f"[plate{len(screens)}]format=yuv420p,setsar=1,"
-        "setparams=range=limited:colorspace=bt709:color_primaries=bt709:color_trc=bt709[out]"
+        f"setparams=range=limited:colorspace=bt709:color_primaries=bt709:color_trc={transfer}[out]"
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -61,10 +63,10 @@ def encode(source, studio, output):
         rendered = Path(stage) / "encoded.mp4"
         subprocess.run([
             "ffmpeg", "-nostdin", "-v", "error", "-filter_complex_threads", "4",
-            *inputs, "-filter_complex", ";".join(filters), "-map", "[out]", "-map", "0:a:0",
+            *inputs, "-filter_complex", ";".join(filters), "-map", "[out]", "-map", "0:a:0?",
             "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-threads", "6",
             "-maxrate", str(maxrate), "-bufsize", str(maxrate), "-fps_mode", "passthrough",
-            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", transfer,
             "-color_range", "tv", "-c:a", "copy", "-movflags", "+faststart", rendered,
         ], check=True)
         if rendered.stat().st_size > 15_000_000:
