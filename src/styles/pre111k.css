@@ -70,12 +70,15 @@ body:has(.relic-page--locked) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
   width: min(100%, 420px);
   height: 100%;
   min-height: 0;
   margin: 0 auto;
   padding-inline: clamp(6px, 2vw, 20px);
+}
+
+.relic-page__picture {
+  display: contents;
 }
 
 .relic-page__artwork {
