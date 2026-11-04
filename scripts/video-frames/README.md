@@ -21,7 +21,9 @@ scratch. `encode.py` holds the screen projection and H.264 settings.
 `render.py` pins the four source files by SHA-256 and fetches clips 1–4 from
 `https://wip.lil.org/111k/videos/{id}.mp4` using curl. For offline rendering,
 place matching copies named `1.mp4` through `4.mp4` in `.cache/video-frames/sources/`.
-`verify.py` checks the frame count, audio, format and file sizes before publication.
+`verify.py` checks square pixels, every frame timestamp, audio, format and file
+sizes. It compares each source midpoint with the picture at the reviewed screen
+position for that variant before publication.
 
 The reference setup used Blender 4.5.3 LTS (build `67807e1800cc`, Cycles
 Metal on Apple M1 Max), Python 3.9.6, FFmpeg and ffprobe 8.1.2 with libx264

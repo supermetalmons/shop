@@ -1,6 +1,7 @@
 import hashlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -43,7 +44,10 @@ def publish(videos, output):
         directory_fd = os.open(output, os.O_RDONLY)
         resources.callback(os.close, directory_fd)
         flock(directory_fd, LOCK_EX)
-        backup = Path(resources.enter_context(tempfile.TemporaryDirectory(dir=videos.parent)))
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+        resources.callback(signal.pthread_sigmask, signal.SIG_SETMASK, previous)
+        staging = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix=".publish-", dir=output)))
+        incoming = staging / "incoming"
         with ExitStack() as rollback:
             for source in [*sorted(videos.glob("*/*.mp4")), videos / "comparison.png"]:
                 relative = source.relative_to(videos)
@@ -56,13 +60,14 @@ def publish(videos, output):
                 if target.is_symlink() or (target.exists() and not target.is_file()):
                     raise ValueError(f"Expected a regular output file: {target}")
                 if target.exists():
-                    saved = backup / relative
+                    saved = staging / relative
                     saved.parent.mkdir(exist_ok=True)
-                    os.link(target, saved)
+                    shutil.copy2(target, saved)
                     rollback.callback(os.replace, saved, target)
                 else:
                     rollback.callback(target.unlink, missing_ok=True)
-                source.replace(target)
+                shutil.copyfile(source, incoming)
+                incoming.replace(target)
             rollback.pop_all()
 
 
@@ -89,4 +94,5 @@ def main():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda signum, _: sys.exit(128 + signum))
     main()
