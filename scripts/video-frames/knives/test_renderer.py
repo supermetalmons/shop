@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 HERE = Path(__file__).resolve().parent
-WIDTH, HEIGHT = 1056, 704
+WIDTH, HEIGHT = 1920, 1080
 
 
 def png(pixels):

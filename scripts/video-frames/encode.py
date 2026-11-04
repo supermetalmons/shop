@@ -1,12 +1,12 @@
-import argparse
 import json
 import math
 import subprocess
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 
-
-BT709_TO_SRGB = "colorspace=iall=bt709:all=bt709:trc=srgb:irange=tv:range=tv"
+from media import MAX_MOVIE_BYTES
+from verify import movie_tick
 
 
 def screen_filters(index, corners):
@@ -31,31 +31,43 @@ def screen_filters(index, corners):
     ]
 
 
-def encode(source, studio, output):
+def encode(source, studio, output, *, fps, transfer, duration, audio, source_filter):
     screens = json.loads((studio / "screens.json").read_text())
-    probe = subprocess.check_output([
-        "ffprobe", "-v", "error", "-show_entries",
-        "stream=codec_type,avg_frame_rate,duration,bit_rate,color_transfer", "-of", "json", source,
-    ])
-    streams = json.loads(probe)["streams"]
-    video = next(stream for stream in streams if stream["codec_type"] == "video")
-    audio = next((stream for stream in streams if stream["codec_type"] == "audio"), None)
-    fps = video["avg_frame_rate"]
-    transfer = "iec61966-2-1" if video.get("color_transfer") == "iec61966-2-1" else "bt709"
-    duration = float(video["duration"])
-    # Reserve space for muxing, audio, and the encoder's initial VBV buffer.
-    audio_bits = float(audio["duration"]) * int(audio["bit_rate"]) if audio else 0
-    maxrate = int((9_800_000 * 8 - audio_bits) / (duration + 1))
-    inputs = ["-i", source, "-framerate", fps, "-i", studio / "plate.png"]
+    audio_base = Fraction(audio["time_base"]) if audio else Fraction(1)
+    timescale = math.lcm(fps.numerator, audio_base.denominator)
+    if timescale >= 2**31:
+        raise ValueError("Video and audio clocks exceed the MP4 movie timescale limit")
+    audio_options = ["-c:a", "copy"]
+    available = MAX_MOVIE_BYTES
+    if audio:
+        probe = subprocess.check_output([
+            "ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=size,pts,duration",
+            "-of", "json", source,
+        ])
+        packets = json.loads(probe)["packets"]
+        if not packets:
+            raise ValueError(f"{source}: audio stream has no packets")
+        available -= sum(int(packet["size"]) for packet in packets)
+        end = (int(audio["start_pts"]) + int(audio["duration_ts"])) * audio_base
+        last = packets[-1]
+        packet_end = (int(last["pts"]) + int(last["duration"])) * audio_base
+        if abs(packet_end - end) > movie_tick(source) + Fraction(1, timescale):
+            audio_options += ["-bsf:a", f"setts=duration='if(eq(NEXT_PTS,NOPTS),max(0,round({end}/TB)-PTS),DURATION)'"]
+    if available <= 0:
+        raise ValueError(f"{source}: copied audio alone exhausts the 15 MB output limit")
+    # Leave room for muxing and the encoder's initial VBV buffer.
+    video_bytes = min(9_800_000, available * .98)
+    maxrate = max(1000, int(video_bytes * 8 / (duration + 1)))
+    inputs = ["-i", source, "-framerate", str(fps), "-i", studio / "plate.png"]
     plate = "[1:v]scale=out_color_matrix=bt709:out_range=tv,format=yuv444p"
-    if transfer == "iec61966-2-1":
-        # The approved plate values were mastered as BT.709.
-        plate += "," + BT709_TO_SRGB
+    if transfer == "bt709":
+        plate += ",colorspace=iall=bt709:itrc=srgb:all=bt709:irange=tv:range=tv"
     filters = [
         plate + ",loop=loop=-1:size=1:start=0[plate0]",
     ]
     labels = "".join(f"[source{i}]" for i in range(len(screens)))
-    filters.append(f"[0:v]split={len(screens)}{labels}")
+    fit = source_filter + "," if source_filter else ""
+    filters.append(f"[0:v]{fit}split={len(screens)}{labels}")
     for index, corners in enumerate(screens):
         inputs.extend(["-i", studio / f"mask-{index}.png"])
         filters.extend(screen_filters(index, corners))
@@ -73,17 +85,9 @@ def encode(source, studio, output):
             "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-threads", "6",
             "-maxrate", str(maxrate), "-bufsize", str(maxrate), "-fps_mode", "passthrough",
             "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", transfer,
-            "-color_range", "tv", "-c:a", "copy", "-movflags", "+faststart", rendered,
+            "-color_range", "tv", *audio_options, "-write_tmcd", "0", "-movflags", "+faststart",
+            "-movie_timescale", str(timescale), rendered,
         ], check=True)
-        if rendered.stat().st_size > 15_000_000:
+        if rendered.stat().st_size > MAX_MOVIE_BYTES:
             raise ValueError(f"{output.name} exceeds 15 MB")
         rendered.replace(output)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("source", type=Path)
-    parser.add_argument("studio", type=Path)
-    parser.add_argument("output", type=Path)
-    args = parser.parse_args()
-    encode(args.source, args.studio, args.output)

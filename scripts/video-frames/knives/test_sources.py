@@ -1,3 +1,4 @@
+import json
 import struct
 import sys
 import tempfile
@@ -6,10 +7,30 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from render import prepare_sources
+from acrylic import knife_sources
+from media import prepare_sources, sha256
 
 
 class SourceCacheTests(unittest.TestCase):
+    def test_local_alignment_follows_glb_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            known = directory / "renamed.glb"
+            known.write_bytes(b"known")
+            other = directory / "1.glb"
+            other.write_bytes(b"other")
+            record = {"id": 1, "source_sha256": sha256(known), "alignment_radians": .75}
+            (directory / "alignments.json").write_text(json.dumps([record]))
+
+            def record_angle(renderer, source, angle, movie):
+                movie.write_text(json.dumps(angle))
+
+            with patch.object(knife_sources, "KNIVES", directory), patch("subprocess.run"), \
+                 patch.object(knife_sources, "render_orbit", side_effect=record_angle):
+                movies = knife_sources.render_knives([known, other], directory / "rendered")
+            self.assertEqual([p.stem for p in movies], ["renamed", "1"])
+            self.assertEqual([json.loads(p.read_text()) for p in movies], [.75, None])
+
     def test_bad_glb_is_refetched_and_bad_download_is_never_published(self):
         json_chunk = b'{"asset":{"version":"2.0"},"buffers":[{"byteLength":4}]}'
         json_chunk += b" " * (-len(json_chunk) % 4)
@@ -24,7 +45,7 @@ class SourceCacheTests(unittest.TestCase):
             def download(cmd, check):
                 Path(cmd[cmd.index("--output") + 1]).write_bytes(next(downloads))
 
-            with patch("render.subprocess.run", side_effect=download) as fetch:
+            with patch("media.subprocess.run", side_effect=download) as fetch:
                 with self.assertRaisesRegex(ValueError, "invalid GLB"):
                     prepare_sources(directory, "3d", {17: None}, "glb")
                 self.assertEqual(cached.read_bytes(), valid[:-1])

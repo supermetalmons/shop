@@ -1,46 +1,67 @@
-# Reproducing the bamboo video frames
+# White acrylic frames for 111k
 
-Render clips 10, 11, and 12 with both bamboo frames from the repository root.
+Soft Clear (`08-soft-clear`) and High Key (`15-high-key`) each use a single
+clear acrylic body, a white bezel and four silver fasteners. Both face the
+camera squarely on a shadowless white background. The 16:9 screen sits inside
+a 1440 × 1440 H.264 MP4.
+
+## Render
+
+Run from the repository root with Python 3, FFmpeg with libx264, and ffprobe.
+Fetching uncached 111k sources also requires curl.
+Knife rendering also requires macOS, Swift and Metal. The encoder reads the
+approved plates directly from the repository.
 
 ```sh
-npm run render:video-frames
+npm run render:video-frames -- --ids 1,371
+npm run render:video-frames -- --collection animated --ids 21 --variant 08-soft-clear
+npm run render:knives -- --ids 904 --variant 15-high-key
+npm run render:video-frames -- --input /path/to/clip.mp4 --output /path/to/export
+npm run render:knives -- --input /path/to/knife.glb --output /path/to/export
 ```
 
-Use the animated collection for clips 3, 27, and 102.
+Both presets render by default. `--background white` is accepted for existing
+commands. Category-local 111k IDs use the raw source cache when available.
+Local inputs require an explicit output directory. With no selection, videos
+use IDs 10–12, animated items use 3, 27 and 102, and knives use 1–4.
+
+## Approved assets
+
+Both npm commands accept `--verify` to check the two saved setups against
+their SHA-256 manifest. Verification works without cached sources or sample
+movies.
 
 ```sh
-npm run render:video-frames -- --collection animated
+npm run render:video-frames -- --verify
 ```
 
-Each of these collections writes six 1440 × 1440 MP4s on white and a midpoint comparison sheet.
-The original 16:9 clips retain their 24 fps timing and AAC audio in
-`output/video-frames/`. The 932 × 1006 animated clips retain all 360 frames
-at 60 fps and have no audio track. Their outputs go in `output/video-frames/animated/`.
+Each [preset directory](acrylic/presets/) contains the original sRGB plate,
+antialiased opening mask, projected screen corners, physical frame bounds,
+and editable Blender scene. The [checksum manifest](acrylic/presets/checksums.json)
+identifies the approved copies. To rebuild a scene for inspection, run the
+[Blender recipe](acrylic/studio.py) headlessly into a separate directory:
 
-| Comparison order | Folder | Camera | Frame |
-| --- | --- | --- | --- |
-| 1 | `01-wide-border` | 15° left, 8° above | Wide bamboo border |
-| 2 | `02-front` | Straight on | Standard honey bamboo bezel |
+```sh
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 \
+  --python scripts/video-frames/acrylic/studio.py -- /tmp/111k-acrylic-inspect --variant 08-soft-clear --save-blend
+```
 
-`studio.py` sizes the screen opening and bamboo enclosure for each display
-aspect ratio. Both presets keep their camera angles, depth, material and lights.
-`encode.py` projects the complete source picture into the opening. For sRGB
-animations it converts the bamboo plate from its approved BT.709 appearance
-to sRGB before compositing. Both comparison sheets use sRGB.
-`render.py` pins the source files by SHA-256 and fetches them from
-`https://wip.lil.org/111k/{collection}/{id}.mp4` using curl. For offline rendering,
-place matching copies named `{id}.mp4` in `.cache/video-frames/sources/` for
-the videos collection or `.cache/video-frames/animated/sources/` for animated.
-Before Blender starts, the renderer checks that both presets have reviewed
-screen corners for every input aspect ratio. `verify.py` checks square pixels,
-every frame timestamp, audio, format and file sizes. It compares each source
-midpoint with the picture at the reviewed screen position before publication.
+## Samples and playback
 
-The reference setup used Blender 4.5.3 LTS (build `67807e1800cc`, Cycles
-Metal on Apple M1 Max), Python 3.9.6, FFmpeg and ffprobe 8.1.2 with libx264
-r3222, and rsvg-convert 2.62.3 on macOS 27.2. Set `BLENDER_BIN` if Blender
-is outside its default macOS app path and not on PATH.
+Use `npm run render:video-frames -- --samples` to generate 20 MP4s on demand
+in `output/video-frames/acrylic/finalists/`. Source numbers stay stable when
+filtering by collection or preset. Each item produces a pair, such as
+`01-soft-clear-white.mp4` and `01-high-key-white.mp4`.
 
-MP4 bytes can vary slightly between renders on the reference hardware.
+| Sample numbers | Collection | 111k IDs in filename order |
+| --- | --- | --- |
+| 01–05 | Videos | 1, 371, 1112, 2222, 2963 |
+| 06–10 | Knives | 904, 906, 909, 942, 986 |
 
-For 111k knife models, use the [approved Dark Halo Soft Strip renderer](knives/README.md).
+The compositor centers the complete source image using neutral dark bars when
+needed. It checks playback timestamps, source audio, color transfer, file size,
+screen placement and the white surround before publishing a batch. Local
+clips should have one constant-rate SDR BT.709 or sRGB video stream starting
+at zero, and at most one MP4-compatible audio stream. Knife models use a native
+1920 × 1080 intermediate with one scale for all 300 poses. See the
+[knife model guide](knives/README.md) for GLB compatibility.

@@ -1,0 +1,16 @@
+{
+  "08-soft-clear": {
+    "frame.blend": "11fcdb06f5082a66913d8c20f08471de6db8904ddf39c592f385c5742d81653c",
+    "mask-0.png": "fe7509852017c8ea73c45d2ff767002bbcf3d0c787c2f54740159fbccd539a1c",
+    "outline.json": "48a222a73ead16fdc263c9aaf4ecc29f4d85fb21719fdc70e5de08edb432dcc1",
+    "plate.png": "dc909947a08b35cbc89008e29532254e81423321170549538c88c560d069bb16",
+    "screens.json": "8955e1f117a3b1ec679e32db4e71d83f21bcc85067cce4624375094377ad87d6"
+  },
+  "15-high-key": {
+    "frame.blend": "163cfafd6a5821689a65481e0cebea831c262b252e394b42105d77a8b4db884c",
+    "mask-0.png": "d43a631a46b769f65720add541e35289c17407de8956f0a3c116d713ae9e97ea",
+    "outline.json": "04a68eec858778ff4755fc51dc2abc216c3017aa1c8fefcb7fa065ff7cda15af",
+    "plate.png": "bdfe26c4ffa6b920df467ff0409c919a38e41091c6c7cc1302af7f870f85fe0a",
+    "screens.json": "337b64cc8f435aea4f33c35bf5ab344f8a9d4f46a9c9c4c3bef7f6fd8ea95a92"
+  }
+}

@@ -133,7 +133,7 @@ struct Model {
     let textures: [MTLTexture]
     let alphaBlend, doubleSided: Bool
 
-    init(url: URL, device: MTLDevice, approvedAxis: Float?) throws {
+    init(url: URL, device: MTLDevice, knownAxis: Float?) throws {
         let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
         func word(_ offset: Int) -> Int {
             bytes.withUnsafeBytes { Int($0.loadUnaligned(fromByteOffset: offset, as: UInt32.self)) }
@@ -249,7 +249,7 @@ struct Model {
             }
         }
         indices = combinedIndices
-        if approvedAxis == nil {
+        if knownAxis == nil {
             let anchor = positions[0]
             for i in positions.indices { positions[i] -= anchor }
         }
@@ -268,7 +268,7 @@ struct Model {
                 for j in [a, b, c] { tangents[j] += t; bitangents[j] += bt }
             }
         }
-        let axis = try approvedAxis ?? projectedAxis(positions, indices)
+        let axis = try knownAxis ?? projectedAxis(positions, indices)
         let align = simd_quatf(angle: -axis, axis: V3(0, 0, 1))
         let aligned = positions.map { align.act($0.xyz) }
         let low = aligned.reduce(V3(repeating: .infinity), simd_min)
@@ -343,13 +343,13 @@ func orbit(frame: Int) -> simd_float4x4 {
 
 func run() throws {
     let args = CommandLine.arguments
-    guard args.count == 3 || args.count == 4 else { throw RenderError("Usage: MetalRenderer MODEL.glb SHADER.metal [APPROVED_AXIS]") }
-    let approvedAxis = args.count == 4 ? Float(args[3]) : nil
-    guard args.count == 3 || approvedAxis?.isFinite == true else { throw RenderError("Invalid approved alignment angle") }
-    let width = 1056, height = 704
+    guard args.count == 3 || args.count == 4 else { throw RenderError("Usage: MetalRenderer MODEL.glb SHADER.metal [AXIS_RADIANS]") }
+    let knownAxis = args.count == 4 ? Float(args[3]) : nil
+    guard args.count == 3 || knownAxis?.isFinite == true else { throw RenderError("Invalid alignment angle") }
+    let width = 1920, height = 1080
     let aspect = Float(width) / Float(height)
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw RenderError("Metal unavailable") }
-    let model = try Model(url: URL(fileURLWithPath: args[1]), device: device, approvedAxis: approvedAxis)
+    let model = try Model(url: URL(fileURLWithPath: args[1]), device: device, knownAxis: knownAxis)
     let shader = args[2]
     let library = try device.makeLibrary(source: String(contentsOfFile: shader, encoding: .utf8), options: nil)
     let pipeline = MTLRenderPipelineDescriptor()
@@ -398,21 +398,17 @@ func run() throws {
     let vertexBuffer = device.makeBuffer(bytes: model.vertices, length: model.vertices.count * MemoryLayout<Vertex>.stride)
     let indexBuffer = device.makeBuffer(bytes: model.indices, length: model.indices.count * MemoryLayout<UInt32>.stride)!
     var low = V3(repeating: .infinity), high = V3(repeating: -.infinity)
-    var maxViewportHeight: Float = 0
     for f in 0..<300 {
-        var frameLow = V3(repeating: .infinity), frameHigh = V3(repeating: -.infinity)
         let transform = orbit(frame: f)
         for vertex in model.vertices {
             let point = (transform * vertex.position).xyz
-            frameLow = simd_min(frameLow, point)
-            frameHigh = simd_max(frameHigh, point)
+            low = simd_min(low, point)
+            high = simd_max(high, point)
         }
-        low = simd_min(low, frameLow)
-        high = simd_max(high, frameHigh)
-        maxViewportHeight = max(maxViewportHeight, (frameHigh.x - frameLow.x) / aspect, frameHigh.y - frameLow.y)
     }
     let center = (high + low) / 2
-    let scaleY = 1.66 / maxViewportHeight
+    let travel = high - low
+    let scaleY = 1.78 / max(travel.x / aspect, travel.y)
     let fit = V4(center.x, center.y, scaleY / aspect, scaleY)
     let region = MTLRegionMake2D(0, 0, width, height)
     var pixels = Data(count: width * height * 4)
@@ -441,7 +437,7 @@ func run() throws {
                 params.treatment.w = 1
                 encoder.setFragmentBytes(&params, length: MemoryLayout<Uniforms>.stride, index: 1)
                 encoder.setDepthStencilState(translucentDepth)
-                if approvedAxis != nil {
+                if knownAxis != nil {
                     // Preserve the pinned M9's two-pass blend for byte-identical exports.
                     encoder.setCullMode(.front)
                     draw(indexBuffer)

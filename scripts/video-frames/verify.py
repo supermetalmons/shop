@@ -1,46 +1,92 @@
-import argparse
 import json
 import struct
 import subprocess
-import tempfile
 from fractions import Fraction
-from pathlib import Path
 
-from encode import BT709_TO_SRGB
-from render import SOURCE_HASHES, VARIANTS, reviewed_aspects
+from media import MAX_MOVIE_BYTES
+
+BT709_TO_SRGB = "colorspace=iall=bt709:all=bt709:trc=srgb:irange=tv:range=tv"
 
 FFMPEG = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror"]
 
 
-def streams(path):
+def streams(path, *, media_only=False):
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_streams", "-of", "json", path],
         check=True, capture_output=True,
     )
     tracks = json.loads(result.stdout)["streams"]
+    if media_only:
+        tracks = [track for track in tracks if track["codec_type"] in ("audio", "video")]
     if sorted(track["codec_type"] for track in tracks) not in (["video"], ["audio", "video"]):
         raise ValueError(f"{path}: expected one video stream and at most one audio stream")
     return {track["codec_type"]: track for track in tracks}
 
 
+def mp4_boxes(movie, end):
+    while movie.tell() + 8 <= end:
+        offset = movie.tell()
+        size, kind = struct.unpack(">I4s", movie.read(8))
+        header = 8
+        if size == 1:
+            extended = movie.read(8)
+            if len(extended) != 8:
+                return
+            size, = struct.unpack(">Q", extended)
+            header = 16
+        if size == 0:
+            size = end - offset
+        if size < header or offset + size > end:
+            return
+        yield kind, offset + size
+        movie.seek(offset + size)
+
+
 def fast_start(path):
-    file_size = path.stat().st_size
     with path.open("rb") as movie:
-        while movie.tell() + 8 <= file_size:
-            offset = movie.tell()
-            size, kind = struct.unpack(">I4s", movie.read(8))
-            header_size = 8
-            if size == 1:
-                size, = struct.unpack(">Q", movie.read(8))
-                header_size = 16
-            if not size:
-                size = file_size - offset
-            if size < header_size or offset + size > file_size:
-                break
+        for kind, _ in mp4_boxes(movie, path.stat().st_size):
             if kind in (b"moov", b"mdat"):
                 return kind == b"moov"
-            movie.seek(offset + size)
     return False
+
+
+def movie_tick(path):
+    with path.open("rb") as movie:
+        for kind, end in mp4_boxes(movie, path.stat().st_size):
+            if kind == b"moov":
+                for child, limit in mp4_boxes(movie, end):
+                    if child == b"mvhd":
+                        header = movie.read(min(24, limit - movie.tell()))
+                        offset = 20 if header and header[0] == 1 else 12
+                        if len(header) >= offset + 4:
+                            scale, = struct.unpack_from(">I", header, offset)
+                            if scale:
+                                return Fraction(1, scale)
+    return Fraction(0)
+
+
+def audio_packets(path, time_base):
+    packets = json.loads(subprocess.check_output([
+        "ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+        "packet=pts,duration:packet_side_data=skip_samples,discard_padding", "-of", "json", path,
+    ]))["packets"]
+    return [(int(packet["pts"]) * time_base, int(packet["duration"]) * time_base,
+             [(side.get("skip_samples", 0), side.get("discard_padding", 0))
+              for side in packet.get("side_data_list", [])
+              if side.get("skip_samples", 0) or side.get("discard_padding", 0)]) for packet in packets]
+
+
+def check_audio_timing(source, output, original, encoded):
+    old_base, new_base = Fraction(original["time_base"]), Fraction(encoded["time_base"])
+    if int(original["start_pts"]) * old_base != int(encoded["start_pts"]) * new_base:
+        raise ValueError(f"{output}: audio start differs from source")
+    if audio_packets(source, old_base) != audio_packets(output, new_base):
+        raise ValueError(f"{output}: audio packet timeline differs from source")
+    old_duration = int(original["duration_ts"]) * old_base
+    new_duration = int(encoded["duration_ts"]) * new_base
+    # MP4 edit duration labels are rounded to their movie clocks, independently of the copied samples.
+    if abs(old_duration - new_duration) > movie_tick(source) + movie_tick(output):
+        raise ValueError(f"{output}: audio edit duration differs from source")
 
 
 def audio_hash(path):
@@ -58,9 +104,9 @@ def midpoint_filter(frame_count, transfer):
     return select
 
 
-def check_movie(path, frame_count, fps, transfer, source_audio, source_hash, samples):
+def check_movie(path, frame_count, fps, transfer, source_audio, source_hash, samples, *, source):
     size = path.stat().st_size
-    if size > 15_000_000 or not fast_start(path):
+    if size > MAX_MOVIE_BYTES or not fast_start(path):
         raise ValueError(f"{path}: exceeds 15 MB or lacks MP4 fast-start layout")
     tracks = streams(path)
     video = tracks["video"]
@@ -79,9 +125,10 @@ def check_movie(path, frame_count, fps, transfer, source_audio, source_hash, sam
         raise ValueError(f"{path}: audio stream presence differs from source")
     audio_output = []
     if source_audio is not None:
-        for key in ("codec_name", "sample_rate", "channels", "start_time", "duration"):
+        for key in ("codec_name", "sample_rate", "channels"):
             if tracks["audio"].get(key) != source_audio.get(key):
                 raise ValueError(f"{path}: audio {key} differs from source")
+        check_audio_timing(source, path, source_audio, tracks["audio"])
         audio_output = ["-map", "0:a:0", "-c:a", "pcm_f32le", "-f", "hash", samples / "audio.sha256"]
     result = subprocess.run([
         *FFMPEG, "-i", path, "-stats_enc_pre", "pipe:1", "-stats_enc_pre_fmt", "{ptsi} {tbi}",
@@ -112,88 +159,3 @@ def thumbnail(path, picture_filter):
     if len(pixels) != 32 * 18 * 3:
         raise ValueError(f"{path}: missing midpoint image")
     return pixels
-
-
-def contact_sheet(samples, destination, frame_counts, fps):
-    left, top, cell, gap = 174, 212, 424, 12
-    width = left + len(VARIANTS) * (cell + gap) + 40
-    height = top + len(frame_counts) * (cell + gap) + 32
-    right = width - 52
-    svg = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{width}" height="{height}">',
-        '<style>text{font-family:Helvetica,Arial,sans-serif;fill:#302f29}.minor{font-size:17px;fill:#716e63;letter-spacing:1px}</style>',
-        '<rect width="100%" height="100%" fill="white"/>',
-        '<text x="52" y="50" class="minor">111K   /   MOVING IMAGE STUDIES</text>',
-        '<text x="50" y="113" style="font-family:Georgia,serif;font-size:54px">Video frame studies</text>',
-        f'<text x="{right}" y="108" text-anchor="end" class="minor">1440 × 1440    /    {fps} FPS</text>',
-        f'<path d="M52 144 H{right}" stroke="#a49d8e"/>',
-    ]
-    for col, (_, label, _) in enumerate(VARIANTS):
-        x = left + col * (cell + gap) + 8
-        svg += [
-            f'<text x="{x}" y="190" class="minor">{col + 1:02}</text>',
-            f'<text x="{x + 42}" y="191" font-size="25">{label}</text>',
-        ]
-    for row, (clip, count) in enumerate(frame_counts.items()):
-        y = top + row * (cell + gap)
-        frame = count // 2
-        svg += [
-            f'<path d="M52 {y} H{right}" stroke="#d8d5cd"/>',
-            f'<text x="52" y="{y + 50}" class="minor">CLIP</text>',
-            f'<text x="50" y="{y + 102}" style="font-family:Georgia,serif;font-size:45px">{clip:02}</text>',
-            f'<text x="52" y="{y + 147}" font-size="17">Midpoint</text>',
-            f'<text x="52" y="{y + 172}" class="minor">{frame / fps:.2f} s</text>',
-        ]
-        for col, (slug, _, _) in enumerate(VARIANTS):
-            x = left + col * (cell + gap)
-            svg.append(
-                f'<image x="{x}" y="{y + 3}" width="{cell}" height="{cell}" '
-                f'xlink:href="{slug}/{clip}/midpoint.png"/>'
-            )
-    layout = samples / "sheet.svg"
-    layout.write_text("\n".join([*svg, "</svg>"]), encoding="utf8")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["rsvg-convert", layout, "-o", destination], check=True)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Check the video previews and build their comparison sheet.")
-    parser.add_argument("source_dir", type=Path)
-    parser.add_argument("output_dir", type=Path)
-    parser.add_argument("sheet_file", type=Path)
-    parser.add_argument("--collection", choices=SOURCE_HASHES, default="videos")
-    args = parser.parse_args()
-    sizes = []
-    frame_counts = {}
-    fps = 60 if args.collection == "animated" else 24
-    with tempfile.TemporaryDirectory(prefix="video-frame-proof-") as temporary:
-        samples = Path(temporary)
-        for clip, aspect in reviewed_aspects(args.source_dir, args.collection).items():
-            source = args.source_dir / f"{clip}.mp4"
-            original = streams(source)
-            count = int(original["video"]["nb_frames"])
-            if count < 1 or Fraction(original["video"]["avg_frame_rate"]) != fps:
-                raise ValueError(f"{source}: expected a nonempty {fps} fps clip")
-            frame_counts[clip] = count
-            transfer = "iec61966-2-1" if original["video"].get("color_transfer") == "iec61966-2-1" else "bt709"
-            source_hash = audio_hash(source) if "audio" in original else None
-            reference = thumbnail(source, midpoint_filter(count, transfer))
-            for slug, _, corners in VARIANTS:
-                directory = samples / slug / str(clip)
-                directory.mkdir(parents=True)
-                path = args.output_dir / slug / source.name
-                sizes.append(check_movie(path, count, fps, transfer, original.get("audio"), source_hash, directory))
-                screen = thumbnail(directory / "midpoint.png", f"perspective={corners[aspect]}:sense=source")
-                mean_error = sum(abs(a - b) for a, b in zip(screen, reference)) / len(reference)
-                if mean_error > 6:
-                    raise ValueError(f"{path}: screen does not match the source midpoint at the {slug} position "
-                                     f"(mean RGB error {mean_error:.1f})")
-        under_target = sum(size < 10_000_000 for size in sizes)
-        if under_target <= len(sizes) // 2:
-            raise ValueError(f"Only {under_target} of {len(sizes)} videos are below 10 MB")
-        contact_sheet(samples, args.sheet_file, frame_counts, fps)
-        print(f"Verified {len(sizes)} videos. {under_target} below 10 MB. Largest {max(sizes) / 1_000_000:.3f} MB.")
-
-
-if __name__ == "__main__":
-    main()

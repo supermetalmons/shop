@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "source_sha256": "7d956f9deaaf6fc4d218b06e512bde360025c5c3191c1b2477cefaeff213a75a",
+    "alignment_radians": -0.5153599
+  },
+  {
+    "id": 2,
+    "source_sha256": "ce895d06a690b545585c29d003e5283c8c66cd6b833c5ebd3f9aef0158cbeca3",
+    "alignment_radians": -0.021385517
+  },
+  {
+    "id": 3,
+    "source_sha256": "0829f870c5c6874f7b623e8b478d4914b9a329d2b61f14d47cec8493117b47cd",
+    "alignment_radians": -0.5153599
+  },
+  {
+    "id": 4,
+    "source_sha256": "4637a3845f3a0955b370ff55a4a743badda04d6d42501b15c8cda4792760b09c",
+    "alignment_radians": -0.5153599
+  }
+]
