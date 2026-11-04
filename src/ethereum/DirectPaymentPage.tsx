@@ -45,7 +45,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   useEffect(() => { if (approved && choosing) firstWallet.current?.focus(); }, [approved, choosing, wallet.wallets.length]);
   const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => reserveButton.current?.focus()); };
 
-  const artwork = <img className="relic-page__artwork" src="https://wip.lil.org/111k/artwork_placeholder.png" width={932} height={1006} alt="Artwork" draggable={false} />;
+  const artwork = <img className="relic-page__artwork" src="/images/111k-relics.webp" width={1448} height={1086} alt="111K relics on display in a warehouse" draggable={false} />;
   const reserveLabel = model.stage ?? (soldOut ? 'Preorders ended' : null);
   const reserve = <button ref={reserveButton} type="button"
     className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
