@@ -1,4 +1,5 @@
 import argparse
+import filecmp
 import hashlib
 import json
 import os
@@ -43,19 +44,19 @@ VARIANTS = [
 ]
 
 
-def prepare_sources(directory, collection):
+def prepare_sources(directory, collection, hashes, extension):
     directory.mkdir(parents=True, exist_ok=True)
-    for clip, digest in SOURCE_HASHES[collection].items():
-        path = directory / f"{clip}.mp4"
-        if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == digest:
+    for clip, digest in hashes.items():
+        path = directory / f"{clip}.{extension}"
+        if path.is_file() and (digest is None or hashlib.sha256(path.read_bytes()).hexdigest() == digest):
             continue
         with tempfile.TemporaryDirectory(dir=directory) as temporary:
             incoming = Path(temporary) / path.name
-            url = f"https://wip.lil.org/111k/{collection}/{clip}.mp4"
+            url = f"https://wip.lil.org/111k/{collection}/{path.name}"
             subprocess.run(["curl", "-fsSL", "--retry", "2", "--max-time", "120",
                             "--output", incoming, url], check=True)
-            if hashlib.sha256(incoming.read_bytes()).hexdigest() != digest:
-                raise ValueError(f"Clip {clip} differs from the source used in this study: {url}")
+            if digest is not None and hashlib.sha256(incoming.read_bytes()).hexdigest() != digest:
+                raise ValueError(f"Downloaded file differs from the pinned source: {url}")
             incoming.replace(path)
 
 
@@ -86,7 +87,7 @@ def reviewed_aspects(source_dir, collection):
     return aspects
 
 
-def publish(videos, output):
+def publish(videos, output, *, files=None):
     output.mkdir(parents=True, exist_ok=True)
     with ExitStack() as resources:
         directory_fd = os.open(output, os.O_RDONLY)
@@ -96,9 +97,11 @@ def publish(videos, output):
         resources.callback(signal.pthread_sigmask, signal.SIG_SETMASK, previous)
         staging = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix=".publish-", dir=output)))
         incoming = staging / "incoming"
+        if files is None:
+            files = [p.relative_to(videos) for p in sorted(videos.glob("*/*.mp4"))] + [Path("comparison.png")]
         with ExitStack() as rollback:
-            for source in [*sorted(videos.glob("*/*.mp4")), videos / "comparison.png"]:
-                relative = source.relative_to(videos)
+            for relative in files:
+                source = videos / relative
                 target = output / relative
                 if target.parent.is_symlink():
                     raise ValueError(f"Expected a regular output directory: {target.parent}")
@@ -108,6 +111,8 @@ def publish(videos, output):
                 if target.is_symlink() or (target.exists() and not target.is_file()):
                     raise ValueError(f"Expected a regular output file: {target}")
                 if target.exists():
+                    if filecmp.cmp(source, target, shallow=False):
+                        continue
                     saved = staging / relative
                     saved.parent.mkdir(exist_ok=True)
                     shutil.copy2(target, saved)
@@ -120,13 +125,17 @@ def publish(videos, output):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Render both bamboo frames for a sample collection.")
-    parser.add_argument("--collection", choices=SOURCE_HASHES, default="videos")
+    selector = argparse.ArgumentParser(add_help=False)
+    selector.add_argument("--collection", choices=[*SOURCE_HASHES, "knives"], default="videos")
+    options, remaining = selector.parse_known_args()
+    if options.collection == "knives":
+        os.execv(sys.executable, [sys.executable, str(SCRIPTS / "knives" / "run.py"), *remaining])
+    parser = argparse.ArgumentParser(parents=[selector], description="Render a framed video collection.")
     collection = parser.parse_args().collection
     subdir = Path() if collection == "videos" else Path(collection)
     source_dir = CACHE / subdir / "sources"
     output = OUTPUT / subdir
-    prepare_sources(source_dir, collection)
+    prepare_sources(source_dir, collection, SOURCE_HASHES[collection], "mp4")
     aspects = reviewed_aspects(source_dir, collection)
     blender = os.environ.get("BLENDER_BIN") or shutil.which("blender") or "/Applications/Blender.app/Contents/MacOS/Blender"
     with tempfile.TemporaryDirectory(prefix="batch-", dir=CACHE) as temporary:

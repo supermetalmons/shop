@@ -12,7 +12,7 @@ Use the animated collection for clips 3, 27, and 102.
 npm run render:video-frames -- --collection animated
 ```
 
-Each run writes six 1440 × 1440 MP4s on white and a midpoint comparison sheet.
+Each of these collections writes six 1440 × 1440 MP4s on white and a midpoint comparison sheet.
 The original 16:9 clips retain their 24 fps timing and AAC audio in
 `output/video-frames/`. The 932 × 1006 animated clips retain all 360 frames
 at 60 fps and have no audio track. Their outputs go in `output/video-frames/animated/`.
@@ -42,3 +42,5 @@ r3222, and rsvg-convert 2.62.3 on macOS 27.2. Set `BLENDER_BIN` if Blender
 is outside its default macOS app path and not on PATH.
 
 MP4 bytes can vary slightly between renders on the reference hardware.
+
+For 111k knife models, use the [approved Dark Halo Soft Strip renderer](knives/README.md).

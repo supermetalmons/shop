@@ -99,10 +99,13 @@ def rounded_rect(width, height, radius, depth):
     return vertices
 
 
-def frame(location, slug, wood, lip, aspect=ASPECT):
+def display_size(aspect):
     # The original 16:9 display is one unit high. Keep its long edge for every orientation.
-    front_w = ASPECT * min(aspect, 1)
-    front_h = ASPECT / max(aspect, 1)
+    return ASPECT * min(aspect, 1), ASPECT / max(aspect, 1)
+
+
+def frame(location, slug, wood, lip, aspect=ASPECT):
+    front_w, front_h = display_size(aspect)
     outer = (front_w + 0.2, front_h + 0.2)
     scale = 1.2 / 1.36 if slug == '01-wide-border' else 1
     screen_w, screen_h = front_w * scale, front_h * scale
@@ -249,7 +252,7 @@ def write_screen_mask(path, outline):
                      chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
 
 
-def render_variant(path, slug, aspect=ASPECT):
+def render_variant(path, slug, aspect=ASPECT, frame_builder=None):
     scene = setup_scene()
     lip = bpy.data.materials.new('Graphite display gasket')
     lip.diffuse_color = (0.012, 0.014, 0.016, 1)
@@ -264,7 +267,10 @@ def render_variant(path, slug, aspect=ASPECT):
     scene.camera = camera
     basis = camera.rotation_euler.to_quaternion()
     location = (basis @ Vector((0, 1, 0))) * 0.03
-    obj, screen_points = frame(location, slug, bamboo_material(), lip, aspect)
+    if frame_builder is None:
+        obj, screen_points = frame(location, slug, bamboo_material(), lip, aspect)
+    else:
+        obj, screen_points = frame_builder(location, lip, *display_size(aspect))
     bpy.context.view_layer.update()
     shadow_sweep(scene, obj)
     path.mkdir(exist_ok=True, parents=True)

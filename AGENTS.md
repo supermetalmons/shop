@@ -8,3 +8,9 @@ with the requested painting IDs or local images. This is the sole approved look:
 35% photographic weave, the saved folded geometry, and the fixed Blender setup.
 Keep all rendering headless. Do not recreate variants or change the preset unless
 the user explicitly requests a new appearance. Use `--verify` to check reproduction.
+
+## Knife model rendering
+
+Use the Dark Halo Soft Strip preset for framed knife models. Run
+`npm run render:knives` with 111k IDs or compatible local GLBs as described in
+`scripts/video-frames/knives/README.md`. Use `--verify` to reproduce and check the four approved loops.
