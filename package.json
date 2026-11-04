@@ -28,6 +28,7 @@
     "render:canvases": "node scripts/painting-canvas/render.mjs",
     "render:canvases:urls": "node scripts/painting-canvas/render-urls.mjs",
     "render:eggs": "node scripts/egg-render/render.mjs",
+    "render:video-frames": "python3 scripts/video-frames/render.py",
     "test:mi-note-videos": "node scripts/mi-note-video/test.mjs",
     "build": "vite build",
     "validate:browser-bundle": "node --env-file-if-exists=cloud/workers/frontend/.env.bundle-scan --experimental-strip-types scripts/validate-browser-bundle.ts",

@@ -17,6 +17,7 @@ dist/
 .cache/
 /output/canvas/
 /output/eggs/
+/output/video-frames/
 .wrangler/
 renderer-samples/
 scripts/collection-files/
