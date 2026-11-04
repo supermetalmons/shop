@@ -37,6 +37,9 @@ embedded PNG or JPEG base-color, normal, and metallic-roughness textures, defaul
 factors, repeat wrapping, and linear mipmap filtering. Bake any animation,
 skin, morph targets, or glTF extensions before export. The preset uses the
 authored texture color and opaque or blended alpha, including the translucent M9 blade.
+Blended models use per-pose triangle depth sorting. Subdivide large overlapping
+surfaces when their centroid depths do not represent the visible order. The four
+hash-matched reference assets retain their approved alignment and rendering.
 
 ## Reproduce the approved result
 

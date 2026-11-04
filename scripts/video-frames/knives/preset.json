@@ -17,21 +17,25 @@
   "samples": [
     {
       "id": 1,
+      "alignment_radians": -0.5153599,
       "source_sha256": "7d956f9deaaf6fc4d218b06e512bde360025c5c3191c1b2477cefaeff213a75a",
       "output_sha256": "1810adb1ab5c737875a4102e21d3945317b1cf64c5d9a97706bc811badda6e71"
     },
     {
       "id": 2,
+      "alignment_radians": -0.021385517,
       "source_sha256": "ce895d06a690b545585c29d003e5283c8c66cd6b833c5ebd3f9aef0158cbeca3",
       "output_sha256": "07685e6714a25173dd0ec6563bc4e0bd8e2f2a424510cd882ca85154a23feee6"
     },
     {
       "id": 3,
+      "alignment_radians": -0.5153599,
       "source_sha256": "0829f870c5c6874f7b623e8b478d4914b9a329d2b61f14d47cec8493117b47cd",
       "output_sha256": "644ed168d7b050242b57be0c5c196678b9111c08c658470006f65597d8985dae"
     },
     {
       "id": 4,
+      "alignment_radians": -0.5153599,
       "source_sha256": "4637a3845f3a0955b370ff55a4a743badda04d6d42501b15c8cda4792760b09c",
       "output_sha256": "79b6a30162f29b2ebda7646efa4de686bd0bd05ee80af00cdc0317867151384a"
     }

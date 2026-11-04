@@ -65,7 +65,7 @@ def source_files(args, samples, publishing_approved):
     return [directory / f"{i}.glb" for i in ids]
 
 
-def render_movie(renderer, model, output, frame):
+def render_movie(renderer, model, output, frame, approved_angle):
     corners, = json.loads(frame["corners"].read_text())
     filters = [
         "[1:v]scale=out_color_matrix=bt709:out_range=tv,format=yuv444p,"
@@ -84,7 +84,10 @@ def render_movie(renderer, model, output, frame):
         "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709",
         "-color_trc", "iec61966-2-1", "-movflags", "+faststart", output,
     ]
-    with subprocess.Popen([renderer, model, HERE / "Knife.metal"], stdout=subprocess.PIPE) as gpu:
+    gpu_command = [renderer, model, HERE / "Knife.metal"]
+    if approved_angle is not None:
+        gpu_command.append(str(approved_angle))
+    with subprocess.Popen(gpu_command, stdout=subprocess.PIPE) as gpu:
         try:
             result = subprocess.run(command, stdin=gpu.stdout)
         finally:
@@ -109,6 +112,7 @@ def main():
 
     preset = json.loads((HERE / "preset.json").read_text())
     samples = {str(s["id"]): s for s in preset["samples"]}
+    approved_angles = {s["source_sha256"]: s["alignment_radians"] for s in samples.values()}
     approved = (OUTPUT / "knives" / preset["name"]).resolve()
     destination = args.output.resolve() if args.output else approved
     publishing_approved = destination == approved or (
@@ -124,7 +128,7 @@ def main():
         for model in sources:
             output = stage / (model.stem + ".mp4")
             print(f"Rendering {model.name}", flush=True)
-            render_movie(renderer, model, output, frame)
+            render_movie(renderer, model, output, frame, approved_angles.get(sha256(model)))
             with tempfile.TemporaryDirectory(dir=stage) as proof:
                 check_movie(output, 300, 60, "iec61966-2-1", None, None, Path(proof))
             files.append(Path(output.name))

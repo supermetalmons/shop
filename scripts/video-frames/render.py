@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -44,19 +45,35 @@ VARIANTS = [
 ]
 
 
+def valid_source(path, digest):
+    if digest is not None:
+        return hashlib.sha256(path.read_bytes()).hexdigest() == digest
+    with path.open("rb") as source:
+        size = os.fstat(source.fileno()).st_size
+        header = source.read(20)
+        if len(header) != 20:
+            return False
+        magic, version, length, json_length, kind = struct.unpack("<4sIII4s", header)
+        if (magic, version, length, kind) != (b"glTF", 2, size, b"JSON") or not 0 < json_length <= size - 28:
+            return False
+        source.seek(json_length, os.SEEK_CUR)
+        return source.read(8) == struct.pack("<I4s", size - 28 - json_length, b"BIN\0")
+
+
 def prepare_sources(directory, collection, hashes, extension):
     directory.mkdir(parents=True, exist_ok=True)
     for clip, digest in hashes.items():
         path = directory / f"{clip}.{extension}"
-        if path.is_file() and (digest is None or hashlib.sha256(path.read_bytes()).hexdigest() == digest):
+        if path.is_file() and valid_source(path, digest):
             continue
         with tempfile.TemporaryDirectory(dir=directory) as temporary:
             incoming = Path(temporary) / path.name
             url = f"https://wip.lil.org/111k/{collection}/{path.name}"
             subprocess.run(["curl", "-fsSL", "--retry", "2", "--max-time", "120",
                             "--output", incoming, url], check=True)
-            if digest is not None and hashlib.sha256(incoming.read_bytes()).hexdigest() != digest:
-                raise ValueError(f"Downloaded file differs from the pinned source: {url}")
+            if not valid_source(incoming, digest):
+                reason = "SHA-256 mismatch" if digest is not None else "invalid GLB container"
+                raise ValueError(f"{url}: {reason}")
             incoming.replace(path)
 
 

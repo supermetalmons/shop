@@ -100,13 +100,40 @@ struct Vertex {
     var position, normal, tangent, texcoord: V4
 }
 
+private func projectedAxis(_ positions: [V4], _ indices: [UInt32]) throws -> Float {
+    func xy(_ index: Int) -> SIMD2<Double> {
+        let p = positions[Int(indices[index])]
+        return SIMD2(Double(p.x), Double(p.y))
+    }
+    func moments(_ p: SIMD2<Double>) -> SIMD3<Double> {
+        SIMD3(p.x * p.x, p.y * p.y, p.x * p.y)
+    }
+    var mass = 0.0, centroid = SIMD2<Double>.zero, second = SIMD3<Double>.zero
+    for i in stride(from: 0, to: indices.count, by: 3) {
+        let a = xy(i), b = xy(i + 1), c = xy(i + 2)
+        let weight = abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x))
+        let sum = a + b + c
+        mass += weight
+        centroid += weight * sum / 3
+        // Integrate the second moments over the projected triangle, including its area about its centroid.
+        second += weight * (moments(sum) + moments(a) + moments(b) + moments(c)) / 12
+    }
+    guard mass > 0, mass.isFinite else { throw RenderError("Expected geometry with a nonzero XY projection") }
+    let covariance = second / mass - moments(centroid / mass)
+    let tolerance = 1e-12 * (covariance.x + covariance.y)
+    if abs(covariance.z) <= tolerance {
+        return covariance.y > covariance.x + tolerance ? .pi / 2 : 0
+    }
+    return Float(0.5 * atan2(2 * covariance.z, covariance.x - covariance.y))
+}
+
 struct Model {
     let vertices: [Vertex]
     let indices: [UInt32]
     let textures: [MTLTexture]
     let alphaBlend, doubleSided: Bool
 
-    init(url: URL, device: MTLDevice) throws {
+    init(url: URL, device: MTLDevice, approvedAxis: Float?) throws {
         let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
         func word(_ offset: Int) -> Int {
             bytes.withUnsafeBytes { Int($0.loadUnaligned(fromByteOffset: offset, as: UInt32.self)) }
@@ -197,6 +224,7 @@ struct Model {
                 throw RenderError("Expected unsigned triangle indices")
             }
             let (start, stride) = try layout(a, bytesPerElement: size)
+            var vertexIDs = [UInt32?](repeating: nil, count: part.count)
             try bytes.withUnsafeBytes { raw in
                 for i in 0..<a.count {
                     let offset = start + i * stride
@@ -207,18 +235,27 @@ struct Model {
                     default: index = Int(raw.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
                     }
                     guard index < part.count else { throw RenderError("Triangle index lies outside its primitive") }
-                    combinedIndices.append(UInt32(positions.count + index))
+                    if let id = vertexIDs[index] {
+                        combinedIndices.append(id)
+                    } else {
+                        let id = UInt32(positions.count)
+                        positions.append(part[index])
+                        normals.append(ns[index])
+                        uv.append(uvs[index])
+                        vertexIDs[index] = id
+                        combinedIndices.append(id)
+                    }
                 }
             }
-            positions += part; normals += ns; uv += uvs
         }
         indices = combinedIndices
+        if approvedAxis == nil {
+            let anchor = positions[0]
+            for i in positions.indices { positions[i] -= anchor }
+        }
 
         var tangents = Array(repeating: V3.zero, count: positions.count)
         var bitangents = tangents
-        var centroid = V3.zero
-        var projectedArea: Float = 0
-        var secondMoment = V3.zero
         for i in stride(from: 0, to: indices.count, by: 3) {
             let a = Int(indices[i]), b = Int(indices[i + 1]), c = Int(indices[i + 2])
             let p0 = positions[a].xyz, p1 = positions[b].xyz, p2 = positions[c].xyz
@@ -230,17 +267,8 @@ struct Model {
                 let bt = (e2 * d1.x - e1 * d2.x) / det
                 for j in [a, b, c] { tangents[j] += t; bitangents[j] += bt }
             }
-            let area = abs(simd_cross(e1, e2).z)
-            let midpoint = (p0 + p1 + p2) / 3
-            centroid += area * midpoint
-            projectedArea += area
-            secondMoment += area * V3(midpoint.x * midpoint.x, midpoint.y * midpoint.y, midpoint.x * midpoint.y)
         }
-        guard projectedArea > 0, projectedArea.isFinite else { throw RenderError("Expected geometry with a nonzero XY projection") }
-        centroid /= projectedArea
-        secondMoment /= projectedArea
-        let covariance = secondMoment - V3(centroid.x * centroid.x, centroid.y * centroid.y, centroid.x * centroid.y)
-        let axis = 0.5 * atan2(2 * covariance.z, covariance.x - covariance.y)
+        let axis = try approvedAxis ?? projectedAxis(positions, indices)
         let align = simd_quatf(angle: -axis, axis: V3(0, 0, 1))
         let aligned = positions.map { align.act($0.xyz) }
         let low = aligned.reduce(V3(repeating: .infinity), simd_min)
@@ -289,6 +317,18 @@ struct Uniforms {
     var framing, treatment: V4
 }
 
+func backToFrontIndices(_ model: Model, _ rotation: simd_float4x4) -> [UInt32] {
+    let viewZ = V3(rotation.columns.0.z, rotation.columns.1.z, rotation.columns.2.z)
+    let indices = model.indices
+    let triangles = stride(from: 0, to: indices.count, by: 3).map { i in
+        let a = model.vertices[Int(indices[i])].position.xyz
+        let b = model.vertices[Int(indices[i + 1])].position.xyz
+        let c = model.vertices[Int(indices[i + 2])].position.xyz
+        return (start: i, depth: simd_dot(a + b + c, viewZ))
+    }.sorted { $0.depth < $1.depth }
+    return triangles.flatMap { indices[$0.start..<$0.start + 3] }
+}
+
 func orbit(frame: Int) -> simd_float4x4 {
     let phase = 2 * Float.pi * Float(frame) / 300
     let radians = Float.pi / 180
@@ -303,11 +343,13 @@ func orbit(frame: Int) -> simd_float4x4 {
 
 func run() throws {
     let args = CommandLine.arguments
-    guard args.count == 3 else { throw RenderError("Usage: MetalRenderer MODEL.glb SHADER.metal") }
+    guard args.count == 3 || args.count == 4 else { throw RenderError("Usage: MetalRenderer MODEL.glb SHADER.metal [APPROVED_AXIS]") }
+    let approvedAxis = args.count == 4 ? Float(args[3]) : nil
+    guard args.count == 3 || approvedAxis?.isFinite == true else { throw RenderError("Invalid approved alignment angle") }
     let width = 1056, height = 704
     let aspect = Float(width) / Float(height)
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw RenderError("Metal unavailable") }
-    let model = try Model(url: URL(fileURLWithPath: args[1]), device: device)
+    let model = try Model(url: URL(fileURLWithPath: args[1]), device: device, approvedAxis: approvedAxis)
     let shader = args[2]
     let library = try device.makeLibrary(source: String(contentsOfFile: shader, encoding: .utf8), options: nil)
     let pipeline = MTLRenderPipelineDescriptor()
@@ -389,22 +431,29 @@ func run() throws {
             encoder.setVertexBytes(&params, length: MemoryLayout<Uniforms>.stride, index: 1)
             encoder.setFragmentBytes(&params, length: MemoryLayout<Uniforms>.stride, index: 1)
             for (i, map) in model.textures.enumerated() { encoder.setFragmentTexture(map, index: i) }
-            func draw() {
-                encoder.drawIndexedPrimitives(type: .triangle, indexCount: model.indices.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: 0)
+            func draw(_ buffer: MTLBuffer) {
+                encoder.drawIndexedPrimitives(type: .triangle, indexCount: model.indices.count, indexType: .uint32, indexBuffer: buffer, indexBufferOffset: 0)
             }
             encoder.setFrontFacing(.counterClockwise)
             if !model.doubleSided { encoder.setCullMode(.back) }
-            draw()
+            draw(indexBuffer)
             if model.alphaBlend {
                 params.treatment.w = 1
                 encoder.setFragmentBytes(&params, length: MemoryLayout<Uniforms>.stride, index: 1)
                 encoder.setDepthStencilState(translucentDepth)
-                if model.doubleSided {
+                if approvedAxis != nil {
+                    // Preserve the pinned M9's two-pass blend for byte-identical exports.
                     encoder.setCullMode(.front)
-                    draw()
+                    draw(indexBuffer)
+                    encoder.setCullMode(.back)
+                    draw(indexBuffer)
+                } else {
+                    let sorted = backToFrontIndices(model, params.rotation)
+                    guard let buffer = device.makeBuffer(bytes: sorted, length: indexBuffer.length) else {
+                        throw RenderError("Could not allocate translucent index buffer")
+                    }
+                    draw(buffer)
                 }
-                encoder.setCullMode(.back)
-                draw()
             }
             encoder.endEncoding()
             commands.commit()
