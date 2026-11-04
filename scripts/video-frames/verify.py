@@ -6,19 +6,9 @@ import tempfile
 from fractions import Fraction
 from pathlib import Path
 
-from render import SOURCE_HASHES, display_aspect
+from encode import BT709_TO_SRGB
+from render import SOURCE_HASHES, VARIANTS, reviewed_aspects
 
-# Reviewed screen corners (TL, TR, BL, BR) in the 424px midpoint images.
-VARIANTS = [
-    ("01-wide-border", "Wide bamboo border", {
-        Fraction(16, 9): "77.4:134.1:345.6:124.1:77.4:288.8:345.6:278.8",
-        Fraction(466, 503): "87.3:73.6:335.7:64.3:87.3:348.5:335.7:339.3",
-    }),
-    ("02-front", "Bamboo front", {
-        Fraction(16, 9): "60:121.4:364:121.4:60:292.4:364:292.4",
-        Fraction(466, 503): "71.2:54.9:352.8:54.9:71.2:358.8:352.8:358.8",
-    }),
-]
 FFMPEG = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror"]
 
 
@@ -61,6 +51,13 @@ def audio_hash(path):
     return result.stdout
 
 
+def midpoint_filter(frame_count, transfer):
+    select = f"select=eq(n\\,{frame_count // 2})"
+    if transfer == "bt709":
+        return select + "," + BT709_TO_SRGB
+    return select
+
+
 def check_movie(path, frame_count, fps, transfer, source_audio, source_hash, samples):
     size = path.stat().st_size
     if size > 15_000_000 or not fast_start(path):
@@ -90,7 +87,7 @@ def check_movie(path, frame_count, fps, transfer, source_audio, source_hash, sam
         *FFMPEG, "-i", path, "-stats_enc_pre", "pipe:1", "-stats_enc_pre_fmt", "{ptsi} {tbi}",
         "-map", "0:v:0", "-fps_mode", "passthrough", "-f", "null", "-",
         *audio_output,
-        "-map", "0:v:0", "-vf", f"select=eq(n\\,{frame_count // 2}),scale=424:424:flags=lanczos+accurate_rnd+full_chroma_int",
+        "-map", "0:v:0", "-vf", midpoint_filter(frame_count, transfer) + ",scale=424:424:flags=lanczos+accurate_rnd+full_chroma_int",
         "-fps_mode", "passthrough", "-threads:v", "1", "-update", "1", samples / "midpoint.png",
     ], check=True, stdout=subprocess.PIPE, text=True)
     timestamps = result.stdout.splitlines()
@@ -171,17 +168,16 @@ def main():
     fps = 60 if args.collection == "animated" else 24
     with tempfile.TemporaryDirectory(prefix="video-frame-proof-") as temporary:
         samples = Path(temporary)
-        for clip in SOURCE_HASHES[args.collection]:
+        for clip, aspect in reviewed_aspects(args.source_dir, args.collection).items():
             source = args.source_dir / f"{clip}.mp4"
             original = streams(source)
-            aspect = display_aspect(source)
             count = int(original["video"]["nb_frames"])
             if count < 1 or Fraction(original["video"]["avg_frame_rate"]) != fps:
                 raise ValueError(f"{source}: expected a nonempty {fps} fps clip")
             frame_counts[clip] = count
             transfer = "iec61966-2-1" if original["video"].get("color_transfer") == "iec61966-2-1" else "bt709"
             source_hash = audio_hash(source) if "audio" in original else None
-            reference = thumbnail(source, f"select=eq(n\\,{count // 2})")
+            reference = thumbnail(source, midpoint_filter(count, transfer))
             for slug, _, corners in VARIANTS:
                 directory = samples / slug / str(clip)
                 directory.mkdir(parents=True)

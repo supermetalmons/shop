@@ -6,6 +6,9 @@ import tempfile
 from pathlib import Path
 
 
+BT709_TO_SRGB = "colorspace=iall=bt709:all=bt709:trc=srgb:irange=tv:range=tv"
+
+
 def screen_filters(index, corners):
     xs, ys = zip(*corners)
     left = max(0, math.floor(min(xs)) - 2)
@@ -44,9 +47,12 @@ def encode(source, studio, output):
     audio_bits = float(audio["duration"]) * int(audio["bit_rate"]) if audio else 0
     maxrate = int((9_800_000 * 8 - audio_bits) / (duration + 1))
     inputs = ["-i", source, "-framerate", fps, "-i", studio / "plate.png"]
+    plate = "[1:v]scale=out_color_matrix=bt709:out_range=tv,format=yuv444p"
+    if transfer == "iec61966-2-1":
+        # The approved plate values were mastered as BT.709.
+        plate += "," + BT709_TO_SRGB
     filters = [
-        "[1:v]scale=out_color_matrix=bt709:out_range=tv,format=yuv444p,"
-        "loop=loop=-1:size=1:start=0[plate0]",
+        plate + ",loop=loop=-1:size=1:start=0[plate0]",
     ]
     labels = "".join(f"[source{i}]" for i in range(len(screens)))
     filters.append(f"[0:v]split={len(screens)}{labels}")

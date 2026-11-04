@@ -24,14 +24,17 @@ at 60 fps and have no audio track. Their outputs go in `output/video-frames/anim
 
 `studio.py` sizes the screen opening and bamboo enclosure for each display
 aspect ratio. Both presets keep their camera angles, depth, material and lights.
-`encode.py` projects the complete source picture into the opening.
+`encode.py` projects the complete source picture into the opening. For sRGB
+animations it converts the bamboo plate from its approved BT.709 appearance
+to sRGB before compositing. Both comparison sheets use sRGB.
 `render.py` pins the source files by SHA-256 and fetches them from
 `https://wip.lil.org/111k/{collection}/{id}.mp4` using curl. For offline rendering,
 place matching copies named `{id}.mp4` in `.cache/video-frames/sources/` for
 the videos collection or `.cache/video-frames/animated/sources/` for animated.
-`verify.py` checks square pixels, every frame timestamp, audio, format and file
-sizes. It compares each source midpoint with the picture at the reviewed screen
-position for that variant before publication.
+Before Blender starts, the renderer checks that both presets have reviewed
+screen corners for every input aspect ratio. `verify.py` checks square pixels,
+every frame timestamp, audio, format and file sizes. It compares each source
+midpoint with the picture at the reviewed screen position before publication.
 
 The reference setup used Blender 4.5.3 LTS (build `67807e1800cc`, Cycles
 Metal on Apple M1 Max), Python 3.9.6, FFmpeg and ffprobe 8.1.2 with libx264

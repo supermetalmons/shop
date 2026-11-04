@@ -30,6 +30,18 @@ SOURCE_HASHES = {
     },
 }
 
+# Reviewed screen corners (TL, TR, BL, BR) in the 424px midpoint images.
+VARIANTS = [
+    ("01-wide-border", "Wide bamboo border", {
+        Fraction(16, 9): "77.4:134.1:345.6:124.1:77.4:288.8:345.6:278.8",
+        Fraction(466, 503): "87.3:73.6:335.7:64.3:87.3:348.5:335.7:339.3",
+    }),
+    ("02-front", "Bamboo front", {
+        Fraction(16, 9): "60:121.4:364:121.4:60:292.4:364:292.4",
+        Fraction(466, 503): "71.2:54.9:352.8:54.9:71.2:358.8:352.8:358.8",
+    }),
+]
+
 
 def prepare_sources(directory, collection):
     directory.mkdir(parents=True, exist_ok=True)
@@ -59,6 +71,19 @@ def display_aspect(source):
     if any(side.get("rotation", 0) % 180 == 90 for side in video.get("side_data_list", [])):
         return 1 / aspect
     return aspect
+
+
+def reviewed_aspects(source_dir, collection):
+    aspects = {}
+    for clip in SOURCE_HASHES[collection]:
+        source = source_dir / f"{clip}.mp4"
+        aspect = display_aspect(source)
+        for slug, _, corners in VARIANTS:
+            if aspect not in corners:
+                raise ValueError(f"{source}: {slug} needs reviewed screen corners for "
+                                 f"display aspect ratio {aspect.numerator}:{aspect.denominator}")
+        aspects[clip] = aspect
+    return aspects
 
 
 def publish(videos, output):
@@ -102,13 +127,13 @@ def main():
     source_dir = CACHE / subdir / "sources"
     output = OUTPUT / subdir
     prepare_sources(source_dir, collection)
+    aspects = reviewed_aspects(source_dir, collection)
     blender = os.environ.get("BLENDER_BIN") or shutil.which("blender") or "/Applications/Blender.app/Contents/MacOS/Blender"
     with tempfile.TemporaryDirectory(prefix="batch-", dir=CACHE) as temporary:
         batch = Path(temporary)
         videos = batch / "videos"
-        for clip in SOURCE_HASHES[collection]:
+        for clip, aspect in aspects.items():
             source = source_dir / f"{clip}.mp4"
-            aspect = display_aspect(source)
             studio = batch / f"studio-{aspect.numerator}x{aspect.denominator}"
             if not studio.exists():
                 subprocess.run([blender, "-b", "--quiet", "--factory-startup", "--python-exit-code", "1",
