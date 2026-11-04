@@ -16,6 +16,7 @@ dist/
 .vite/
 .cache/
 /output/canvas/
+/output/eggs/
 .wrangler/
 renderer-samples/
 scripts/collection-files/
