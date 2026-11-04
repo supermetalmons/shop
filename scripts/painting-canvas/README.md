@@ -47,6 +47,28 @@ and render sampling remain fixed to the approved setup.
 The ten IDs used when approving this look were
 `1,3,7,79,275,336,1883,12345,64000,85556`.
 
+## Numbered image URLs
+
+Use `{id}` in the URL and supply an inclusive range. This renders paintings 1 through 8888.
+
+```sh
+npm run render:canvases:urls -- \
+  --url-template 'https://cdn.lil.org/nft/111k/paintings/{id}.png' \
+  --first 1 --last 8888 --output output/canvas/111k-8888
+```
+
+The command verifies the reference once, renders 20 images per batch with the
+default WebP settings, and prefetches one batch. Up to four downloads run at a
+time. Each verified `<id>.webp` appears in the output folder, and its downloaded
+source is removed. Prefix the command with `caffeinate -i` to keep a Mac awake.
+
+Run one batch per output folder. To resume, keep `canvas-checkpoint.jsonl` there
+and rerun the same command once the previous renderer exits. The command reclaims
+its temporary downloads and skips files matching the recorded URL and checksum. A conflicting
+output or a missing checkpointed file in the requested range stops the run.
+If you moved IDs 1–8745 elsewhere, rerun with `--first 8746 --last 8888` to
+check and finish only those remaining IDs.
+
 ## Export options
 
 The normal command produces transparent WebP at quality 85, capped at 1400 pixels:
