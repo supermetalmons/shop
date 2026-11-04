@@ -15,10 +15,9 @@ ROOT = SCRIPTS.parents[1]
 CACHE = ROOT / ".cache" / "video-frames"
 OUTPUT = ROOT / "output" / "video-frames"
 SOURCES = {
-    1: "fb56548e8adb18af3c08b86cb0447b001c131ef146abb5fe5085f11aee7ae94c",
-    2: "649e4551af86fe908cb6978d7d0f9620ca1b4af21995831713c3535088993a71",
-    3: "6883fdb5ee0d0a6b09eb15869fc5d32edef5eae6eafded10e2cb9c2248da94a0",
-    4: "b0f4b727c38d3005859f4fb73ad68e55012d4639fb70674f2f280201d4530b66",
+    10: "2c87274bbf432a46cd4b062c9f2b5c8cbbe25c62bb91824e4f086280f372f3c4",
+    11: "259182c66bbf6f092dacffc695a734ab7c4081393617628cb3edc8f3bf7cbaef",
+    12: "3d52f686a7fbe17b2ba207ab22d53917bd3a923ccc1cda560f22d0b4748594ef",
 }
 
 

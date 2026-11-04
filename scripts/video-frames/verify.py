@@ -6,13 +6,13 @@ import tempfile
 from fractions import Fraction
 from pathlib import Path
 
+from render import SOURCES
+
 # Reviewed screen corners (TL, TR, BL, BR) in the 424px midpoint images.
 VARIANTS = [
-    ("01-front", "Bamboo front", "60:121.4:364:121.4:60:292.4:364:292.4"),
-    ("03-wide-border", "Wide bamboo border", "77.4:134.1:345.6:124.1:77.4:288.8:345.6:278.8"),
-    ("04-bamboo-block", "Bamboo block", "96.6:145.1:326.2:133.4:96.6:279.2:326.2:267.5"),
+    ("01-wide-border", "Wide bamboo border", "77.4:134.1:345.6:124.1:77.4:288.8:345.6:278.8"),
+    ("02-front", "Bamboo front", "60:121.4:364:121.4:60:292.4:364:292.4"),
 ]
-FRAME_COUNTS = [121, 241, 145, 121]
 FFMPEG = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror"]
 
 
@@ -106,10 +106,10 @@ def thumbnail(path, picture_filter):
     return pixels
 
 
-def contact_sheet(samples, destination):
+def contact_sheet(samples, destination, frame_counts):
     left, top, cell, gap = 174, 212, 424, 12
     width = left + len(VARIANTS) * (cell + gap) + 40
-    height = top + len(FRAME_COUNTS) * (cell + gap) + 32
+    height = top + len(frame_counts) * (cell + gap) + 32
     right = width - 52
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{width}" height="{height}">',
@@ -126,13 +126,13 @@ def contact_sheet(samples, destination):
             f'<text x="{x}" y="190" class="minor">{col + 1:02}</text>',
             f'<text x="{x + 42}" y="191" font-size="25">{label}</text>',
         ]
-    for row, count in enumerate(FRAME_COUNTS):
+    for row, (clip, count) in enumerate(frame_counts.items()):
         y = top + row * (cell + gap)
         frame = count // 2
         svg += [
             f'<path d="M52 {y} H{right}" stroke="#d8d5cd"/>',
             f'<text x="52" y="{y + 50}" class="minor">CLIP</text>',
-            f'<text x="50" y="{y + 102}" style="font-family:Georgia,serif;font-size:45px">{row + 1:02}</text>',
+            f'<text x="50" y="{y + 102}" style="font-family:Georgia,serif;font-size:45px">{clip:02}</text>',
             f'<text x="52" y="{y + 147}" font-size="17">Midpoint</text>',
             f'<text x="52" y="{y + 172}" class="minor">{frame / 24:.2f} s</text>',
         ]
@@ -140,7 +140,7 @@ def contact_sheet(samples, destination):
             x = left + col * (cell + gap)
             svg.append(
                 f'<image x="{x}" y="{y + 3}" width="{cell}" height="{cell}" '
-                f'xlink:href="{slug}/{row + 1}/midpoint.png"/>'
+                f'xlink:href="{slug}/{clip}/midpoint.png"/>'
             )
     layout = samples / "sheet.svg"
     layout.write_text("\n".join([*svg, "</svg>"]), encoding="utf8")
@@ -155,13 +155,16 @@ def main():
     parser.add_argument("sheet_file", type=Path)
     args = parser.parse_args()
     sizes = []
+    frame_counts = {}
     with tempfile.TemporaryDirectory(prefix="video-frame-proof-") as temporary:
         samples = Path(temporary)
-        for clip, count in enumerate(FRAME_COUNTS, 1):
+        for clip in SOURCES:
             source = args.source_dir / f"{clip}.mp4"
             original = streams(source)
-            if int(original["video"]["nb_frames"]) != count or Fraction(original["video"]["avg_frame_rate"]) != 24:
-                raise ValueError(f"{source}: source frame count or rate differs from the study")
+            count = int(original["video"]["nb_frames"])
+            if count < 1 or Fraction(original["video"]["avg_frame_rate"]) != 24:
+                raise ValueError(f"{source}: expected a nonempty 24 fps clip")
+            frame_counts[clip] = count
             source_hash = audio_hash(source)
             reference = thumbnail(source, f"select=eq(n\\,{count // 2})")
             for slug, _, corners in VARIANTS:
@@ -177,7 +180,7 @@ def main():
         under_target = sum(size < 10_000_000 for size in sizes)
         if under_target <= len(sizes) // 2:
             raise ValueError(f"Only {under_target} of {len(sizes)} videos are below 10 MB")
-        contact_sheet(samples, args.sheet_file)
+        contact_sheet(samples, args.sheet_file, frame_counts)
         print(f"Verified {len(sizes)} videos. {under_target} below 10 MB. Largest {max(sizes) / 1_000_000:.3f} MB.")
 
 

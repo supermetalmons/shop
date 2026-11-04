@@ -13,7 +13,7 @@ from mathutils import Vector
 
 SIZE = 1440
 ASPECT = 16 / 9
-CAMERA_ANGLES = {'01-front': (0, 0), '03-wide-border': (15, 8), '04-bamboo-block': (18, 9)}
+CAMERA_ANGLES = {'01-wide-border': (15, 8), '02-front': (0, 0)}
 
 
 def bamboo_material():
@@ -101,41 +101,23 @@ def rounded_rect(width, height, radius, depth):
 
 def frame(location, slug, wood, lip):
     width, height = ASPECT + 0.2, 1.2
-    block = slug == '04-bamboo-block'
-    if block:
-        border = 0.42
-        screen_h = width / (ASPECT + 2 * border)
-        height = screen_h * (1 + 2 * border)
-    else:
-        border = 0.18 if slug == '03-wide-border' else 0.10
-        screen_h = height / (1 + 2 * border)
+    border = 0.18 if slug == '01-wide-border' else 0.10
+    screen_h = height / (1 + 2 * border)
     screen_w = screen_h * ASPECT
     outer = (width, height)
     screen = (screen_w, screen_h)
-    if block:
-        outer_profile = [
-            (outer, -0.006, 0.002, 0.255),
-            (outer, -0.002, 0.004, 0.254),
-            (outer, 0, 0.005, 0.252),
-            (outer, 0, 0.005, 0.003),
-            (outer, -0.002, 0.004, 0.001),
-            (outer, -0.006, 0.002, 0),
-        ]
-    else:
-        outer_profile = [
-            (outer, -0.012, 0.010, 0.154),
-            (outer, -0.003, 0.016, 0.151),
-            (outer, 0, 0.018, 0.147),
-            (outer, 0, 0.018, 0.008),
-            (outer, -0.003, 0.016, 0.003),
-            (outer, -0.012, 0.011, 0),
-        ]
     recess = 0.011
-    profiles = outer_profile + [
-        (screen, 0.015 if block else 0.030, 0.018, 0),
-        (screen, 0.010 if block else 0.022, 0.014, 0.002),
-        (screen, 0.006 if block else 0.016, 0.011, recess - 0.005),
-        (screen, 0.006 if block else 0.016, 0.011, recess - 0.001),
+    profiles = [
+        (outer, -0.012, 0.010, 0.154),
+        (outer, -0.003, 0.016, 0.151),
+        (outer, 0, 0.018, 0.147),
+        (outer, 0, 0.018, 0.008),
+        (outer, -0.003, 0.016, 0.003),
+        (outer, -0.012, 0.011, 0),
+        (screen, 0.030, 0.018, 0),
+        (screen, 0.022, 0.014, 0.002),
+        (screen, 0.016, 0.011, recess - 0.005),
+        (screen, 0.016, 0.011, recess - 0.001),
         (screen, 0.000, 0.005, recess),
     ]
     vertices, polygons = [], []
