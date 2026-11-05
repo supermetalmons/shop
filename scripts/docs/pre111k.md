@@ -53,6 +53,8 @@ the server allowlist. Missing or invalid codes return `401 unauthenticated`;
 missing or invalid server configuration returns `503 unavailable`. No code is
 returned in API responses or sent to the chain. Status and confirmation do not
 require a code, so submitted reservations remain recoverable.
+Confirmation uses the deployed contract and canonical receipt. It remains available
+if sales are paused or the current reservation price is missing or malformed.
 No wallet login signature is required: authorization is bound to `msg.sender`.
 The backend chooses the contract and price; callers cannot override them.
 

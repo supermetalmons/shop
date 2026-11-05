@@ -334,14 +334,21 @@ test('pre111k only accepts canonical uint256 decimal strings as quote prices', (
   }
 });
 
-test('pre111k refuses to quote with a missing or malformed configured price', async () => {
+test('pre111k confirms mined reservations while a missing or malformed price blocks status and new quotes', async () => {
   for (const value of [undefined, '', '-1', '1.5', '01', (1n << 256n).toString()]) {
     const f = fixture();
+    const quote = await f.mined();
+    f.state.calls.length = 0;
     if (value === undefined) Reflect.deleteProperty(f.env, 'ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI');
     else f.env.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI = value;
-    const result = await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE });
-    assert.equal(result.response.status, 503);
+    const status = await f.call(`${PRE111K_API_PATHS.status}?network=devnet`);
+    const prepare = await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE });
+    assert.equal(status.response.status, 503);
+    assert.equal(prepare.response.status, 503);
     assert.equal(f.state.calls.length, 0);
+    const confirmation = await f.confirm();
+    assert.equal(confirmation.response.status, 200);
+    assert.deepEqual(confirmation.body, { status: 'confirmed', confirmations: 3, transactionHash: HASH, reservationNonce: quote.nonce });
   }
 });
 

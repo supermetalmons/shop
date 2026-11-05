@@ -21,3 +21,5 @@ Simulated calls at the deployment block accepted quotes for 2.3 ETH, 1 ETH and z
 After v1 admission closed and outstanding quotes expired, mainnet v1 had zero reservations and zero balance at block 26,348,331. [Mainnet v1 deployment](../pre111k-mainnet-v1/deployment.json)
 
 The [live storefront](https://mons.shop/111k/relics) showed `17 / 18 left` at activation and a reservation price of 2.3 ETH. A simulated call with an authorization issued by the live Worker succeeded at that price and reverted when the value increased by one wei. [Worker cutover](application-release.json) · [Live authorization](live-acceptance.json) · [Browser acceptance](browser-acceptance.json)
+
+The shared API Worker subsequently gained price-independent receipt confirmation. [Worker version and live verification](../pre111k-sepolia-v2/README.md#receipt-confirmation-update)

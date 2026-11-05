@@ -3,8 +3,8 @@ import { decodeReturn, encodeCall } from '../../../../shared/ethereum/abi.js';
 import { ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.js';
 import {
   PRE111K_API_PATHS, PRE111K_AUTHORIZATION_TTL_SECONDS, PRE111K_MAX_RELICS,
-  encodePre111kReservation, resolvePre111kConfig, type Pre111kAccessResponse, type Pre111kConfig, type Pre111kConfirmResponse,
-  type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus,
+  encodePre111kReservation, resolvePre111kConfig, resolvePre111kDeployment, type Pre111kAccessResponse, type Pre111kConfig,
+  type Pre111kConfirmResponse, type Pre111kDeployment, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus,
 } from '../../../../shared/ethereum/pre111k.js';
 import { PRE111K_RESERVED_TOPIC, pre111kReservationDigest } from '../../../../shared/ethereum/pre111kCrypto.js';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
@@ -24,7 +24,8 @@ export type Pre111kEnvironment = Pick<Env,
   'ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS' | 'ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK' | 'ETHEREUM_PRE111K_SEPOLIA_ENABLED'
 > & Partial<Pick<Env, 'ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET' | 'ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET' | 'ETHEREUM_PRE111K_ACCESS_CODES'>>;
 
-type Context = EthereumReadContext & { env: Pre111kEnvironment; config: Pre111kConfig; nowMs: number };
+type DeploymentContext = EthereumReadContext & { config: Pre111kDeployment };
+type Context = DeploymentContext & { env: Pre111kEnvironment; config: Pre111kConfig; nowMs: number };
 type State = { blockNumber: number; blockHash: string; timestamp: number; totalReserved: number; reservedRelics: number; signer: string };
 const networkSchema = z.enum(['mainnet', 'devnet']);
 const requestSchema = z.object({ network: networkSchema, wallet: z.string() }).strict();
@@ -33,17 +34,16 @@ const accessCodesSchema = z.array(z.string().trim().toUpperCase().min(1).max(64)
 const ZERO_ADDRESS = `0x${'0'.repeat(40)}`;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 
-function configuration(env: Pre111kEnvironment, network: Pre111kNetwork): Pre111kConfig {
+function deploymentSettings(env: Pre111kEnvironment, network: Pre111kNetwork) {
   const mainnet = network === 'mainnet';
-  return resolvePre111kConfig(network, {
+  return {
     contractAddress: mainnet ? env.ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS : env.ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS,
     deploymentBlock: mainnet ? env.ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK : env.ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK,
-    priceWei: mainnet ? env.ETHEREUM_PRE111K_MAINNET_PRICE_WEI : env.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI,
     enabled: (mainnet ? env.ETHEREUM_PRE111K_MAINNET_ENABLED : env.ETHEREUM_PRE111K_SEPOLIA_ENABLED) === 'true',
-  });
+  };
 }
 
-function readContext(context: Context): EthereumReadContext {
+function readContext(context: DeploymentContext): EthereumReadContext {
   return { ...context, config: { ...context.config, enabled: !!context.config.contractAddress } };
 }
 
@@ -141,7 +141,7 @@ async function prepare(request: Request, context: Context, wallet: string, code:
       value: ethereumHexQuantity(BigInt(context.config.priceWei)), data: encodePre111kReservation(nonce, deadline, signature) } };
 }
 
-async function confirm(context: Context, wallet: string, transactionHash: string): Promise<Pre111kConfirmResponse> {
+async function confirm(context: DeploymentContext, wallet: string, transactionHash: string): Promise<Pre111kConfirmResponse> {
   if (!context.config.contractAddress) return unavailable();
   const read = readContext(context);
   const pending = (confirmations = 0, reservationNonce: number | null = null): Pre111kConfirmResponse =>
@@ -254,11 +254,16 @@ export async function handlePre111kRequest(request: Request, env: Pre111kEnviron
       wallet = ethereumAddress(body.wallet);
       hash = ethereumTransactionHash(body.transactionHash);
     }
-    const context: Context = { env, signal, config: configuration(env, network), nowMs: (dependencies.nowMs || Date.now)(),
-      fetch: dependencies.fetch || ((input, init) => fetch(input, init)) };
-    if (path !== PRE111K_API_PATHS.prepare) await limitEthereumRequest(request, context, path, env.PUBLIC_SHOP_RATE_LIMITER);
-    const result = path === PRE111K_API_PATHS.status ? await status(context, wallet)
-      : path === PRE111K_API_PATHS.prepare ? await prepare(request, context, wallet!, code) : await confirm(context, wallet!, hash!);
+    const runtime = { env, signal, fetch: dependencies.fetch || ((input, init) => fetch(input, init)) } satisfies Omit<EthereumReadContext, 'config'>;
+    const settings = deploymentSettings(env, network);
+    if (path !== PRE111K_API_PATHS.prepare) await limitEthereumRequest(request, runtime, path, env.PUBLIC_SHOP_RATE_LIMITER);
+    if (path === PRE111K_API_PATHS.confirm) {
+      const config = resolvePre111kDeployment(network, settings);
+      return jsonResponse(await confirm({ ...runtime, config }, wallet!, hash!), 200);
+    }
+    const priceWei = network === 'mainnet' ? env.ETHEREUM_PRE111K_MAINNET_PRICE_WEI : env.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI;
+    const context: Context = { ...runtime, config: resolvePre111kConfig(network, { ...settings, priceWei }), nowMs: (dependencies.nowMs || Date.now)() };
+    const result = path === PRE111K_API_PATHS.status ? await status(context, wallet) : await prepare(request, context, wallet!, code);
     return jsonResponse(result, 200, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     if (request.signal.aborted) throw request.signal.reason;
