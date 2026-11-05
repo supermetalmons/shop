@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { testPre111kConfig } from './helpers/pre111k.ts';
 import { registerHooks } from 'node:module';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
 import { encodePre111kReservation, type Pre111kConfirmResponse, type Pre111kNetwork, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
+import { formatEtherAmount } from '../shared/ethereum/protocol.ts';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 import { pre111kApi } from '../src/ethereum/pre111kApi.ts';
 import { EthereumApiError } from '../src/ethereum/api.ts';
@@ -23,6 +25,8 @@ const HASH = `0x${'ab'.repeat(32)}`;
 const NEXT_HASH = `0x${'cd'.repeat(32)}`;
 const ACCESS_KEY = 'mons.shop.pre111k.access-code';
 const ACCESS_CODE = 'TESTPASS';
+const { vars } = JSON.parse(readFileSync(new URL('../cloud/workers/api/wrangler.jsonc', import.meta.url), 'utf8'));
+const configuredPriceWei = { mainnet: vars.ETHEREUM_PRE111K_MAINNET_PRICE_WEI, devnet: vars.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI };
 const clients: InstanceType<typeof QueryClient>[] = [];
 let address = OWNER;
 let reserved = 0;
@@ -168,12 +172,20 @@ test('Reserve connects, shows positive reservations before the address and disco
 for (const unavailable of ['API failure', 'disabled reservations'] as const) {
   test(`${unavailable} still allows wallet connection but blocks reservation`, async () => {
     if (unavailable === 'API failure') statusImpl = async () => { throw new Error('Unavailable'); };
-    else statusImpl = async (network, wallet) => ({ ...status(network, wallet), config: testPre111kConfig(network) });
+    else statusImpl = async (network, wallet) => ({
+      ...status(network, wallet),
+      config: testPre111kConfig(network, { contractAddress: CONTRACT, enabled: false, priceWei: configuredPriceWei[network] }),
+    });
     const view = page('devnet', false);
-    const label = unavailable === 'API failure' ? 'Reserve' : 'Reserve · 0.0023 ETH';
+    const label = `Reserve · ${formatEtherAmount(configuredPriceWei.devnet, 18)} ETH`;
+    const unavailableMessage = () => unavailable === 'API failure'
+      ? view.findByRole('button', { name: 'Retry' }, { timeout: 3_000 })
+      : view.findByText('Reservations are not open yet.');
+    await unavailableMessage();
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, false));
     fireEvent.click(view.getByRole('button', { name: label }));
     await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+    await unavailableMessage();
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, true));
     fireEvent.click(view.getByRole('button', { name: label }));
     assert.deepEqual(preparedCodes, []);
@@ -262,16 +274,20 @@ for (const network of ['mainnet', 'devnet'] as const) {
     const pending = deferred<void>();
     statusImpl = async (requestedNetwork, wallet) => {
       await pending.promise;
-      return { config: testPre111kConfig(requestedNetwork), wallet, totalReserved: null, reservedRelics: null,
+      return { config: testPre111kConfig(requestedNetwork, { priceWei: '0' }), wallet, totalReserved: null, reservedRelics: null,
         remainingRelics: null, observedBlock: null, blockHash: null };
     };
     const view = page(network);
+    const initialPrice = view.getByText(`${formatEtherAmount(configuredPriceWei[network], 18)} ETH`);
+    assert.ok(view.primary().contains(initialPrice));
     await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
     view.getByRole('status', { name: 'Loading availability' });
     assert.notEqual(view.availability(), '00 / 18 left');
     assert.equal(view.primary().disabled, true);
     await act(async () => pending.resolve());
     await waitFor(() => assert.equal(view.availability(), '— / 18 left'));
+    assert.equal(view.getByText('0 ETH'), initialPrice);
+    view.getByRole('button', { name: 'Reserve · 0 ETH' });
     assert.equal(view.queryByRole('button', { name: 'Preorders ended' }), null);
     statusImpl = async (requestedNetwork, wallet) => status(requestedNetwork, wallet);
     reserved = 17;
@@ -511,18 +527,39 @@ test('a count decrease removes the old count without inventing a settled success
   assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
 });
 
-test('switching accounts clears old counts until the new address finishes loading', async () => {
+test('switching accounts clears old counts and preserves the latest network price while loading', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const switchAccount = (next: string) => act(async () => {
+    address = next;
+    for (const listener of listeners.get('accountsChanged') ?? []) listener([next]);
+  });
   reserved = 2;
   const newStatus = deferred<Pre111kStatus>();
   const view = page(); await view.ready(); view.getByText('2 reserved');
   statusImpl = async (network, wallet) => wallet === OTHER ? newStatus.promise : status(network, wallet);
-  await act(async () => { address = OTHER; for (const listener of listeners.get('accountsChanged') ?? []) listener([OTHER]); });
+  await switchAccount(OTHER);
   view.getByText('0x2222…2222');
   assert.equal(view.queryByText('Loading reservations…'), null);
   assert.equal(view.queryByText('0 reserved'), null);
   assert.equal(view.queryByText('2 reserved'), null);
-  await act(async () => newStatus.resolve({ ...status('devnet', OTHER), reservedRelics: 1 }));
+  const updatedAt = view.client.getQueryState(['pre111k', 'devnet', OWNER])!.dataUpdatedAt + 1;
+  t.mock.method(Date, 'now', () => updatedAt);
+  const updated = status('devnet', OTHER);
+  updated.config.priceWei = '0';
+  await act(async () => newStatus.resolve({ ...updated, reservedRelics: 1 }));
   await waitFor(() => view.getByText('1 reserved'));
+  view.getByText('0 ETH');
+  await switchAccount(OWNER);
+  view.getByText('2 reserved');
+  statusImpl = async () => { throw new Error('Unavailable'); };
+  await act(async () => { await view.client.refetchQueries({ queryKey: ['pre111k', 'devnet', OWNER] }); });
+  await view.findByRole('button', { name: 'Retry' });
+  assert.equal((view.getByRole('button', { name: 'Reserve · 0 ETH' }) as HTMLButtonElement).disabled, true);
+  const pending = deferred<Pre111kStatus>();
+  statusImpl = () => pending.promise;
+  await switchAccount('0x4444444444444444444444444444444444444444');
+  assert.equal(view.primary().disabled, true);
+  view.getByRole('button', { name: 'Reserve · 0 ETH' });
 });
 
 test('undeployed mainnet remains closed and never displays a fake count', async () => {

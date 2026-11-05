@@ -101,9 +101,12 @@ Withdrawal remains permissionless regardless of backend availability.
 
 The API has independent `ETHEREUM_PRE111K_MAINNET_*` and
 `ETHEREUM_PRE111K_SEPOLIA_*` settings: `CONTRACT_ADDRESS`, `DEPLOYMENT_BLOCK`,
-`ENABLED`, `PRICE_WEI`, and `SIGNER_SECRET`. Set `PRICE_WEI` to a canonical unsigned
-decimal wei string and deploy the Worker to apply a price change. The storefront
-shows the price from status and requires a fresh click if the prepared price changes.
+`ENABLED`, `PRICE_WEI`, and `SIGNER_SECRET`. Set `PRICE_WEI` in
+`cloud/workers/api/wrangler.jsonc` and the matching `INITIAL_PRICE_WEI` in
+`src/ethereum/DirectPaymentPage.tsx` to the same canonical unsigned decimal wei
+string (`devnet` for Sepolia). Deploy both the Worker and storefront. The button
+shows that price immediately and updates if status reports a different price.
+The storefront requires a fresh click if the prepared price changes.
 RPC reads reuse `ALCHEMY_MI_NOTE_API_KEY`.
 Both network signer secrets are required for the deployed API. Each signer has
 its own encrypted local keystore and a password stored in macOS Keychain; the

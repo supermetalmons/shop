@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ETHEREUM_MAX_RELICS, formatEtherAmount } from '../../shared/ethereum/protocol';
 import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle } from '../components/MintPanel';
@@ -9,6 +9,11 @@ import { Pre111kAccessGate } from './Pre111kAccessGate';
 import { usePre111k } from './usePre111k';
 import { usePre111kAccess } from './usePre111kAccess';
 import '../styles/pre111k.css';
+
+const INITIAL_PRICE_WEI: Record<Pre111kNetwork, string> = {
+  mainnet: '2300000000000000000',
+  devnet: '2300000000000000',
+};
 
 export default function DirectPaymentPage({ network }: { network: Pre111kNetwork }) {
   const access = usePre111kAccess();
@@ -26,9 +31,19 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const remaining = model.statusQuery.isError ? null : status?.remainingRelics;
   const available = status?.config.enabled && remaining != null && remaining > 0;
   const soldOut = remaining === 0;
-  const price = status && !model.statusQuery.isError ? `${formatEtherAmount(status.config.priceWei, 18)} ETH` : null;
+  const [prices, setPrices] = useState(INITIAL_PRICE_WEI);
+  const lastPriceUpdate = useRef({ mainnet: 0, devnet: 0 });
+  const backendPrice = status?.config.priceWei;
+  const { dataUpdatedAt } = model.statusQuery;
+  useEffect(() => {
+    if (backendPrice === undefined || dataUpdatedAt <= lastPriceUpdate.current[network]) return;
+    lastPriceUpdate.current[network] = dataUpdatedAt;
+    if (backendPrice !== prices[network]) setPrices({ ...prices, [network]: backendPrice });
+  }, [backendPrice, dataUpdatedAt, network, prices]);
+  const currentPrice = model.statusQuery.isError ? undefined : backendPrice;
+  const price = `${formatEtherAmount(currentPrice ?? prices[network], 18)} ETH`;
   const action = approved ? 'Reserve' : 'Reserve Relic';
-  const actionLabel = price === null ? action : `${action} · ${price}`;
+  const actionLabel = `${action} · ${price}`;
   const explorerLink = model.transactionHash && status?.config.explorerUrl ? `${status.config.explorerUrl}/tx/${model.transactionHash}` : null;
   const hasFeedback = Boolean(model.statusQuery.isError || status && !status.config.enabled || model.error || explorerLink);
 
@@ -62,7 +77,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
     onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
     {approved ? reserveLabel ? <span className="mint-panel__submit-text">{reserveLabel}</span> : <>
       <span className="mint-panel__submit-text">Reserve</span>
-      {price && <span className="mint-panel__submit-price">{price}</span>}
+      <span className="mint-panel__submit-price">{price}</span>
     </> : reserveLabel ?? actionLabel}
   </button>;
   const walletControls = <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
