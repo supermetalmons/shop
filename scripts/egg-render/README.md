@@ -30,7 +30,7 @@ The reference setup used Blender **4.5.3 LTS**, build `67807e1800cc`, with
 Cycles on Apple M1 Max Metal (160 samples, seed 27, Standard view transform).
 A clean repeat on this setup differed by at most one 8-bit color level in
 at most 17 pixels per render. The command also requires
-Node.js 22.15+ and macOS Swift tools. Set `BLENDER_BIN` if the Blender executable
+the Node.js version pinned in the repository’s `.nvmrc` and macOS Swift tools. Set `BLENDER_BIN` if the Blender executable
 is outside its default Mac app path.
 
 Run the cache, publication, artwork-switching, and cancellation checks with:

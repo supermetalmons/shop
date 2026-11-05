@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": {"node": "24.22.x"},
+  "engines": {"node": "26.13.0"},
   "dependencies": {
     "@vitejs/plugin-react": "6.1.1",
     "react": "19.2.8",

@@ -26,7 +26,15 @@ schedules, and required secrets are declared in `cloud/workers/api/wrangler.json
 
 ## Local development
 
-Use Node.js 22.15 or newer and the npm version pinned in `package.json`.
+Use Node.js 26.13.0 from `.nvmrc` and npm 12.0.2 from `package.json`.
+With nvm, install the project toolchain from the repository root.
+
+```sh
+nvm install
+npm install --global npm@12.0.2
+```
+
+Install the shop dependencies and start the development server.
 
 ```sh
 npm install

@@ -13,10 +13,15 @@ function fixture(context) {
   mkdirSync(join(root, 'bin'));
   writeFileSync(join(root, 'bin/tool'), 'preserved executable');
   symlinkSync('tool', join(root, 'bin/link'));
-  const contract = { node: '24.22.0' };
-  writeFileSync(join(root, 'runtime.json'), JSON.stringify({ version: 1, contract,
-    files: { 'bin/tool': { sha256: digest(join(root, 'bin/tool')) }, 'bin/link': { symlink: 'tool' } } }));
-  return { root, options: { contract, receiptHash: digest(join(root, 'runtime.json')) } };
+  const node = join(root, 'node/bin/node');
+  mkdirSync(join(root, 'node/bin'), { recursive: true });
+  writeFileSync(node, 'original node');
+  const originalNodeSha256 = digest(node);
+  writeFileSync(node, 'upgraded node');
+  const contract = { node: '26.13.0' };
+  writeFileSync(join(root, 'runtime.json'), JSON.stringify({ version: 1, contract: { ...contract, node: '24.22.0' },
+    files: { 'node/bin/node': { sha256: originalNodeSha256 }, 'bin/tool': { sha256: digest(join(root, 'bin/tool')) }, 'bin/link': { symlink: 'tool' } } }));
+  return { root, options: { contract, nodeSha256: digest(node), receiptHash: digest(join(root, 'runtime.json')) } };
 }
 
 test('runtime versions invoke only explicit pinned executables', () => {
@@ -24,7 +29,7 @@ test('runtime versions invoke only explicit pinned executables', () => {
   const calls = [];
   const versions = runtimeVersions(paths, (command, args) => {
     calls.push({ command, args });
-    if (command === paths.node) return 'v24.22.0';
+    if (command === paths.node) return 'v26.13.0';
     if (command === paths.python) return JSON.stringify({ python: '3.12.14', pillow: '12.3.0', numpy: '2.3.5', littlecms: '2.19' });
     if (command === paths.ffmpeg) return 'ffmpeg version 8.1.2 fixture';
     if (command === paths.ffprobe) return 'ffprobe version 8.1.2 fixture';
@@ -32,6 +37,7 @@ test('runtime versions invoke only explicit pinned executables', () => {
   });
   assert.deepEqual(calls.map(call => call.command), Object.values(paths));
   assert.equal(calls[1].args[0], '-B');
+  assert.equal(versions.node, 'v26.13.0');
   assert.equal(versions.ffmpeg, 'ffmpeg version 8.1.2 fixture');
   assert.equal(Object.hasOwn(versions, 'safariDriver'), false);
 });
@@ -60,9 +66,17 @@ test('runtime receipt ignores only untracked Finder files and Python cache exclu
   writeFileSync(join(root, 'bin/generated.pyc'), 'cache');
   writeFileSync(join(root, 'bin/.DS_Store'), 'finder');
   const result = verifyRuntimeInventory(root, options);
-  assert.equal(result.verifiedEntries, 2);
+  assert.equal(result.verifiedEntries, 3);
   assert.deepEqual(result.ignoredFinderFiles, ['bin/.DS_Store']);
   writeFileSync(join(root, 'bin/unexpected'), 'not allowed');
+  assert.throws(() => verifyRuntimeInventory(root, options), /files differ/);
+});
+
+test('the pinned Node replacement preserves the original inventory and rejects the previous executable', context => {
+  const { root, options } = fixture(context);
+  const result = verifyRuntimeInventory(root, options);
+  assert.equal(result.receiptSha256, options.receiptHash);
+  writeFileSync(join(root, 'node/bin/node'), 'original node');
   assert.throws(() => verifyRuntimeInventory(root, options), /files differ/);
 });
 

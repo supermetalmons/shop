@@ -2432,7 +2432,7 @@ test('public routes accept only mons.shop and local browser origins', async () =
       upstreamCalls += 1;
       return Response.json({});
     }));
-    assert.equal(response.status, 403, origin);
+    assert.equal(response.status, 403, origin ?? 'missing Origin header');
     assert.equal(response.headers.get('access-control-allow-origin'), null);
     assert.equal(upstreamCalls, 0);
   }

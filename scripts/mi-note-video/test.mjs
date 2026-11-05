@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimePaths, verifyPinnedNode } from './native-runtime.mjs';
 
 const script = fileURLToPath(import.meta.url);
 const directory = dirname(script);
@@ -12,11 +12,9 @@ if (args.length === 1 && args[0] === '--help') {
   console.log(usage);
   process.exit(0);
 }
-const runtime = join(homedir(), 'Library/Application Support/Mons Mi Note Render/host/runtime');
-const node = join(runtime, 'node/bin/node');
-const ffmpeg = join(runtime, 'media/bin/ffmpeg');
-const ffprobe = join(runtime, 'media/bin/ffprobe');
-let python = join(runtime, 'python/bin/python3.12');
+const paths = runtimePaths();
+const { node, ffmpeg, ffprobe } = paths;
+let python = paths.python;
 for (let index = 0; index < args.length; index += 1) {
   if (args[index] === '--python' && args[index + 1] && isAbsolute(args[index + 1])) python = args[++index];
   else throw Error(usage);
@@ -25,6 +23,7 @@ for (const executable of [node, python, ffmpeg, ffprobe]) {
   try { accessSync(executable, constants.X_OK); }
   catch { throw Error(`Required native test executable is missing or not executable: ${executable}`); }
 }
+verifyPinnedNode(paths);
 const env = { ...process.env, PYTHON: python, MI_NOTE_VIDEO_PYTHON: python,
   MI_NOTE_FFMPEG: ffmpeg, MI_NOTE_FFPROBE: ffprobe,
   PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1',

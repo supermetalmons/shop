@@ -70,7 +70,7 @@ test('oversized session IDs and document paths cannot block later pages', async 
   const visited: string[] = [];
   let cursor: FulfillmentManualReviewPage['nextCursor'] = null;
   for (let pageNumber = 0; pageNumber < 3; pageNumber++) {
-    const body = { dropId: DROP, limit: 1, cursor };
+    const body: Record<string, unknown> = { dropId: DROP, limit: 1, cursor };
     assert.ok(new TextEncoder().encode(JSON.stringify(body)).byteLength <= 4096);
     const result = await state.request(body);
     assert.equal(result.response.status, 200);

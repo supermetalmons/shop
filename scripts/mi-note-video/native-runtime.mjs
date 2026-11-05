@@ -13,9 +13,9 @@ const runtimeContract = Object.freeze(JSON.parse(readFileSync(join(directory, 'c
 export const expectedIccSha256 = '0ff6958f98684c61f6bbdce1368ddeaf3873baf84545baba482e920d92a914c0';
 const preservedHashes = Object.freeze({
   runtimeReceipt: '245e4a945f28034b830e722a59bf12af47915b99f046bf4b24cf6fb0f2429893',
-  node: 'b468fb9c67427c9d3aec07ee1105e63020923a631a9a2a00beb71a7ba3768bfd',
+  node: '533bd644c5ae0e0ea3a80e433aad16b817447ccba1e1eea701875eac80cb75d4',
   srgb: '2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e',
-  packageLock: '30787c9a98225aa3ca68ecc788afbd881be7b6f6be170c2a90a7e1d9e5724a6d',
+  packageLock: '40be85f58de4f60c82d0e00a889c194d3e18252a075667df55874c18c8eee8c5',
 });
 const nativeAppHashes = Object.freeze({
   app: 'e270a1def8c960e482401b12926dbbd1a857a2c559623cfeb5196468e8973b62',
@@ -54,15 +54,20 @@ export function verifyPinnedNode(paths = runtimePaths()) {
   return paths.node;
 }
 
-export function verifyRuntimeInventory(runtime, { receiptHash = preservedHashes.runtimeReceipt, contract = runtimeContract } = {}) {
+export function verifyRuntimeInventory(runtime, {
+  receiptHash = preservedHashes.runtimeReceipt, contract = runtimeContract, nodeSha256 = preservedHashes.node,
+} = {}) {
   runtime = resolve(runtime);
   check(lstatSync(runtime).isDirectory() && realpathSync(runtime) === runtime, 'The native runtime must be a real directory.');
   const receiptPath = regular(join(runtime, 'runtime.json'));
   check(checksum(receiptPath) === receiptHash, 'The preserved native runtime receipt changed.');
   const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
   const canonical = object => JSON.stringify(Object.fromEntries(Object.entries(object).sort(([a], [b]) => a.localeCompare(b))));
-  check(receipt.version === 1 && canonical(receipt.contract) === canonical(contract), 'The native runtime version contract differs.');
+  const baselineContract = { ...contract, node: '24.22.0' };
+  check(receipt.version === 1 && canonical(receipt.contract) === canonical(baselineContract), 'The native runtime version contract differs.');
   check(receipt.files && typeof receipt.files === 'object' && !Array.isArray(receipt.files), 'The native runtime inventory is missing.');
+  check(/^[a-f0-9]{64}$/.test(receipt.files['node/bin/node']?.sha256 || ''), 'The native runtime inventory is missing its Node executable.');
+  const expectedFiles = { ...receipt.files, 'node/bin/node': { sha256: nodeSha256 } };
   for (const name of Object.keys(receipt.files)) {
     check(name && !isAbsolute(name) && !name.split(/[\\/]/).some(part => !part || part === '.' || part === '..'), 'Unsafe native runtime inventory path.');
   }
@@ -82,7 +87,7 @@ export function verifyRuntimeInventory(runtime, { receiptHash = preservedHashes.
     }
   }
   visit(runtime);
-  check(canonical(actual) === canonical(receipt.files), 'Native runtime files differ from the preserved receipt.');
+  check(canonical(actual) === canonical(expectedFiles), 'Native runtime files differ from the preserved receipt and Node pin.');
   return { root: runtime, receiptSha256: receiptHash, verifiedEntries: Object.keys(actual).length, ignoredFinderFiles };
 }
 

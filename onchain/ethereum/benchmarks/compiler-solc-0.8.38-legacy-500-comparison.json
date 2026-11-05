@@ -1184,23 +1184,23 @@
   },
   "comparison": {
     "schemaVersion": 2,
-    "measuredAt": "2026-11-02T23:51:33.193Z",
-    "sourceCommit": "117b4ad5b2332b37d244dab473a1675ce4f3ce05",
+    "measuredAt": "2026-11-05T13:57:54.439Z",
+    "sourceCommit": "5ab852d64e3d97447248093669dcb4f48ff6375e",
     "sourceSha256": {
       "NFT111K.sol": "0c1093d852e9778c33f07fc611bf605affd6deb7cdab348aab4bb01a129d0f4a",
-      "Pre111K.sol": "d42524c6ad40cb625d7ddba0c35c043f2d21747608712aa5c694439d3de15a69"
+      "Pre111K.sol": "26ecf0dd38cf7694726d89b668963ae8f4ae734a72101f9a33d47a1babb6423c"
     },
     "baselineReference": {
       "path": "benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json",
       "updated": true,
-      "sha256": "82866f4c79f29aadb5d49a4f2ffed72eaee92122d49bb97fe491b98d73c9883b"
+      "sha256": "673f538a6fda6b2ac2e7c49f0c9b0ce8ed743b0188eb7afbc24a06a9827a3a8e"
     },
     "benchmarkCount": 160,
     "writeBenchmarkCount": 139,
     "toolchain": {
       "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
       "anvil": "anvil Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
-      "node": "v26.5.0",
+      "node": "v26.13.0",
       "dependencies": {
         "@metamask/abi-utils": "2.0.4",
         "@noble/hashes": "1.8.0",
@@ -1259,7 +1259,7 @@
         "optimizerRuns": 200,
         "sourceSha256": {
           "NFT111K.sol": "0c1093d852e9778c33f07fc611bf605affd6deb7cdab348aab4bb01a129d0f4a",
-          "Pre111K.sol": "d42524c6ad40cb625d7ddba0c35c043f2d21747608712aa5c694439d3de15a69"
+          "Pre111K.sol": "26ecf0dd38cf7694726d89b668963ae8f4ae734a72101f9a33d47a1babb6423c"
         },
         "status": "measured",
         "artifacts": {
@@ -1641,7 +1641,7 @@
         "optimizerRuns": 500,
         "sourceSha256": {
           "NFT111K.sol": "0c1093d852e9778c33f07fc611bf605affd6deb7cdab348aab4bb01a129d0f4a",
-          "Pre111K.sol": "d42524c6ad40cb625d7ddba0c35c043f2d21747608712aa5c694439d3de15a69"
+          "Pre111K.sol": "26ecf0dd38cf7694726d89b668963ae8f4ae734a72101f9a33d47a1babb6423c"
         },
         "status": "measured",
         "artifacts": {

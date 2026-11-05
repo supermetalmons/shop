@@ -29,10 +29,62 @@ The preserved host runtime lives at:
 ~/Library/Application Support/Mons Mi Note Render/host/runtime
 ```
 
-It contains Node 24.22.0, Python 3.12.14, NumPy 2.3.5, Pillow 12.3.0,
+It contains Node 26.13.0, Python 3.12.14, NumPy 2.3.5, Pillow 12.3.0,
 LittleCMS 2.19, and FFmpeg/FFprobe 8.1.2. Keep the complete runtime, its shared
 libraries, and `runtime.json`. JavaScript dependencies use this directory's
-unchanged `package.json` and `package-lock.json`.
+pinned `package.json` and `package-lock.json`.
+
+On a Mac with the verified Node 24.22.0 runtime, run `nvm install` from the
+repository root. With the renderer idle, back up its executable and replace
+it with the checksum-verified Node 26.13.0 macOS arm64 binary.
+
+```sh
+(
+  set -eu
+  host="$HOME/Library/Application Support/Mons Mi Note Render/host"
+  runtime_node="$host/runtime/node/bin/node"
+  backup="$host/node-24.22.0.backup"
+  test -f "$runtime_node"
+  test ! -L "$runtime_node"
+  printf '%s  %s\n' b468fb9c67427c9d3aec07ee1105e63020923a631a9a2a00beb71a7ba3768bfd "$runtime_node" | shasum -a 256 -c -
+  stage=$(mktemp "$host/.node-upgrade.XXXXXX")
+  trap 'rm -f "$stage"' EXIT
+  cp -p "$(node -p 'process.execPath')" "$stage"
+  printf '%s  %s\n' 533bd644c5ae0e0ea3a80e433aad16b817447ccba1e1eea701875eac80cb75d4 "$stage" | shasum -a 256 -c -
+  test ! -L "$backup"
+  if [ ! -e "$backup" ]; then ln "$runtime_node" "$backup"; fi
+  test "$backup" -ef "$runtime_node"
+  mv -f "$stage" "$runtime_node"
+)
+```
+
+With the repository's Node and npm versions active, install the renderer's
+locked dependencies and verify the host.
+
+```sh
+npm ci --prefix scripts/mi-note-video
+npm run render:mi-note-videos -- doctor
+```
+
+Keep the original `runtime.json` in place. The verifier checks its digest
+and every inventoried file, using the new executable digest for
+`node/bin/node`. To roll back, stop the renderer, switch back to its previous
+source revision, and restore the verified binary.
+
+```sh
+(
+  set -eu
+  host="$HOME/Library/Application Support/Mons Mi Note Render/host"
+  backup="$host/node-24.22.0.backup"
+  runtime_node="$host/runtime/node/bin/node"
+  test -f "$backup"
+  test ! -L "$backup"
+  test ! -d "$runtime_node"
+  test ! -L "$runtime_node"
+  printf '%s  %s\n' b468fb9c67427c9d3aec07ee1105e63020923a631a9a2a00beb71a7ba3768bfd "$backup" | shasum -a 256 -c -
+  if [ ! "$backup" -ef "$runtime_node" ]; then mv -f "$backup" "$runtime_node"; fi
+)
+```
 
 The current verified application supports foreground and offscreen capture:
 
@@ -48,7 +100,7 @@ The controller checks the verified application, runtime, and profile before a
 render. A graphical macOS session and Screen Recording permission for the
 capture application are required.
 
-No command installs dependencies or rebuilds the application.
+Renderer commands use the installed dependencies and the verified application.
 The build script defaults to this application directory.
 A newly compiled binary is not automatically accepted by the
 controller's executable and source hash checks.
@@ -146,10 +198,9 @@ outside version control.
 
 ## Storage and checks
 
-Application Support needs only `host/runtime` and `native-runs`. Keep the
-complete pinned runtime intact. Native run receipts support verification and
-resume; temporary images are removed after successful publication. Finished
-videos stay together in `~/Movies/Mi Note Native Renders`.
+Application Support stores the pinned runtime in `host/runtime` and run
+receipts in `native-runs`. Temporary images are removed after successful
+publication. Finished videos stay in `~/Movies/Mi Note Native Renders`.
 
 Run the retained JavaScript and Python suites with:
 

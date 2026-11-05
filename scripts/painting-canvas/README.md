@@ -114,7 +114,7 @@ original full-size, white-background PNG settings and approved fixture.
 
 ## Requirements and fixed settings
 
-- Node.js 22 or newer; the runner uses only built-in modules. No `npm install` needed.
+- Use the Node.js version pinned in the repository’s `.nvmrc`. The runner uses only built-in modules.
 - Blender **4.5.3 LTS**, build `67807e1800cc`, with a Metal GPU.
 - macOS Swift command-line tools for the small ImageIO normalization helper,
   compiled automatically and cached on first use. No image-processing packages are needed.

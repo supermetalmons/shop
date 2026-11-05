@@ -4,14 +4,14 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import npmCheckUpdates from 'npm-check-updates';
 
-const REQUIRED_NODE = '22.23.1';
+const REQUIRED_NODE = '26.13.0';
 const REQUIRED_NPM = '12.0.2';
 const NCU_EXCLUDED_PACKAGES = '@types/node,@typescript/native,typescript,npm';
 const COMPATIBILITY_LANES = [
   {
     dependency: '@types/node',
     registryPackage: '@types/node',
-    major: 22,
+    major: 26,
     versionSpec: (version) => `^${version}`,
   },
   {

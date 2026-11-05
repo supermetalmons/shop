@@ -96,6 +96,7 @@ const productionExportBaseline = [
   ["shared/dropMediaDefaults.ts","exports","CLEAR_CARDS_SOUND_BASE_URL"],
   ["shared/dropMediaDefaults.ts","exports","DRIFELLA_SHIRT_CDN_BASE_URL"],
   ["shared/dropMediaDefaults.ts","exports","DRIFELLA_SHIRT_IMAGE_BASE_URL"],
+  ["shared/ethereum/revealDeployment.ts","exports","ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN"],
   ["shared/ethereum/revealDeployment.ts","exports","ETHEREUM_REVEAL_DEPLOYMENT_ID"],
   ["shared/fulfillmentAccess.ts","exports","MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES"],
   ["shared/fulfillmentAccess.ts","exports","STAFF_WALLET_ADDRESSES"],
