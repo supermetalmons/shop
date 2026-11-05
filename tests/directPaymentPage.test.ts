@@ -91,11 +91,26 @@ function page(network: Pre111kNetwork = 'mainnet') {
     } };
 }
 
+for (const restored of [true, false]) {
+  test(`a saved wallet waits for account restoration before showing ${restored ? 'Disconnect' : 'Connect Wallet'}`, async () => {
+    window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
+    const wallet = walletFixture();
+    const accounts = deferred();
+    wallet.handlers.set('eth_accounts', () => accounts.promise);
+    wallet.install();
+    const view = page();
+    await waitFor(() => assert.ok(wallet.calls('eth_accounts').length));
+    assert.equal(view.queryByRole('button', { name: 'Connect Wallet' }) === null, true);
+    await act(async () => accounts.resolve(restored ? [OWNER] : []));
+    view.getByRole('button', { name: restored ? 'Disconnect' : 'Connect Wallet' });
+  });
+}
+
 for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NETWORKS) {
   test(`${network} requires a second Reserve click after connecting before authorizing payment`, async () => {
     const wallet = walletFixture(chain); wallet.install();
     const view = page(network);
-    assert.equal(view.queryByRole('button', { name: 'Connect wallet' }), null);
+    view.getByRole('button', { name: 'Connect Wallet' });
     await view.connect(); await view.ready();
     assert.equal(wallet.calls('eth_requestAccounts').length, 1);
     assert.equal(prepareCalls, 0);
@@ -179,7 +194,7 @@ test('a cancelled wallet connection can be retried through Reserve without submi
   feedback.focus();
   assert.equal(document.activeElement === feedback, true);
   assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
-  assert.equal(view.queryByRole('button', { name: 'Connect wallet' }), null);
+  assert.equal((view.getByRole('button', { name: 'Connect Wallet' }) as HTMLButtonElement).disabled, false);
   assert.equal(view.button().disabled, false);
   assert.equal(prepareCalls, 0);
   assert.equal(wallet.calls('eth_sendTransaction').length, 0);
@@ -194,17 +209,18 @@ test('a cancelled wallet connection can be retried through Reserve without submi
   await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
 });
 
-for (const cancelWithEscape of [false, true]) {
-  test(`cancelling wallet choice with ${cancelWithEscape ? 'Escape' : 'Cancel'} restores focus to Reserve`, async () => {
+for (const [trigger, cancelWithEscape] of [['Reserve', false], ['Connect Wallet', true]] as const) {
+  test(`cancelling wallet choice with ${cancelWithEscape ? 'Escape' : 'Cancel'} restores focus to ${trigger}`, async () => {
     const first = walletFixture(); const second = walletFixture(); first.announce('first'); second.announce('second');
     const view = page();
     await waitFor(() => assert.equal(view.button().disabled, false));
-    view.reserve();
+    const opener = trigger === 'Reserve' ? view.button() : view.getByRole('button', { name: trigger });
+    fireEvent.click(opener);
     const choices = await waitFor(() => view.getByRole('group', { name: 'Select Ethereum wallet' }));
     assert.equal(view.button().disabled, true);
     if (cancelWithEscape) fireEvent.keyDown(choices, { key: 'Escape' });
     else fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => assert.equal(document.activeElement === view.button(), true));
+    await waitFor(() => assert.ok(document.activeElement === opener));
     assert.equal(view.queryByRole('group', { name: 'Select Ethereum wallet' }), null);
     assert.equal(view.button().disabled, false);
     assert.equal(prepareCalls, 0);

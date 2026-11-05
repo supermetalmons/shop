@@ -148,14 +148,14 @@ for (const during of ['status', 'prepare'] as const) {
   });
 }
 
-test('Reserve connects, shows positive reservations before the address and disconnects without requesting payment', async () => {
+test('Connect Wallet shows reservations and disconnects without requesting payment', async () => {
   reserved = 3;
   const view = page('devnet', false);
   const reserve = () => view.getByRole('button', { name: 'Reserve · 0.0023 ETH' }) as HTMLButtonElement;
   await waitFor(() => assert.equal(reserve().disabled, false));
-  assert.equal(view.queryByRole('button', { name: 'Connect wallet' }), null);
+  const connect = view.getByRole('button', { name: 'Connect Wallet' });
   assert.equal(view.queryByText('3 reserved'), null);
-  view.reserve();
+  fireEvent.click(connect);
   await view.ready();
   const count = view.getByText('3 reserved');
   const walletAddress = view.getByText('0x1111…1111');
@@ -163,6 +163,7 @@ test('Reserve connects, shows positive reservations before the address and disco
   assert.ok(walletAddress.compareDocumentPosition(view.getByRole('button', { name: 'Disconnect' })) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
   fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
   await waitFor(() => assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null));
+  assert.equal((view.getByRole('button', { name: 'Connect Wallet' }) as HTMLButtonElement).disabled, false);
   assert.equal(reserve().disabled, false);
   assert.equal(view.queryByText('3 reserved'), null);
   assert.equal(sendCount, 0);

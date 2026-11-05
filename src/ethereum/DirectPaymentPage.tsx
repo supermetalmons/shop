@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type MouseEvent, useEffect, useRef, useState } from 'react';
 import { ETHEREUM_MAX_RELICS, formatEtherAmount } from '../../shared/ethereum/protocol';
 import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle } from '../components/MintPanel';
@@ -23,7 +23,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const reservationSection = useRef<HTMLElement>(null);
   const previouslyApproved = useRef(approved);
   const firstWallet = useRef<HTMLButtonElement>(null);
-  const reserveButton = useRef<HTMLButtonElement>(null);
+  const walletTrigger = useRef<HTMLButtonElement>(null);
   const choosing = wallet.status === 'choosing';
   const connecting = !wallet.ready || wallet.status === 'connecting' || wallet.status === 'restoring';
   const connected = wallet.status === 'connected' && Boolean(wallet.address);
@@ -61,7 +61,11 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   }, [approved]);
 
   useEffect(() => { if (approved && choosing) firstWallet.current?.focus(); }, [approved, choosing, wallet.wallets.length]);
-  const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => reserveButton.current?.focus()); };
+  const connectWallet = (event: MouseEvent<HTMLButtonElement>) => {
+    walletTrigger.current = event.currentTarget;
+    wallet.connect();
+  };
+  const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => walletTrigger.current?.focus()); };
 
   const artwork = (
     <picture className="relic-page__picture">
@@ -70,21 +74,24 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
     </picture>
   );
   const reserveLabel = model.stage ?? (soldOut ? 'Preorders ended' : null);
-  const reserve = <button ref={reserveButton} type="button"
+  const reserve = <button type="button"
     className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
     aria-label={reserveLabel ?? actionLabel}
     disabled={!approved || connecting || choosing || model.inFlight || soldOut || (connected && !available)}
-    onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
+    onClick={connected ? () => { void model.reserve(); } : connectWallet}>
     {approved ? reserveLabel ? <span className="mint-panel__submit-text">{reserveLabel}</span> : <>
       <span className="mint-panel__submit-text">Reserve</span>
       <span className="mint-panel__submit-price">{price}</span>
     </> : reserveLabel ?? actionLabel}
   </button>;
+  const reservedCount = wallet.address && !model.statusQuery.isError && typeof count === 'number' && count > 0
+    ? <span className="relic-preorder__reserved" aria-live="polite">{count} reserved</span> : null;
   const walletControls = <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
-    {wallet.address ? <div className="relic-preorder__connection">
-      {!model.statusQuery.isError && typeof count === 'number' && count > 0 ? <span aria-live="polite">{count} reserved</span> : null}
-      <span className="relic-preorder__address" title={wallet.address}>{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
-      <button type="button" className="relic-preorder__text-button relic-preorder__disconnect" onClick={wallet.disconnect}>Disconnect</button>
+    {wallet.ready && (approved || wallet.address) ? <div className="relic-preorder__connection">
+      {!approved && reservedCount}
+      {wallet.address ? <span className="relic-preorder__address" title={wallet.address}>{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span> : null}
+      <button type="button" className="relic-preorder__text-button" disabled={!wallet.address && (connecting || choosing)}
+        onClick={wallet.address ? wallet.disconnect : connectWallet}>{wallet.address ? 'Disconnect' : 'Connect Wallet'}</button>
     </div> : null}
     {choosing ? <div className="relic-preorder__choices" role="group" aria-label="Select Ethereum wallet" onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelChoice(); }
@@ -134,9 +141,12 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
                   <span> / {ETHEREUM_MAX_RELICS} left</span>
                 </div>
               </>}
-              controls={<div className="relic-preorder__support" data-empty={!wallet.address && !choosing && !hasFeedback}>
+              controls={<div className="relic-preorder__support">
+                <div className="relic-preorder__status">
+                  {reservedCount}
+                  {feedback}
+                </div>
                 {walletControls}
-                {feedback}
               </div>}
               actions={<div className="mint-panel__cta">{reserve}</div>}
             />
