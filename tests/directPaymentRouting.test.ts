@@ -102,7 +102,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
     clients.forEach(client => client.clear());
     imports.deregister(); Reflect.deleteProperty(globalThis, '__directPaymentRoutingTest'); dom.window.close();
   });
-  const reserveButton = (network: Pre111kNetwork) => getByRole(document.body, 'button', { name: `Reserve · ${network === 'mainnet' ? '2.22' : '0.0023'} ETH` }) as HTMLButtonElement;
+  const reserveButton = (network: Pre111kNetwork) => getByRole(document.body, 'button', { name: `Reserve · ${network === 'mainnet' ? '2.23' : '0.00333'} ETH` }) as HTMLButtonElement;
   const transactionKey = (network: Pre111kNetwork) => `mons.shop.pre111k.last-transaction:${config(network).chainId}:${contracts[network]}:${OWNER}`;
   const ready = async (network: Pre111kNetwork) => {
     await waitFor(() => {
@@ -177,7 +177,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
     const last = requests.filter(request => request.method === 'eth_sendTransaction').at(-1)!;
     const transaction = (last.params as Array<{ to: string; value: string; data: string; chainId: string }>)[0];
     assert.equal(transaction.to, contracts.devnet);
-    assert.equal(BigInt(transaction.value), 2300000000000000n);
+    assert.equal(BigInt(transaction.value), 3330000000000000n);
     assert.equal(transaction.chainId, '0xaa36a7');
     assert.notEqual(transaction.data, '0x');
     await act(async () => pendingSend!.resolve(DEVNET_HASH));

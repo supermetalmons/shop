@@ -57,7 +57,7 @@ try {
   const [admin, wallet, other] = await rpc<string[]>('eth_accounts');
   const key = `0x${'44'.repeat(32)}`;
   const artifact = JSON.parse(await readFile(resolve(project, 'out/Pre111K.sol/Pre111K.json'), 'utf8')) as { bytecode: { object: string } };
-  const initialPrice = '2300000000000000';
+  const initialPrice = '3330000000000000';
   const nextPrice = '1700000000000000';
   const deployment = await send(admin, { data: `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(
     ['address', 'address', 'address'], [admin, PRE111K_TREASURY, ethereumSignerAddress(key)]).slice(2)}` });
@@ -69,7 +69,7 @@ try {
     PREORDER_PREPARE_RATE_LIMITER: limiter, PREORDER_PREPARE_IP_RATE_LIMITER: limiter,
     ETHEREUM_PRE111K_ACCESS_CODES: '["TESTACCESS"]',
     ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_MAINNET_ENABLED: 'false',
-    ETHEREUM_PRE111K_MAINNET_PRICE_WEI: '2300000000000000000', ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI: initialPrice,
+    ETHEREUM_PRE111K_MAINNET_PRICE_WEI: '2230000000000000000', ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI: initialPrice,
     ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: contractAddress, ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: String(Number(deployment.blockNumber)),
     ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'true', ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: key,
   };

@@ -3,7 +3,7 @@
 `/111k/relics` uses Ethereum mainnet and `/111k/relics_devnet` uses Sepolia. Each
 successful `reserveRelic(uint256 nonce,uint256 deadline,bytes signature)` call
 reserves one relic for its caller and holds the payment in `Pre111K`. The backend
-sets the price per network, currently 2.22 ETH on mainnet and 0.0023 ETH on Sepolia.
+sets the price per network, currently 2.23 ETH on mainnet and 0.00333 ETH on Sepolia.
 Each deployment has a lifetime maximum of seventeen reservations. The storefront
 initially shows `17 / 18 left` because there are eighteen physical relics.
 Wallets may reserve multiple times, one call at a time. There is no NFT, transfer, cancellation, refund, or relic-ID selection in

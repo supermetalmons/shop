@@ -76,7 +76,7 @@ function deferred() { let resolve!: (value: unknown) => void; const promise = ne
 function page(network: Pre111kNetwork = 'mainnet') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }); clients.push(client);
   const view = render(createElement(QueryClientProvider, { client }, createElement(DirectPaymentPage, { network })), { reactStrictMode: true });
-  const button = () => view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.22' : '0.0023'} ETH` }) as HTMLButtonElement;
+  const button = () => view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.23' : '0.00333'} ETH` }) as HTMLButtonElement;
   return { ...view, button, reserve: () => fireEvent.click(button()),
     async connect() {
       await waitFor(() => assert.equal(button().disabled, false));
@@ -129,7 +129,7 @@ for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NET
     assert.ok(methods.indexOf('wallet_switchEthereumChain') < methods.indexOf('eth_sendTransaction'));
     const transaction = (wallet.calls('eth_sendTransaction')[0].params as Array<{ to: string; chainId: string; value: string; data: string }>)[0];
     assert.equal(transaction.chainId, chain); assert.equal(transaction.to, CONTRACT);
-    assert.equal(BigInt(transaction.value), network === 'mainnet' ? 2220000000000000000n : 2300000000000000n);
+    assert.equal(BigInt(transaction.value), network === 'mainnet' ? 2230000000000000000n : 3330000000000000n);
     assert.notEqual(transaction.data, '0x');
   });
   test(`unknown ${network} uses the fixed add-network fallback`, async () => {

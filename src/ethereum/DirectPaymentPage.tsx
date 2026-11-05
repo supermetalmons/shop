@@ -11,8 +11,8 @@ import { usePre111kAccess } from './usePre111kAccess';
 import '../styles/pre111k.css';
 
 const INITIAL_PRICE_WEI: Record<Pre111kNetwork, string> = {
-  mainnet: '2220000000000000000',
-  devnet: '2300000000000000',
+  mainnet: '2230000000000000000',
+  devnet: '3330000000000000',
 };
 
 export default function DirectPaymentPage({ network }: { network: Pre111kNetwork }) {

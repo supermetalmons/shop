@@ -22,7 +22,7 @@ const HASH = `0x${'aa'.repeat(32)}`;
 const BLOCK_HASH = `0x${'bb'.repeat(32)}`;
 const ACCESS_CODE = 'TESTACCESS';
 const SECOND_ACCESS_CODE = 'OTHERACCESS';
-const prices = { mainnet: '2220000000000000000', devnet: '2300000000000000' };
+const prices = { mainnet: '2230000000000000000', devnet: '3330000000000000' };
 
 type RpcRequest = { id: number; method: string; params: unknown[] };
 function fixture(network: Pre111kNetwork = 'devnet') {
