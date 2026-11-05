@@ -148,7 +148,7 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
               info={<>
                 <MintPanelTitle title="111K Relics" helpContent={<>
                   <p>Reserve a relic now.</p>
-                  <p>Select a specific one and claim it on 11/11 when the 111k mint starts.</p>
+                  <p>On 11/11, choose a specific one and claim it.</p>
                   <p>First come, first served.</p>
                 </>} />
                 <div className="mint-panel__remaining mint-panel__availability">
