@@ -1,16 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ETHEREUM_CHECKOUT_ID, type EthereumCheckoutStatusResponse } from '../../shared/ethereum/checkout';
-import { checkoutApi, CheckoutApiError } from '../checkout/api';
+import { checkoutApi, checkoutNotFound } from '../checkout/api';
+import { CHECKOUT_ENABLED } from '../checkout/config';
 import { navigate } from '../navigation';
 import { observeCheckoutReservation, rememberCheckoutReservation } from './checkoutReservations';
 
 export type EthereumCheckoutReturnStatus = Pick<EthereumCheckoutStatusResponse,
   'checkoutId' | 'status' | 'chainId' | 'contractAddress' | 'wallet' | 'tokenIds'>;
-
-function checkoutNotFound(error: unknown): boolean {
-  return error instanceof CheckoutApiError && error.status === 404 && error.code === 'not-found';
-}
 
 export function EthereumCheckoutReturn({ checkoutId, onConfirmed, onStatus }: {
   checkoutId: string; onConfirmed: (checkout: EthereumCheckoutStatusResponse) => void; onStatus?: (status: EthereumCheckoutReturnStatus) => void;
@@ -50,17 +47,18 @@ export function EthereumCheckoutReturn({ checkoutId, onConfirmed, onStatus }: {
   const missing = result.isFetchedAfterMount && result.isError && checkoutNotFound(result.error);
   const status = result.data?.status;
   const message = missing ? 'This checkout has expired or no longer exists.' :
-    result.isError ? 'Couldn’t check your checkout. You can reopen it to try again.' :
+    result.isError ? 'Couldn’t check your checkout.' :
     result.isPending ? 'Checking your checkout…' :
     status === 'success' ? 'Your test redemption is confirmed.' :
-    status === 'failed' ? 'This redemption attempt failed. Open checkout for details.' :
+    status === 'failed' ? 'This redemption attempt failed.' :
     status === 'pending' || status === 'submitting' ? 'Your redemption is pending. Processing continues even when you leave.' :
-    'Your checkout is ready to resume.';
+    CHECKOUT_ENABLED ? 'Your checkout is ready to resume.' : 'Shipping checkout is temporarily unavailable.';
   return <div className="ethereum111k__pending" role="status">
     <span>{message}</span>
-    <a href={missing ? '/111k_devnet' : `/checkout/${checkoutId}`}
-      onClick={missing ? undefined : event => { event.preventDefault(); navigate(`/checkout/${checkoutId}`); }}>
-      {missing ? 'Continue to collection' : status === 'success' ? 'View checkout' : 'Resume checkout'}
-    </a>
+    {missing ? <a href="/111k_devnet">Continue to collection</a> : CHECKOUT_ENABLED ? (
+      <a href={`/checkout/${checkoutId}`} onClick={event => { event.preventDefault(); navigate(`/checkout/${checkoutId}`); }}>
+        {status === 'success' ? 'View checkout' : 'Resume checkout'}
+      </a>
+    ) : null}
   </div>;
 }

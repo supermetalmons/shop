@@ -21,6 +21,10 @@ export class CheckoutApiError extends EthereumApiError {
   }
 }
 
+export function checkoutNotFound(error: unknown): boolean {
+  return error instanceof CheckoutApiError && error.status === 404 && error.code === 'not-found';
+}
+
 function returnUrl(value: unknown, checkout: Omit<EthereumCheckoutStatusResponse, 'returnUrl'>): string {
   const result = checkout.status === 'success' || checkout.status === 'failed' ? checkout.status :
     checkout.status === 'pending' || checkout.status === 'submitting' ? 'pending' : 'canceled';

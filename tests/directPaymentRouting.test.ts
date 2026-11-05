@@ -6,6 +6,7 @@ import type { Root } from 'react-dom/client';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 import { encodePre111kReservation, type Pre111kNetwork, type Pre111kPrepareResponse } from '../shared/ethereum/pre111k.ts';
 import { pre111kApi } from '../src/ethereum/pre111kApi.ts';
+import { checkoutApi, CheckoutApiError } from '../src/checkout/api.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const OWNER = '0x1111111111111111111111111111111111111111';
@@ -27,7 +28,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test('relic routes scope authorizations and transaction links without retaining abandoned wallet attempts', async t => {
+test('relic and checkout routes discard abandoned wallet and return requests', async t => {
   const { dom } = setupFrontendDom();
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
@@ -43,7 +44,11 @@ test('relic routes scope authorizations and transaction links without retaining 
   const { navigate } = await import('../src/navigation.ts');
   const clients: InstanceType<typeof QueryClient>[] = [];
   const originalMount = QueryClient.prototype.mount;
-  t.mock.method(QueryClient.prototype, 'mount', function (this: InstanceType<typeof QueryClient>) { clients.push(this); originalMount.call(this); });
+  t.mock.method(QueryClient.prototype, 'mount', function (this: InstanceType<typeof QueryClient>) {
+    this.setDefaultOptions({ mutations: { gcTime: Infinity } });
+    clients.push(this);
+    originalMount.call(this);
+  });
   const createRoot = ReactDOM.createRoot;
   let root: Root | undefined;
   t.mock.method(ReactDOM, 'createRoot', (...args: Parameters<typeof createRoot>) => { root = createRoot(...args); return root; });
@@ -80,7 +85,7 @@ test('relic routes scope authorizations and transaction links without retaining 
       if (context.parentURL?.endsWith('/src/main.tsx')) {
         if (specifier === './ShopRoute') return { url: 'test:payment-shop-route', shortCircuit: true };
         if (specifier === './wallet/WalletContext') return { url: 'test:payment-wallet-context', shortCircuit: true };
-        if (specifier === './checkout/CheckoutPage') return { url: 'test:payment-checkout', shortCircuit: true };
+        if (specifier === './FulfillmentRoute') return { url: 'test:payment-fulfillment', shortCircuit: true };
       }
       return nextResolve(specifier, context);
     },
@@ -88,7 +93,7 @@ test('relic routes scope authorizations and transaction links without retaining 
       const source = url.endsWith('.css') ? ''
         : url === 'test:payment-shop-route' ? 'export default function ShopRoute() { return null; }'
         : url === 'test:payment-wallet-context' ? 'export function WalletContextProvider({ children }) { return children; }'
-        : url === 'test:payment-checkout' ? 'const bridge = globalThis.__directPaymentRoutingTest; bridge.loads += 1; await bridge.ready; export default function CheckoutPage() { return null; }' : null;
+        : url === 'test:payment-fulfillment' ? 'const bridge = globalThis.__directPaymentRoutingTest; bridge.loads += 1; await bridge.ready; export default function FulfillmentRoute() { return null; }' : null;
       return source === null ? nextLoad(url, context) : { format: 'module', source, shortCircuit: true };
     },
   });
@@ -112,12 +117,27 @@ test('relic routes scope authorizations and transaction links without retaining 
     prepareGate = deferred<Pre111kPrepareResponse>();
     fireEvent.click(reserveButton('mainnet'));
     await waitFor(() => assert.equal(prepareCalls, 1));
-    await act(async () => navigate('/checkout'));
+    await act(async () => navigate('/fulfillment'));
     await waitFor(() => assert.equal(bridge.loads, 1));
     await act(async () => prepareGate!.resolve(prepared('mainnet', OWNER)));
     assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 0);
     assert.equal(document.body.classList.contains('drif-body'), false);
     prepareGate = null;
+  });
+
+  await t.test('a late checkout return cannot redirect away from a loading destination', async t => {
+    const lookup = deferred<void>();
+    const status = t.mock.method(checkoutApi, 'status', async () => {
+      await lookup.promise;
+      throw new CheckoutApiError(404, 'Checkout not found.', null, 'not-found');
+    });
+    await act(async () => navigate('/checkout/11111111-1111-4111-8111-111111111111'));
+    const arrow = await waitFor(() => getByRole(document.body, 'button', { name: 'return' }));
+    fireEvent.click(arrow);
+    await waitFor(() => assert.equal(status.mock.callCount(), 1));
+    await act(async () => navigate('/fulfillment'));
+    await act(async () => lookup.resolve());
+    assert.equal(window.location.pathname, '/fulfillment');
     await act(async () => resolveDestination());
   });
 

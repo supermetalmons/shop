@@ -7,6 +7,7 @@ import { getBuildInfo } from './lib/buildInfo';
 import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
 import { canonicalProductionUrl } from './lib/canonicalOrigin';
 import { runBrowserBootstrap } from './bootstrap';
+import { loadCheckoutPage } from './checkout/config';
 import { discardLegacyBrowserState } from './lib/discardLegacyBrowserState';
 import type { ResolvedAppRoute } from './routes';
 import ShopRoute from './ShopRoute';
@@ -17,7 +18,7 @@ import './styles.css';
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const DirectPaymentPage = React.lazy(() => import('./ethereum/DirectPaymentPage'));
 const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
-const CheckoutPage = React.lazy(() => import('./checkout/CheckoutPage'));
+const CheckoutPage = React.lazy(loadCheckoutPage);
 
 function RoutedApp() {
   const route = useAppRoute();
@@ -44,7 +45,7 @@ function RoutedContent({ route }: RoutedContentProps) {
   }
   if (route.kind === 'checkout') {
     return (
-      <React.Suspense fallback={null}>
+      <React.Suspense key={route.kind} fallback={null}>
         <CheckoutPage key={`${route.checkoutId ?? ''}:${route.checkoutSearch ?? ''}`} checkoutId={route.checkoutId} search={route.checkoutSearch ?? ''} />
       </React.Suspense>
     );

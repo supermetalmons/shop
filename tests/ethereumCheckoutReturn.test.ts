@@ -7,7 +7,7 @@ import type { EthereumCheckoutReturnStatus } from '../src/ethereum/EthereumCheck
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 let { dom } = setupFrontendDom();
-const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, render, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { EthereumCheckoutReturn } = await import('../src/ethereum/EthereumCheckoutReturn.tsx');
 const { checkoutApi, CheckoutApiError } = await import('../src/checkout/api.ts');
@@ -64,12 +64,8 @@ test('a forged success return waits for server status and shows pending without 
   assert.equal(status.mock.calls[0].arguments[0], checkoutId);
   await act(async () => { resolve(checkout('pending')); });
   await waitFor(() => assert.ok(view.getByText('Your redemption is pending. Processing continues even when you leave.')));
-  const resume = view.getByRole('link', { name: 'Resume checkout' });
-  assert.equal(resume.getAttribute('href'), `/checkout/${checkoutId}`);
+  assert.equal(view.queryByRole('link'), null);
   assert.equal(confirmed, 0);
-  fireEvent.click(resume);
-  assert.equal(window.location.pathname, `/checkout/${checkoutId}`);
-  assert.equal(window.location.search, '');
 });
 
 test('server confirmation refreshes inventory once even when URL says canceled and callbacks rerender', async t => {
@@ -80,7 +76,7 @@ test('server confirmation refreshes inventory once even when URL says canceled a
   const view = returnPage(response => { assert.deepEqual(response, successful); confirmed++; });
   await waitFor(() => assert.equal(confirmed, 1));
   assert.ok(view.getByText('Your test redemption is confirmed.'));
-  assert.ok(view.getByRole('link', { name: 'View checkout' }));
+  assert.equal(view.queryByRole('link'), null);
   view.rerenderReturn(checkoutId, () => { confirmed++; });
   await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', checkoutId] }); });
   assert.equal(confirmed, 1);
@@ -97,7 +93,6 @@ test('pending return becomes confirmed from refreshed server data without a wall
   response = checkout('success');
   await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', checkoutId] }); });
   await waitFor(() => assert.equal(confirmed, 1));
-  assert.ok(view.getByRole('link', { name: 'View checkout' }));
 });
 
 test('each newly returned confirmed checkout refreshes its inventory independently', async t => {
@@ -107,7 +102,6 @@ test('each newly returned confirmed checkout refreshes its inventory independent
   await waitFor(() => assert.equal(confirmed, 1));
   view.rerenderReturn(otherCheckoutId);
   await waitFor(() => assert.equal(confirmed, 2));
-  assert.equal(view.getByRole('link', { name: 'View checkout' }).getAttribute('href'), `/checkout/${otherCheckoutId}`);
   view.rerenderReturn(checkoutId);
   await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', checkoutId] }); });
   assert.equal(confirmed, 2);
@@ -222,6 +216,13 @@ test('a fresh not-found response explains the expired checkout and links to the 
   assert.equal(view.queryByRole('link', { name: 'Resume checkout' }), null);
 });
 
+for (const status of ['ready', 'prepared'] as const) test(`a ${status} return explains that checkout is temporarily unavailable`, async t => {
+  t.mock.method(checkoutApi, 'status', async () => checkout(status));
+  const view = returnPage(() => assert.fail('An unfinished checkout cannot confirm'));
+  await view.findByText('Shipping checkout is temporarily unavailable.');
+  assert.equal(view.queryByRole('link'), null);
+});
+
 for (const outcome of ['pending', 'unavailable'] as const) test(`a cached not-found error waits for its fresh ${outcome} response`, async t => {
   let resolve!: (value: EthereumCheckoutStatusResponse) => void;
   let reject!: (error: Error) => void;
@@ -240,7 +241,7 @@ for (const outcome of ['pending', 'unavailable'] as const) test(`a cached not-fo
   });
   await waitFor(() => assert.ok(view.getByText(outcome === 'pending' ? /Your redemption is pending/ : /Couldn’t check your checkout/)));
   assert.equal(view.queryByRole('link', { name: 'Continue to collection' }), null);
-  assert.ok(view.getByRole('link', { name: 'Resume checkout' }));
+  assert.equal(view.queryByRole('link', { name: 'Resume checkout' }), null);
 });
 
 test('an unrecognized 404 remains a retryable checkout error', async t => {
@@ -248,11 +249,11 @@ test('an unrecognized 404 remains a retryable checkout error', async t => {
   const view = returnPage(() => assert.fail('An unavailable checkout cannot confirm'));
   await waitFor(() => assert.ok(view.getByText(/Couldn’t check your checkout/)));
   assert.equal(view.queryByRole('link', { name: 'Continue to collection' }), null);
-  assert.ok(view.getByRole('link', { name: 'Resume checkout' }));
+  assert.equal(view.queryByRole('link', { name: 'Resume checkout' }), null);
 });
 
 for (const outcome of ['failed', 'unavailable'] as const) {
-  test(`${outcome} server status never trusts a success query parameter and allows reopening checkout`, async t => {
+  test(`${outcome} server status never trusts a success query parameter or offers the disabled checkout`, async t => {
     window.history.replaceState(null, '', `/111k_devnet?checkout_id=${checkoutId}&result=success`);
     t.mock.method(checkoutApi, 'status', async () => {
       if (outcome === 'unavailable') throw new Error('Network unavailable');
@@ -260,9 +261,9 @@ for (const outcome of ['failed', 'unavailable'] as const) {
     });
     const view = returnPage(() => assert.fail('Failed or unavailable checkout cannot confirm'));
     await waitFor(() => assert.ok(view.getByText(outcome === 'failed'
-      ? 'This redemption attempt failed. Open checkout for details.'
-      : 'Couldn’t check your checkout. You can reopen it to try again.')));
+      ? 'This redemption attempt failed.'
+      : 'Couldn’t check your checkout.')));
     assert.equal(view.queryByText('Your test redemption is confirmed.'), null);
-    assert.equal(view.getByRole('link', { name: 'Resume checkout' }).getAttribute('href'), `/checkout/${checkoutId}`);
+    assert.equal(view.queryByRole('link'), null);
   });
 }

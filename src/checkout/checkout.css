@@ -1,3 +1,26 @@
+.checkout-placeholder {
+  min-height: calc(100dvh - var(--page-padding-top) - var(--page-padding-bottom));
+}
+
+.checkout-placeholder__content {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+}
+
+.checkout-placeholder__content h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.checkout-placeholder__content button:focus-visible {
+  outline: 2px solid var(--fg) !important;
+  outline-offset: 3px;
+}
+
 .shipping-checkout {
   width: 100%;
   max-width: 960px;
