@@ -81,18 +81,18 @@ function page(network: Pre111kNetwork = 'mainnet') {
     async connect() {
       await waitFor(() => assert.equal(button().disabled, false));
       fireEvent.click(button());
-      await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+      await waitFor(() => view.getByTitle(OWNER));
     },
     async ready() {
       await waitFor(() => {
-        view.getByRole('button', { name: 'Disconnect' });
+        view.getByTitle(OWNER);
         assert.equal(button().disabled, false);
       }, { timeout: 3_000 });
     } };
 }
 
 for (const restored of [true, false]) {
-  test(`a saved wallet waits for account restoration before showing ${restored ? 'Disconnect' : 'Connect Wallet'}`, async () => {
+  test(`a saved wallet waits for account restoration before showing ${restored ? 'the address' : 'Connect Wallet'}`, async () => {
     window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
     const wallet = walletFixture();
     const accounts = deferred();
@@ -102,7 +102,8 @@ for (const restored of [true, false]) {
     await waitFor(() => assert.ok(wallet.calls('eth_accounts').length));
     assert.equal(view.queryByRole('button', { name: 'Connect Wallet' }) === null, true);
     await act(async () => accounts.resolve(restored ? [OWNER] : []));
-    view.getByRole('button', { name: restored ? 'Disconnect' : 'Connect Wallet' });
+    if (restored) view.getByTitle(OWNER);
+    else view.getByRole('button', { name: 'Connect Wallet' });
   });
 }
 
@@ -193,7 +194,7 @@ test('a cancelled wallet connection can be retried through Reserve without submi
   assert.equal(feedback.tabIndex, 0);
   feedback.focus();
   assert.equal(document.activeElement === feedback, true);
-  assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+  assert.equal(view.queryByTitle(OWNER), null);
   assert.equal((view.getByRole('button', { name: 'Connect Wallet' }) as HTMLButtonElement).disabled, false);
   assert.equal(view.button().disabled, false);
   assert.equal(prepareCalls, 0);

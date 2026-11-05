@@ -1,4 +1,4 @@
-import { type MouseEvent, useEffect, useRef, useState } from 'react';
+import { type MouseEvent, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ETHEREUM_MAX_RELICS, formatEtherAmount } from '../../shared/ethereum/protocol';
 import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle } from '../components/MintPanel';
@@ -15,7 +15,24 @@ const INITIAL_PRICE_WEI: Record<Pre111kNetwork, string> = {
   devnet: '3330000000000000',
 };
 
+const narrowFooterQuery = () => window.matchMedia('(max-width: 860px)');
+
+function subscribeToFooterWidth(onChange: () => void) {
+  const query = narrowFooterQuery();
+  query.addEventListener('change', onChange);
+  return () => query.removeEventListener('change', onChange);
+}
+
+function RelicCount({ value, digits, loadingLabel }: { value: string | number | null | undefined; digits: number; loadingLabel?: string }) {
+  return <span className="mint-panel__remaining-count" style={{ minWidth: `${digits}ch` }}>
+    {value ?? (loadingLabel ? <span role="status" aria-label={loadingLabel}>
+      {Array.from({ length: digits }, (_, index) => <span key={index} className="mint-panel__digit-placeholder" aria-hidden="true" />)}
+    </span> : '—')}
+  </span>;
+}
+
 export default function DirectPaymentPage({ network }: { network: Pre111kNetwork }) {
+  const narrowFooter = useSyncExternalStore(subscribeToFooterWidth, () => narrowFooterQuery().matches, () => false);
   const access = usePre111kAccess();
   const approved = Boolean(access.code);
   const model = usePre111k(network, access.code, access.reject);
@@ -84,14 +101,16 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
       <span className="mint-panel__submit-price">{price}</span>
     </> : reserveLabel ?? actionLabel}
   </button>;
-  const reservedCount = wallet.address && !model.statusQuery.isError && typeof count === 'number' && count > 0
-    ? <span className="relic-preorder__reserved" aria-live="polite">{count} reserved</span> : null;
-  const walletControls = <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
+  const showReservedCount = model.statusQuery.isPending || count != null;
+  const walletControls = <div key="wallet" className="relic-preorder__wallet" aria-label="Ethereum wallet">
     {wallet.ready && (approved || wallet.address) ? <div className="relic-preorder__connection">
-      {!approved && reservedCount}
-      {wallet.address ? <span className="relic-preorder__address" title={wallet.address}>{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span> : null}
-      <button type="button" className="relic-preorder__text-button" disabled={!wallet.address && (connecting || choosing)}
-        onClick={wallet.address ? wallet.disconnect : connectWallet}>{wallet.address ? 'Disconnect' : 'Connect Wallet'}</button>
+      {wallet.address ? <>
+        <span className="relic-preorder__address" title={wallet.address}>{wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}</span>
+        {showReservedCount ? <span className="relic-preorder__reserved" aria-live="polite">
+          <RelicCount value={count} digits={1} loadingLabel="Loading reserved count" /> reserved
+        </span> : null}
+      </> : <button type="button" className="relic-preorder__text-button" disabled={connecting || choosing}
+        onClick={connectWallet}>Connect Wallet</button>}
     </div> : null}
     {choosing ? <div className="relic-preorder__choices" role="group" aria-label="Select Ethereum wallet" onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelChoice(); }
@@ -105,9 +124,9 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
       <button type="button" className="relic-preorder__text-button" onClick={cancelChoice}>Cancel</button>
     </div> : null}
   </div>;
-  const feedback = <div className="relic-preorder__feedback" aria-live="polite" tabIndex={hasFeedback ? 0 : undefined}
+  const feedback = <div key="feedback" className="relic-preorder__feedback" aria-live="polite" tabIndex={hasFeedback ? 0 : undefined}
     role={hasFeedback ? 'region' : undefined} aria-label={hasFeedback ? 'Reservation messages' : undefined}>
-    {model.statusQuery.isError ? <p>Couldn’t load reservations. <button type="button" className="relic-preorder__text-button" onClick={() => { void model.statusQuery.refetch(); }}>Retry</button></p>
+    {model.statusQuery.isError ? <p>{status ? 'Couldn’t refresh reservations.' : 'Couldn’t load reservations.'} <button type="button" className="relic-preorder__text-button" onClick={() => { void model.statusQuery.refetch(); }}>Retry</button></p>
       : status && !status.config.enabled ? <p>Reservations are not open yet.</p> : null}
     {model.error ? <p role="alert">{model.error}</p> : null}
     {explorerLink ? <p><a href={explorerLink} target="_blank" rel="noopener noreferrer">View transaction ↗</a></p> : null}
@@ -133,20 +152,13 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
                   <p>First come, first served.</p>
                 </>} />
                 <div className="mint-panel__remaining mint-panel__availability">
-                  <span className="mint-panel__remaining-count" style={{ minWidth: '2ch' }}>
-                    {remaining != null ? formatRemainingCount(remaining, ETHEREUM_MAX_RELICS) : model.statusQuery.isPending ? <span role="status" aria-label="Loading availability">
-                      <span className="mint-panel__digit-placeholder" aria-hidden="true" /><span className="mint-panel__digit-placeholder" aria-hidden="true" />
-                    </span> : '—'}
-                  </span>
+                  <RelicCount value={remaining != null ? formatRemainingCount(remaining, ETHEREUM_MAX_RELICS) : null} digits={2}
+                    loadingLabel={model.statusQuery.isPending ? 'Loading availability' : undefined} />
                   <span> / {ETHEREUM_MAX_RELICS} left</span>
                 </div>
               </>}
               controls={<div className="relic-preorder__support">
-                <div className="relic-preorder__status">
-                  {reservedCount}
-                  {feedback}
-                </div>
-                {walletControls}
+                {narrowFooter ? [walletControls, feedback] : [feedback, walletControls]}
               </div>}
               actions={<div className="mint-panel__cta">{reserve}</div>}
             />

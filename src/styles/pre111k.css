@@ -255,6 +255,7 @@ body:has(.relic-page--unlocked) {
 
 .relic-preorder__reserved {
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .relic-page--unlocked .relic-preorder__wallet,
@@ -263,14 +264,9 @@ body:has(.relic-page--unlocked) {
 }
 
 .relic-page--unlocked .relic-preorder__feedback {
-  display: inline;
   width: auto;
   min-width: 0;
   padding: 0;
-}
-
-.relic-preorder__reserved + .relic-preorder__feedback {
-  margin-inline-start: 12px;
 }
 
 .relic-page--unlocked .relic-preorder__feedback p {
@@ -290,7 +286,7 @@ body:has(.relic-page--unlocked) {
     grid-template-columns: minmax(0, 1fr) fit-content(40%) minmax(0, 1fr);
   }
 
-  .relic-preorder__status a {
+  .relic-preorder__feedback a {
     display: inline-block;
   }
 }
@@ -308,8 +304,8 @@ body:has(.relic-page--unlocked) {
     grid-column: auto;
     min-height: 28px;
     flex-direction: row;
-    align-items: baseline;
     justify-content: flex-start;
+    align-items: baseline;
     text-align: left;
   }
 
@@ -318,19 +314,13 @@ body:has(.relic-page--unlocked) {
     column-gap: min(2.5vw, 14px);
   }
 
-  .relic-preorder__status {
-    display: contents;
-  }
-
   .relic-page--unlocked .relic-preorder__wallet {
-    order: -1;
     position: static;
     width: auto;
     flex: none;
   }
 
   .relic-page--unlocked .relic-preorder__feedback {
-    order: 1;
     margin-inline-start: auto;
     text-align: right;
   }

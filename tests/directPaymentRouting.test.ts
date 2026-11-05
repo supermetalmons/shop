@@ -38,7 +38,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   }));
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState(null, '', '/111k/relics');
-  const { act, fireEvent, getByRole, getByText, queryByRole, waitFor } = await import('@testing-library/react');
+  const { act, fireEvent, getByRole, getByText, getByTitle, queryByRole, waitFor } = await import('@testing-library/react');
   const { default: ReactDOM } = await import('react-dom/client');
   const { QueryClient } = await import('@tanstack/react-query');
   const { navigate } = await import('../src/navigation.ts');
@@ -106,7 +106,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   const transactionKey = (network: Pre111kNetwork) => `mons.shop.pre111k.last-transaction:${config(network).chainId}:${contracts[network]}:${OWNER}`;
   const ready = async (network: Pre111kNetwork) => {
     await waitFor(() => {
-      getByRole(document.body, 'button', { name: 'Disconnect' });
+      getByTitle(document.body, address);
       assert.equal(reserveButton(network).disabled, false);
     }, { timeout: 3_000 });
   };

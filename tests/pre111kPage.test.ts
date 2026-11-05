@@ -11,7 +11,7 @@ import { pre111kApi } from '../src/ethereum/pre111kApi.ts';
 import { EthereumApiError } from '../src/ethereum/api.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
-let { dom } = setupFrontendDom();
+let { dom, setMediaQueryMatches } = setupFrontendDom();
 const imports = registerHooks({ load(url, context, next) { return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context); } });
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider, focusManager, onlineManager } = await import('@tanstack/react-query');
@@ -59,7 +59,7 @@ function lastTransactionKey(network: Pre111kNetwork = 'devnet', wallet = OWNER) 
 }
 beforeEach(context => {
   const t = context as TestContext;
-  ({ dom } = setupFrontendDom());
+  ({ dom, setMediaQueryMatches } = setupFrontendDom());
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   address = OWNER; reserved = 0; sendError = null; sendCount = 0; connectCount = 0; listeners = new Map();
   preparedCodes = []; preparedNonces = []; prepareError = null; verifiedCodes = [];
@@ -109,16 +109,23 @@ function page(network: Pre111kNetwork = 'devnet', restore = true) {
   clients.push(client);
   const view = render(createElement(QueryClientProvider, { client }, createElement(BackgroundBlurProvider, null, createElement(DirectPaymentPage, { network }))));
   return { ...view, client, primary: () => view.container.querySelector('.relic-preorder__reserve') as HTMLButtonElement,
+    reservedLabel: () => view.container.querySelector('.relic-preorder__reserved')?.textContent ?? null,
     availability: () => view.container.querySelector('.mint-panel__availability')?.textContent,
     rerenderNetwork(next: Pre111kNetwork) {
       network = next;
       view.rerender(createElement(QueryClientProvider, { client }, createElement(BackgroundBlurProvider, null, createElement(DirectPaymentPage, { network }))));
     }, async ready() {
     await waitFor(() => {
-      view.getByRole('button', { name: 'Disconnect' });
+      view.getByTitle(address);
       assert.equal((view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.23' : '0.00333'} ETH` }) as HTMLButtonElement).disabled, false);
     }, { timeout: 3_000 });
   }, reserve() { fireEvent.click(view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.23' : '0.00333'} ETH` })); } };
+}
+
+async function disconnectProvider() {
+  await act(async () => {
+    for (const listener of listeners.get('disconnect') ?? []) listener();
+  });
 }
 
 for (const during of ['status', 'prepare'] as const) {
@@ -148,26 +155,37 @@ for (const during of ['status', 'prepare'] as const) {
   });
 }
 
-test('Connect Wallet shows reservations and disconnects without requesting payment', async () => {
+test('Connect Wallet shows the address and reservations until the provider disconnects', async () => {
   reserved = 3;
   const view = page('devnet', false);
   const reserve = () => view.getByRole('button', { name: 'Reserve · 0.00333 ETH' }) as HTMLButtonElement;
   await waitFor(() => assert.equal(reserve().disabled, false));
   const connect = view.getByRole('button', { name: 'Connect Wallet' });
-  assert.equal(view.queryByText('3 reserved'), null);
+  assert.equal(view.reservedLabel(), null);
   fireEvent.click(connect);
   await view.ready();
-  const count = view.getByText('3 reserved');
+  assert.equal(view.reservedLabel(), '3 reserved');
+  const count = view.getByText('reserved');
   const walletAddress = view.getByText('0x1111…1111');
-  assert.ok(count.compareDocumentPosition(walletAddress) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
-  assert.ok(walletAddress.compareDocumentPosition(view.getByRole('button', { name: 'Disconnect' })) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
-  fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
-  await waitFor(() => assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null));
+  assert.ok(walletAddress.compareDocumentPosition(count) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+  await disconnectProvider();
+  await waitFor(() => assert.equal(view.queryByTitle(address), null));
   assert.equal((view.getByRole('button', { name: 'Connect Wallet' }) as HTMLButtonElement).disabled, false);
   assert.equal(reserve().disabled, false);
-  assert.equal(view.queryByText('3 reserved'), null);
+  assert.equal(view.reservedLabel(), null);
   assert.equal(sendCount, 0);
   assert.deepEqual(preparedCodes, []);
+});
+
+test('Retry comes before Connect Wallet on wide screens and after it on narrow screens', async () => {
+  statusImpl = async () => { throw new Error('Unavailable'); };
+  const view = page('devnet', false);
+  const retry = await view.findByRole('button', { name: 'Retry' }, { timeout: 3_000 });
+  const connect = view.getByRole('button', { name: 'Connect Wallet' });
+  assert.ok(retry.compareDocumentPosition(connect) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  act(() => setMediaQueryMatches('(max-width: 860px)', true));
+  assert.ok(connect.compareDocumentPosition(retry) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
 for (const unavailable of ['API failure', 'disabled reservations'] as const) {
@@ -185,7 +203,7 @@ for (const unavailable of ['API failure', 'disabled reservations'] as const) {
     await unavailableMessage();
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, false));
     fireEvent.click(view.getByRole('button', { name: label }));
-    await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => view.getByTitle(address));
     await unavailableMessage();
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, true));
     fireEvent.click(view.getByRole('button', { name: label }));
@@ -205,7 +223,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
       assert.equal(cached().totalReserved, reserved);
       assert.equal(cached().reservedRelics, reserved);
       assert.equal(cached().config.maxRelics, 17);
-      if (reserved > 0) view.getByText(`${reserved} reserved`);
+      assert.equal(view.reservedLabel(), `${reserved} reserved`);
       view.reserve();
       await waitFor(() => assert.equal(sendCount, 1));
       assert.deepEqual(preparedNonces, [reserved]);
@@ -219,7 +237,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     test(`${network} ends preorders at zero remaining with the wallet ${connected ? 'connected' : 'disconnected'}`, async () => {
       reserved = 17;
       const view = page(network, connected);
-      if (connected) await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+      if (connected) await waitFor(() => view.getByTitle(address));
       await waitFor(() => {
         view.getByRole('button', { name: 'Preorders ended' });
         assert.equal(view.availability(), '00 / 18 left');
@@ -229,7 +247,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
       assert.equal(connectCount, 0);
       assert.deepEqual(preparedCodes, []);
       assert.equal(sendCount, 0);
-      if (!connected) assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+      if (!connected) assert.equal(view.queryByTitle(address), null);
     });
   }
 
@@ -281,7 +299,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     const view = page(network);
     const initialPrice = view.getByText(`${formatEtherAmount(configuredPriceWei[network], 18)} ETH`);
     assert.ok(view.primary().contains(initialPrice));
-    await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => view.getByTitle(address));
     view.getByRole('status', { name: 'Loading availability' });
     assert.notEqual(view.availability(), '00 / 18 left');
     assert.equal(view.primary().disabled, true);
@@ -317,7 +335,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     await view.ready();
     assert.equal(window.localStorage.getItem(lastTransactionKey(network)), null);
     assert.equal(window.localStorage.getItem(pendingKey(network)), null);
-    assert.equal(view.queryByText('1 reserved'), null);
+    assert.equal(view.reservedLabel(), '0 reserved');
     assert.equal(view.queryByText('Relic reserved.'), null);
     assert.equal(view.queryByRole('button', { name: 'Confirming reservation…' }), null);
     assert.equal(view.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `${status(network, OWNER).config.explorerUrl}/tx/${HASH}`);
@@ -362,7 +380,7 @@ test('confirming an earlier transaction cannot remove the latest pending transac
     firstConfirmation.resolve({ status: 'confirmed', confirmations: 3, transactionHash: HASH, reservationNonce: 0 });
     await view.client.refetchQueries({ queryKey: ['pre111k', 'devnet', OWNER] });
   });
-  await waitFor(() => view.getByText('1 reserved'));
+  await waitFor(() => assert.equal(view.reservedLabel(), '1 reserved'));
   assert.equal(link(), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`);
   confirmImpl = async (_network, _wallet, transactionHash) => ({ status: 'failed', confirmations: 3, transactionHash, reservationNonce: 0 });
   await act(async () => { await view.client.refetchQueries({ queryKey: ['pre111k-confirmation'] }); });
@@ -409,7 +427,7 @@ for (const completion of ['hash', 'error'] as const) {
     reserved = 1;
     await act(async () => { t.mock.timers.tick(3_000); });
     await view.ready();
-    view.getByText('1 reserved');
+    assert.equal(view.reservedLabel(), '1 reserved');
     assert.equal(view.queryByText('Relic reserved.'), null);
     sendImpl = () => nextSend.promise;
     view.reserve();
@@ -459,7 +477,7 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
     let current = view;
     let currentNetwork: Pre111kNetwork = 'devnet';
     if (interruption === 'disconnect') {
-      fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
+      await disconnectProvider();
       await waitFor(() => assert.equal(view.primary().disabled, false));
       view.reserve();
     } else if (interruption === 'account change') {
@@ -514,18 +532,21 @@ test('previously saved transactions never restore a link', async () => {
   assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
 });
 
-test('a count decrease removes the old count without inventing a settled success state', async t => {
+test('a count decrease displays zero reservations even if the next refresh fails', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   reserved = 1;
   window.localStorage.setItem(lastTransactionKey(), HASH);
-  const view = page(); await view.ready(); view.getByText('1 reserved');
+  const view = page(); await view.ready(); assert.equal(view.reservedLabel(), '1 reserved');
   reserved = 0;
   await act(async () => { t.mock.timers.tick(3_000); });
-  await waitFor(() => assert.equal(view.queryByText('1 reserved') === null, true));
-  assert.equal(view.queryByText('0 reserved'), null);
+  await waitFor(() => assert.equal(view.reservedLabel(), '0 reserved'));
   assert.equal(view.queryByText('Relic reserved.'), null);
   assert.equal(view.primary().disabled, false);
   assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
+  statusImpl = async () => { throw new Error('Unavailable'); };
+  await act(async () => { await view.client.refetchQueries({ queryKey: ['pre111k', 'devnet', OWNER] }); });
+  await view.findByRole('button', { name: 'Retry' });
+  assert.equal(view.reservedLabel(), '0 reserved');
 });
 
 test('switching accounts clears old counts and preserves the latest network price while loading', async t => {
@@ -536,22 +557,22 @@ test('switching accounts clears old counts and preserves the latest network pric
   });
   reserved = 2;
   const newStatus = deferred<Pre111kStatus>();
-  const view = page(); await view.ready(); view.getByText('2 reserved');
+  const view = page(); await view.ready(); assert.equal(view.reservedLabel(), '2 reserved');
   statusImpl = async (network, wallet) => wallet === OTHER ? newStatus.promise : status(network, wallet);
   await switchAccount(OTHER);
   view.getByText('0x2222…2222');
-  assert.equal(view.queryByText('Loading reservations…'), null);
-  assert.equal(view.queryByText('0 reserved'), null);
-  assert.equal(view.queryByText('2 reserved'), null);
+  const loading = view.getByRole('status', { name: 'Loading reserved count' });
+  assert.equal(loading.querySelectorAll('.mint-panel__digit-placeholder').length, 1);
+  assert.equal(view.reservedLabel()?.trim(), 'reserved');
   const updatedAt = view.client.getQueryState(['pre111k', 'devnet', OWNER])!.dataUpdatedAt + 1;
   t.mock.method(Date, 'now', () => updatedAt);
   const updated = status('devnet', OTHER);
   updated.config.priceWei = '0';
   await act(async () => newStatus.resolve({ ...updated, reservedRelics: 1 }));
-  await waitFor(() => view.getByText('1 reserved'));
+  await waitFor(() => assert.equal(view.reservedLabel(), '1 reserved'));
   view.getByText('0 ETH');
   await switchAccount(OWNER);
-  view.getByText('2 reserved');
+  assert.equal(view.reservedLabel(), '2 reserved');
   statusImpl = async () => { throw new Error('Unavailable'); };
   await act(async () => { await view.client.refetchQueries({ queryKey: ['pre111k', 'devnet', OWNER] }); });
   await view.findByRole('button', { name: 'Retry' });
@@ -570,7 +591,7 @@ test('undeployed mainnet remains closed and never displays a fake count', async 
   await waitFor(() => view.getByText('0x1111…1111'));
   await waitFor(() => view.getByText('Reservations are not open yet.'));
   assert.equal(view.queryByText('Reservations unavailable'), null);
-  assert.equal(view.queryByText('0 reserved'), null);
+  assert.equal(view.reservedLabel(), null);
   assert.equal(view.queryByText('Loading reservations…'), null);
   assert.equal((view.getByRole('button', { name: 'Reserve · 2.23 ETH' }) as HTMLButtonElement).disabled, true);
 });
