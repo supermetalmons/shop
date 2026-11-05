@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, useCallback, useRef, useState } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
@@ -80,7 +81,8 @@ beforeEach(context => {
     unresolved: tokenIds.map(tokenId => ({ tokenId, status: 'recovering' as const })) }));
 });
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
-function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, initialize?: (client: InstanceType<typeof QueryClient>) => void) {
+function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, initialize?: (client: InstanceType<typeof QueryClient>) => void,
+  Page = Ethereum111kPage) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   clients.push(client);
   initialize?.(client);
@@ -90,7 +92,7 @@ function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, i
     canOpenSolanaBoxes: () => true, solanaRevealLoading: null, solanaInventoryReady: true,
     ...overrides,
   };
-  const tree = () => createElement(QueryClientProvider, { client }, createElement(Ethereum111kPage, props));
+  const tree = () => createElement(QueryClientProvider, { client }, createElement(Page, props));
   const view = render(tree());
   return { ...view, client, rerenderPage(next: Partial<typeof props>) {
     Object.assign(props, next);
@@ -920,20 +922,19 @@ test('a queued mint blocks newly loaded inventory actions until it fails', async
   await waitFor(() => assert.deepEqual(view.messages, ['Minting is paused.']));
   fireEvent.click(crate);
   assert.equal(crate.getAttribute('aria-pressed'), 'true');
-  fireEvent.click(view.getByRole('button', { name: 'Send' }));
-  assert.equal(window.location.pathname, '/checkout');
-  assert.equal(window.location.search, '?drop=111k_devnet&ids=111112');
+  assert.equal((view.getByRole('button', { name: 'Open crate' }) as HTMLButtonElement).disabled, false);
+  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, true);
   assert.equal(view.queryByRole('dialog'), null);
   assert.equal(view.transactions.length, 0);
 });
 
-test('a queued mint disables existing selection actions and cancellation restores checkout navigation', async t => {
+test('cancelling a queued mint restores View and Open while Send stays disabled', async t => {
   const view = await delayedMintPage(t);
   await act(async () => { view.configuration.resolve(config); });
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${item().id}"]`)!);
   const send = view.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
-  assert.equal(send.disabled, false);
+  assert.equal(send.disabled, true);
   await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate/ })); });
   for (const name of ['Send', 'View', 'Open crate']) {
     const action = view.getByRole('button', { name }) as HTMLButtonElement;
@@ -943,10 +944,12 @@ test('a queued mint disables existing selection actions and cancellation restore
   assert.equal(view.queryByRole('dialog'), null);
   assert.equal(window.location.pathname, '/111k_devnet');
   await act(async () => { window.dispatchEvent(new window.Event('pagehide')); });
-  assert.equal(send.disabled, false);
+  assert.equal(send.disabled, true);
+  for (const name of ['View', 'Open crate']) {
+    assert.equal((view.getByRole('button', { name }) as HTMLButtonElement).disabled, false);
+  }
   fireEvent.click(send);
-  assert.equal(window.location.pathname, '/checkout');
-  assert.equal(window.location.search, '?drop=111k_devnet&ids=111112');
+  assert.equal(window.location.pathname, '/111k_devnet');
   await act(async () => { view.availability.resolve(stats()); });
   await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
   assert.equal(view.queryByRole('dialog'), null);
@@ -1427,21 +1430,21 @@ test('Ethereum and Solana appear in one inventory while selection dispatch stays
 });
 
 for (const selection of [
-  { name: 'crate', tokens: [item()], expected: '111112' },
-  { name: 'artwork', tokens: [{ ...item('332', 'artwork'), displayId: 332, name: 'Artwork #332' }], expected: '332' },
-  { name: 'relic', tokens: [{ ...item('117189', 'relic'), displayId: 18, name: 'Relic #18' }], expected: '117189' },
+  { name: 'crate', tokens: [item()] },
+  { name: 'artwork', tokens: [{ ...item('332', 'artwork'), displayId: 332, name: 'Artwork #332' }] },
+  { name: 'relic', tokens: [{ ...item('117189', 'relic'), displayId: 18, name: 'Relic #18' }] },
   { name: 'mixed crate and artwork', tokens: [
     { ...item('111113'), displayId: 2, name: 'Crate #2' },
     { ...item('553', 'artwork'), displayId: 553, name: 'Artwork #553' },
     item(),
-  ], expected: '553,111112,111113' },
+  ] },
   { name: 'mixed relics, crate and artwork', tokens: [
     { ...item('117189', 'relic'), displayId: 18, name: 'Relic #18' }, item(),
     { ...item('332', 'artwork'), displayId: 332, name: 'Artwork #332' },
     { ...item('117172', 'relic'), name: 'Relic #1' },
-  ], expected: '332,111112,117172,117189' },
+  ] },
 ]) {
-  test(`sending a ${selection.name} selection opens checkout with onchain token IDs and no transaction`, async t => {
+  test(`Send stays disabled for ${selection.name} selections while redemptions are paused`, async t => {
     const methods: string[] = [];
     const sendingWallet: EthereumWallet = { ...wallet, provider: { request: async args => {
       methods.push(args.method);
@@ -1453,15 +1456,38 @@ for (const selection of [
     const view = page({ wallet: sendingWallet });
     await waitFor(() => assert.equal(view.container.querySelectorAll('[data-inventory-id]').length, selection.tokens.length));
     for (const token of selection.tokens) fireEvent.click(view.container.querySelector(`[data-inventory-id="${token.id}"]`)!);
-    fireEvent.click(view.getByRole('button', { name: 'Send' }));
-    assert.equal(window.location.pathname, '/checkout');
-    assert.deepEqual([...new URLSearchParams(window.location.search)], [['drop', '111k_devnet'], ['ids', selection.expected]]);
+    assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, selection.tokens.length);
+    const send = view.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+    assert.equal(send.disabled, true);
+    fireEvent.click(send);
+    assert.equal(window.location.pathname, '/111k_devnet');
+    assert.equal(window.location.search, '');
     assert.equal(view.queryByRole('dialog'), null);
     assert.equal(prepare.mock.callCount(), 0);
     assert.equal(saveAddress.mock.callCount(), 0);
     assert.equal(methods.some(method => ['eth_sendTransaction', 'personal_sign', 'wallet_switchEthereumChain'].includes(method)), false);
   });
 }
+
+test('Send opens checkout with the selected onchain token IDs when checkout is enabled', async t => {
+  const pageUrl = new URL('../src/ethereum/Ethereum111kPage.tsx?checkout-enabled', import.meta.url).href;
+  const imports = registerHooks({ resolve(specifier, context, next) {
+    if (context.parentURL === pageUrl && specifier === '../checkout/config') {
+      return { url: 'data:text/javascript,export const CHECKOUT_ENABLED = true', shortCircuit: true };
+    }
+    return next(specifier, context);
+  } });
+  t.after(() => imports.deregister());
+  const { default: EnabledPage } = await import(pageUrl);
+  const items = [{ ...item('117189', 'relic'), displayId: 18, name: 'Relic #18' }, item()];
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items, nextCursor: null, observedBlock: 10 }));
+  const view = page({}, undefined, EnabledPage);
+  await waitFor(() => assert.equal(view.container.querySelectorAll('[data-inventory-id]').length, items.length));
+  for (const token of items) fireEvent.click(view.container.querySelector(`[data-inventory-id="${token.id}"]`)!);
+  fireEvent.click(view.getByRole('button', { name: 'Send' }));
+  assert.equal(window.location.pathname, '/checkout');
+  assert.deepEqual([...new URLSearchParams(window.location.search)], [['drop', '111k_devnet'], ['ids', '111112,117189']]);
+});
 
 test('warehouses and receipts keep their existing actions without offering checkout', async t => {
   const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
@@ -1484,7 +1510,7 @@ test('warehouses and receipts keep their existing actions without offering check
   assert.equal(window.location.pathname, '/111k_devnet');
 });
 
-test('crate opening is capped at fifteen without truncating fifty-item delivery selections', async t => {
+test('crate opening is capped at fifteen while inventory supports fifty selected items', async t => {
   const crates = Array.from({ length: 51 }, (_, index) => ({ ...item(String(111112 + index)), displayId: index + 1, name: `Crate #${index + 1}` }));
   const artwork = { ...item('1', 'artwork'), name: 'Artwork #1' };
   const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
@@ -1501,12 +1527,12 @@ test('crate opening is capped at fifteen without truncating fifty-item delivery 
   assert.ok(view.getByText(/Open up to 15 crates at once/));
   for (const crate of crates.slice(16)) select(crate);
   assert.equal((view.getByRole('button', { name: 'Open 50 crates' }) as HTMLButtonElement).disabled, true);
-  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, false);
+  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, true);
   assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 50);
   select(crates[0]);
   select(artwork);
   assert.equal(view.queryByRole('button', { name: /Open \d+ crates/ }), null);
-  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, false);
+  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, true);
   select(warehouse);
   assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 1);
   assert.equal((view.getByRole('button', { name: 'Open warehouse' }) as HTMLButtonElement).disabled, false);
@@ -1754,7 +1780,7 @@ test('the relic icon opens claims without adding a public relic mint', async t =
   assert.equal(view.queryByRole('button', { name: /Mint.*relic/i }), null);
 });
 
-test('relics preserve their numbered images and allow delivery together or opening individually', async t => {
+test('relics preserve their numbered images and can be opened when selected individually', async t => {
   const relic = { ...item('117189', 'relic'), displayId: 18, name: 'Relic #18', image: 'https://wip.lil.org/111k/relics/18.webp' };
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [relic, item()], nextCursor: null, observedBlock: 10 }));
   const view = page();
@@ -1764,11 +1790,11 @@ test('relics preserve their numbered images and allow delivery together or openi
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${relic.id}"]`)!);
   assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 2);
   assert.equal(view.queryByRole('button', { name: 'Open relic' }), null);
-  assert.ok(view.getByRole('button', { name: 'Send' }));
+  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, true);
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${item().id}"]`)!);
   assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 1);
-  assert.ok(view.getByRole('button', { name: 'Open relic' }));
-  assert.ok(view.getByRole('button', { name: 'Send' }));
+  assert.equal((view.getByRole('button', { name: 'Open relic' }) as HTMLButtonElement).disabled, false);
+  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, true);
 });
 
 test('relic receipts preserve the matching image and offer transfer without further claims or delivery', async t => {

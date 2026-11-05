@@ -4,6 +4,7 @@ import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
 import { ETHEREUM_CHECKOUT_ID, checkoutEntryUrl, type EthereumCheckoutStatusResponse } from '../../shared/ethereum/checkout';
 import { ETHEREUM_MAX_EXPECTED_IDS, ethereumItemDisplayIdMaximum, ethereumReceiptTokenId, formatEtherAmount, isEthereumDeliveryKind, type EthereumContainerKind } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
+import { CHECKOUT_ENABLED } from '../checkout/config';
 import { InventoryGrid } from '../components/InventoryGrid';
 import { Modal } from '../components/Modal';
 import { BackgroundLayerPortal } from '../components/BackgroundBlurLayer';
@@ -383,7 +384,7 @@ export default function Ethereum111kPage({
           }} disabled={disabled || unboxLimitExceeded || checkoutUnboxBlocked}>
             {selectedItems.length === 1 ? `Open ${selectedContainer!.kind}` : `Open ${selectedItems.length} crates`}
           </button> : null}
-          {canDeliver ? <button type="button" onClick={() => navigate(checkoutEntryUrl(selectedItems.map(item => item.tokenId)))} disabled={disabled}>Send</button> : null}
+          {canDeliver ? <button type="button" onClick={() => navigate(checkoutEntryUrl(selectedItems.map(item => item.tokenId)))} disabled={disabled || !CHECKOUT_ENABLED}>Send</button> : null}
         </div>
       </div></BackgroundLayerPortal> : null}
       <Modal open={claimConnectionOpen} title="Claim crate contents" onClose={() => { setDismissedClaimConnection(claimLinkKey); wallet.cancel(); }} suspended={suspended}>
