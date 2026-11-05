@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-11-05T11:31:47.515Z",
+  "contractAddress": "0xd1432dd5ec5dba6861bd4c6a56212f54abcbc0b9",
+  "network": "mainnet",
+  "page": "https://mons.shop/111k/relics",
+  "availability": "17 / 18 left",
+  "action": "Reserve · 2.3 ETH",
+  "visibleAction": "Reserve 2.3 ETH",
+  "actionEnabled": true,
+  "artworkLoaded": true,
+  "statusBlock": 26348350,
+  "deploymentBlock": 26348338,
+  "contractMaxRelics": 17,
+  "accessGateVerified": true,
+  "freshBrowserContext": true,
+  "walletConnected": false,
+  "reservationActionClicked": false,
+  "reservationRequests": 0
+}

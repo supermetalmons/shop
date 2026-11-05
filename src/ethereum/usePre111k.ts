@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
-import { checkedPre111kReservation, pre111kApi } from './pre111kApi';
+import { checkedPre111kReservation, pre111kApi, Pre111kPriceChanged } from './pre111kApi';
 import { ethereumOperation, ethereumWalletError } from './wallet';
 import { EthereumApiError } from './api';
 
@@ -115,16 +115,18 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
       const fresh = await pre111kApi.status(network, savedWallet, signal);
       assertCurrent();
       if (!fresh.config.enabled || fresh.config.contractAddress !== config.contractAddress || fresh.config.chainId !== config.chainId ||
-        fresh.config.priceWei !== config.priceWei || fresh.reservedRelics === null || fresh.remainingRelics === null) {
+        fresh.reservedRelics === null || fresh.remainingRelics === null) {
         throw new Error('Reservations are unavailable. Please refresh and try again.');
       }
       queryClient.setQueryData(queryKey, fresh);
-      if (fresh.remainingRelics <= 1) throw new Error('Preorders ended');
+      if (fresh.config.priceWei !== config.priceWei) throw new Pre111kPriceChanged();
+      if (fresh.remainingRelics === 0) throw new Error('Preorders ended');
       const prepared = await pre111kApi.prepare(network, savedWallet, accessCode, signal);
       assertCurrent();
       const transaction = checkedPre111kReservation(prepared, fresh.config, savedWallet, fresh.reservedRelics);
       const transactionHash = await operation.send(transaction, () => {
         assertCurrent();
+        if (queryClient.getQueryData<typeof fresh>(queryKey)?.config.priceWei !== config.priceWei) throw new Pre111kPriceChanged();
         checkedPre111kReservation(prepared, fresh.config, savedWallet, fresh.reservedRelics!);
         current.nonce = prepared.nonce;
         setStage('Confirm in your wallet…');
@@ -134,6 +136,7 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
       void queryClient.invalidateQueries({ queryKey: ['pre111k', network] });
     } catch (cause) {
       if (!isCurrent()) return;
+      if (cause instanceof Pre111kPriceChanged) void queryClient.invalidateQueries({ queryKey });
       if (cause instanceof EthereumApiError && cause.code === 'unauthenticated') latestAccess.current.reject(accessCode);
       else setError({ scope: current.scope, message: ethereumWalletError(cause) });
     } finally {

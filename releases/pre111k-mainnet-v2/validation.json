@@ -1,0 +1,61 @@
+{
+  "checkedAt": "2026-11-05T11:31:59.588Z",
+  "chainId": 1,
+  "contractAddress": "0xd1432dd5ec5dba6861bd4c6a56212f54abcbc0b9",
+  "previousDeployment": {
+    "contractAddress": "0x0a00d0a121cf14632845a16651d43941e8107f08",
+    "observedBlock": 26348331,
+    "observedBlockHash": "0x7660da355e1daed67ad7adddf29075ecabfa3ad352894e3ba7b0716b9604410e",
+    "blockTimestamp": "2026-11-05T11:27:47.000Z",
+    "totalReserved": 0,
+    "balanceWei": "0"
+  },
+  "contractTests": {
+    "command": "npm run test:pre111k",
+    "passed": 19,
+    "failed": 0,
+    "forkOnlySkipped": 1
+  },
+  "mainnetSafeFork": {
+    "block": 26326516,
+    "testsPassed": 1,
+    "withdrawalWei": "39100000000000000000"
+  },
+  "deploymentToolTests": {
+    "command": "npm run test:pre111k-deployment",
+    "passed": 33,
+    "failed": 0
+  },
+  "canonicalReceipt": {
+    "blockNumber": 26348338,
+    "blockHash": "0xbcbef61e90f03a45d8ac8b7d5d2d6fceb3fca82a8598e364007458d41854e25b",
+    "confirmationsAtVerification": 3,
+    "transactionHash": "0xae829ff1a323a0cabb96ae4812567ba93a9f59c12190d6d44294ec49bc96ef74"
+  },
+  "constructorArgs": "0x00000000000000000000000072d0c5623a05033f9ee4495d408bc6c05df8367d00000000000000000000000072d0c5623a05033f9ee4495d408bc6c05df8367d00000000000000000000000043c829cbb3648cc5eb8ebaa15fb7cfab21ecc2ea",
+  "runtimeBytes": 3485,
+  "gasUsed": "846679",
+  "feePaidWei": "108203985290159",
+  "artifactMatchesSepolia": true,
+  "standardInputMatchesSepolia": true,
+  "sourcify": {
+    "creationMatch": "match",
+    "runtimeMatch": "match",
+    "frozenSourcesMatch": true
+  },
+  "etherscan": {
+    "exactMatch": true,
+    "frozenSourcesMatch": true
+  },
+  "simulations": {
+    "file": "reservation-simulation.json",
+    "pricesWei": [
+      "2300000000000000000",
+      "1000000000000000000",
+      "0"
+    ],
+    "modifiedValuesRejected": true
+  },
+  "startingSupplyRemaining": 17,
+  "reservationTransactionBroadcast": false
+}

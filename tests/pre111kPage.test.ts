@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { testPre111kConfig } from './helpers/pre111k.ts';
 import { registerHooks } from 'node:module';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
-import { encodePre111kReservation, resolvePre111kConfig, type Pre111kConfirmResponse, type Pre111kNetwork, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
+import { encodePre111kReservation, type Pre111kConfirmResponse, type Pre111kNetwork, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 import { pre111kApi } from '../src/ethereum/pre111kApi.ts';
 import { EthereumApiError } from '../src/ethereum/api.ts';
@@ -45,8 +46,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 function status(network: Pre111kNetwork, wallet: string | null): Pre111kStatus {
-  return { config: resolvePre111kConfig(network, { contractAddress: CONTRACT, enabled: true }), wallet,
-    totalReserved: reserved, reservedRelics: wallet ? reserved : null, remainingRelics: 18 - reserved, observedBlock: 1, blockHash: HASH };
+  return { config: testPre111kConfig(network, { contractAddress: CONTRACT, enabled: true }), wallet,
+    totalReserved: reserved, reservedRelics: wallet ? reserved : null, remainingRelics: 17 - reserved, observedBlock: 1, blockHash: HASH };
 }
 function pendingKey(network: Pre111kNetwork = 'devnet') { return `mons.shop.pre111k.pending:${network === 'mainnet' ? 1 : 11155111}:${CONTRACT}:${OWNER}`; }
 function lastTransactionKey(network: Pre111kNetwork = 'devnet', wallet = OWNER) {
@@ -116,6 +117,33 @@ function page(network: Pre111kNetwork = 'devnet', restore = true) {
   }, reserve() { fireEvent.click(view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` })); } };
 }
 
+for (const during of ['status', 'prepare'] as const) {
+  test(`a price change during ${during} refreshes the displayed amount and requires another click`, async t => {
+    const view = page();
+    await view.ready();
+    const repriced = () => {
+      statusImpl = async (network, wallet) => {
+        const current = status(network, wallet);
+        return { ...current, config: { ...current.config, priceWei: '1' } };
+      };
+    };
+    if (during === 'status') repriced();
+    const originalPrepare = pre111kApi.prepare;
+    t.mock.method(pre111kApi, 'prepare', async (...args: Parameters<typeof pre111kApi.prepare>) => {
+      const quote = await originalPrepare(...args);
+      repriced();
+      return { ...quote, transaction: { ...quote.transaction, value: '0x1' } };
+    });
+    view.reserve();
+    const label = 'Reserve · 0.000000000000000001 ETH';
+    await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, false));
+    assert.match(view.getByRole('alert').textContent ?? '', /price changed/i);
+    assert.equal(sendCount, 0);
+    fireEvent.click(view.getByRole('button', { name: label }));
+    await waitFor(() => assert.equal(sendCount, 1));
+  });
+}
+
 test('Reserve connects, shows positive reservations before the address and disconnects without requesting payment', async () => {
   reserved = 3;
   const view = page('devnet', false);
@@ -140,12 +168,12 @@ test('Reserve connects, shows positive reservations before the address and disco
 for (const unavailable of ['API failure', 'disabled reservations'] as const) {
   test(`${unavailable} still allows wallet connection but blocks reservation`, async () => {
     if (unavailable === 'API failure') statusImpl = async () => { throw new Error('Unavailable'); };
-    else statusImpl = async (network, wallet) => ({ ...status(network, wallet), config: resolvePre111kConfig(network) });
+    else statusImpl = async (network, wallet) => ({ ...status(network, wallet), config: testPre111kConfig(network) });
     const view = page('devnet', false);
-    await waitFor(() => assert.equal((view.getByRole('button', { name: 'Reserve · 0.0023 ETH' }) as HTMLButtonElement).disabled, false));
-    view.reserve();
+    const label = unavailable === 'API failure' ? 'Reserve' : 'Reserve · 0.0023 ETH';
+    await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, false));
+    fireEvent.click(view.getByRole('button', { name: label }));
     await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
-    const label = 'Reserve · 0.0023 ETH';
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, true));
     fireEvent.click(view.getByRole('button', { name: label }));
     assert.deepEqual(preparedCodes, []);
@@ -154,16 +182,16 @@ for (const unavailable of ['API failure', 'disabled reservations'] as const) {
 }
 
 for (const network of ['mainnet', 'devnet'] as const) {
-  for (const [remaining, availability] of [[18, '17 / 18 left'], [2, '01 / 18 left']] as const) {
-    test(`${network} displays one fewer than ${remaining} remaining while preserving purchase counts and nonce`, async () => {
-      reserved = 18 - remaining;
+  for (const [remaining, availability] of [[17, '17 / 18 left'], [1, '01 / 18 left']] as const) {
+    test(`${network} displays and allows purchase with ${remaining} remaining while preserving purchase counts and nonce`, async () => {
+      reserved = 17 - remaining;
       const view = page(network); await view.ready();
       assert.equal(view.availability(), availability);
       const cached = () => view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])!;
       assert.equal(cached().remainingRelics, remaining);
       assert.equal(cached().totalReserved, reserved);
       assert.equal(cached().reservedRelics, reserved);
-      assert.equal(cached().config.maxRelics, 18);
+      assert.equal(cached().config.maxRelics, 17);
       if (reserved > 0) view.getByText(`${reserved} reserved`);
       view.reserve();
       await waitFor(() => assert.equal(sendCount, 1));
@@ -174,40 +202,38 @@ for (const network of ['mainnet', 'devnet'] as const) {
     });
   }
 
-  for (const remaining of [1, 0]) {
-    for (const connected of [false, true]) {
-      test(`${network} ends preorders at ${remaining} remaining with the wallet ${connected ? 'connected' : 'disconnected'}`, async () => {
-        reserved = 18 - remaining;
-        const view = page(network, connected);
-        if (connected) await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
-        await waitFor(() => {
-          view.getByRole('button', { name: 'Preorders ended' });
-          assert.equal(view.availability(), '00 / 18 left');
-          assert.equal(view.primary().disabled, true);
-        });
-        await act(async () => { fireEvent.click(view.primary()); });
-        assert.equal(connectCount, 0);
-        assert.deepEqual(preparedCodes, []);
-        assert.equal(sendCount, 0);
-        if (!connected) assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+  for (const connected of [false, true]) {
+    test(`${network} ends preorders at zero remaining with the wallet ${connected ? 'connected' : 'disconnected'}`, async () => {
+      reserved = 17;
+      const view = page(network, connected);
+      if (connected) await waitFor(() => view.getByRole('button', { name: 'Disconnect' }));
+      await waitFor(() => {
+        view.getByRole('button', { name: 'Preorders ended' });
+        assert.equal(view.availability(), '00 / 18 left');
+        assert.equal(view.primary().disabled, true);
       });
-    }
-
-    test(`${network} blocks preparation when a fresh read falls from two to ${remaining} remaining`, async () => {
-      reserved = 16;
-      const view = page(network); await view.ready();
-      assert.equal(view.availability(), '01 / 18 left');
-      reserved = 18 - remaining;
-      view.reserve();
-      await waitFor(() => assert.equal(view.getByRole('alert').textContent, 'Preorders ended'));
-      const ended = view.getByRole('button', { name: 'Preorders ended' }) as HTMLButtonElement;
-      assert.equal(ended.disabled, true);
-      assert.equal(view.availability(), '00 / 18 left');
-      assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])?.remainingRelics, remaining);
+      await act(async () => { fireEvent.click(view.primary()); });
+      assert.equal(connectCount, 0);
       assert.deepEqual(preparedCodes, []);
       assert.equal(sendCount, 0);
+      if (!connected) assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
     });
   }
+
+  test(`${network} blocks preparation when the final slot sells before preparation`, async () => {
+    reserved = 16;
+    const view = page(network); await view.ready();
+    assert.equal(view.availability(), '01 / 18 left');
+    reserved = 17;
+    view.reserve();
+    await waitFor(() => assert.equal(view.getByRole('alert').textContent, 'Preorders ended'));
+    const ended = view.getByRole('button', { name: 'Preorders ended' }) as HTMLButtonElement;
+    assert.equal(ended.disabled, true);
+    assert.equal(view.availability(), '00 / 18 left');
+    assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])?.remainingRelics, 0);
+    assert.deepEqual(preparedCodes, []);
+    assert.equal(sendCount, 0);
+  });
 
   for (const connected of [false, true]) {
     test(`${network} polling updates availability and the ended button while ${connected ? 'connected' : 'disconnected'}`, async t => {
@@ -216,13 +242,13 @@ for (const network of ['mainnet', 'devnet'] as const) {
       const view = page(network, connected);
       if (connected) await view.ready();
       await waitFor(() => assert.equal(view.availability(), '02 / 18 left'));
-      for (const [remaining, availability] of [[2, '01 / 18 left'], [1, '00 / 18 left'], [0, '00 / 18 left'], [2, '01 / 18 left']] as const) {
-        reserved = 18 - remaining;
+      for (const [remaining, availability] of [[1, '01 / 18 left'], [0, '00 / 18 left'], [1, '01 / 18 left']] as const) {
+        reserved = 17 - remaining;
         await act(async () => { t.mock.timers.tick(connected ? 3_000 : 10_000); });
         await waitFor(() => {
           assert.equal(view.availability(), availability);
-          assert.equal(view.primary().disabled, remaining <= 1);
-          assert.equal(Boolean(view.queryByRole('button', { name: 'Preorders ended' })), remaining <= 1);
+          assert.equal(view.primary().disabled, remaining === 0);
+          assert.equal(Boolean(view.queryByRole('button', { name: 'Preorders ended' })), remaining === 0);
         });
         assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, connected ? OWNER : null])?.remainingRelics, remaining);
       }
@@ -236,7 +262,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     const pending = deferred<void>();
     statusImpl = async (requestedNetwork, wallet) => {
       await pending.promise;
-      return { config: resolvePre111kConfig(requestedNetwork), wallet, totalReserved: null, reservedRelics: null,
+      return { config: testPre111kConfig(requestedNetwork), wallet, totalReserved: null, reservedRelics: null,
         remainingRelics: null, observedBlock: null, blockHash: null };
     };
     const view = page(network);
@@ -257,7 +283,7 @@ for (const network of ['mainnet', 'devnet'] as const) {
     view.getByRole('button', { name: 'Retry' });
     assert.equal(view.primary().disabled, true);
     assert.equal(view.queryByRole('button', { name: 'Preorders ended' }), null);
-    assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])?.remainingRelics, 1);
+    assert.equal(view.client.getQueryData<Pre111kStatus>(['pre111k', network, OWNER])?.remainingRelics, 0);
     assert.deepEqual(preparedCodes, []);
     assert.equal(sendCount, 0);
   });
@@ -500,7 +526,7 @@ test('switching accounts clears old counts until the new address finishes loadin
 });
 
 test('undeployed mainnet remains closed and never displays a fake count', async () => {
-  statusImpl = async (network, wallet) => ({ config: resolvePre111kConfig(network), wallet, totalReserved: null, reservedRelics: null,
+  statusImpl = async (network, wallet) => ({ config: testPre111kConfig(network), wallet, totalReserved: null, reservedRelics: null,
     remainingRelics: null, observedBlock: null, blockHash: null });
   const view = page('mainnet');
   await waitFor(() => view.getByText('0x1111…1111'));

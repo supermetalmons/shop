@@ -9,22 +9,18 @@ interface Pre111KDeploymentVm {
 }
 
 contract Pre111KDeploymentHarness is DeployPre111K {
-    function configuration(uint256 chainId) external pure returns (address, uint256) {
-        return _configuration(chainId);
+    function adminForChain(uint256 chainId) external pure returns (address) {
+        return _admin(chainId);
     }
 }
 
 contract Pre111KDeploymentTest is TestSupport {
-    function testDeploymentPinsBothNetworkPricesAndImmutableRoles() public {
+    function testDeploymentPinsAdminForSupportedNetworks() public {
         Pre111KDeploymentHarness script = new Pre111KDeploymentHarness();
-        (address admin, uint256 price) = script.configuration(1);
-        assertEq(admin, script.TREASURY());
-        assertEq(price, 2.3 ether);
-        (admin, price) = script.configuration(11155111);
-        assertEq(admin, script.SEPOLIA_ADMIN());
-        assertEq(price, 0.0023 ether);
+        assertEq(script.adminForChain(1), script.TREASURY());
+        assertEq(script.adminForChain(11155111), script.SEPOLIA_ADMIN());
         vm.expectRevert();
-        script.configuration(31337);
+        script.adminForChain(31337);
     }
 
     function testMainnetDeploymentScriptUsesSafeAdminAndTreasuryInLocalEVM() public {
@@ -37,7 +33,7 @@ contract Pre111KDeploymentTest is TestSupport {
         assertEq(preorder.admin(), script.TREASURY());
         assertEq(preorder.treasury(), script.TREASURY());
         assertEq(preorder.quoteSigner(), 0x2222222222222222222222222222222222222222);
-        assertEq(preorder.price(), 2.3 ether);
+        assertEq(preorder.MAX_RELICS(), 17);
         assertEq(preorder.totalReserved(), 0);
         assertEq(address(preorder).balance, 0);
         vm.chainId(11155111);

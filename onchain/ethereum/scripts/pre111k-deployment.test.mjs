@@ -10,18 +10,17 @@ const mainnetSigner = '0x2222222222222222222222222222222222222222';
 
 test('Sepolia deployment pins the approved immutable configuration', () => {
   assert.equal(PRE111K_SEPOLIA.chainId, 11155111);
-  assert.equal(PRE111K_SEPOLIA.priceWei, '2300000000000000');
+  assert.equal(PRE111K_SEPOLIA.quoteSigner, '0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca');
   assert.equal(PRE111K_SEPOLIA.treasury, '0x72d0c5623a05033f9ee4495d408bc6c05df8367d');
 });
 
-test('mainnet pins the Safe roles and price while keeping a separate funded deployer and signer', () => {
+test('mainnet pins the Safe roles while keeping a separate funded deployer and signer', () => {
   const configuration = deploymentConfiguration('mainnet', mainnetSigner);
   assert.equal(configuration.chainId, 1);
   assert.equal(configuration.deployer, PRE111K_SEPOLIA.admin);
   assert.equal(configuration.admin, PRE111K_SEPOLIA.treasury);
   assert.equal(configuration.treasury, configuration.admin);
   assert.notEqual(configuration.deployer, configuration.admin);
-  assert.equal(configuration.priceWei, '2300000000000000000');
   assert.equal(configuration.maximumFeeWei, '1000000000000000');
   assert.equal(configuration.quoteSigner, mainnetSigner);
   assert.equal(deploymentConfiguration().chainId, 11155111);
@@ -36,7 +35,7 @@ test('frozen configuration rejects mixed networks, deployers and constructor rol
   const manifest = { network: 'mainnet', ...deploymentConfiguration('mainnet', mainnetSigner) };
   validateDeploymentConfiguration(manifest, 'mainnet');
   for (const [key, value] of Object.entries({ chainId: 11155111, network: 'sepolia', deployer: manifest.admin,
-    admin: manifest.deployer, treasury: manifest.deployer, priceWei: PRE111K_SEPOLIA.priceWei, quoteSigner: PRE111K_SEPOLIA.quoteSigner })) {
+    admin: manifest.deployer, treasury: manifest.deployer, quoteSigner: PRE111K_SEPOLIA.quoteSigner })) {
     assert.throws(() => validateDeploymentConfiguration({ ...manifest, [key]: value }, 'mainnet'));
   }
   assert.throws(() => validateDeploymentConfiguration(manifest, 'sepolia'));
@@ -153,8 +152,8 @@ test('mainnet preparation freezes Safe constructor values and reads only the dep
   assert.equal(manifest.admin, PRE111K_MAINNET.treasury);
   assert.equal(manifest.quoteSigner, mainnetSigner);
   const words = manifest.constructorArgs.slice(2).match(/.{64}/g);
-  assert.deepEqual(words.slice(0, 3).map(word => '0x' + word.slice(24)), [manifest.admin, manifest.treasury, mainnetSigner]);
-  assert.equal(BigInt('0x' + words[3]).toString(), '2300000000000000000');
+  assert.deepEqual(words.map(word => '0x' + word.slice(24)), [manifest.admin, manifest.treasury, mainnetSigner]);
+  assert.equal(Object.hasOwn(manifest, 'priceWei'), false);
   for (const request of f.requests.filter(request => ['eth_getTransactionCount', 'eth_getBalance'].includes(request.method))) {
     assert.equal(request.params[0], manifest.deployer);
   }

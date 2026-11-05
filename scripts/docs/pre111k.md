@@ -2,20 +2,24 @@
 
 `/111k/relics` uses Ethereum mainnet and `/111k/relics_devnet` uses Sepolia. Each
 successful `reserveRelic(uint256 nonce,uint256 deadline,bytes signature)` call
-reserves one relic for its caller and holds the payment in `Pre111K`. The exact
-price is 2.3 ETH on mainnet or 0.0023 ETH on Sepolia. Each deployment has a lifetime
-maximum of eighteen reservations. Wallets may reserve multiple times, one call at
-a time. There is no NFT, transfer, cancellation, refund, or relic-ID selection in
+reserves one relic for its caller and holds the payment in `Pre111K`. The backend
+sets the price per network, initially 2.3 ETH on mainnet and 0.0023 ETH on Sepolia.
+Each deployment has a lifetime maximum of seventeen reservations. The storefront
+initially shows `17 / 18 left` because there are eighteen physical relics.
+Wallets may reserve multiple times, one call at a time. There is no NFT, transfer, cancellation, refund, or relic-ID selection in
 this contract. Existing NFT111K relic claims remain independent.
 
 ## Authorization and counts
 
 The API approves a wallet only when its request includes a valid secret code,
-that network is enabled, and supply remains. It signs EIP-712 `ReserveRelic(address wallet,uint256 nonce,uint256
-deadline)` using domain name `pre111k`, version `1`, the chain ID, and the deployed
-contract address. The wallet's `reservedRelics(address)` count is its next nonce.
+that network is enabled, and supply remains. It signs EIP-712
+`ReserveRelic(address wallet,uint256 nonce,uint256 deadline,uint256 priceWei)`
+using domain name `pre111k`, version `2`, the chain ID, and the deployed contract address. The wallet's `reservedRelics(address)` count is its next nonce.
 An authorization must be unexpired and no more than ten minutes in the future.
-The contract verifies the caller, nonce, signer, price, and remaining supply.
+The contract hashes the actual transaction value into the authorization, so the
+call must pay the exact signed amount, including for a zero-wei quote. A price
+change affects newly issued quotes. A previous quote remains usable at its original
+amount until it expires or its nonce is consumed.
 
 The API does not hold supply offchain. Concurrent quotes can race for the final
 slot; only a successful onchain reservation consumes it. Duplicate quotes for
@@ -56,7 +60,7 @@ The backend chooses the contract and price; callers cannot override them.
 
 Anyone may call `withdraw()` with zero ETH. It sends the entire balance only to
 `0x72D0c5623A05033F9eE4495D408BC6c05DF8367d`. The caller cannot redirect funds.
-Price, cap, treasury, and administrator are immutable. Withdrawal has a reentrancy
+The cap, treasury, and administrator are immutable. Withdrawal has a reentrancy
 guard and forwards gas to the receiver; failure reverts and retains the balance
 for a retry. No fixed 2,300-gas transfer is used. An empty withdrawal is a no-op.
 
@@ -95,7 +99,10 @@ Withdrawal remains permissionless regardless of backend availability.
 
 The API has independent `ETHEREUM_PRE111K_MAINNET_*` and
 `ETHEREUM_PRE111K_SEPOLIA_*` settings: `CONTRACT_ADDRESS`, `DEPLOYMENT_BLOCK`,
-`ENABLED`, and `SIGNER_SECRET`. RPC reads reuse `ALCHEMY_MI_NOTE_API_KEY`.
+`ENABLED`, `PRICE_WEI`, and `SIGNER_SECRET`. Set `PRICE_WEI` to a canonical unsigned
+decimal wei string and deploy the Worker to apply a price change. The storefront
+shows the price from status and requires a fresh click if the prepared price changes.
+RPC reads reuse `ALCHEMY_MI_NOTE_API_KEY`.
 Both network signer secrets are required for the deployed API. Each signer has
 its own encrypted local keystore and a password stored in macOS Keychain; the
 Worker receives only its corresponding signing key as a secret. To back up a
@@ -122,9 +129,9 @@ validation errors report only a generic category, never a code value.
 
 Use the dedicated pre111k deployment workflow; do not replace NFT111K, reset its
 commerce state, allocate relic claims, or modify its metadata. Validate the
-expected chain, constructor values, price, signer, and deployment bytecode before
+expected chain, constructor values, signer, cap, and deployment bytecode before
 activating an address. Estimate gas against the target chain. Preserve the
 deployment transaction, block, source verification, and validation evidence in
-the release record. Public acceptance must leave all eighteen initial slots
+the release record. Public acceptance must leave all seventeen initial slots
 available; purchase and withdrawal transactions run locally, and public-network
 reservation acceptance uses simulation.

@@ -20,6 +20,7 @@ import { matchesSha256Hex, sha256Hex } from './sessionSecrets.js';
 export type Pre111kEnvironment = Pick<Env,
   'ALCHEMY_MI_NOTE_API_KEY' | 'ETHEREUM_111K_RPC_URL' | 'PUBLIC_SHOP_RATE_LIMITER' | 'PREORDER_PREPARE_RATE_LIMITER' | 'PREORDER_PREPARE_IP_RATE_LIMITER' |
   'ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS' | 'ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK' | 'ETHEREUM_PRE111K_MAINNET_ENABLED' |
+  'ETHEREUM_PRE111K_MAINNET_PRICE_WEI' | 'ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI' |
   'ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS' | 'ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK' | 'ETHEREUM_PRE111K_SEPOLIA_ENABLED'
 > & Partial<Pick<Env, 'ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET' | 'ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET' | 'ETHEREUM_PRE111K_ACCESS_CODES'>>;
 
@@ -37,6 +38,7 @@ function configuration(env: Pre111kEnvironment, network: Pre111kNetwork): Pre111
   return resolvePre111kConfig(network, {
     contractAddress: mainnet ? env.ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS : env.ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS,
     deploymentBlock: mainnet ? env.ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK : env.ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK,
+    priceWei: mainnet ? env.ETHEREUM_PRE111K_MAINNET_PRICE_WEI : env.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI,
     enabled: (mainnet ? env.ETHEREUM_PRE111K_MAINNET_ENABLED : env.ETHEREUM_PRE111K_SEPOLIA_ENABLED) === 'true',
   });
 }
@@ -87,19 +89,18 @@ async function state(context: Context, wallet: string | null): Promise<State> {
   if (typeof block.hash !== 'string' || !HASH.test(block.hash) || blockNumber < context.config.deploymentBlock) return unavailable();
   const snapshot = { blockNumber, blockHash: block.hash.toLowerCase() };
   const results = await ethereumCallBatch(read, [
-    encodeCall('price()', [], []), encodeCall('treasury()', [], []), encodeCall('MAX_RELICS()', [], []),
+    encodeCall('treasury()', [], []), encodeCall('MAX_RELICS()', [], []),
     encodeCall('MAX_AUTHORIZATION_LIFETIME()', [], []), encodeCall('quoteSigner()', [], []),
     encodeCall('totalReserved()', [], []), encodeCall('reservedRelics(address)', ['address'], [wallet || ZERO_ADDRESS]),
   ], ethereumHexQuantity(blockNumber));
   if (results.some(result => result.length !== 66)) return unavailable();
-  const [price] = decodeReturn(['uint256'], results[0]);
-  const [treasury] = decodeReturn(['address'], results[1]);
-  const [maximum] = decodeReturn(['uint256'], results[2]);
-  const [lifetime] = decodeReturn(['uint256'], results[3]);
-  const [signer] = decodeReturn(['address'], results[4]);
-  const totalReserved = smallInteger(decodeReturn(['uint256'], results[5])[0], PRE111K_MAX_RELICS);
-  const reservedRelics = smallInteger(decodeReturn(['uint256'], results[6])[0], totalReserved);
-  if (price !== BigInt(context.config.priceWei) || treasury !== context.config.treasury || maximum !== BigInt(PRE111K_MAX_RELICS) ||
+  const [treasury] = decodeReturn(['address'], results[0]);
+  const [maximum] = decodeReturn(['uint256'], results[1]);
+  const [lifetime] = decodeReturn(['uint256'], results[2]);
+  const [signer] = decodeReturn(['address'], results[3]);
+  const totalReserved = smallInteger(decodeReturn(['uint256'], results[4])[0], PRE111K_MAX_RELICS);
+  const reservedRelics = smallInteger(decodeReturn(['uint256'], results[5])[0], totalReserved);
+  if (treasury !== context.config.treasury || maximum !== BigInt(PRE111K_MAX_RELICS) ||
     lifetime !== BigInt(PRE111K_AUTHORIZATION_TTL_SECONDS) || typeof signer !== 'string' || signer === ZERO_ADDRESS) return unavailable();
   await verifyEthereumBlockSnapshot(read, snapshot);
   return { ...snapshot, timestamp, totalReserved, reservedRelics, signer };
@@ -133,7 +134,7 @@ async function prepare(request: Request, context: Context, wallet: string, code:
   if (deadline <= now || deadline <= current.timestamp) return unavailable();
   const nonce = current.reservedRelics;
   const signature = signDigest(signer.secret, pre111kReservationDigest({ chainId: context.config.chainId,
-    contractAddress: context.config.contractAddress, wallet, nonce, deadline }));
+    contractAddress: context.config.contractAddress, wallet, nonce, deadline, priceWei: context.config.priceWei }));
   context.signal.throwIfAborted();
   return { network: context.config.network, wallet, nonce, deadline, expiresAtMs: deadline * 1000, signature,
     transaction: { to: context.config.contractAddress, chainId: context.config.chainId,
@@ -179,7 +180,7 @@ async function confirm(context: Context, wallet: string, transactionHash: string
       const [nonce, deadline, signature] = decodeReturn(['uint256', 'uint256', 'bytes'], `0x${transaction.input.slice(10)}`);
       reservationNonce = smallInteger(nonce, PRE111K_MAX_RELICS - 1);
       const deadlineNumber = smallInteger(deadline, Number.MAX_SAFE_INTEGER);
-      if (BigInt(transaction.value) !== BigInt(context.config.priceWei) || typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature) ||
+      if (typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature) ||
         encodePre111kReservation(reservationNonce, deadlineNumber, signature).toLowerCase() !== transaction.input.toLowerCase()) throw new Error();
     } catch { throw new EthereumApiError('invalid-argument', 'This transaction is not a relic reservation call.'); }
   } else if (receipt.status === '0x0') {

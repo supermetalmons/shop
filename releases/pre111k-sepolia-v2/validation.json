@@ -1,0 +1,49 @@
+{
+  "checkedAt": "2026-11-05T11:18:02.298Z",
+  "chainId": 11155111,
+  "contractAddress": "0x9e4d1fa72f669e273ef6244295b398b7594430ad",
+  "previousDeployment": {
+    "contractAddress": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+    "observedBlock": 12069078,
+    "totalReserved": 8,
+    "balanceWei": "18400000000000000"
+  },
+  "contractTests": {
+    "command": "npm run test:pre111k",
+    "passed": 19,
+    "failed": 0,
+    "skipped": 1,
+    "skippedTest": "testForkPermissionlessWithdrawalReachesActualMainnetSafe (fork-only)"
+  },
+  "deploymentTests": {
+    "command": "npm run test:pre111k-deployment",
+    "passed": 33,
+    "failed": 0
+  },
+  "canonicalReceipt": {
+    "blockNumber": 12069118,
+    "blockHash": "0xda71705b4dcf6ec3580c2e9aab70ba2f45950e956b1fa98d27aa46784344db42",
+    "confirmationsAtVerification": 3,
+    "transactionHash": "0x9ae84a9b0108601b9b1b0866be6b6e00922b8077b6f53d097e3d3ecd5cb4a762"
+  },
+  "constructorArgs": "0x000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae9300000000000000000000000072d0c5623a05033f9ee4495d408bc6c05df8367d000000000000000000000000cc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "runtimeBytes": 3485,
+  "gasUsed": "5725003",
+  "feePaidWei": "5725003000",
+  "sourcify": {
+    "creationMatch": "match",
+    "runtimeMatch": "match",
+    "frozenSourcesMatch": true
+  },
+  "simulations": {
+    "file": "reservation-simulation.json",
+    "pricesWei": [
+      "2300000000000000",
+      "1000000000000000",
+      "0"
+    ],
+    "modifiedValuesRejected": true
+  },
+  "startingSupplyRemaining": 17,
+  "reservationTransactionBroadcast": false
+}

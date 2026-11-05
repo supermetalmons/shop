@@ -4,7 +4,7 @@ import test from 'node:test';
 import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ethereumSignerAddress, recoverEthereumAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import {
-  PRE111K_API_PATHS, PRE111K_TREASURY, encodePre111kReservation, resolvePre111kConfig,
+  PRE111K_API_PATHS, PRE111K_MAX_RELICS, PRE111K_TREASURY, encodePre111kReservation, isPre111kPriceWei, resolvePre111kConfig,
   type Pre111kConfirmResponse, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus,
 } from '../../../../shared/ethereum/pre111k.ts';
 import { PRE111K_RESERVED_TOPIC, pre111kReservationDigest } from '../../../../shared/ethereum/pre111kCrypto.ts';
@@ -22,10 +22,11 @@ const HASH = `0x${'aa'.repeat(32)}`;
 const BLOCK_HASH = `0x${'bb'.repeat(32)}`;
 const ACCESS_CODE = 'TESTACCESS';
 const SECOND_ACCESS_CODE = 'OTHERACCESS';
+const prices = { mainnet: '2300000000000000000', devnet: '2300000000000000' };
 
 type RpcRequest = { id: number; method: string; params: unknown[] };
 function fixture(network: Pre111kNetwork = 'devnet') {
-  const config = resolvePre111kConfig(network, { contractAddress: CONTRACT, enabled: true, deploymentBlock: 1 });
+  const config = resolvePre111kConfig(network, { contractAddress: CONTRACT, enabled: true, deploymentBlock: 1, priceWei: prices[network] });
   const limiter: RateLimit = { limit: async () => ({ success: true }) };
   const env: Pre111kEnvironment = {
     ALCHEMY_MI_NOTE_API_KEY: 'test', ETHEREUM_111K_RPC_URL: '', PUBLIC_SHOP_RATE_LIMITER: limiter,
@@ -33,11 +34,12 @@ function fixture(network: Pre111kNetwork = 'devnet') {
     ETHEREUM_PRE111K_ACCESS_CODES: JSON.stringify([ACCESS_CODE, SECOND_ACCESS_CODE]),
     ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: CONTRACT, ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK: '1', ETHEREUM_PRE111K_MAINNET_ENABLED: 'true',
     ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: CONTRACT, ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: '1', ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'true',
+    ETHEREUM_PRE111K_MAINNET_PRICE_WEI: prices.mainnet, ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI: prices.devnet,
     ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET: KEY, ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: KEY,
   };
   const state = {
     chainId: config.chainId, blockNumber: 100, canonicalHash: BLOCK_HASH, timestamp: NOW / 1000,
-    total: 4, reserved: 2, price: config.priceWei, treasury: PRE111K_TREASURY, maximum: 18, signer: String(SIGNER),
+    total: 4, reserved: 2, treasury: PRE111K_TREASURY, maximum: PRE111K_MAX_RELICS, signer: String(SIGNER),
     lifetime: 600, receipt: null as Record<string, unknown> | null, transaction: null as Record<string, unknown> | null,
     calls: [] as RpcRequest[], urls: [] as string[], afterCall: null as (() => void) | null,
   };
@@ -54,11 +56,14 @@ function fixture(network: Pre111kNetwork = 'devnet') {
     assert.equal(transaction.to, CONTRACT);
     const signature = (name: string) => encodeCall(`${name}()`, [], []);
     const values: Record<string, [string, unknown]> = {
-      [signature('price')]: ['uint256', state.price], [signature('treasury')]: ['address', state.treasury],
+      [signature('treasury')]: ['address', state.treasury],
       [signature('MAX_RELICS')]: ['uint256', state.maximum], [signature('MAX_AUTHORIZATION_LIFETIME')]: ['uint256', state.lifetime],
       [signature('quoteSigner')]: ['address', state.signer], [signature('totalReserved')]: ['uint256', state.total],
+      [encodeCall('reservedRelics(address)', ['address'], [WALLET])]: ['uint256', state.reserved],
+      [encodeCall('reservedRelics(address)', ['address'], [ZERO_ADDRESS])]: ['uint256', 0],
     };
-    const value = values[transaction.data] || ['uint256', state.reserved];
+    const value = values[transaction.data];
+    assert.ok(value, 'Unexpected reservation contract read');
     const encoded = encodeAbi([value[0]], [value[1]]);
     state.afterCall?.();
     return encoded;
@@ -221,16 +226,17 @@ for (const network of ['mainnet', 'devnet'] as const) {
     const status = result.body as unknown as Pre111kStatus;
     assert.equal(status.config.enabled, true);
     assert.equal(status.config.chainId, f.config.chainId);
+    assert.equal(status.config.priceWei, prices[network]);
     assert.equal(status.totalReserved, 4);
     assert.equal(status.reservedRelics, 2);
-    assert.equal(status.remainingRelics, 14);
+    assert.equal(status.remainingRelics, 13);
     const quote = await f.prepared();
     assert.equal(quote.transaction.value, ethereumHexQuantity(BigInt(f.config.priceWei)));
     assert.equal(quote.deadline, NOW / 1000 + 600);
     assert.equal(quote.expiresAtMs, quote.deadline * 1000);
     assert.equal(quote.nonce, 2);
     assert.equal(recoverEthereumAddress(pre111kReservationDigest({ chainId: f.config.chainId, contractAddress: CONTRACT,
-      wallet: WALLET, nonce: quote.nonce, deadline: quote.deadline }), quote.signature), SIGNER);
+      wallet: WALLET, nonce: quote.nonce, deadline: quote.deadline, priceWei: prices[network] }), quote.signature), SIGNER);
     assert.equal(quote.transaction.data, encodePre111kReservation(quote.nonce, quote.deadline, quote.signature));
     assert.ok(f.state.urls.every(url => url.startsWith(network === 'mainnet' ? 'https://eth-mainnet.' : 'https://eth-sepolia.')));
   });
@@ -252,9 +258,10 @@ test('pre111k status works without a wallet or signer and stays unavailable befo
   assert.equal(f.state.calls.length, 0);
 });
 
-test('pre111k rejects invalid networks, arbitrary contracts, quantity, origin, method, and missing CSRF', async () => {
+test('pre111k rejects invalid networks, arbitrary contracts, prices, quantity, origin, method, and missing CSRF', async () => {
   const f = fixture();
   for (const body of [{ network: 'local', wallet: WALLET }, { network: 'devnet', wallet: WALLET, contractAddress: OTHER },
+    { network: 'devnet', wallet: WALLET, code: ACCESS_CODE, priceWei: '0' },
     { network: 'devnet', wallet: WALLET, quantity: 2 }, { network: 'devnet', wallet: ZERO_ADDRESS }]) {
     assert.equal((await f.call(PRE111K_API_PATHS.prepare, body)).response.status, 400);
   }
@@ -271,8 +278,7 @@ test('pre111k refuses disabled, missing signer, mismatched immutable values, sta
     (f: ReturnType<typeof fixture>) => { delete f.env.ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET; },
     (f: ReturnType<typeof fixture>) => { f.state.signer = OTHER; },
     (f: ReturnType<typeof fixture>) => { f.state.treasury = OTHER; },
-    (f: ReturnType<typeof fixture>) => { f.state.price = '1'; },
-    (f: ReturnType<typeof fixture>) => { f.state.maximum = 19; },
+    (f: ReturnType<typeof fixture>) => { f.state.maximum = 18; },
     (f: ReturnType<typeof fixture>) => { f.state.lifetime = 601; },
     (f: ReturnType<typeof fixture>) => { f.state.chainId = 1; },
     (f: ReturnType<typeof fixture>) => { f.state.timestamp -= 600; },
@@ -284,7 +290,7 @@ test('pre111k refuses disabled, missing signer, mismatched immutable values, sta
     assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE })).response.status, 503);
   }
   const f = fixture();
-  f.state.total = 18;
+  f.state.total = PRE111K_MAX_RELICS;
   assert.equal((await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE })).response.status, 409);
 });
 
@@ -318,6 +324,41 @@ test('pre111k confirms canonical reservations after three blocks and supports di
   assert.deepEqual(result.body, { status: 'confirmed', confirmations: 3, transactionHash: HASH, reservationNonce: 2 });
   f.state.canonicalHash = HASH;
   assert.equal((await f.confirm()).body.status, 'pending');
+});
+
+test('pre111k only accepts canonical uint256 decimal strings as quote prices', () => {
+  const maximum = ((1n << 256n) - 1n).toString();
+  for (const value of ['0', '1', maximum]) assert.equal(isPre111kPriceWei(value), true);
+  for (const value of [undefined, null, '', ' ', '-1', '01', '1.5', '1e18', '0x1', 0, (1n << 256n).toString()]) {
+    assert.equal(isPre111kPriceWei(value), false);
+  }
+});
+
+test('pre111k refuses to quote with a missing or malformed configured price', async () => {
+  for (const value of [undefined, '', '-1', '1.5', '01', (1n << 256n).toString()]) {
+    const f = fixture();
+    if (value === undefined) Reflect.deleteProperty(f.env, 'ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI');
+    else f.env.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI = value;
+    const result = await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code: ACCESS_CODE });
+    assert.equal(result.response.status, 503);
+    assert.equal(f.state.calls.length, 0);
+  }
+});
+
+test('pre111k reprices only new quotes, including explicitly free reservations', async () => {
+  const f = fixture();
+  const first = await f.mined();
+  f.env.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI = '0';
+  const free = await f.prepared();
+  assert.equal(free.nonce, first.nonce);
+  assert.equal(free.deadline, first.deadline);
+  assert.equal(free.transaction.value, '0x0');
+  assert.notEqual(free.signature, first.signature);
+  assert.equal(recoverEthereumAddress(pre111kReservationDigest({ chainId: f.config.chainId, contractAddress: CONTRACT,
+    wallet: WALLET, nonce: free.nonce, deadline: free.deadline, priceWei: '0' }), free.signature), SIGNER);
+  const status = await f.call(`${PRE111K_API_PATHS.status}?network=devnet`);
+  assert.equal((status.body.config as Pre111kStatus['config']).priceWei, '0');
+  assert.equal((await f.confirm()).body.status, 'confirmed');
 });
 
 test('pre111k recognizes reverted reservation transactions only after confirmation', async () => {
@@ -363,7 +404,7 @@ test('pre111k refuses unrelated transactions and forged reservation log identity
     (f: ReturnType<typeof fixture>) => { f.state.receipt!.from = OTHER; },
     (f: ReturnType<typeof fixture>) => { f.state.receipt!.to = OTHER; },
     (f: ReturnType<typeof fixture>) => { f.state.transaction!.to = OTHER; },
-    (f: ReturnType<typeof fixture>) => { f.state.transaction!.value = '0x1'; },
+    (f: ReturnType<typeof fixture>) => { f.state.transaction!.value = 'invalid'; },
     (f: ReturnType<typeof fixture>) => { f.state.transaction!.input = '0x'; },
     (f: ReturnType<typeof fixture>) => { f.state.transaction!.chainId = '0x1'; },
     (f: ReturnType<typeof fixture>) => { f.state.receipt!.logs = []; },

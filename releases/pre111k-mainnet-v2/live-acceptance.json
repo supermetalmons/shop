@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-11-05T11:31:52.060Z",
+  "network": "mainnet",
+  "chainId": 1,
+  "contractAddress": "0xd1432dd5ec5dba6861bd4c6a56212f54abcbc0b9",
+  "deploymentBlock": 26348338,
+  "quoteSigner": "0x43c829cbb3648cc5eb8ebaa15fb7cfab21ecc2ea",
+  "simulatedWallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "priceWei": "2300000000000000000",
+  "simulationBlock": 26348351,
+  "simulationBlockHash": "0x01c5089bce57272c0f1922e947dcdf0c14b195bfe1daec3992d37f85fbf4cddd",
+  "liveBackendSignatureVerified": true,
+  "exactPriceSimulation": "success",
+  "alteredPriceSimulation": "InvalidAuthorization",
+  "totalReserved": 0,
+  "remainingRelics": 17,
+  "balanceWei": "0",
+  "reservationTransactionBroadcast": false
+}

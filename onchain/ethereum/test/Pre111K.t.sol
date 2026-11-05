@@ -23,7 +23,7 @@ contract Pre111KReceiver {
         callbacks++;
         if (attacking) {
             _blocked(abi.encodeCall(preorder.withdraw, ()), 0);
-            _blocked(reservation, preorder.price());
+            _blocked(reservation, msg.value);
         }
     }
 
@@ -48,26 +48,33 @@ contract Pre111KTest is TestSupport {
         vm.warp(2_000_000_000);
         vm.deal(ALICE, 100 ether);
         vm.deal(BOB, 100 ether);
-        preorder = new Pre111K(address(this), TREASURY, vm.addr(SIGNER_KEY), PRICE);
+        preorder = new Pre111K(address(this), TREASURY, vm.addr(SIGNER_KEY));
     }
 
-    function _digest(address wallet, uint256 nonce, uint256 deadline, address verifyingContract, uint256 chainId)
-        internal
-        pure
-        returns (bytes32)
-    {
+    function _digest(
+        address wallet,
+        uint256 nonce,
+        uint256 deadline,
+        uint256 priceWei,
+        address verifyingContract,
+        uint256 chainId
+    ) internal pure returns (bytes32) {
         bytes32 domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
                 keccak256("pre111k"),
-                keccak256("1"),
+                keccak256("2"),
                 chainId,
                 verifyingContract
             )
         );
         bytes32 data = keccak256(
             abi.encode(
-                keccak256("ReserveRelic(address wallet,uint256 nonce,uint256 deadline)"), wallet, nonce, deadline
+                keccak256("ReserveRelic(address wallet,uint256 nonce,uint256 deadline,uint256 priceWei)"),
+                wallet,
+                nonce,
+                deadline,
+                priceWei
             )
         );
         return keccak256(abi.encodePacked(hex"1901", domain, data));
@@ -78,55 +85,51 @@ contract Pre111KTest is TestSupport {
         return abi.encodePacked(r, s, v);
     }
 
-    function _authorize(Pre111K target, address wallet, uint256 nonce, uint256 deadline)
+    function _authorize(Pre111K target, address wallet, uint256 nonce, uint256 deadline, uint256 priceWei)
         internal
         returns (bytes memory)
     {
-        return _signature(SIGNER_KEY, _digest(wallet, nonce, deadline, address(target), block.chainid));
+        return _signature(SIGNER_KEY, _digest(wallet, nonce, deadline, priceWei, address(target), block.chainid));
     }
 
-    function _reserve(Pre111K target, address wallet) internal {
+    function _reserve(Pre111K target, address wallet, uint256 priceWei) internal {
         uint256 nonce = target.reservedRelics(wallet);
         uint256 deadline = block.timestamp + 600;
-        bytes memory signature = _authorize(target, wallet, nonce, deadline);
-        uint256 value = target.price();
+        bytes memory signature = _authorize(target, wallet, nonce, deadline, priceWei);
         vm.prank(wallet);
-        target.reserveRelic{value: value}(nonce, deadline, signature);
+        target.reserveRelic{value: priceWei}(nonce, deadline, signature);
     }
 
     function testConstructorConfigurationAndDomain() public view {
         assertEq(preorder.admin(), address(this));
         assertEq(preorder.treasury(), TREASURY);
-        assertEq(preorder.price(), PRICE);
-        assertEq(preorder.MAX_RELICS(), 18);
+        assertEq(preorder.MAX_RELICS(), 17);
         assertEq(preorder.MAX_AUTHORIZATION_LIFETIME(), 600);
         assertEq(preorder.totalReserved(), 0);
         (bytes1 fields, string memory name, string memory version, uint256 chain, address verifyingContract,,) =
             preorder.eip712Domain();
         assertEq(uint256(uint8(fields)), 15);
         assertEq(name, "pre111k");
-        assertEq(version, "1");
+        assertEq(version, "2");
         assertEq(chain, 11155111);
         assertEq(verifyingContract, address(preorder));
     }
 
-    function testConstructorRejectsZeroAddressesAndPrice() public {
+    function testConstructorRejectsZeroAddresses() public {
         address signer = vm.addr(SIGNER_KEY);
         vm.expectRevert(Pre111K.InvalidAddress.selector);
-        new Pre111K(address(0), TREASURY, signer, PRICE);
+        new Pre111K(address(0), TREASURY, signer);
         vm.expectRevert(Pre111K.InvalidAddress.selector);
-        new Pre111K(address(this), address(0), signer, PRICE);
+        new Pre111K(address(this), address(0), signer);
         vm.expectRevert(Pre111K.InvalidAddress.selector);
-        new Pre111K(address(this), TREASURY, address(0), PRICE);
-        vm.expectRevert(Pre111K.InvalidPrice.selector);
-        new Pre111K(address(this), TREASURY, signer, 0);
+        new Pre111K(address(this), TREASURY, address(0));
     }
 
     function testReservesOneAtATimeAndEmitsWalletNonce() public {
         vm.recordLogs();
-        _reserve(preorder, ALICE);
-        _reserve(preorder, ALICE);
-        _reserve(preorder, BOB);
+        _reserve(preorder, ALICE, PRICE);
+        _reserve(preorder, ALICE, PRICE);
+        _reserve(preorder, BOB, PRICE);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertEq(logs.length, 3);
         assertEq(logs[0].topics[0], keccak256("RelicReserved(address,uint256,uint256)"));
@@ -141,58 +144,56 @@ contract Pre111KTest is TestSupport {
     }
 
     function testEnforcesLifetimeSupplyAcrossWalletsAndWithdrawals() public {
-        for (uint256 i; i < 18; ++i) {
-            _reserve(preorder, i % 2 == 0 ? ALICE : BOB);
+        for (uint256 i; i < 17; ++i) {
+            _reserve(preorder, i % 2 == 0 ? ALICE : BOB, PRICE);
             if (i == 8) preorder.withdraw();
         }
-        bytes memory signature = _authorize(preorder, ALICE, 9, block.timestamp + 600);
+        bytes memory signature = _authorize(preorder, ALICE, 9, block.timestamp + 600, PRICE);
         vm.prank(ALICE);
         vm.expectRevert(Pre111K.SoldOut.selector);
         preorder.reserveRelic{value: PRICE}(9, block.timestamp + 600, signature);
-        assertEq(preorder.totalReserved(), 18);
+        assertEq(preorder.totalReserved(), 17);
         assertEq(preorder.reservedRelics(ALICE), 9);
-        assertEq(preorder.reservedRelics(BOB), 9);
-        assertEq(address(preorder).balance + TREASURY.balance, PRICE * 18);
+        assertEq(preorder.reservedRelics(BOB), 8);
+        assertEq(address(preorder).balance + TREASURY.balance, PRICE * 17);
     }
 
-    function testRejectsWrongPaymentIncludingAttemptedBatch() public {
-        bytes memory signature = _authorize(preorder, ALICE, 0, block.timestamp + 600);
+    function testRejectsAnyPaymentDifferentFromSignedQuote() public {
+        bytes memory signature = _authorize(preorder, ALICE, 0, block.timestamp + 600, PRICE);
         uint256[4] memory values = [uint256(0), PRICE - 1, PRICE + 1, PRICE * 2];
         for (uint256 i; i < values.length; ++i) {
             vm.prank(ALICE);
-            vm.expectRevert(Pre111K.WrongPayment.selector);
+            vm.expectRevert(Pre111K.InvalidAuthorization.selector);
             preorder.reserveRelic{value: values[i]}(0, block.timestamp + 600, signature);
         }
         assertEq(preorder.totalReserved(), 0);
         assertEq(preorder.reservedRelics(ALICE), 0);
         assertEq(address(preorder).balance, 0);
-        _reserve(preorder, ALICE);
+        _reserve(preorder, ALICE, PRICE);
     }
 
-    function testMainnetPriceIsExact() public {
-        vm.chainId(1);
-        Pre111K mainnet = new Pre111K(address(this), TREASURY, vm.addr(SIGNER_KEY), 2.3 ether);
-        bytes memory signature = _authorize(mainnet, ALICE, 0, block.timestamp + 600);
-        vm.prank(ALICE);
-        vm.expectRevert(Pre111K.WrongPayment.selector);
-        mainnet.reserveRelic{value: PRICE}(0, block.timestamp + 600, signature);
-        _reserve(mainnet, ALICE);
-        assertEq(address(mainnet).balance, 2.3 ether);
+    function testBackendCanAuthorizeDifferentPricesIncludingZero() public {
+        _reserve(preorder, ALICE, 2.3 ether);
+        _reserve(preorder, ALICE, 1 wei);
+        _reserve(preorder, ALICE, 0);
+        assertEq(preorder.reservedRelics(ALICE), 3);
+        assertEq(preorder.totalReserved(), 3);
+        assertEq(address(preorder).balance, 2.3 ether + 1 wei);
     }
 
     function testRejectsSignatureReplayAndFutureNonce() public {
         uint256 deadline = block.timestamp + 600;
-        bytes memory signature = _authorize(preorder, ALICE, 0, deadline);
-        _reserve(preorder, ALICE);
+        bytes memory signature = _authorize(preorder, ALICE, 0, deadline, PRICE);
+        _reserve(preorder, ALICE, PRICE);
         vm.prank(ALICE);
         vm.expectRevert(Pre111K.InvalidNonce.selector);
         preorder.reserveRelic{value: PRICE}(0, deadline, signature);
-        signature = _authorize(preorder, ALICE, 2, deadline);
+        signature = _authorize(preorder, ALICE, 2, deadline, PRICE);
         vm.prank(ALICE);
         vm.expectRevert(Pre111K.InvalidNonce.selector);
         preorder.reserveRelic{value: PRICE}(2, deadline, signature);
         assertEq(preorder.reservedRelics(ALICE), 1);
-        _reserve(preorder, ALICE);
+        _reserve(preorder, ALICE, PRICE);
     }
 
     function testRejectsMissingMalformedAndWrongSigner() public {
@@ -204,7 +205,7 @@ contract Pre111KTest is TestSupport {
         vm.expectRevert();
         preorder.reserveRelic{value: PRICE}(0, deadline, new bytes(65));
         bytes memory signature =
-            _signature(NEXT_SIGNER_KEY, _digest(ALICE, 0, deadline, address(preorder), block.chainid));
+            _signature(NEXT_SIGNER_KEY, _digest(ALICE, 0, deadline, PRICE, address(preorder), block.chainid));
         vm.prank(ALICE);
         vm.expectRevert(Pre111K.InvalidAuthorization.selector);
         preorder.reserveRelic{value: PRICE}(0, deadline, signature);
@@ -214,10 +215,10 @@ contract Pre111KTest is TestSupport {
     function testRejectsAnotherWalletChainContractOrDeadline() public {
         uint256 deadline = block.timestamp + 600;
         bytes32[4] memory digests = [
-            _digest(BOB, 0, deadline, address(preorder), block.chainid),
-            _digest(ALICE, 0, deadline, address(preorder), 1),
-            _digest(ALICE, 0, deadline, address(0x1111), block.chainid),
-            _digest(ALICE, 0, deadline - 1, address(preorder), block.chainid)
+            _digest(BOB, 0, deadline, PRICE, address(preorder), block.chainid),
+            _digest(ALICE, 0, deadline, PRICE, address(preorder), 1),
+            _digest(ALICE, 0, deadline, PRICE, address(0x1111), block.chainid),
+            _digest(ALICE, 0, deadline - 1, PRICE, address(preorder), block.chainid)
         ];
         for (uint256 i; i < digests.length; ++i) {
             bytes memory signature = _signature(SIGNER_KEY, digests[i]);
@@ -231,26 +232,26 @@ contract Pre111KTest is TestSupport {
     function testDeadlineBoundariesAndExpiredAuthorization() public {
         uint256[4] memory deadlines = [block.timestamp - 1, block.timestamp, block.timestamp + 601, type(uint256).max];
         for (uint256 i; i < deadlines.length; ++i) {
-            bytes memory invalidSignature = _authorize(preorder, ALICE, 0, deadlines[i]);
+            bytes memory invalidSignature = _authorize(preorder, ALICE, 0, deadlines[i], PRICE);
             vm.prank(ALICE);
             vm.expectRevert(Pre111K.InvalidDeadline.selector);
             preorder.reserveRelic{value: PRICE}(0, deadlines[i], invalidSignature);
         }
         uint256 deadline = block.timestamp + 1;
-        bytes memory signature = _authorize(preorder, ALICE, 0, deadline);
+        bytes memory signature = _authorize(preorder, ALICE, 0, deadline, PRICE);
         vm.prank(ALICE);
         preorder.reserveRelic{value: PRICE}(0, deadline, signature);
-        signature = _authorize(preorder, ALICE, 1, deadline);
+        signature = _authorize(preorder, ALICE, 1, deadline, PRICE);
         vm.warp(deadline);
         vm.prank(ALICE);
         vm.expectRevert(Pre111K.InvalidDeadline.selector);
         preorder.reserveRelic{value: PRICE}(1, deadline, signature);
-        _reserve(preorder, ALICE);
+        _reserve(preorder, ALICE, PRICE);
     }
 
     function testOnlyFixedAdminCanRotateSignerAndOldSignaturesStopWorking() public {
         uint256 deadline = block.timestamp + 600;
-        bytes memory original = _authorize(preorder, ALICE, 0, deadline);
+        bytes memory original = _authorize(preorder, ALICE, 0, deadline, PRICE);
         address nextSigner = vm.addr(NEXT_SIGNER_KEY);
         vm.prank(BOB);
         vm.expectRevert(Pre111K.Unauthorized.selector);
@@ -266,13 +267,13 @@ contract Pre111KTest is TestSupport {
         vm.expectRevert(Pre111K.InvalidAuthorization.selector);
         preorder.reserveRelic{value: PRICE}(0, deadline, original);
         bytes memory signature =
-            _signature(NEXT_SIGNER_KEY, _digest(ALICE, 0, deadline, address(preorder), block.chainid));
+            _signature(NEXT_SIGNER_KEY, _digest(ALICE, 0, deadline, PRICE, address(preorder), block.chainid));
         vm.prank(ALICE);
         preorder.reserveRelic{value: PRICE}(0, deadline, signature);
     }
 
     function testAnyoneWithdrawsEverythingOnlyToTreasuryIncludingForcedBalance() public {
-        _reserve(preorder, ALICE);
+        _reserve(preorder, ALICE, PRICE);
         vm.deal(address(preorder), PRICE + 17);
         uint256 bobBefore = BOB.balance;
         vm.prank(BOB);
@@ -282,7 +283,7 @@ contract Pre111KTest is TestSupport {
         assertEq(address(preorder).balance, 0);
         assertEq(preorder.totalReserved(), 1);
         preorder.withdraw();
-        _reserve(preorder, BOB);
+        _reserve(preorder, BOB, PRICE);
         preorder.withdraw();
         assertEq(TREASURY.balance, PRICE * 2 + 17);
         assertEq(preorder.totalReserved(), 2);
@@ -290,11 +291,11 @@ contract Pre111KTest is TestSupport {
 
     function testWithdrawForwardsEnoughGasAndBlocksReentrantCalls() public {
         Pre111KReceiver receiver = new Pre111KReceiver();
-        Pre111K target = new Pre111K(address(this), address(receiver), vm.addr(SIGNER_KEY), PRICE);
+        Pre111K target = new Pre111K(address(this), address(receiver), vm.addr(SIGNER_KEY));
         uint256 deadline = block.timestamp + 600;
-        bytes memory signature = _authorize(target, address(receiver), 0, deadline);
+        bytes memory signature = _authorize(target, address(receiver), 0, deadline, PRICE);
         receiver.configure(target, false, true, abi.encodeCall(target.reserveRelic, (0, deadline, signature)));
-        _reserve(target, ALICE);
+        _reserve(target, ALICE, PRICE);
         target.withdraw();
         assertEq(receiver.callbacks(), 1);
         assertEq(receiver.blockedCalls(), 2);
@@ -306,9 +307,9 @@ contract Pre111KTest is TestSupport {
 
     function testRejectingWithdrawalRetainsFundsAndCanBeRetried() public {
         Pre111KReceiver receiver = new Pre111KReceiver();
-        Pre111K target = new Pre111K(address(this), address(receiver), vm.addr(SIGNER_KEY), PRICE);
+        Pre111K target = new Pre111K(address(this), address(receiver), vm.addr(SIGNER_KEY));
         receiver.configure(target, true, false, bytes(""));
-        _reserve(target, ALICE);
+        _reserve(target, ALICE, PRICE);
         vm.expectRevert(Pre111K.WithdrawalFailed.selector);
         target.withdraw();
         assertEq(address(target).balance, PRICE);
@@ -332,17 +333,20 @@ contract Pre111KTest is TestSupport {
     }
 
     function testFuzzReservationsConserveCountAndFunds(uint256 seed, uint8 count_) public {
-        uint256 count = uint256(count_) % 19;
+        uint256 count = uint256(count_) % (preorder.MAX_RELICS() + 1);
         uint256 aliceCount;
+        uint256 totalPaid;
         for (uint256 i; i < count; ++i) {
             bool alice = (seed >> i) & 1 == 0;
-            _reserve(preorder, alice ? ALICE : BOB);
+            uint256 priceWei = uint256(keccak256(abi.encode(seed, i))) % 1 ether;
+            _reserve(preorder, alice ? ALICE : BOB, priceWei);
+            totalPaid += priceWei;
             if (alice) aliceCount++;
             if ((seed >> (i + 18)) & 1 == 1) preorder.withdraw();
         }
         assertEq(preorder.totalReserved(), count);
         assertEq(preorder.reservedRelics(ALICE), aliceCount);
         assertEq(preorder.reservedRelics(BOB), count - aliceCount);
-        assertEq(TREASURY.balance + address(preorder).balance, count * PRICE);
+        assertEq(TREASURY.balance + address(preorder).balance, totalPaid);
     }
 }

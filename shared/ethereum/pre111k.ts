@@ -11,7 +11,7 @@ export const PRE111K_API_PATHS = {
 
 const PRE111K_FUNCTIONS = { reserveRelic: 'reserveRelic(uint256,uint256,bytes)' } as const;
 export const PRE111K_TREASURY = '0x72d0c5623a05033f9ee4495d408bc6c05df8367d';
-export const PRE111K_MAX_RELICS = 18;
+export const PRE111K_MAX_RELICS = 17;
 export const PRE111K_AUTHORIZATION_TTL_SECONDS = 600;
 
 export type Pre111kNetwork = 'mainnet' | 'devnet';
@@ -33,10 +33,15 @@ export type Pre111kConfirmResponse = {
   status: 'pending' | 'confirmed' | 'failed'; confirmations: number; transactionHash: string; reservationNonce: number | null;
 };
 
+export function isPre111kPriceWei(value: unknown): value is string {
+  return typeof value === 'string' && /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) < (1n << 256n);
+}
+
 export function resolvePre111kConfig(network: Pre111kNetwork, input: {
-  contractAddress?: string | null; deploymentBlock?: number | string; enabled?: boolean;
-} = {}): Pre111kConfig {
+  contractAddress?: string | null; deploymentBlock?: number | string; enabled?: boolean; priceWei: string;
+}): Pre111kConfig {
   if (network !== 'mainnet' && network !== 'devnet') throw new Error('Invalid relic preorder network');
+  if (!isPre111kPriceWei(input.priceWei)) throw new Error('Invalid relic preorder price');
   const contractAddress = normalizeEthereumAddress(input.contractAddress);
   if (input.contractAddress && (!contractAddress || /^0x0{40}$/.test(contractAddress))) {
     throw new Error('Invalid relic preorder contract');
@@ -47,7 +52,7 @@ export function resolvePre111kConfig(network: Pre111kNetwork, input: {
   return {
     network, chainId: mainnet ? 1 : 11155111, chainName: mainnet ? 'Ethereum' : 'Sepolia',
     contractAddress, deploymentBlock, enabled: !!contractAddress && input.enabled === true,
-    priceWei: mainnet ? '2300000000000000000' : '2300000000000000', treasury: PRE111K_TREASURY,
+    priceWei: input.priceWei, treasury: PRE111K_TREASURY,
     explorerUrl: mainnet ? 'https://etherscan.io' : 'https://sepolia.etherscan.io',
     walletRpcUrl: mainnet ? 'https://ethereum-rpc.publicnode.com' : 'https://ethereum-sepolia-rpc.publicnode.com',
     confirmationBlocks: 3, maxRelics: PRE111K_MAX_RELICS,

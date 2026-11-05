@@ -1,0 +1,51 @@
+{
+  "compilerVersion": "0.8.38+commit.1835d247",
+  "settings": {
+    "remappings": [
+      "@openzeppelin/=node_modules/@openzeppelin/",
+      "erc721a/=node_modules/erc721a/"
+    ],
+    "optimizer": {
+      "enabled": true,
+      "runs": 500
+    },
+    "metadata": {
+      "bytecodeHash": "none"
+    },
+    "evmVersion": "prague",
+    "libraries": {},
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "metadata"
+        ]
+      }
+    }
+  },
+  "fullyQualifiedName": "src/Pre111K.sol:Pre111K",
+  "sources": {
+    "node_modules/@openzeppelin/contracts/interfaces/IERC5267.sol": "f89772d2d4fafcbef8b73bb10ee9a3373edec2eedb2f1b302320915b351dc3d1",
+    "node_modules/@openzeppelin/contracts/utils/Bytes.sol": "3ce9120a27934c75a074cb785d3a88868069ef6529dbe4dc6b845af0836f3c70",
+    "node_modules/@openzeppelin/contracts/utils/Panic.sol": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
+    "node_modules/@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol": "cff7c20aed945d939b764d876adbd42e1b7725d62d5b1f2bd303db237567b575",
+    "node_modules/@openzeppelin/contracts/utils/ShortStrings.sol": "1cfa08d3c551e9ec0b9cd249b09987f04e7e90f352e1a5e3b0d6a3bc426b3de7",
+    "node_modules/@openzeppelin/contracts/utils/StorageSlot.sol": "75704538dcb223239280c6726d9a31cf769a7816718517c997fc7d63bdb70778",
+    "node_modules/@openzeppelin/contracts/utils/Strings.sol": "e318709bbe73a7831d64c1351e8bdc43780b245f25191234e361e6ab9b98c67b",
+    "node_modules/@openzeppelin/contracts/utils/TransientSlot.sol": "ea92f361d697ba8b1fbd322b4d84b989998862c21fbebfa4b45289dc94a9eea2",
+    "node_modules/@openzeppelin/contracts/utils/cryptography/ECDSA.sol": "ba7c2d314fcd61c9783e0b3f0c664d004b76b408fda6a84edc8267d17c5012d6",
+    "node_modules/@openzeppelin/contracts/utils/cryptography/EIP712.sol": "2845caaaf70757b6cce612ae4ffbec2c382cb3d1cb9765c98fa649c0f5f1c794",
+    "node_modules/@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol": "538a0d7c4f0ec5a8562f58561890f7b49d14580674ecf58bc5f505b45c73df65",
+    "node_modules/@openzeppelin/contracts/utils/math/Math.sol": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
+    "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
+    "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
+    "src/Pre111K.sol": "26ecf0dd38cf7694726d89b668963ae8f4ae734a72101f9a33d47a1babb6423c"
+  },
+  "artifactSha256": "36cb300d2be2fa274bc9b2cc1aa35eb20ec2dc6a703e232df466199f4b48e7cc",
+  "standardInputSha256": "a22100459fc341407227189387c8dc63ae0f50c8582f3c3cbbfafd1a3f5ecb03",
+  "constructorArgs": "0x00000000000000000000000072d0c5623a05033f9ee4495d408bc6c05df8367d00000000000000000000000072d0c5623a05033f9ee4495d408bc6c05df8367d00000000000000000000000043c829cbb3648cc5eb8ebaa15fb7cfab21ecc2ea",
+  "runtimeBytes": 3485,
+  "runtimeKeccak256": "0x434f99438469f3a375d616e4787beca2a6ed1b09c8ed10913ed82c422e389cb2"
+}

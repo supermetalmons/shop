@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../../../../shared/ethereum/crypto.ts';
-import { PRE111K_API_PATHS, PRE111K_TREASURY, type Pre111kPrepareResponse, type Pre111kStatus } from '../../../../shared/ethereum/pre111k.ts';
+import { PRE111K_API_PATHS, PRE111K_MAX_RELICS, PRE111K_TREASURY, type Pre111kPrepareResponse, type Pre111kStatus } from '../../../../shared/ethereum/pre111k.ts';
 import { handlePre111kRequest, type Pre111kEnvironment } from '../src/pre111k.ts';
 
 const root = resolve(import.meta.dirname, '../../../..');
@@ -57,9 +57,10 @@ try {
   const [admin, wallet, other] = await rpc<string[]>('eth_accounts');
   const key = `0x${'44'.repeat(32)}`;
   const artifact = JSON.parse(await readFile(resolve(project, 'out/Pre111K.sol/Pre111K.json'), 'utf8')) as { bytecode: { object: string } };
-  const price = '2300000000000000';
+  const initialPrice = '2300000000000000';
+  const nextPrice = '1700000000000000';
   const deployment = await send(admin, { data: `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(
-    ['address', 'address', 'address', 'uint256'], [admin, PRE111K_TREASURY, ethereumSignerAddress(key), price]).slice(2)}` });
+    ['address', 'address', 'address'], [admin, PRE111K_TREASURY, ethereumSignerAddress(key)]).slice(2)}` });
   assert.ok(deployment.contractAddress);
   const contractAddress = deployment.contractAddress.toLowerCase();
   const limiter: RateLimit = { limit: async () => ({ success: true }) };
@@ -68,6 +69,7 @@ try {
     PREORDER_PREPARE_RATE_LIMITER: limiter, PREORDER_PREPARE_IP_RATE_LIMITER: limiter,
     ETHEREUM_PRE111K_ACCESS_CODES: '["TESTACCESS"]',
     ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_MAINNET_ENABLED: 'false',
+    ETHEREUM_PRE111K_MAINNET_PRICE_WEI: '2300000000000000000', ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI: initialPrice,
     ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: contractAddress, ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: String(Number(deployment.blockNumber)),
     ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'true', ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: key,
   };
@@ -95,11 +97,17 @@ try {
   }
   const initial = await status();
   assert.equal(initial.totalReserved, 0);
+  assert.equal(initial.remainingRelics, 17);
   assert.equal(initial.reservedRelics, 0);
   assert.equal(initial.config.enabled, true);
   const quote = await prepare();
+  assert.equal(BigInt(quote.transaction.value), BigInt(initialPrice));
   await assert.rejects(send(other, quote.transaction), /revert/);
-  await assert.rejects(send(wallet, { ...quote.transaction, value: '0x1' }), /revert/);
+  env.ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI = nextPrice;
+  assert.equal((await status()).config.priceWei, nextPrice);
+  for (const value of [0n, BigInt(nextPrice), BigInt(initialPrice) + 1n]) {
+    await assert.rejects(send(wallet, { ...quote.transaction, value: `0x${value.toString(16)}` }), /revert/);
+  }
   const receipt = await send(wallet, quote.transaction);
   const pending = await api<{ status: string }>(PRE111K_API_PATHS.confirm,
     { network: 'devnet', wallet, transactionHash: receipt.transactionHash });
@@ -111,25 +119,27 @@ try {
   assert.equal(confirmed.reservationNonce, 0);
   assert.equal((await status()).reservedRelics, 1);
   await assert.rejects(send(wallet, quote.transaction), /revert/);
-  for (let i = 1; i < 17; i++) {
+  for (let i = 1; i < PRE111K_MAX_RELICS - 1; i++) {
     const next = await prepare();
     assert.equal(next.nonce, i);
+    assert.equal(BigInt(next.transaction.value), BigInt(nextPrice));
     await send(wallet, next.transaction);
   }
   const [last, competitor] = await Promise.all([prepare(), prepare(other)]);
   await send(wallet, last.transaction);
   await assert.rejects(send(other, competitor.transaction), /revert/);
   const soldOut = await status();
-  assert.equal(soldOut.totalReserved, 18);
-  assert.equal(soldOut.reservedRelics, 18);
+  assert.equal(soldOut.totalReserved, PRE111K_MAX_RELICS);
+  assert.equal(soldOut.reservedRelics, PRE111K_MAX_RELICS);
   assert.equal(soldOut.remainingRelics, 0);
   assert.equal((await status(other)).reservedRelics, 0);
   const balanceBefore = BigInt(await rpc<string>('eth_getBalance', [PRE111K_TREASURY, 'latest']));
   await send(other, { to: contractAddress, data: encodeCall('withdraw()', [], []) });
   assert.equal(BigInt(await rpc<string>('eth_getBalance', [contractAddress, 'latest'])), 0n);
-  assert.equal(BigInt(await rpc<string>('eth_getBalance', [PRE111K_TREASURY, 'latest'])) - balanceBefore, BigInt(price) * 18n);
-  assert.equal((await status()).reservedRelics, 18);
-  console.log('pre111k E2E passed: backend authorizations, onchain reservations, confirmation, replay rejection, 18-slot race, and public withdrawal');
+  const proceeds = BigInt(initialPrice) + BigInt(nextPrice) * BigInt(PRE111K_MAX_RELICS - 1);
+  assert.equal(BigInt(await rpc<string>('eth_getBalance', [PRE111K_TREASURY, 'latest'])) - balanceBefore, proceeds);
+  assert.equal((await status()).reservedRelics, PRE111K_MAX_RELICS);
+  console.log('pre111k E2E passed: backend repricing, tampered-value rejection, confirmation, replay rejection, 17-slot race, and public withdrawal');
 } finally {
   anvil.kill('SIGTERM');
 }

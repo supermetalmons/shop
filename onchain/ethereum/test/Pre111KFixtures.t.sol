@@ -12,20 +12,25 @@ contract Pre111KFixturesTest is TestSupport {
     address private constant WALLET = 0x2222222222222222222222222222222222222222;
     uint256 private constant NONCE = 3;
     uint256 private constant DEADLINE = 2_000_000_600;
+    uint256 private constant PRICE_WEI = 0.0023 ether;
 
     function testExportPre111KAuthorizationFixture() public {
         bytes32 domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
                 keccak256("pre111k"),
-                keccak256("1"),
+                keccak256("2"),
                 uint256(11155111),
                 VERIFYING_CONTRACT
             )
         );
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256("ReserveRelic(address wallet,uint256 nonce,uint256 deadline)"), WALLET, NONCE, DEADLINE
+                keccak256("ReserveRelic(address wallet,uint256 nonce,uint256 deadline,uint256 priceWei)"),
+                WALLET,
+                NONCE,
+                DEADLINE,
+                PRICE_WEI
             )
         );
         bytes32 digest = keccak256(abi.encodePacked(hex"1901", domain, structHash));
@@ -40,7 +45,9 @@ contract Pre111KFixturesTest is TestSupport {
             Strings.toHexString(VERIFYING_CONTRACT),
             '","wallet":"',
             Strings.toHexString(WALLET),
-            '","nonce":"3","deadline":2000000600,"domainName":"pre111k","domainVersion":"1"'
+            '","nonce":"3","deadline":2000000600,"priceWei":"',
+            PRICE_WEI.toString(),
+            '","domainName":"pre111k","domainVersion":"2"'
         );
         output = string.concat(
             output,

@@ -12,7 +12,6 @@ export const PRE111K_SEPOLIA = Object.freeze({
   admin: '0xd58d143ca63d9baccc33fdf69ea203f59c58ae93',
   treasury: '0x72d0c5623a05033f9ee4495d408bc6c05df8367d',
   quoteSigner: '0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca',
-  priceWei: '2300000000000000',
   maximumFeeWei: '5000000000000000',
 });
 
@@ -21,7 +20,6 @@ export const PRE111K_MAINNET = Object.freeze({
   deployer: PRE111K_SEPOLIA.deployer,
   admin: PRE111K_SEPOLIA.treasury,
   treasury: PRE111K_SEPOLIA.treasury,
-  priceWei: '2300000000000000000',
   maximumFeeWei: '1000000000000000',
 });
 
@@ -45,7 +43,7 @@ export function deploymentConfiguration(network = 'sepolia', quoteSigner) {
 
 export function validateDeploymentConfiguration(manifest, network) {
   const configuration = deploymentConfiguration(network, manifest.quoteSigner);
-  for (const key of ['chainId', 'admin', 'treasury', 'quoteSigner', 'priceWei']) {
+  for (const key of ['chainId', 'admin', 'treasury', 'quoteSigner']) {
     assert.equal(manifest[key], configuration[key], 'Unexpected deployment ' + key);
   }
   assert.equal(manifest.deployer ?? manifest.admin, configuration.deployer, 'Unexpected deployer');
@@ -54,8 +52,8 @@ export function validateDeploymentConfiguration(manifest, network) {
 }
 
 export function deploymentConstructorArgs(configuration) {
-  return run(['abi-encode', 'constructor(address,address,address,uint256)', configuration.admin,
-    configuration.treasury, configuration.quoteSigner, configuration.priceWei]);
+  return run(['abi-encode', 'constructor(address,address,address)', configuration.admin,
+    configuration.treasury, configuration.quoteSigner]);
 }
 
 function validateDeploymentFee(manifest, maximumFeeWei) {
@@ -303,14 +301,14 @@ export async function main(argv = process.argv.slice(2)) {
     return type === 'address' ? '0x' + result.slice(-40) : BigInt(result).toString();
   };
   for (const getter of ['admin', 'treasury', 'quoteSigner']) assert.equal(await call(getter + '()', 'address'), manifest[getter]);
-  assert.equal(await call('price()', 'uint256'), manifest.priceWei);
-  assert.equal(await call('MAX_RELICS()', 'uint256'), '18');
+  const maxRelics = Number(await call('MAX_RELICS()', 'uint256'));
+  assert.equal(maxRelics, 17);
   assert.equal(await call('MAX_AUTHORIZATION_LIFETIME()', 'uint256'), '600');
   assert.equal(await call('totalReserved()', 'uint256'), '0');
   assert.equal(BigInt(await rpc('eth_getBalance', [manifest.contractAddress, receipt.blockNumber])), 0n);
   const report = { chainId: manifest.chainId, contractAddress: manifest.contractAddress, deploymentBlock: Number(BigInt(receipt.blockNumber)),
     deploymentBlockHash: receipt.blockHash, transactionHash: journal.transactionHash, deployer, admin: manifest.admin, treasury: manifest.treasury,
-    quoteSigner: manifest.quoteSigner, priceWei: manifest.priceWei, maxRelics: 18, runtimeBytes: (code.length - 2) / 2,
+    quoteSigner: manifest.quoteSigner, maxRelics, runtimeBytes: (code.length - 2) / 2,
     runtimeKeccak256: hashHex(code), artifactSha256: manifest.artifactSha256, standardInputSha256: manifest.standardInputSha256,
     constructorArgs: manifest.constructorArgs, confirmations: Number(BigInt(latest.number) - BigInt(receipt.blockNumber) + 1n),
     verifiedAt: new Date().toISOString(), receipt };

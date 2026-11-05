@@ -1,0 +1,44 @@
+{
+  "checkedAt": "2026-11-05T11:16:56.642Z",
+  "chainId": 11155111,
+  "contractAddress": "0x9e4d1fa72f669e273ef6244295b398b7594430ad",
+  "quoteSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "simulationWallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "pinnedBlock": 12069123,
+  "blockHash": "0x959d2349739c8b04b99239f21534c23f218ccebaca75639831f4d939bee6e79f",
+  "signatureDomainVersion": "2",
+  "signedType": "ReserveRelic(address wallet,uint256 nonce,uint256 deadline,uint256 priceWei)",
+  "cases": [
+    {
+      "quotedPriceWei": "2300000000000000",
+      "quotedValueSucceeded": true,
+      "alteredValueWei": "2299999999999999",
+      "alteredValueRevert": "InvalidAuthorization()"
+    },
+    {
+      "quotedPriceWei": "1000000000000000",
+      "quotedValueSucceeded": true,
+      "alteredValueWei": "999999999999999",
+      "alteredValueRevert": "InvalidAuthorization()"
+    },
+    {
+      "quotedPriceWei": "0",
+      "quotedValueSucceeded": true,
+      "alteredValueWei": "1",
+      "alteredValueRevert": "InvalidAuthorization()"
+    }
+  ],
+  "before": {
+    "totalReserved": 0,
+    "walletCount": 0,
+    "contractBalanceWei": "0"
+  },
+  "after": {
+    "totalReserved": 0,
+    "walletCount": 0,
+    "contractBalanceWei": "0"
+  },
+  "afterBlock": 12069123,
+  "remainingRelics": 17,
+  "reservationTransactionBroadcast": false
+}

@@ -25,20 +25,21 @@ contract Pre111KSafeForkTest is TestSupport {
         assertTrue(TREASURY.code.length > 0);
         assertEq(Pre111KSafe(TREASURY).VERSION(), "1.5.0");
         assertTrue(Pre111KSafe(TREASURY).getThreshold() > 0);
-        Pre111K preorder = new Pre111K(TREASURY, TREASURY, vm.addr(0xA11CE), 2.3 ether);
+        Pre111K preorder = new Pre111K(TREASURY, TREASURY, vm.addr(0xA11CE));
+        uint256 selloutBalance = preorder.MAX_RELICS() * 2.3 ether;
         uint256 balanceBefore = TREASURY.balance;
-        vm.deal(address(preorder), 41.4 ether);
+        vm.deal(address(preorder), selloutBalance);
         vm.recordLogs();
         vm.prank(address(0xB0B));
         preorder.withdraw();
-        assertEq(TREASURY.balance, balanceBefore + 41.4 ether);
+        assertEq(TREASURY.balance, balanceBefore + selloutBalance);
         assertEq(address(preorder).balance, 0);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertEq(logs.length, 2);
         assertEq(logs[0].emitter, TREASURY);
         assertEq(logs[0].topics[0], keccak256("SafeReceived(address,uint256)"));
         assertEq(logs[0].topics[1], bytes32(uint256(uint160(address(preorder)))));
-        assertEq(abi.decode(logs[0].data, (uint256)), 41.4 ether);
+        assertEq(abi.decode(logs[0].data, (uint256)), selloutBalance);
         assertEq(logs[1].emitter, address(preorder));
     }
 }

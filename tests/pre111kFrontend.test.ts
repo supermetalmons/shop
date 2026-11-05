@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { testPre111kConfig } from './helpers/pre111k.ts';
 import test from 'node:test';
-import { encodePre111kReservation, resolvePre111kConfig, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
+import { encodePre111kReservation, type Pre111kNetwork, type Pre111kPrepareResponse, type Pre111kStatus } from '../shared/ethereum/pre111k.ts';
 import { checkedPre111kReservation, pre111kApi } from '../src/ethereum/pre111kApi.ts';
 import { EthereumApiError } from '../src/ethereum/api.ts';
 
@@ -8,8 +9,8 @@ const wallet = '0x1111111111111111111111111111111111111111';
 const contract = '0x3333333333333333333333333333333333333333';
 const hash = `0x${'aa'.repeat(32)}`;
 function status(network: Pre111kNetwork): Pre111kStatus {
-  return { config: resolvePre111kConfig(network, { contractAddress: contract, enabled: true }), wallet,
-    totalReserved: 7, reservedRelics: 2, remainingRelics: 11, observedBlock: 100, blockHash: hash };
+  return { config: testPre111kConfig(network, { contractAddress: contract, enabled: true }), wallet,
+    totalReserved: 7, reservedRelics: 2, remainingRelics: 10, observedBlock: 100, blockHash: hash };
 }
 function prepared(network: Pre111kNetwork): Pre111kPrepareResponse {
   const deadline = Math.floor(Date.now() / 1000) + 600;
@@ -19,12 +20,16 @@ function prepared(network: Pre111kNetwork): Pre111kPrepareResponse {
     transaction: { to: contract, chainId: config.chainId, value: `0x${BigInt(config.priceWei).toString(16)}`, data: encodePre111kReservation(2, deadline, signature) } };
 }
 
-test('relic status accepts each network with its exact price and validates wallet counts', async t => {
+test('relic status accepts each network with backend pricing and validates wallet counts', async t => {
   let response: unknown;
   t.mock.method(globalThis, 'fetch', async () => Response.json(response));
   for (const network of ['mainnet', 'devnet'] as const) {
     response = status(network);
     assert.deepEqual(await pre111kApi.status(network, wallet), response);
+    for (const priceWei of ['0', '1', '23000000000000000']) {
+      response = { ...status(network), config: { ...status(network).config, priceWei } };
+      assert.equal((await pre111kApi.status(network, wallet)).config.priceWei, priceWei);
+    }
     for (const invalid of [
       { ...status(network), wallet: contract },
       { ...status(network), reservedRelics: 8 },
@@ -32,7 +37,8 @@ test('relic status accepts each network with its exact price and validates walle
       { ...status(network), remainingRelics: 12 },
       { ...status(network), observedBlock: null },
       { ...status(network), config: { ...status(network).config, chainId: 31337 } },
-      { ...status(network), config: { ...status(network).config, priceWei: '23000000000000000' } },
+      { ...status(network), config: { ...status(network).config, priceWei: '-1' } },
+      { ...status(network), config: { ...status(network).config, maxRelics: 18 } },
       { ...status(network), config: { ...status(network).config, treasury: contract } },
       { ...status(network), config: { ...status(network).config, walletRpcUrl: 'http://evil.example' } },
     ]) {
@@ -43,7 +49,7 @@ test('relic status accepts each network with its exact price and validates walle
 });
 
 test('undeployed mainnet reports unknown counts instead of fabricated zero reservations', async t => {
-  const value = { config: resolvePre111kConfig('mainnet'), wallet, totalReserved: null, reservedRelics: null, remainingRelics: null, observedBlock: null, blockHash: null };
+  const value = { config: testPre111kConfig('mainnet'), wallet, totalReserved: null, reservedRelics: null, remainingRelics: null, observedBlock: null, blockHash: null };
   t.mock.method(globalThis, 'fetch', async () => Response.json(value));
   assert.deepEqual(await pre111kApi.status('mainnet', wallet), value);
 });
@@ -143,7 +149,7 @@ test('transaction confirmation rejects mismatched hashes and malformed responses
   for (const invalid of [null, {}, { ...valid, transactionHash: `0x${'bb'.repeat(32)}` },
     { ...valid, transactionHash: 'invalid' }, { ...valid, status: 'success' }, { ...valid, status: ['confirmed'] },
     { ...valid, confirmations: -1 }, { ...valid, confirmations: 1.5 },
-    { ...valid, reservationNonce: 18 }, { ...valid, reservationNonce: -1 }]) {
+    { ...valid, reservationNonce: 17 }, { ...valid, reservationNonce: -1 }]) {
     response = invalid;
     await assert.rejects(pre111kApi.confirm('devnet', wallet, hash), /invalid response/i);
   }

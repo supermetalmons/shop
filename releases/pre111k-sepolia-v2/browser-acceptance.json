@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-11-05T11:31:45.209Z",
+  "contractAddress": "0x9e4d1fa72f669e273ef6244295b398b7594430ad",
+  "network": "sepolia",
+  "page": "https://mons.shop/111k/relics_devnet",
+  "availability": "17 / 18 left",
+  "action": "Reserve · 0.0023 ETH",
+  "visibleAction": "Reserve 0.0023 ETH",
+  "actionEnabled": true,
+  "artworkLoaded": true,
+  "statusBlock": 12069196,
+  "deploymentBlock": 12069118,
+  "contractMaxRelics": 17,
+  "accessGateVerified": true,
+  "freshBrowserContext": true,
+  "walletConnected": false,
+  "reservationActionClicked": false,
+  "reservationRequests": 0
+}

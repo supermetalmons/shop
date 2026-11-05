@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { testPre111kConfig } from './helpers/pre111k.ts';
 import { registerHooks } from 'node:module';
 import test from 'node:test';
 import type { Root } from 'react-dom/client';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
-import { encodePre111kReservation, resolvePre111kConfig, type Pre111kNetwork, type Pre111kPrepareResponse } from '../shared/ethereum/pre111k.ts';
+import { encodePre111kReservation, type Pre111kNetwork, type Pre111kPrepareResponse } from '../shared/ethereum/pre111k.ts';
 import { pre111kApi } from '../src/ethereum/pre111kApi.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -12,7 +13,7 @@ const OTHER = '0x2222222222222222222222222222222222222222';
 const HASH = `0x${'ab'.repeat(32)}`;
 const DEVNET_HASH = `0x${'cd'.repeat(32)}`;
 const contracts = { mainnet: '0x3333333333333333333333333333333333333333', devnet: '0x4444444444444444444444444444444444444444' };
-const config = (network: Pre111kNetwork) => resolvePre111kConfig(network, { contractAddress: contracts[network], enabled: true });
+const config = (network: Pre111kNetwork) => testPre111kConfig(network, { contractAddress: contracts[network], enabled: true });
 function prepared(network: Pre111kNetwork, wallet: string, nonce = 0): Pre111kPrepareResponse {
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const signature = `0x${'11'.repeat(65)}`;
@@ -69,7 +70,7 @@ test('relic routes scope authorizations and transaction links without retaining 
   let prepareGate: ReturnType<typeof deferred<Pre111kPrepareResponse>> | null = null;
   let prepareCalls = 0;
   t.mock.method(pre111kApi, 'status', async (network, wallet) => ({ config: config(network), wallet,
-    totalReserved: 0, reservedRelics: wallet ? 0 : null, remainingRelics: 18, observedBlock: 1, blockHash: `0x${'aa'.repeat(32)}` }));
+    totalReserved: 0, reservedRelics: wallet ? 0 : null, remainingRelics: 17, observedBlock: 1, blockHash: `0x${'aa'.repeat(32)}` }));
   t.mock.method(pre111kApi, 'prepare', async (network, wallet) => { prepareCalls++; return prepareGate ? prepareGate.promise : prepared(network, wallet); });
   let resolveDestination!: () => void;
   const bridge = { ready: new Promise<void>(resolve => { resolveDestination = resolve; }), loads: 0 };

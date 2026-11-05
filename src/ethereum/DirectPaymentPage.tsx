@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { PRE111K_MAX_RELICS, type Pre111kNetwork } from '../../shared/ethereum/pre111k';
+import { ETHEREUM_MAX_RELICS, formatEtherAmount } from '../../shared/ethereum/protocol';
+import type { Pre111kNetwork } from '../../shared/ethereum/pre111k';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle } from '../components/MintPanel';
 import { ShopHeader } from '../components/ShopHeader';
 import { formatRemainingCount } from '../lib/formatRemainingCount';
@@ -22,10 +23,12 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const connecting = !wallet.ready || wallet.status === 'connecting' || wallet.status === 'restoring';
   const connected = wallet.status === 'connected' && Boolean(wallet.address);
   const count = status?.reservedRelics;
-  const remaining = model.statusQuery.isError || status?.remainingRelics == null ? null : Math.max(0, status.remainingRelics - 1);
-  const available = status?.config.enabled && remaining !== null && remaining > 0;
+  const remaining = model.statusQuery.isError ? null : status?.remainingRelics;
+  const available = status?.config.enabled && remaining != null && remaining > 0;
   const soldOut = remaining === 0;
-  const price = network === 'mainnet' ? '2.3' : '0.0023';
+  const price = status && !model.statusQuery.isError ? `${formatEtherAmount(status.config.priceWei, 18)} ETH` : null;
+  const action = approved ? 'Reserve' : 'Reserve Relic';
+  const actionLabel = price === null ? action : `${action} · ${price}`;
   const explorerLink = model.transactionHash && status?.config.explorerUrl ? `${status.config.explorerUrl}/tx/${model.transactionHash}` : null;
   const hasFeedback = Boolean(model.statusQuery.isError || status && !status.config.enabled || model.error || explorerLink);
 
@@ -54,13 +57,13 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const reserveLabel = model.stage ?? (soldOut ? 'Preorders ended' : null);
   const reserve = <button ref={reserveButton} type="button"
     className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
-    aria-label={reserveLabel ?? `${approved ? 'Reserve' : 'Reserve Relic'} · ${price} ETH`}
+    aria-label={reserveLabel ?? actionLabel}
     disabled={!approved || connecting || choosing || model.inFlight || soldOut || (connected && !available)}
     onClick={() => { if (connected) void model.reserve(); else wallet.connect(); }}>
     {approved ? reserveLabel ? <span className="mint-panel__submit-text">{reserveLabel}</span> : <>
       <span className="mint-panel__submit-text">Reserve</span>
-      <span className="mint-panel__submit-price">{price} ETH</span>
-    </> : reserveLabel ?? `Reserve Relic · ${price} ETH`}
+      {price && <span className="mint-panel__submit-price">{price}</span>}
+    </> : reserveLabel ?? actionLabel}
   </button>;
   const walletControls = <div className="relic-preorder__wallet" aria-label="Ethereum wallet">
     {wallet.address ? <div className="relic-preorder__connection">
@@ -109,11 +112,11 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
                 </>} />
                 <div className="mint-panel__remaining mint-panel__availability">
                   <span className="mint-panel__remaining-count" style={{ minWidth: '2ch' }}>
-                    {remaining != null ? formatRemainingCount(remaining, PRE111K_MAX_RELICS) : model.statusQuery.isPending ? <span role="status" aria-label="Loading availability">
+                    {remaining != null ? formatRemainingCount(remaining, ETHEREUM_MAX_RELICS) : model.statusQuery.isPending ? <span role="status" aria-label="Loading availability">
                       <span className="mint-panel__digit-placeholder" aria-hidden="true" /><span className="mint-panel__digit-placeholder" aria-hidden="true" />
                     </span> : '—'}
                   </span>
-                  <span> / {PRE111K_MAX_RELICS} left</span>
+                  <span> / {ETHEREUM_MAX_RELICS} left</span>
                 </div>
               </>}
               controls={<div className="relic-preorder__support" data-empty={!wallet.address && !choosing && !hasFeedback}>

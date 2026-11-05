@@ -1,0 +1,47 @@
+{
+  "checkedAt": "2026-11-05T11:32:13.252Z",
+  "chainId": 11155111,
+  "contractAddress": "0x9e4d1fa72f669e273ef6244295b398b7594430ad",
+  "deploymentBlock": 12069118,
+  "originalDeployment": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+  "quotePauseCheckedAt": "2026-11-05T11:17:41.995Z",
+  "oldQuoteExpiry": "2026-11-05T11:27:42.000Z",
+  "preMainnetGateCheckedAt": "2026-11-05T11:28:21.542Z",
+  "v1AfterExpiry": {
+    "contractAddress": "0x8dfde3c4a82ab6322ca5bd0306eb8cd2e75674b6",
+    "apiEnabled": false,
+    "block": 12069177,
+    "blockHash": "0x3af17743c13868370b941ce6c9851686fd33be92dabebd6452aedc8cdf3d50d9",
+    "timestamp": 1793878068,
+    "totalReserved": 8,
+    "balanceWei": "18400000000000000"
+  },
+  "previousApiVersion": "a6c410cc-e498-4e48-bccb-b1ce9d622016",
+  "v1PausedApiVersion": "6144f30a-c409-4aaf-a102-f5b9b9d97a59",
+  "activeApiVersion": "70641daf-5b8a-41d0-957c-545ce8cd3455",
+  "previousFrontendVersion": "e1b35cca-5eb7-4b9f-96d9-dc876a45c6cd",
+  "activeFrontendVersion": "4e679845-67be-4579-9dee-7332befe31de",
+  "priceWei": "2300000000000000",
+  "maximumReservations": 17,
+  "physicalRelics": 18,
+  "sourceSha256": {
+    "onchain/ethereum/src/Pre111K.sol": "26ecf0dd38cf7694726d89b668963ae8f4ae734a72101f9a33d47a1babb6423c",
+    "shared/ethereum/pre111k.ts": "62713a1dce60978a300fbb709f1c50f236a64507d2dd090491b33832d4f28660",
+    "shared/ethereum/pre111kCrypto.ts": "7f47ddd32bad0ff8cacee9194305451bdb6ff55db07a18c332099f532ec7353d",
+    "cloud/workers/api/src/pre111k.ts": "444389398b695b15074fd349989fd7ff52b5e178191fa3f5155cee57df318037",
+    "cloud/workers/api/wrangler.jsonc": "5bbd15c05314054200a6d13a93c473341fa50fa7b09cc649f47d268cd80d9e5c",
+    "cloud/workers/api/worker-configuration.d.ts": "42c557a4942a0f0b2cf62f75a6537279b2d80f355913e760593ce05b4924a39d",
+    "src/ethereum/pre111kApi.ts": "f2d0385d799ee732db229402703c92bbfc7a6cdaf709aa7ed71f9e6b7f0d9f45",
+    "src/ethereum/usePre111k.ts": "999940f8bc39aa66dac675c62d30d1c5706ca86049f4b8ddde8f9800805b8847",
+    "src/ethereum/DirectPaymentPage.tsx": "efcc9104e117ce8c177cd21113c6317369c1b74081bd56df5e68faad51be35ff"
+  },
+  "applicationChecks": {
+    "reservationE2E": "passed",
+    "storefrontTestsPassed": 4920,
+    "apiUnitTestsPassed": 2947,
+    "apiRuntimeTestsPassed": 52,
+    "productionBundleChecks": "passed",
+    "remoteDatabaseIntegrity": "passed",
+    "testNotes": "With concurrency limited, all storefront tests passed on Node 22.23.1 and all API unit tests passed on Node 26.5.0. Two API tests also failed on Node 22.23.1 with the unmodified source."
+  }
+}

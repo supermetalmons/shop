@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
-import { PRE111K_API_PATHS } from '../../../../shared/ethereum/pre111k.ts';
+import { PRE111K_API_PATHS, type Pre111kStatus } from '../../../../shared/ethereum/pre111k.ts';
 
 test('pre111k access verification and preparation rejection run in the Worker runtime', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'pre111k-access-runtime-'));
@@ -25,6 +25,7 @@ export default {
     name: `pre111k-access-${name}`, main, compatibility_date: production.compatibility_date,
     compatibility_flags: production.compatibility_flags, ratelimits: production.ratelimits,
     vars: { ...production.vars, ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: '',
+      ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI: '1700000000000001',
       ETHEREUM_PRE111K_ACCESS_CODES: name === 'configured' ? '["RUNTIMEONE","RUNTIMETWO"]' : '' },
   } })) });
   try {
@@ -32,6 +33,11 @@ export default {
     const worker = server.getWorker('pre111k-access-configured');
     const headers = { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.1',
       'Content-Type': 'application/json', 'X-Mons-CSRF': '1' };
+    const status = await worker.fetch(`https://api.mons.shop${PRE111K_API_PATHS.status}?network=devnet`, { headers });
+    assert.equal(status.status, 200);
+    const { config } = await status.json() as Pre111kStatus;
+    assert.equal(config.priceWei, '1700000000000001');
+    assert.equal(config.maxRelics, 17);
     const call = (path: string, body: unknown) => worker.fetch(`https://api.mons.shop${path}`, {
       method: 'POST', headers, body: JSON.stringify(body),
     });

@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-11-05T11:18:23.839Z",
+  "chainId": 11155111,
+  "contractAddress": "0x9e4d1fa72f669e273ef6244295b398b7594430ad",
+  "url": "https://sepolia.etherscan.io/address/0x9e4d1fa72f669e273ef6244295b398b7594430ad#code",
+  "contractName": "Pre111K",
+  "compilerVersion": "v0.8.38+commit.1835d247",
+  "optimizationRuns": 500,
+  "constructorArgsMatch": true,
+  "frozenSourcesMatch": true,
+  "sourceCount": 15,
+  "verified": true,
+  "match": "exact_match",
+  "evmVersion": "prague",
+  "metadataBytecodeHash": "none",
+  "optimizerSettingsMatch": true,
+  "abiMatches": true
+}
