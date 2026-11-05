@@ -147,6 +147,7 @@ const config = {
     ETHEREUM_111K_METADATA_BASE_URI: deployment.metadataBaseURI,
     ETHEREUM_111K_RPC_URL: rpcUrl.href, ETHEREUM_111K_SIGNER_SECRET: testKey,
     ETHEREUM_111K_DELIVERY_CONFIG_ID: deliveryConfigId,
+    ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED: 'true',
     ADDRESS_DECRYPTION_SECRET: Buffer.from(addressKeyPair.secretKey).toString('base64'),
   },
   d1_databases: rawConfig.d1_databases.map((database: Record<string, unknown>) => ({

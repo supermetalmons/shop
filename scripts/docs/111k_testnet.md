@@ -174,6 +174,7 @@ The [v7 release](../../releases/111k-sepolia-v7/README.md) records the preceding
 | `ETHEREUM_111K_DEPLOYMENT_BLOCK` | First block for bounded event reconciliation |
 | `ETHEREUM_111K_RPC_URL` | Local loopback RPC only; unused for Sepolia |
 | `ETHEREUM_111K_DELIVERY_CONFIG_ID` | Registered delivery configuration selected for new quotes; initial value `1` |
+| `ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED` | Set to `"true"` and redeploy the API Worker to resume issuing delivery and crate-receipt claim signatures. The production setting is `"false"` during the pause. |
 | `ETHEREUM_111K_SIGNER_SECRET` | Backend authorization key matching `quoteSigner()`; required for delivery and claims, optional while undeployed |
 | `ALCHEMY_MI_NOTE_API_KEY` | Existing server-only key for Sepolia RPC and NFT indexing |
 

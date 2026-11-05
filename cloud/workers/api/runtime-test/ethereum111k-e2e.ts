@@ -129,6 +129,7 @@ function testEnvironment(contract: string, key: string, ops: EthereumEnvironment
     ETHEREUM_111K_METADATA_BASE_URI: metadataBaseURI,
     ETHEREUM_111K_RPC_URL: rpcUrl, ETHEREUM_111K_SIGNER_SECRET: key,
     ETHEREUM_111K_DELIVERY_CONFIG_ID: '1',
+    ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED: 'true',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
   } as EthereumEnvironment;
 }

@@ -103,7 +103,7 @@ function fixture(controlActive = true) {
     ETHEREUM_111K_DEPLOYMENT_BLOCK: '2',
     ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
     ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_SIGNER_SECRET: SIGNER_KEY,
-    ETHEREUM_111K_DELIVERY_CONFIG_ID: '1',
+    ETHEREUM_111K_DELIVERY_CONFIG_ID: '1', ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED: 'true',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
   };
   const state = {
@@ -1693,6 +1693,74 @@ for (const reason of ['paused', 'scope-mismatch'] as const) {
     } finally { f.close(); }
   });
 }
+
+function assertRedemptionPaused(result: { response: Response; body: unknown }) {
+  assert.equal(result.response.status, 503);
+  assert.deepEqual(result.body, { ok: false, error: { code: 'unavailable', message: '111k Ethereum redemptions are temporarily paused.' } });
+}
+
+for (const path of [paths.deliveryPrepare, checkoutPaths.prepare]) test(`redemption signing pause blocks new and existing quotes at ${path}`, async () => {
+  const f = fixture();
+  try {
+    f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
+    f.commerce.database.prepare('UPDATE ethereum_111k_control SET chain_id = 11155111 WHERE singleton = 1').run();
+    delete f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED;
+    const auth = await f.session();
+    await f.saveAddress(auth.token);
+    const input = path === checkoutPaths.prepare ? { checkoutId: (await draftCheckout(f)).checkout.checkoutId, addressId: ADDRESS_ID } :
+      { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: REQUEST_ID };
+    const prepare = () => f.request<EthereumDeliveryPrepareResponse>(path, input, auth.token);
+    assertRedemptionPaused(await prepare());
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 0);
+
+    f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED = 'true';
+    const first = await prepare();
+    assert.equal(first.response.status, 200, JSON.stringify(first.body));
+    const original = f.quoteRow(first.body.orderId);
+    f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED = 'false';
+    assertRedemptionPaused(await prepare());
+    f.state.now = first.body.expiresAtMs + 1000;
+    f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED = 'TRUE';
+    assertRedemptionPaused(await prepare());
+    assert.deepEqual(f.quoteRow(first.body.orderId), original);
+
+    f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED = 'true';
+    const renewed = await prepare();
+    assert.equal(renewed.response.status, 200, JSON.stringify(renewed.body));
+    assert.equal(renewed.body.orderId, first.body.orderId);
+    assert.ok(renewed.body.quote.deadline > first.body.quote.deadline);
+    assert.notEqual(renewed.body.signature, first.body.signature);
+  } finally { f.close(); }
+});
+
+test('redemption signing pause blocks crate claim preparation and allows confirmation of issued authorizations', async () => {
+  const f = fixture();
+  try {
+    const { authentication, prepared } = await f.prepared();
+    f.setReceipt(HASH, [f.deliveryLog(prepared)]);
+    f.state.tokens.set('2000001', { kind: 5, displayId: 1, owner: WALLET });
+    f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED = 'false';
+    const delivery = await f.request(paths.deliveryConfirm, { orderId: prepared.orderId, transactionHash: HASH }, authentication.token);
+    assert.equal(delivery.body.status, 'confirmed', JSON.stringify(delivery.body));
+    const claim = f.claimRow();
+    const order = f.order(prepared.orderId);
+    const quote = f.quoteRow(prepared.orderId);
+    const input = { receiptId: '2000001', code: claim.code };
+    assertRedemptionPaused(await f.request(paths.claimPrepare, input, authentication.token));
+    assert.deepEqual(f.claimRow(), claim);
+    assert.deepEqual(f.order(prepared.orderId), order);
+    assert.deepEqual(f.quoteRow(prepared.orderId), quote);
+
+    f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED = 'true';
+    const issued = await f.request<EthereumClaimPrepareResponse>(paths.claimPrepare, input, authentication.token);
+    assert.equal(issued.response.status, 200, JSON.stringify(issued.body));
+    assert.ok(issued.body.signature);
+    f.setReceipt(CLAIM_HASH, [f.claimLog(issued.body)]);
+    f.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED = 'false';
+    const confirmed = await f.request(paths.claimConfirm, { claimId: issued.body.claimId, transactionHash: CLAIM_HASH }, authentication.token);
+    assert.equal(confirmed.body.status, 'confirmed', JSON.stringify(confirmed.body));
+  } finally { f.close(); }
+});
 
 test('an existing delivery quote is not signed when the pause arrives during its validation', async () => {
   const f = fixture();

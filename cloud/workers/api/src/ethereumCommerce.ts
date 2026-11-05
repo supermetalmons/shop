@@ -100,6 +100,12 @@ async function authorizationDeadline(context: EthereumContext): Promise<number> 
   return deadline;
 }
 
+function requireRedemptionSigning(context: EthereumContext): void {
+  if (context.env.ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED !== 'true') {
+    throw new EthereumApiError('unavailable', '111k Ethereum redemptions are temporarily paused.');
+  }
+}
+
 async function signerSecret(context: EthereumContext): Promise<string> {
   const secret = context.env.ETHEREUM_111K_SIGNER_SECRET?.trim();
   if (!secret) throw new EthereumApiError('unavailable', 'Ethereum delivery signing is not configured.');
@@ -138,6 +144,7 @@ async function prepareEthereumDelivery(request: Request, context: EthereumContex
 export async function prepareEthereumDeliveryQuote(context: EthereumContext, wallet: string,
   body: { tokenIds: string[]; addressId: string; requestId: string },
   checkout?: { checkoutId: string; items: readonly Pick<EthereumTokenInfo, 'tokenId' | 'kind' | 'displayId'>[] }): Promise<EthereumDeliveryPrepareResponse> {
+  requireRedemptionSigning(context);
   const ids = body.tokenIds.map(normalizeEthereumTokenId);
   if (ids.some((id) => id === null) || new Set(ids).size !== ids.length) throw new EthereumApiError('invalid-argument', 'Choose distinct owned artworks, crates or relics.');
   const tokenIds = ids as string[];
@@ -401,6 +408,7 @@ async function prepareEthereumClaim(request: Request, context: EthereumContext):
   const session = await verifyEthereumSession(request, context);
   await limitEthereumRequest(request, context, `claim:${session.wallet}`, context.env.STAFF_AUTH_SESSION_RATE_LIMITER);
   const body = await readEthereumBody(request, context.signal, z.object({ code: z.string().min(1).max(64), receiptId: decimalId }).strict());
+  requireRedemptionSigning(context);
   const contractAddress = requireEthereumContract(context);
   const claim = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_crate_claims WHERE chain_id = ? AND contract_address = ? AND receipt_id = ?`)
     .bind(context.config.chainId, contractAddress, body.receiptId).first<EthereumClaimRow>();
