@@ -116,9 +116,9 @@ function page(network: Pre111kNetwork = 'devnet', restore = true) {
     }, async ready() {
     await waitFor(() => {
       view.getByRole('button', { name: 'Disconnect' });
-      assert.equal((view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` }) as HTMLButtonElement).disabled, false);
+      assert.equal((view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.22' : '0.0023'} ETH` }) as HTMLButtonElement).disabled, false);
     }, { timeout: 3_000 });
-  }, reserve() { fireEvent.click(view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.3' : '0.0023'} ETH` })); } };
+  }, reserve() { fireEvent.click(view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.22' : '0.0023'} ETH` })); } };
 }
 
 for (const during of ['status', 'prepare'] as const) {
@@ -572,7 +572,7 @@ test('undeployed mainnet remains closed and never displays a fake count', async 
   assert.equal(view.queryByText('Reservations unavailable'), null);
   assert.equal(view.queryByText('0 reserved'), null);
   assert.equal(view.queryByText('Loading reservations…'), null);
-  assert.equal((view.getByRole('button', { name: 'Reserve · 2.3 ETH' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Reserve · 2.22 ETH' }) as HTMLButtonElement).disabled, true);
 });
 
 for (const network of ['mainnet', 'devnet'] as const) {

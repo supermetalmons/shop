@@ -11,7 +11,7 @@ import { usePre111kAccess } from './usePre111kAccess';
 import '../styles/pre111k.css';
 
 const INITIAL_PRICE_WEI: Record<Pre111kNetwork, string> = {
-  mainnet: '2300000000000000000',
+  mainnet: '2220000000000000000',
   devnet: '2300000000000000',
 };
 
