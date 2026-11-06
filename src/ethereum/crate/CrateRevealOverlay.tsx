@@ -162,8 +162,6 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
   const sceneFailed = useCallback(() => { if (mounted.current && !current.current.overlay.closing) setFallback(true); }, []);
   const sceneBecameReady = useCallback(() => { if (mounted.current) setSceneReady(true); }, []);
   const previewsBecameReady = useCallback(() => { if (mounted.current) setAssetsReady(true); }, []);
-  const status = assetError ? 'Couldn’t load the artwork previews.' : opening ? '' :
-    flow.hitCount >= 3 ? 'Preparing your artworks…' : 'Tap the crate to open';
 
   return <BodyPortal>
     <ModalFocusScope ariaLabel={`${crate.name} unboxing`} suspended={suspended || overlay.closing}
@@ -203,7 +201,7 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
         })}
       </div> : null}
       <div className="crate-reveal__status" role="status" aria-live="polite">
-        {status}
+        {assetError ? 'Couldn’t load the artwork previews.' : null}
         {overlay.resultsVisible ? <span className="crate-reveal__announcement">{overlay.results.length} artworks revealed</span> : null}
         {assetError ? <div className="crate-reveal__actions" onClick={event => event.stopPropagation()}>
           <button type="button" onClick={() => setAssetAttempt(value => value + 1)}>Retry loading</button>
