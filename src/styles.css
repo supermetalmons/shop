@@ -4,6 +4,7 @@
 @import './styles/controls.css';
 @import './styles/inventory.css';
 @import './styles/reveal.css';
+@import './styles/crateReveal.css';
 @import './styles/collection-details.css';
 @import './styles/modals.css';
 @import './styles/nfc-claim.css';

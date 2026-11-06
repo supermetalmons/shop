@@ -7,6 +7,7 @@ import { EthereumArtworkMedia } from './EthereumArtworkMedia';
 import { ethereumRevealTiles } from './revealLayout';
 import { ethereumInventoryView } from './state';
 import type { EthereumInventoryPresentation } from './useEthereumInventoryPresentation';
+import { CrateRevealOverlay } from './crate/CrateRevealOverlay';
 
 export function EthereumInventoryOverlays({ presentation, suspended = false }: {
   presentation: EthereumInventoryPresentation;
@@ -15,6 +16,9 @@ export function EthereumInventoryOverlays({ presentation, suspended = false }: {
   const { overlay, style, close, dismiss, requestUnpack, transitionEnd } = presentation;
   const item = overlay?.mode === 'viewer' ? presentation.viewerItem : overlay?.items[0];
   const tiles = overlay ? ethereumRevealTiles(overlay.results.length, overlay.viewport) : [];
+  if (overlay?.mode === 'unpack' && overlay.items.length === 1 && item?.kind === 'crate') {
+    return <CrateRevealOverlay key={overlay.session} presentation={presentation} suspended={suspended} />;
+  }
   return <BackgroundBlurPortal open={Boolean(overlay) && !suspended} active={Boolean(overlay?.active && !overlay.closing) && !suspended}>
     {overlay && item && !suspended ? overlay.mode === 'viewer' ?
       <MediaViewerOverlay name={item.name} resetKey={item.id} active={overlay.active} closing={overlay.closing}

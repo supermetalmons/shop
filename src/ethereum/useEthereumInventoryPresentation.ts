@@ -44,6 +44,11 @@ type Presentation = {
 function targetRect(mode: Presentation['mode'], item: EthereumInventoryItem, viewport = getRevealOverlayViewport()) {
   const dimensions = ethereumInventoryView(item).imageDimensions;
   const aspect = dimensions ? dimensions.width / dimensions.height : 1;
+  if (mode === 'unpack' && item.kind === 'crate') {
+    const width = Math.min(viewport.width * 0.76, viewport.height * 0.42 * aspect, 700);
+    const height = width / aspect;
+    return { left: viewport.left + (viewport.width - width) / 2, top: viewport.top + viewport.height * 0.56 - height / 2, width, height };
+  }
   return mode === 'viewer' ? calcReceiptViewerTargetRectInViewport(aspect, 'shipment-figure', viewport)
     : calcRevealTargetRectForRendererInViewport(undefined, aspect, viewport);
 }
@@ -59,6 +64,10 @@ function sameResults(left: readonly EthereumInventoryItem[], right: readonly Eth
       item.animation_url === other.animation_url && item.category === other.category &&
       item.aspectRatio?.width === other.aspectRatio?.width && item.aspectRatio?.height === other.aspectRatio?.height;
   });
+}
+
+function isCrateUnpack(state: Presentation): boolean {
+  return state.mode === 'unpack' && state.items.length === 1 && state.items[0].kind === 'crate';
 }
 
 export function useEthereumInventoryPresentation(options: PresentationOptions) {
@@ -180,7 +189,7 @@ export function useEthereumInventoryPresentation(options: PresentationOptions) {
     if (!state || state.mode !== 'unpack' || state.closing || state.results.length || optionsRef.current.suspended) return;
     const session = state.session;
     const isActive = () => current.current?.session === session && !current.current.closing && !optionsRef.current.suspended;
-    void soundPlayer.initializeOnUserInteraction(true).then(() => {
+    if (!isCrateUnpack(state)) void soundPlayer.initializeOnUserInteraction(true).then(() => {
       if (!isActive()) return;
       void soundPlayer.playSound(DEFAULT_BOX_SOUND_CLICK_URL, resolveDropContent().reveal.sound.clickVolume, isActive);
       void soundPlayer.preloadSound(DEFAULT_BOX_SOUND_REVEAL_URL).catch(() => {});
@@ -194,6 +203,7 @@ export function useEthereumInventoryPresentation(options: PresentationOptions) {
     update({ ...latest, attempted: Boolean(transactionHash), transactionHash: transactionHash?.toLowerCase() });
   }, [update]);
   const openUnpack = useCallback((items: readonly EthereumInventoryItem[], rect?: DOMRect | null) => {
+    if (items.length !== 1) return false;
     if (!present('unpack', items, rect)) return false;
     void requestUnpack();
     return true;
@@ -215,7 +225,7 @@ export function useEthereumInventoryPresentation(options: PresentationOptions) {
     }
   }, [overlay?.transactionHash, options.scope, options.suspended, options.unpackResults, options.unpackErrors, close, update]);
   useLayoutEffect(() => {
-    if (!overlay?.results.length || overlay.resultsVisible || overlay.closing) return;
+    if (!overlay?.results.length || overlay.resultsVisible || overlay.closing || isCrateUnpack(overlay)) return;
     const session = overlay.session;
     let second = 0;
     const first = window.requestAnimationFrame(() => {
@@ -230,12 +240,19 @@ export function useEthereumInventoryPresentation(options: PresentationOptions) {
     return () => { window.cancelAnimationFrame(first); window.cancelAnimationFrame(second); };
   }, [overlay?.session, overlay?.results.length, overlay?.resultsVisible, overlay?.closing, update]);
   useEffect(() => {
-    if (!overlay?.resultsVisible || overlay.closing || options.suspended || playedReveal.current === overlay.session) return;
+    if (!overlay?.resultsVisible || overlay.closing || options.suspended || isCrateUnpack(overlay) || playedReveal.current === overlay.session) return;
     const session = overlay.session;
     playedReveal.current = session;
     void soundPlayer.playSound(DEFAULT_BOX_SOUND_REVEAL_URL, resolveDropContent().reveal.sound.revealVolume,
       () => current.current?.session === session && !current.current.closing && !optionsRef.current.suspended);
   }, [overlay?.session, overlay?.resultsVisible, overlay?.closing, options.suspended]);
+  const completeCrateReveal = useCallback((session: number) => {
+    const state = current.current;
+    if (!state || state.session !== session || state.closing || optionsRef.current.suspended || !isCrateUnpack(state) ||
+      !state.results.length || state.resultsVisible) return;
+    dismissLockedUntil.current = Date.now() + REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS;
+    update({ ...state, resultsVisible: true });
+  }, [update]);
   useOverlayScrollLock({ active: Boolean(overlay) && !options.suspended, escapeEnabled: !overlay?.closing, onEscape: close });
   const transitionEnd = useCallback((event: TransitionEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget || !current.current?.closing) return;
@@ -247,7 +264,7 @@ export function useEthereumInventoryPresentation(options: PresentationOptions) {
       '--reveal-close-transform': 'none', '--reveal-close-opacity': '0', '--reveal-close-transition': 'opacity 260ms ease',
     } : {}),
   } as CSSProperties : undefined;
-  return { open: Boolean(overlay), overlay, viewerItem, style, openUnpack, openViewer, close, dismiss, requestUnpack, transitionEnd };
+  return { open: Boolean(overlay), overlay, viewerItem, style, openUnpack, openViewer, close, dismiss, requestUnpack, completeCrateReveal, transitionEnd };
 }
 
 export type EthereumInventoryPresentation = ReturnType<typeof useEthereumInventoryPresentation>;

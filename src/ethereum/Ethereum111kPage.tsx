@@ -180,7 +180,7 @@ export default function Ethereum111kPage({
   };
   const selectedViews = selectedItems.map(item => ethereumInventoryView(item, model.config.dropId));
   const selectedContainer = selectedItems.length === 1 && ['crate', 'warehouse', 'relic'].includes(selectedItems[0].kind) ? selectedItems[0] : null;
-  const canOpenSelected = Boolean(selectedContainer || selectedItems.length && selectedItems.length <= model.config.maxUnboxQuantity && selectedItems.every(item => item.kind === 'crate'));
+  const canOpenSelected = Boolean(selectedContainer);
   const selectedPending = selectedItems.some(item => model.pendingItemIds.has(item.id));
   const mintStatus = model.configQuery.data?.enabled === false ? 'Mint unavailable' : model.stats.data && !model.stats.data.saleActive ? 'Minting is paused' : undefined;
   const relicStatus = model.configQuery.data?.enabled === false || relicDataError ? 'Unavailable' :

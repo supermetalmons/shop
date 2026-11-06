@@ -856,6 +856,28 @@ test('a pending discounted mint switches the next mint to public pricing when it
   assert.deepEqual(transactions.map(transaction => BigInt(transaction.value)), [50_000_000_000_000n, 100_000_000_000_000n]);
 });
 
+test('selecting another crate replaces the first and opens only that crate', async t => {
+  const first = item();
+  const second = { ...item('111113'), name: 'Crate #2', displayId: 2 };
+  const transactions: Array<{ data: string }> = [];
+  const hash = `0x${'ab'.repeat(32)}`;
+  const connected = unpackWallet(hash);
+  const provider = connected.provider!;
+  connected.provider = { request: async request => {
+    if (request.method === 'eth_sendTransaction') transactions.push((request.params as typeof transactions)[0]);
+    return provider.request(request);
+  } };
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [first, second], nextCursor: null, observedBlock: 10 }));
+  const view = page({ wallet: connected });
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${second.id}"]`)));
+  fireEvent.click(view.container.querySelector(`[data-inventory-id="${first.id}"]`)!);
+  fireEvent.click(view.container.querySelector(`[data-inventory-id="${second.id}"]`)!);
+  fireEvent.click(view.getByRole('button', { name: 'Open' }));
+  await waitFor(() => assert.equal(transactions.length, 1));
+  assert.equal(transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [second.tokenId]));
+  assert.ok(view.getByRole('dialog', { name: 'Crate #2 unboxing' }).classList.contains('crate-reveal'));
+});
+
 test('opening the shared blurry overlay starts unpacking without another interaction', async t => {
   const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
   const hash = `0x${'ab'.repeat(32)}`;

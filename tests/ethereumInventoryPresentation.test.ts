@@ -35,6 +35,34 @@ function options(overrides: Partial<Options> = {}): Options {
   return { scope, onUnpack: async () => hash, unpackResults: {}, unpackErrors: {}, ...overrides };
 }
 
+function previewImages(t: TestContext, options: { decode?: (src: string) => Promise<void>; fail?: () => boolean } = {}) {
+  const loaded: string[] = [];
+  const released: string[] = [];
+  const previewSources: HTMLCanvasElement[] = [];
+  const originalImage = globalThis.Image;
+  Object.defineProperty(globalThis, 'Image', { configurable: true, value: function () {
+    const image = document.createElement('img');
+    let source = '';
+    Object.defineProperties(image, {
+      naturalWidth: { value: 640 }, naturalHeight: { value: 480 }, complete: { value: false },
+      src: { get: () => source, set: value => {
+        if (value) {
+          loaded.push(value);
+          queueMicrotask(() => image.dispatchEvent(new window.Event(options.fail?.() ? 'error' : 'load')));
+        } else if (source) released.push(source);
+        source = value;
+      } },
+    });
+    image.decode = () => options.decode?.(source) ?? Promise.resolve();
+    return image;
+  } });
+  t.after(() => Object.defineProperty(globalThis, 'Image', { configurable: true, value: originalImage }));
+  t.mock.method(environment.dom.window.HTMLCanvasElement.prototype, 'getContext', (() => ({ drawImage(source: CanvasImageSource) {
+    if (source instanceof environment.dom.window.HTMLCanvasElement) previewSources.push(source);
+  } })) as never);
+  return { loaded, released, previewSources };
+}
+
 function presentationView(initial: Options) {
   let presentation!: ReturnType<typeof useEthereumInventoryPresentation>;
   function Harness(props: Options) {
@@ -86,6 +114,22 @@ test('recovered results never open an overlay on mount or after reload', () => {
   assert.equal(second.result.current.open, false);
 });
 
+test('crate framing leaves room above the lid in portrait, landscape and desktop viewports', () => {
+  for (const [width, height] of [[320, 568], [844, 390], [1440, 900]]) {
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: {
+      width, height, offsetLeft: 5, offsetTop: 7, addEventListener() {}, removeEventListener() {},
+    } });
+    const hook = renderHook(useEthereumInventoryPresentation, { initialProps: options() });
+    act(() => { hook.result.current.openUnpack([item()]); });
+    const rect = hook.result.current.overlay!.targetRect;
+    assert.ok(rect.width <= Math.min(width * 0.76, 700));
+    assert.ok(rect.top >= 7 + height * 0.35 - 0.001);
+    assert.ok(rect.top + rect.height <= 7 + height * 0.77 + 0.001);
+    assert.equal(rect.left + rect.width / 2, 5 + width / 2);
+    hook.unmount();
+  }
+});
+
 test('opening unpack submits immediately and only its own results are presented', async () => {
   const submitted = Promise.withResolvers<string | null>();
   let sends = 0;
@@ -108,11 +152,145 @@ test('opening unpack submits immediately and only its own results are presented'
   assert.deepEqual(view.result.current.overlay?.results, artworks);
 });
 
+test('crate results wait for scene completion and ignore stale or suspended completion callbacks', async () => {
+  const initial = options();
+  const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
+  await act(async () => { view.result.current.openUnpack([item()]); });
+  const session = view.result.current.overlay!.session;
+  const revealed = { ...initial, unpackResults: { [hash]: [item('1', 'artwork')] } };
+  view.rerender(revealed);
+  await act(async () => { await new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))); });
+  assert.equal(view.result.current.overlay?.resultsVisible, false);
+  act(() => view.result.current.completeCrateReveal(session + 1));
+  assert.equal(view.result.current.overlay?.resultsVisible, false);
+  view.rerender({ ...revealed, suspended: true });
+  act(() => view.result.current.completeCrateReveal(session));
+  assert.equal(view.result.current.overlay?.resultsVisible, false);
+  view.rerender(revealed);
+  act(() => view.result.current.completeCrateReveal(session));
+  assert.equal(view.result.current.overlay?.resultsVisible, true);
+});
+
+for (const count of [20, 31]) test(`the fallback crate requires three hits and all ${count} decoded previews before opening`, async t => {
+  environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
+  const lastImage = Promise.withResolvers<void>();
+  const { loaded, released } = previewImages(t, { decode: src => src.endsWith(`/${count}.webp`) ? lastImage.promise : Promise.resolve() });
+  let sends = 0;
+  const initial = options({ onUnpack: async () => { sends++; return hash; } });
+  const view = presentationView(initial);
+  await act(async () => { view.presentation.openUnpack([item()]); });
+  const button = view.getByRole('button', { name: `Reveal ${item().name}` });
+  const results = Array.from({ length: count }, (_, index) => ({ ...item(String(index + 1), 'artwork'),
+    category: index % 2 ? 'video' as const : '3d' as const, animation_url: `https://example.com/${index}.glb` }));
+  view.rerenderOptions({ ...initial, unpackResults: { [hash]: results } });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  if (count === 31) fireEvent.click(button);
+  await waitFor(() => assert.equal(loaded.length, count));
+  assert.equal(view.getByRole('dialog').classList.contains('crate-reveal--opening'), false);
+  assert.equal(view.presentation.overlay?.resultsVisible, false);
+  await act(async () => lastImage.resolve());
+  await waitFor(() => assert.equal(released.length, count));
+  if (count === 20) {
+    assert.equal(view.getByRole('dialog').classList.contains('crate-reveal--opening'), false);
+    fireEvent.click(button);
+  }
+  await waitFor(() => assert.equal(view.getByRole('dialog').classList.contains('crate-reveal--opening'), true));
+  assert.equal(view.getByRole('dialog').querySelectorAll('[data-reveal-item]').length, count);
+  assert.equal(view.getByRole('dialog').querySelectorAll('video').length, 0);
+  assert.equal(loaded.some(source => source.endsWith('.glb')), false);
+  await waitFor(() => assert.equal(view.presentation.overlay?.resultsVisible, true));
+  assert.equal(sends, 1);
+});
+
+test('fallback previews retain their bitmaps through closing after source buffers are released', async t => {
+  environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
+  const { previewSources } = previewImages(t);
+  const results = Array.from({ length: 20 }, (_, index) => item(String(index + 1), 'artwork'));
+  const view = presentationView(options({ unpackResults: { [hash]: results } }));
+  await act(async () => { view.presentation.openUnpack([item()]); });
+  const button = view.getByRole('button', { name: `Reveal ${item().name}` });
+  for (let hit = 0; hit < 3; hit++) fireEvent.click(button);
+  await waitFor(() => assert.equal(view.presentation.overlay?.resultsVisible, true));
+  const dialog = view.getByRole('dialog');
+  const canvases = Array.from(dialog.querySelectorAll<HTMLCanvasElement>('canvas'));
+  assert.equal(canvases.length, 20);
+  assert.equal(previewSources.length, 20);
+  assert.ok(canvases.every(canvas => canvas.width === 512 && canvas.height === 384));
+  assert.ok(previewSources.every(canvas => canvas.width === 512 && canvas.height === 384));
+  act(() => view.presentation.close());
+  assert.equal(view.presentation.overlay?.closing, true);
+  assert.ok(dialog.isConnected && dialog.classList.contains('reveal-overlay--closing'));
+  assert.deepEqual(Array.from(dialog.querySelectorAll('canvas')), canvases);
+  assert.ok(previewSources.every(canvas => canvas.width === 0 && canvas.height === 0));
+  assert.ok(canvases.every(canvas => canvas.width === 512 && canvas.height === 384));
+  await waitFor(() => assert.equal(view.presentation.overlay, null));
+  assert.ok(canvases.every(canvas => !canvas.isConnected));
+});
+
+test('retrying crate previews keeps its transaction and suspension preserves the same presentation', async t => {
+  environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
+  let fail = true;
+  previewImages(t, { fail: () => fail });
+  let sends = 0;
+  const initial = options({ onUnpack: async () => { sends++; return hash; } });
+  const view = presentationView(initial);
+  await act(async () => { view.presentation.openUnpack([item()]); });
+  const button = view.getByRole('button', { name: `Reveal ${item().name}` });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  fireEvent.click(button);
+  const revealed = { ...initial, unpackResults: { [hash]: [item('1', 'artwork')] } };
+  view.rerenderOptions(revealed);
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Retry loading' })));
+  assert.equal(view.presentation.overlay?.resultsVisible, false);
+  const session = view.presentation.overlay!.session;
+  fail = false;
+  fireEvent.click(view.getByRole('button', { name: 'Retry loading' }));
+  view.rerenderOptions({ ...revealed, suspended: true });
+  await waitFor(() => assert.equal(view.queryByRole('button', { name: 'Retry loading' }), null));
+  assert.equal(view.presentation.overlay?.resultsVisible, false);
+  assert.equal(view.presentation.overlay?.session, session);
+  view.rerenderOptions(revealed);
+  await waitFor(() => assert.equal(view.presentation.overlay?.resultsVisible, true));
+  assert.equal(view.presentation.overlay?.transactionHash, hash);
+  assert.equal(sends, 1);
+});
+
+test('a fallback whose flow clock already finished still unlocks dismissal after its gallery paints', async t => {
+  environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
+  previewImages(t);
+  let now = performance.now();
+  t.mock.method(performance, 'now', () => now);
+  const initial = options();
+  const view = presentationView(initial);
+  await act(async () => { view.presentation.openUnpack([item()]); });
+  const button = view.getByRole('button', { name: `Reveal ${item().name}` });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  fireEvent.click(button);
+  const revealed = { ...initial, unpackResults: { [hash]: [item('1', 'artwork')] } };
+  view.rerenderOptions(revealed);
+  await waitFor(() => assert.equal(view.getByRole('dialog').classList.contains('crate-reveal--opening'), true));
+  now += 5_000;
+  view.rerenderOptions({ ...revealed, suspended: true });
+  assert.equal(view.presentation.overlay?.resultsVisible, false);
+  view.rerenderOptions(revealed);
+  assert.equal(view.presentation.overlay?.resultsVisible, false);
+  await waitFor(() => assert.equal(view.presentation.overlay?.resultsVisible, true));
+  assert.equal(view.getByRole('status').textContent, '1 artworks revealed');
+  t.mock.method(Date, 'now', () => 1e15);
+  outsideGesture(view.getByRole('dialog'), 'mouse');
+  assert.equal(view.presentation.overlay?.closing, true);
+});
+
 test('empty, suspended, and viewer presentations never submit an unpack', () => {
   let sends = 0;
   const initial = options({ onUnpack: async () => { sends++; return hash; } });
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
   act(() => { assert.equal(view.result.current.openUnpack([]), false); });
+  act(() => { assert.equal(view.result.current.openUnpack([item(), item('111113')]), false); });
+  assert.equal(view.result.current.open, false);
   view.rerender({ ...initial, suspended: true });
   act(() => { assert.equal(view.result.current.openUnpack([item()]), false); });
   view.rerender(initial);
@@ -145,7 +323,7 @@ for (const input of ['mouse', 'touch'] as const) test(`${input} outside dismissa
   const submitted = Promise.withResolvers<string | null>();
   const initial = options({ onUnpack: () => submitted.promise });
   const view = presentationView(initial);
-  act(() => { view.presentation.openUnpack([item()]); });
+  act(() => { view.presentation.openUnpack([item('116667', 'warehouse')]); });
   assert.equal(view.presentation.overlay?.attempted, true);
   outsideGesture(view.getByRole('dialog'), input);
   assert.equal(view.presentation.overlay?.closing, false);
@@ -284,7 +462,7 @@ test('viewer hydration retains the session and source snapshot while updating it
 test('dense reveal renders every result through the shared reveal shell without a gallery or media players', async () => {
   const initial = options();
   const hook = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
-  await act(async () => { hook.result.current.openUnpack([item()]); });
+  await act(async () => { hook.result.current.openUnpack([item('116667', 'warehouse')]); });
   const view = render(createElement(EthereumInventoryOverlays, { presentation: hook.result.current }));
   hook.rerender({ ...initial, unpackResults: { [hash]: Array.from({ length: 311 }, (_, index) => item(String(index + 1), 'artwork')) } });
   view.rerender(createElement(EthereumInventoryOverlays, { presentation: hook.result.current }));

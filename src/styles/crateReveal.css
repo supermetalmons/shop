@@ -1,0 +1,130 @@
+.crate-reveal--suspended {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.crate-reveal--suspended .crate-reveal__preview {
+  animation-play-state: paused;
+}
+
+.crate-reveal__scene {
+  z-index: 2;
+  opacity: 1;
+  transition: opacity 260ms ease;
+}
+
+.crate-reveal.reveal-overlay--closing .crate-reveal__scene,
+.crate-reveal.reveal-overlay--closing .crate-reveal__results,
+.crate-reveal.reveal-overlay--closing .crate-reveal__status {
+  opacity: 0;
+}
+
+.crate-reveal__frame {
+  z-index: 3;
+}
+
+.crate-reveal__reference {
+  transition: opacity 120ms ease;
+}
+
+.crate-reveal--ready .crate-reveal__reference,
+.crate-reveal--fallback.crate-reveal--opening .crate-reveal__reference {
+  opacity: 0;
+}
+
+.crate-reveal button.crate-reveal__hit {
+  all: unset;
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.crate-reveal button.crate-reveal__hit,
+.crate-reveal button.crate-reveal__hit:hover:not(:disabled),
+.crate-reveal button.crate-reveal__hit:active,
+.crate-reveal button.crate-reveal__hit:focus {
+  background: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  border: 0;
+}
+
+.crate-reveal button.crate-reveal__hit:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 12px;
+  border-radius: 8px;
+}
+
+.crate-reveal button.crate-reveal__hit:disabled {
+  pointer-events: none;
+}
+
+.crate-reveal:has(.crate-reveal__hit:active) .crate-reveal__scene,
+.crate-reveal:has(.crate-reveal__hit:active) .crate-reveal__reference {
+  transform: translateY(1px) scale(.998);
+}
+
+.crate-reveal__status {
+  position: fixed;
+  z-index: 4;
+  left: 20px;
+  right: 20px;
+  bottom: max(28px, env(safe-area-inset-bottom));
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-color, currentColor);
+  transition: opacity 260ms ease;
+  pointer-events: none;
+}
+
+.crate-reveal__announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.crate-reveal__actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  pointer-events: auto;
+}
+
+.crate-reveal__actions button {
+  min-height: 44px;
+  padding: 8px 14px;
+}
+
+.crate-reveal__results {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+
+.crate-reveal__preview {
+  position: absolute;
+  object-fit: contain;
+  opacity: 0;
+  animation: crate-preview-appear 360ms ease both;
+  animation-delay: var(--crate-preview-delay, 0ms);
+}
+
+@keyframes crate-preview-appear {
+  from { opacity: 0; transform: translateY(12px) scale(.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crate-reveal__frame { transition-duration: 120ms; }
+  .crate-reveal__preview { animation-duration: 160ms; }
+}
