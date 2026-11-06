@@ -64,6 +64,9 @@ export function createViteConfig(
 
     envDir: settings.envDir,
     envPrefix: settings.envPrefix,
+    optimizeDeps: {
+      entries: ['*.html'],
+    },
 
     // Vite 7 externalizes Node built-ins by default. We need the npm `buffer` polyfill
     // for Solana web3.js and our client code.
