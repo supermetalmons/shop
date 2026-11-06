@@ -43,15 +43,10 @@ body:has(.relic-page--locked) {
   justify-content: center;
   justify-content: safe center;
   gap: clamp(20px, 3.5svh, 32px);
-  opacity: 1;
-  filter: blur(0);
-  transition: opacity 260ms ease, filter 260ms ease;
 }
 
 .relic-page--locked .relic-page__content {
-  opacity: .2;
-  filter: blur(18px);
-  will-change: filter;
+  visibility: hidden;
   pointer-events: none;
   user-select: none;
 }
@@ -504,7 +499,6 @@ body:has(.relic-page--unlocked) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .relic-page__content,
   .relic-access,
   .relic-access__field {
     transition: none;
