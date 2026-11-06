@@ -882,6 +882,7 @@ test('opening the shared blurry overlay starts unpacking without another interac
   const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
   const hash = `0x${'ab'.repeat(32)}`;
   const submitted = deferred<string>();
+  let confirmed = false;
   let sent = 0;
   const connected: EthereumWallet = { ...wallet, provider: { request: async ({ method }) => {
     if (method === 'eth_sendTransaction') { sent++; return submitted.promise; }
@@ -890,8 +891,11 @@ test('opening the shared blurry overlay starts unpacking without another interac
     if (method === 'eth_getTransactionByHash') return null;
     return [owner];
   } } };
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [warehouse], nextCursor: null, observedBlock: 10 }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1, items: [item()], burnedTokenIds: [warehouse.tokenId] }));
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: confirmed ? [item()] : [warehouse], nextCursor: null, observedBlock: 10 }));
+  t.mock.method(ethereumApi, 'confirm', async () => {
+    confirmed = true;
+    return { status: 'confirmed', confirmations: 1, items: [item()], burnedTokenIds: [warehouse.tokenId] };
+  });
   const view = page({ wallet: connected });
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)));
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)!);
@@ -909,7 +913,9 @@ test('opening the shared blurry overlay starts unpacking without another interac
   fireEvent.click(reveal);
   await act(async () => { submitted.resolve(hash); });
   assert.equal(sent, 1);
-  await waitFor(() => assert.equal(overlay.querySelectorAll('.reveal-overlay__media-item').length, 1));
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
+  assert.equal(overlay.classList.contains('crate-reveal--opening'), false);
+  assert.equal(overlay.querySelectorAll('[data-reveal-item]').length, 0);
   assert.equal(view.queryByRole('button', { name: 'Transaction changed?' }), null);
   fireEvent.keyDown(document, { key: 'Escape' });
   await waitFor(() => assert.equal(view.queryByRole('dialog'), null));
@@ -918,6 +924,7 @@ test('opening the shared blurry overlay starts unpacking without another interac
 
 test('a stored checkout and callback URL do not affect full-drop unpacking or start checkout requests', async t => {
   const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
+  let confirmed = false;
   const checkoutId = '11111111-1111-4111-8111-111111111111';
   window.history.replaceState(null, '', `/111k_devnet?checkout_id=${checkoutId}`);
   assert.equal(rememberCheckoutReservation({ checkoutId, dropId: '111k_devnet', chainId: config.chainId,
@@ -941,15 +948,20 @@ test('a stored checkout and callback URL do not affect full-drop unpacking or st
     if (method === 'eth_getTransactionByHash' || method === 'eth_getTransactionReceipt') return null;
     return [owner];
   } } };
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [warehouse], nextCursor: null, observedBlock: 10 }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1, items: [item()], burnedTokenIds: [warehouse.tokenId] }));
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: confirmed ? [item()] : [warehouse], nextCursor: null, observedBlock: 10 }));
+  t.mock.method(ethereumApi, 'confirm', async () => {
+    confirmed = true;
+    return { status: 'confirmed', confirmations: 1, items: [item()], burnedTokenIds: [warehouse.tokenId] };
+  });
   const view = page({ wallet: connected });
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)));
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)!);
   fireEvent.click(view.getByRole('button', { name: 'Open' }));
   await waitFor(() => assert.equal(transactions.length, 1));
   assert.equal(transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [warehouse.tokenId]));
-  await waitFor(() => assert.equal(document.querySelectorAll('.reveal-overlay__media-item').length, 1));
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
+  assert.equal(view.getByRole('dialog', { name: 'Warehouse #1 unboxing' }).classList.contains('crate-reveal--opening'), false);
+  assert.equal(document.querySelectorAll('[data-reveal-item]').length, 0);
   assert.equal(status.mock.callCount(), 0);
   assert.equal(refresh.mock.callCount(), 0);
   assert.equal(window.localStorage.getItem(reservationKey), reservation);

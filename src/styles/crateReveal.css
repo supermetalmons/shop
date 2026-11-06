@@ -61,8 +61,8 @@
   pointer-events: none;
 }
 
-.crate-reveal:has(.crate-reveal__hit:active) .crate-reveal__scene,
-.crate-reveal:has(.crate-reveal__hit:active) .crate-reveal__reference {
+.crate-reveal:not(.warehouse-reveal):has(.crate-reveal__hit:active) .crate-reveal__scene,
+.crate-reveal:not(.warehouse-reveal):has(.crate-reveal__hit:active) .crate-reveal__reference {
   transform: translateY(1px) scale(.998);
 }
 

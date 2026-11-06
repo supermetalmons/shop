@@ -114,17 +114,17 @@ test('recovered results never open an overlay on mount or after reload', () => {
   assert.equal(second.result.current.open, false);
 });
 
-test('crate framing leaves room above the lid in portrait, landscape and desktop viewports', () => {
+for (const kind of ['crate', 'warehouse'] as const) test(`${kind} framing leaves room for opening in portrait, landscape and desktop viewports`, () => {
   for (const [width, height] of [[320, 568], [844, 390], [1440, 900]]) {
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: {
       width, height, offsetLeft: 5, offsetTop: 7, addEventListener() {}, removeEventListener() {},
     } });
     const hook = renderHook(useEthereumInventoryPresentation, { initialProps: options() });
-    act(() => { hook.result.current.openUnpack([item()]); });
+    act(() => { hook.result.current.openUnpack([item(kind === 'warehouse' ? '116667' : '111112', kind)]); });
     const rect = hook.result.current.overlay!.targetRect;
-    assert.ok(rect.width <= Math.min(width * 0.76, 700));
-    assert.ok(rect.top >= 7 + height * 0.35 - 0.001);
-    assert.ok(rect.top + rect.height <= 7 + height * 0.77 + 0.001);
+    assert.ok(rect.width <= Math.min(width * (kind === 'warehouse' ? 0.82 : 0.76), kind === 'warehouse' ? 640 : 700));
+    assert.ok(rect.top >= 7 + height * (kind === 'warehouse' ? 0.32 : 0.35) - 0.001);
+    assert.ok(rect.top + rect.height <= 7 + height * (kind === 'warehouse' ? 0.8 : 0.77) + 0.001);
     assert.equal(rect.left + rect.width / 2, 5 + width / 2);
     hook.unmount();
   }
@@ -152,22 +152,22 @@ test('opening unpack submits immediately and only its own results are presented'
   assert.deepEqual(view.result.current.overlay?.results, artworks);
 });
 
-test('crate results wait for scene completion and ignore stale or suspended completion callbacks', async () => {
+for (const kind of ['crate', 'warehouse'] as const) test(`${kind} results wait for scene completion and ignore stale or suspended completion callbacks`, async () => {
   const initial = options();
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
-  await act(async () => { view.result.current.openUnpack([item()]); });
+  await act(async () => { view.result.current.openUnpack([item(kind === 'warehouse' ? '116667' : '111112', kind)]); });
   const session = view.result.current.overlay!.session;
-  const revealed = { ...initial, unpackResults: { [hash]: [item('1', 'artwork')] } };
+  const revealed = { ...initial, unpackResults: { [hash]: [item('1', kind === 'warehouse' ? 'crate' : 'artwork')] } };
   view.rerender(revealed);
   await act(async () => { await new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))); });
   assert.equal(view.result.current.overlay?.resultsVisible, false);
-  act(() => view.result.current.completeCrateReveal(session + 1));
+  act(() => view.result.current.completeContainerReveal(session + 1));
   assert.equal(view.result.current.overlay?.resultsVisible, false);
   view.rerender({ ...revealed, suspended: true });
-  act(() => view.result.current.completeCrateReveal(session));
+  act(() => view.result.current.completeContainerReveal(session));
   assert.equal(view.result.current.overlay?.resultsVisible, false);
   view.rerender(revealed);
-  act(() => view.result.current.completeCrateReveal(session));
+  act(() => view.result.current.completeContainerReveal(session));
   assert.equal(view.result.current.overlay?.resultsVisible, true);
 });
 
@@ -228,19 +228,20 @@ test('fallback previews retain their bitmaps through closing after source buffer
   assert.ok(canvases.every(canvas => !canvas.isConnected));
 });
 
-test('retrying crate previews keeps its transaction and suspension preserves the same presentation', async t => {
+for (const kind of ['crate', 'warehouse'] as const) test(`retrying ${kind} previews keeps its transaction and suspension preserves the same presentation`, async t => {
   environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
   let fail = true;
   previewImages(t, { fail: () => fail });
   let sends = 0;
   const initial = options({ onUnpack: async () => { sends++; return hash; } });
   const view = presentationView(initial);
-  await act(async () => { view.presentation.openUnpack([item()]); });
-  const button = view.getByRole('button', { name: `Reveal ${item().name}` });
+  const source = item(kind === 'warehouse' ? '116667' : '111112', kind);
+  await act(async () => { view.presentation.openUnpack([source]); });
+  const button = view.getByRole('button', { name: `Reveal ${source.name}` });
   fireEvent.click(button);
   fireEvent.click(button);
   fireEvent.click(button);
-  const revealed = { ...initial, unpackResults: { [hash]: [item('1', 'artwork')] } };
+  const revealed = { ...initial, unpackResults: { [hash]: [item('1', kind === 'warehouse' ? 'crate' : 'artwork')] } };
   view.rerenderOptions(revealed);
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Retry loading' })));
   assert.equal(view.presentation.overlay?.resultsVisible, false);
@@ -318,6 +319,8 @@ test('Escape during wallet approval retains the Solana keyboard escape and ignor
 });
 
 for (const input of ['mouse', 'touch'] as const) test(`${input} outside dismissal waits for submission and visible results to finish`, async t => {
+  environment.setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
+  previewImages(t);
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   const submitted = Promise.withResolvers<string | null>();
@@ -325,13 +328,15 @@ for (const input of ['mouse', 'touch'] as const) test(`${input} outside dismissa
   const view = presentationView(initial);
   act(() => { view.presentation.openUnpack([item('116667', 'warehouse')]); });
   assert.equal(view.presentation.overlay?.attempted, true);
+  const button = view.getByRole('button', { name: 'Reveal warehouse 116667' });
+  for (let hit = 0; hit < 3; hit++) fireEvent.click(button);
   outsideGesture(view.getByRole('dialog'), input);
   assert.equal(view.presentation.overlay?.closing, false);
   await act(async () => { submitted.resolve(hash); });
   outsideGesture(view.getByRole('dialog'), input);
   assert.equal(view.presentation.overlay?.closing, false);
 
-  view.rerenderOptions({ ...initial, unpackResults: { [hash]: [item('1', 'artwork')] } });
+  view.rerenderOptions({ ...initial, unpackResults: { [hash]: [item('111112', 'crate')] } });
   assert.equal(view.presentation.overlay?.resultsVisible, false);
   outsideGesture(view.getByRole('dialog'), input);
   assert.equal(view.presentation.overlay?.closing, false);
@@ -462,7 +467,7 @@ test('viewer hydration retains the session and source snapshot while updating it
 test('dense reveal renders every result through the shared reveal shell without a gallery or media players', async () => {
   const initial = options();
   const hook = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
-  await act(async () => { hook.result.current.openUnpack([item('116667', 'warehouse')]); });
+  await act(async () => { hook.result.current.openUnpack([item('117172', 'relic')]); });
   const view = render(createElement(EthereumInventoryOverlays, { presentation: hook.result.current }));
   hook.rerender({ ...initial, unpackResults: { [hash]: Array.from({ length: 311 }, (_, index) => item(String(index + 1), 'artwork')) } });
   view.rerender(createElement(EthereumInventoryOverlays, { presentation: hook.result.current }));

@@ -20,6 +20,7 @@ const DirectPaymentPage = React.lazy(() => import('./ethereum/DirectPaymentPage'
 const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
 const CheckoutPage = React.lazy(loadCheckoutPage);
 const CrateDevApp = import.meta.env?.DEV ? React.lazy(() => import('./ethereum/crate/CrateDevApp')) : null;
+const WarehouseDevApp = import.meta.env?.DEV ? React.lazy(() => import('./ethereum/warehouse/WarehouseDevApp')) : null;
 
 function RoutedApp() {
   const route = useAppRoute();
@@ -87,7 +88,9 @@ runBrowserBootstrap(canonicalProductionUrl(window.location.href), {
         <QueryClientProvider client={queryClient}>
           <BackgroundBlurProvider>
             {CrateDevApp && window.location.pathname === '/111k_devnet/crate-preview'
-              ? <React.Suspense fallback={null}><CrateDevApp /></React.Suspense> : <RoutedApp />}
+              ? <React.Suspense fallback={null}><CrateDevApp /></React.Suspense>
+              : WarehouseDevApp && window.location.pathname === '/111k_devnet/warehouse-preview'
+                ? <React.Suspense fallback={null}><WarehouseDevApp /></React.Suspense> : <RoutedApp />}
           </BackgroundBlurProvider>
         </QueryClientProvider>
       </React.StrictMode>,

@@ -161,6 +161,24 @@ test('density caps retina work and total pixels on large screens', () => {
   }
 });
 
+test('a fresh hit ID after a rejected attempt applies another visible crate impact', async () => {
+  const run = harness();
+  await act(async () => {});
+  settle();
+  run.update({ hit: { id: 1, x: 0, y: 0 } });
+  settle();
+  const model = modelLoads[0].model;
+  assert.equal(model.damage.length, 1);
+  run.update({ hit: null });
+  settle();
+  run.update({ hit: { id: 2, x: 0.5, y: 0.5 } });
+  advanceFrame();
+  assert.equal(model.damage.length, 2);
+  assert.equal(model.damage[1].count, 2);
+  assert.equal(run.view.container.querySelector('[data-animating]')?.getAttribute('data-animating'), 'true');
+  settle();
+});
+
 for (const count of [20, 31]) test(`${count} preview surfaces are all warmed before readiness and assignment retains the crate`, async () => {
   const run = harness();
   await act(async () => {});

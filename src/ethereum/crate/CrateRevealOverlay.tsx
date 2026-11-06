@@ -6,10 +6,13 @@ import { createMiNoteCardInput, type PackPointerEvent } from '../../lib/miNoteCa
 import { ETHEREUM_CONTAINER_MEDIA } from '../containerMedia';
 import { ethereumRevealTiles } from '../revealLayout';
 import type { EthereumInventoryPresentation } from '../useEthereumInventoryPresentation';
+import { loadWarehouseCrateImage, warehouseCratePreviews, type WarehouseCrateImage } from '../warehouse/warehouseAssets';
+import { playWarehouseImpactSound, preloadWarehouseSounds, unlockWarehouseSounds } from '../warehouse/warehouseSounds';
 import { loadCratePreviewAssets, type CratePreview, type CratePreviewAssets } from './crateAssets';
-import { createCrateFlow, hitCrateFlow, pauseCrateFlow, readyCrateFlow } from './crateFlow';
+import { CRATE_MINIMUM_HITS, createCrateFlow, hitCrateFlow, pauseCrateFlow, readyCrateFlow } from './crateFlow';
 import { playCrateHitSound, playCrateOpenSound, preloadCrateSounds } from './crateSounds';
 
+const WarehouseScene = lazy(() => import('../warehouse/WarehouseScene'));
 const CrateScene = lazy(() => import('./CrateScene'));
 
 class SceneBoundary extends Component<{ children: ReactNode; onError: (error: Error) => void }, { failed: boolean }> {
@@ -32,17 +35,22 @@ function PreparedPreview({ preview, style }: { preview: CratePreview; style: CSS
     data-reveal-item={preview.id} className="crate-reveal__preview" style={style} />;
 }
 
-export function CrateRevealOverlay({ presentation, suspended = false }: {
+export function ContainerRevealOverlay({ presentation, suspended = false }: {
   presentation: EthereumInventoryPresentation;
   suspended?: boolean;
 }) {
   const overlay = presentation.overlay!;
-  const crate = overlay.items[0];
+  const container = overlay.items[0];
+  const warehouse = container.kind === 'warehouse';
+  const media = ETHEREUM_CONTAINER_MEDIA[warehouse ? 'warehouse' : 'crate'];
+  const resultLabel = warehouse ? 'crates' : 'artworks';
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [flow, setFlow] = useState(() => createCrateFlow({ reducedMotion }));
+  const [hits, setHits] = useState<readonly { id: number; x: number; y: number }[]>([]);
   const [hit, setHit] = useState<{ id: number; x: number; y: number } | null>(null);
   const [press, setPress] = useState<{ id: number; x: number; y: number } | null>(null);
-  const [assets, setAssets] = useState<CratePreviewAssets | null>(null);
+  const [loadedAssets, setLoadedAssets] = useState<CratePreviewAssets | null>(null);
+  const [crateImage, setCrateImage] = useState<WarehouseCrateImage | null>(null);
   const [assetError, setAssetError] = useState(false);
   const [assetAttempt, setAssetAttempt] = useState(0);
   const [fallback, setFallback] = useState(() => typeof window.WebGLRenderingContext === 'undefined');
@@ -60,6 +68,8 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
   const active = overlay.active && !overlay.closing && !suspended;
   const opening = flow.stage === 'opening' || flow.stage === 'revealed';
   const assetKey = overlay.results.map(item => `${item.id}:${item.image}`).join('|');
+  const warehouseAssets = useMemo(() => warehouseCratePreviews(overlay.results, crateImage), [overlay.results, crateImage]);
+  const assets = warehouse ? warehouseAssets : loadedAssets;
   const tiles = useMemo(() => ethereumRevealTiles(overlay.results.length, overlay.viewport), [overlay.results.length, overlay.viewport]);
   const handoff = useStaticToModelHandoff(entered && sceneReady && !fallback, overlay.session);
 
@@ -85,24 +95,41 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
     if (!overlay.attempted && previousAttempt.current && !overlay.results.length) {
       setFlow(createCrateFlow({ reducedMotion }));
       setHit(null);
+      setHits([]);
       setPress(null);
+      if (warehouse) hitSequence.current = 0;
+      soundOpened.current = false;
     }
     previousAttempt.current = overlay.attempted;
-  }, [overlay.attempted, overlay.results.length, reducedMotion]);
+  }, [overlay.attempted, overlay.results.length, reducedMotion, warehouse]);
   useEffect(() => {
-    if (!assetKey || overlay.closing) return;
+    if (warehouse || !assetKey || overlay.closing) return;
     const controller = new AbortController();
     let resident: CratePreviewAssets | null = null;
     setAssetError(false);
-    setAssets(null);
+    setLoadedAssets(null);
     setAssetsReady(false);
     void loadCratePreviewAssets(current.current.overlay.results, { signal: controller.signal }).then(value => {
       if (controller.signal.aborted) { value.release(); return; }
       resident = value;
-      setAssets(value);
+      setLoadedAssets(value);
     }).catch(() => { if (!controller.signal.aborted) setAssetError(true); });
     return () => { controller.abort(); resident?.release(); };
-  }, [assetKey, assetAttempt, overlay.closing]);
+  }, [warehouse, assetKey, assetAttempt, overlay.closing]);
+  useEffect(() => {
+    if (!warehouse || overlay.closing) return;
+    const controller = new AbortController();
+    let resident: WarehouseCrateImage | null = null;
+    setAssetError(false);
+    setCrateImage(null);
+    setAssetsReady(false);
+    void loadWarehouseCrateImage({ signal: controller.signal }).then(value => {
+      if (controller.signal.aborted) { value.release(); return; }
+      resident = value;
+      setCrateImage(value);
+    }).catch(() => { if (!controller.signal.aborted) setAssetError(true); });
+    return () => { controller.abort(); resident?.release(); };
+  }, [warehouse, assetAttempt, overlay.closing]);
   useEffect(() => {
     setFlow(value => pauseCrateFlow(value, suspended || pageHidden || overlay.closing, performance.now()));
   }, [suspended, pageHidden, overlay.closing]);
@@ -113,16 +140,24 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
     const state = current.current;
     return mounted.current && !state.suspended && !state.overlay.closing && !document.hidden;
   }, []);
+  const warehouseImpact = useCallback((critical: boolean) => {
+    if (!isActive()) return;
+    if (critical) soundOpened.current = true;
+    void playWarehouseImpactSound(critical, isActive).catch(() => {});
+  }, [isActive]);
   useEffect(() => {
-    if (!opening || !active || soundOpened.current) return;
-    soundOpened.current = true;
-    void playCrateOpenSound(isActive).catch(() => {});
-  }, [opening, active, isActive]);
+    if (!opening || !active || pageHidden || soundOpened.current || warehouse && !fallback) return;
+    if (warehouse) warehouseImpact(true);
+    else {
+      soundOpened.current = true;
+      void playCrateOpenSound(isActive).catch(() => {});
+    }
+  }, [opening, active, pageHidden, warehouse, fallback, isActive, warehouseImpact]);
   const complete = useCallback(() => {
     const state = current.current;
     if (!isActive() || !state.overlay.results.length) return;
     setFlow(value => ({ ...value, stage: 'revealed' }));
-    state.presentation.completeCrateReveal(state.overlay.session);
+    state.presentation.completeContainerReveal(state.overlay.session);
   }, [isActive]);
   useEffect(() => {
     if (!fallback || !assets || !opening || overlay.resultsVisible || !active || pageHidden) return;
@@ -136,15 +171,23 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
   }, [fallback, assets, opening, overlay.resultsVisible, active, pageHidden, reducedMotion, complete]);
   const activate = useRef<(event?: PackPointerEvent) => void>(() => {});
   activate.current = event => {
-    if (!isActive() || opening || overlay.resultsVisible) return;
+    if (!isActive() || opening || overlay.resultsVisible || warehouse && hitSequence.current >= CRATE_MINIMUM_HITS) return;
     if (!overlay.attempted && !overlay.results.length) void presentation.requestUnpack();
     const rect = overlay.targetRect;
     const x = event ? Math.max(-1, Math.min(1, (event.clientX - rect.left) / rect.width * 2 - 1)) : 0;
     const y = event ? Math.max(-1, Math.min(1, (event.clientY - rect.top) / rect.height * 2 - 1)) : 0;
-    setHit({ id: ++hitSequence.current, x, y });
+    const nextHit = { id: ++hitSequence.current, x, y };
+    setHit(nextHit);
     setFlow(value => hitCrateFlow(value, performance.now()));
-    void playCrateHitSound(Math.min(3, flow.hitCount + 1), isActive).catch(() => {});
-    void preloadCrateSounds().catch(() => {});
+    if (warehouse) {
+      setHits(value => [...value, nextHit]);
+      void unlockWarehouseSounds().catch(() => {});
+      void preloadWarehouseSounds().catch(() => {});
+      if (fallback && nextHit.id < CRATE_MINIMUM_HITS) warehouseImpact(false);
+    } else {
+      void playCrateHitSound(Math.min(CRATE_MINIMUM_HITS, flow.hitCount + 1), isActive).catch(() => {});
+      void preloadCrateSounds().catch(() => {});
+    }
   };
   const input = useMemo(() => createMiNoteCardInput(event => activate.current(event), {
     onStart: event => {
@@ -164,20 +207,23 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
   const previewsBecameReady = useCallback(() => { if (mounted.current) setAssetsReady(true); }, []);
 
   return <BodyPortal>
-    <ModalFocusScope ariaLabel={`${crate.name} unboxing`} suspended={suspended || overlay.closing}
-      className={`reveal-overlay crate-reveal${overlay.active ? ' reveal-overlay--active' : ''}${overlay.closing ? ' reveal-overlay--closing' : ''}${suspended ? ' crate-reveal--suspended' : ''}${opening ? ' crate-reveal--opening' : ''}${fallback ? ' crate-reveal--fallback' : ''}${!handoff.fallbackVisible ? ' crate-reveal--ready' : ''}`}
+    <ModalFocusScope ariaLabel={`${container.name} unboxing`} suspended={suspended || overlay.closing}
+      className={`reveal-overlay crate-reveal${warehouse ? ' warehouse-reveal' : ''}${overlay.active ? ' reveal-overlay--active' : ''}${overlay.closing ? ' reveal-overlay--closing' : ''}${suspended ? ' crate-reveal--suspended' : ''}${opening ? ' crate-reveal--opening' : ''}${fallback ? ' crate-reveal--fallback' : ''}${!handoff.fallbackVisible ? ' crate-reveal--ready' : ''}`}
       style={presentation.style} onClick={() => { if (isActive()) presentation.dismiss(); }}
       onContextMenu={event => event.preventDefault()} onDragStart={event => event.preventDefault()}>
       <div className="reveal-overlay__backdrop" />
       {!fallback ? <SceneBoundary onError={sceneFailed}><Suspense fallback={null}>
-        <CrateScene assets={assets} hit={hit} press={press} opening={opening} active={active && entered && !pageHidden} closing={overlay.closing} suspended={suspended}
+        {warehouse ? <WarehouseScene assets={assets} crateImage={crateImage} hits={hits} opening={opening} active={active && entered && !pageHidden} closing={overlay.closing} suspended={suspended}
+          reducedMotion={reducedMotion} viewport={overlay.viewport} containerRect={overlay.targetRect}
+          onReady={sceneBecameReady} onAssetsReady={previewsBecameReady} onComplete={complete} onError={sceneFailed}
+          onFrame={handoff.onModelFrame} onImpact={warehouseImpact} /> : <CrateScene assets={assets} hit={hit} press={press} opening={opening} active={active && entered && !pageHidden} closing={overlay.closing} suspended={suspended}
           reducedMotion={reducedMotion} viewport={overlay.viewport} crateRect={overlay.targetRect}
-          onReady={sceneBecameReady} onAssetsReady={previewsBecameReady} onComplete={complete} onError={sceneFailed} onFrame={handoff.onModelFrame} />
+          onReady={sceneBecameReady} onAssetsReady={previewsBecameReady} onComplete={complete} onError={sceneFailed} onFrame={handoff.onModelFrame} />}
       </Suspense></SceneBoundary> : null}
       <div className="reveal-overlay__frame crate-reveal__frame" onTransitionEnd={presentation.transitionEnd}>
-        <img className="reveal-overlay__image crate-reveal__reference" src={ETHEREUM_CONTAINER_MEDIA.crate.src}
-          width={ETHEREUM_CONTAINER_MEDIA.crate.width} height={ETHEREUM_CONTAINER_MEDIA.crate.height} alt="" draggable={false} />
-        <button type="button" className="crate-reveal__hit" aria-label={`Reveal ${crate.name}`}
+        <img className="reveal-overlay__image crate-reveal__reference" src={media.src}
+          width={media.width} height={media.height} alt="" draggable={false} />
+        <button type="button" className="crate-reveal__hit" aria-label={`Reveal ${container.name}`}
           aria-busy={overlay.attempted && !opening} aria-disabled={opening || overlay.closing} disabled={opening || overlay.closing}
           onPointerDown={event => {
             event.stopPropagation();
@@ -192,7 +238,7 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
           onPointerCancel={event => input.onPointerCancel(event)} onLostPointerCapture={event => input.onLostPointerCapture(event)}
           onClick={event => { event.stopPropagation(); input.onClick(event); }} />
       </div>
-      {fallback && assets && opening ? <div className="crate-reveal__results" aria-label="Revealed artworks">
+      {fallback && assets && opening ? <div className="crate-reveal__results" aria-label={`Revealed ${resultLabel}`}>
         {assets.items.map((item, index) => {
           const tile = tiles[index];
           return <PreparedPreview key={item.id} preview={item} style={{ left: tile.left, top: tile.top, width: tile.width,
@@ -201,8 +247,8 @@ export function CrateRevealOverlay({ presentation, suspended = false }: {
         })}
       </div> : null}
       <div className="crate-reveal__status" role="status" aria-live="polite">
-        {assetError ? 'Couldn’t load the artwork previews.' : null}
-        {overlay.resultsVisible ? <span className="crate-reveal__announcement">{overlay.results.length} artworks revealed</span> : null}
+        {assetError ? `Couldn’t load the ${warehouse ? 'crate' : 'artwork'} previews.` : null}
+        {overlay.resultsVisible ? <span className="crate-reveal__announcement">{overlay.results.length} {resultLabel} revealed</span> : null}
         {assetError ? <div className="crate-reveal__actions" onClick={event => event.stopPropagation()}>
           <button type="button" onClick={() => setAssetAttempt(value => value + 1)}>Retry loading</button>
           <button type="button" onClick={presentation.close}>Back to inventory</button>
