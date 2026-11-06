@@ -7,7 +7,7 @@ import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { encodeCall } from '../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS, ethereumAssetId, type EthereumInventoryItem } from '../shared/ethereum/protocol.ts';
 import { ETHEREUM_REVEAL_MAX_TOKEN_IDS, type EthereumRevealedArtwork, type EthereumRevealTransactionResponse } from '../shared/ethereum/reveal.ts';
-import type { EthereumPendingTransaction } from '../src/ethereum/state.ts';
+import type { EthereumPendingTransaction, EthereumRevealJob } from '../src/ethereum/state.ts';
 
 let environment = setupFrontendDom();
 const { act, cleanup, fireEvent, render, renderHook, waitFor } = await import('@testing-library/react');
@@ -27,10 +27,12 @@ const config = resolveEthereum111kConfig({ contractAddress: contract });
 const scope = ethereumInventoryScope(config, owner)!;
 const responseScope = { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test-deployment' };
 const clients: InstanceType<typeof QueryClient>[] = [];
+let submissionTime = 0;
 
 beforeEach(context => {
   const t = context as TestContext;
   environment = setupFrontendDom();
+  submissionTime = Date.now();
   installBrowserLocks(t);
   focusManager.setFocused(undefined);
   onlineManager.setOnline(true);
@@ -72,7 +74,7 @@ function item(tokenId = '1'): EthereumInventoryItem {
     image: 'https://wip.lil.org/111k/artwork_placeholder.png', revealStatus: 'unrevealed' };
 }
 function pending(): EthereumPendingTransaction {
-  return { scope, hash, action: 'unbox', submittedAt: 1, intent: {
+  return { scope, hash, action: 'unbox', submittedAt: submissionTime + 1, intent: {
     to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0',
   } };
 }
@@ -87,13 +89,13 @@ function mockPending(t: TestContext) {
 }
 function harness(initial: Partial<{ config: typeof config; scope: string | null; items: EthereumInventoryItem[]; pending: EthereumPendingTransaction | null }> = {},
   onRevealed: (hash: string, artworks: EthereumRevealedArtwork[]) => void = () => {},
-  options: { gcTime?: number; client?: InstanceType<typeof QueryClient> } = {}) {
+  options: { gcTime?: number; client?: InstanceType<typeof QueryClient>; retainLocalJob?: (job: EthereumRevealJob) => boolean } = {}) {
   const client = options.client ?? new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: options.gcTime ?? Infinity } } });
   if (!options.client) clients.push(client);
   const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
   const props = { config, scope: scope as string | null, items: [] as EthereumInventoryItem[], pending: null as EthereumPendingTransaction | null, ...initial };
   if (props.scope && props.pending) writeEthereumStorage(`${props.scope}:pending`, props.pending);
-  const view = renderHook(current => useEthereumReveals(current.config, current.scope, current.items, current.pending, onRevealed),
+  const view = renderHook(current => useEthereumReveals(current.config, current.scope, current.items, current.pending, onRevealed, undefined, options.retainLocalJob),
     { initialProps: props, wrapper });
   return { ...view, client, update(next: Partial<typeof props>) {
     Object.assign(props, next);
@@ -214,7 +216,7 @@ test('restored unpack jobs remain private and survive confirmation clearing the 
   const mocks = mockPending(t);
   const view = harness({ pending: pending() });
   await waitFor(() => assert.equal(mocks.transaction.mock.callCount(), 1));
-  assert.deepEqual(readEthereumRevealJobs(scope).map(({ trackingId: _, ...job }) => job), [{ transactionHash: hash, submittedAt: 1, crateTokenIds: ['111112'] }]);
+  assert.deepEqual(readEthereumRevealJobs(scope).map(({ trackingId: _, ...job }) => job), [{ transactionHash: hash, submittedAt: submissionTime + 1, crateTokenIds: ['111112'] }]);
   assert.equal(view.result.current.applyArtwork(item()).image, item().image);
   view.update({ pending: null });
   assert.equal(readEthereumRevealJobs(scope).length, 1);
@@ -243,7 +245,7 @@ for (const status of ['reverted', 'not_unpack'] as const) test(`a generation ado
   mockPending(t);
   let ready = false;
   const requests = t.mock.method(ethereumRevealApi, 'transaction', async () => transactionResponse(ready ? 'pending' : status));
-  rememberEthereumRevealJob(scope, hash, 1);
+  rememberEthereumRevealJob(scope, hash, submissionTime + 1);
   const first = readEthereumRevealJobs(scope)[0];
   const view = harness();
   await waitFor(() => assert.deepEqual(readEthereumRevealJobs(scope), []));
@@ -251,9 +253,9 @@ for (const status of ['reverted', 'not_unpack'] as const) test(`a generation ado
   const otherHash = `0x${'ee'.repeat(32)}`;
   ready = true;
   act(() => {
-    rememberEthereumRevealJob(scope, otherHash, 2);
+    rememberEthereumRevealJob(scope, otherHash, submissionTime + 2);
     forgetEthereumRevealJob(scope, otherHash);
-    rememberEthereumRevealJob(scope, hash, 3);
+    rememberEthereumRevealJob(scope, hash, submissionTime + 3);
   });
   await waitFor(() => assert.equal(requests.mock.callCount(), 2));
   await waitFor(() => assert.equal(view.client.getQueryState<EthereumRevealTransactionResponse>(['ethereum111k', 'reveal-transaction', config.chainId, contract, hash])?.data?.status, 'pending'));
@@ -270,13 +272,13 @@ test('a generation adopted from another tab cancels the earlier in-flight reques
     signals.push(signal!);
     return signals.length === 1 ? late.promise : Promise.resolve(transactionResponse());
   });
-  rememberEthereumRevealJob(scope, hash, 1);
+  rememberEthereumRevealJob(scope, hash, submissionTime + 1);
   const first = readEthereumRevealJobs(scope)[0];
   const view = harness();
   await waitFor(() => assert.equal(requests.mock.callCount(), 1));
   act(() => {
     forgetEthereumRevealJob(scope, hash, first.trackingId);
-    rememberEthereumRevealJob(scope, hash, 2);
+    rememberEthereumRevealJob(scope, hash, submissionTime + 2);
   });
   await waitFor(() => assert.equal(requests.mock.callCount(), 2));
   assert.equal(signals[0].aborted, true);
@@ -287,17 +289,74 @@ test('a generation adopted from another tab cancels the earlier in-flight reques
   assert.equal(view.client.getQueryState<EthereumRevealTransactionResponse>(['ethereum111k', 'reveal-transaction', config.chainId, contract, hash])?.data?.status, 'pending');
 });
 
+test('explicit cancellation discards a locally retained successful generation', async t => {
+  mockPending(t);
+  const late = Promise.withResolvers<EthereumRevealTransactionResponse>();
+  const signals: AbortSignal[] = [];
+  const requests = t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
+    signals.push(signal!);
+    return late.promise;
+  });
+  rememberEthereumRevealJob(scope, hash, submissionTime, pending());
+  const job = readEthereumRevealJobs(scope)[0];
+  const shown: string[][] = [];
+  const view = harness({}, (_hash, artworks) => shown.push(artworks.map(value => value.tokenId)), { retainLocalJob: () => true });
+  await waitFor(() => assert.equal(requests.mock.callCount(), 1));
+  act(() => forgetEthereumRevealJob(scope, hash, job.trackingId, true));
+  assert.equal(view.result.current.isTracking(hash), true);
+  assert.equal(signals[0].aborted, false);
+  act(() => forgetEthereumRevealJob(scope, hash, job.trackingId));
+  await waitFor(() => assert.equal(signals[0].aborted, true));
+  act(() => forgetEthereumRevealJob(scope, hash, job.trackingId, true));
+  await act(async () => { late.resolve(transactionResponse('revealed', [artwork()])); });
+  assert.equal(view.result.current.isTracking(hash), false);
+  assert.deepEqual(shown, []);
+  assert.equal(view.result.current.applyArtwork(item()).image, item().image);
+  assert.equal(requests.mock.callCount(), 1);
+});
+
+test('a new generation invalidates the earlier locally retained response', async t => {
+  mockPending(t);
+  const older = Promise.withResolvers<EthereumRevealTransactionResponse>();
+  const newer = Promise.withResolvers<EthereumRevealTransactionResponse>();
+  const signals: AbortSignal[] = [];
+  const requests = t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
+    signals.push(signal!);
+    return signals.length === 1 ? older.promise : newer.promise;
+  });
+  rememberEthereumRevealJob(scope, hash, submissionTime, pending());
+  const original = readEthereumRevealJobs(scope)[0];
+  const shown: string[][] = [];
+  const view = harness({}, (_hash, artworks) => shown.push(artworks.map(value => value.tokenId)), { retainLocalJob: () => true });
+  await waitFor(() => assert.equal(requests.mock.callCount(), 1));
+  act(() => forgetEthereumRevealJob(scope, hash, original.trackingId, true));
+  assert.equal(view.result.current.isTracking(hash), true);
+  act(() => rememberEthereumRevealJob(scope, hash, submissionTime, pending()));
+  await waitFor(() => assert.equal(requests.mock.callCount(), 2));
+  const replacement = readEthereumRevealJobs(scope)[0];
+  assert.notEqual(replacement.trackingId, original.trackingId);
+  assert.equal(signals[0].aborted, true);
+  await act(async () => { older.resolve(transactionResponse('revealed', [artwork('1')])); });
+  assert.deepEqual(shown, []);
+  assert.equal(readEthereumRevealJobs(scope)[0].trackingId, replacement.trackingId);
+  await act(async () => { newer.resolve(transactionResponse('revealed', [artwork('2')])); });
+  await waitFor(() => assert.deepEqual(shown, [['2']]));
+  assert.equal(view.result.current.applyArtwork(item('1')).image, item('1').image);
+  assert.equal(view.result.current.applyArtwork(item('2')).image, artwork('2').image);
+  assert.equal(requests.mock.callCount(), 2);
+});
+
 test('a new generation revalidates a revealed transaction output set while retaining frozen token media', async t => {
   mockPending(t);
   let tokenId = '1';
   const requests = t.mock.method(ethereumRevealApi, 'transaction', async () => transactionResponse('revealed',
     [...(tokenId === '1' ? [] : [{ ...artwork('1'), crateTokenId: '111113' }]), artwork(tokenId)]));
   const shown: string[][] = [];
-  rememberEthereumRevealJob(scope, hash, 1, pending());
+  rememberEthereumRevealJob(scope, hash, submissionTime + 1, pending());
   const view = harness({}, (_hash, artworks) => { shown.push(artworks.map(value => value.tokenId)); });
   await waitFor(() => assert.deepEqual(readEthereumRevealJobs(scope), []));
   tokenId = '2';
-  act(() => rememberEthereumRevealJob(scope, hash, 2, pending()));
+  act(() => rememberEthereumRevealJob(scope, hash, submissionTime + 2, pending()));
   await waitFor(() => assert.equal(requests.mock.callCount(), 2));
   await waitFor(() => assert.deepEqual(shown, [['1'], ['2']]));
   assert.equal(view.result.current.applyArtwork(item('1')).image, artwork('1').image);
@@ -307,7 +366,7 @@ test('a new generation revalidates a revealed transaction output set while retai
 test('new tracking submits once while hidden without restarting unchanged generations', async t => {
   mockPending(t);
   const requests = t.mock.method(ethereumRevealApi, 'transaction', async () => transactionResponse());
-  rememberEthereumRevealJob(scope, hash, 1);
+  rememberEthereumRevealJob(scope, hash, submissionTime + 1);
   const first = readEthereumRevealJobs(scope)[0];
   const view = harness();
   const key = ['ethereum111k', 'reveal-transaction', config.chainId, contract, hash];
@@ -315,7 +374,7 @@ test('new tracking submits once while hidden without restarting unchanged genera
   act(() => setPageVisibility('hidden'));
   act(() => {
     forgetEthereumRevealJob(scope, hash, first.trackingId);
-    rememberEthereumRevealJob(scope, hash, 2);
+    rememberEthereumRevealJob(scope, hash, submissionTime + 2);
   });
   await waitFor(() => assert.equal(requests.mock.callCount(), 2));
   await waitFor(() => assert.equal(view.client.getQueryState(key)?.status, 'success'));
@@ -352,7 +411,7 @@ test('an in-flight bundled reveal uses enriched crate scope without losing other
   mockPending(t);
   const response = Promise.withResolvers<EthereumRevealTransactionResponse>();
   const requests = t.mock.method(ethereumRevealApi, 'transaction', () => response.promise);
-  rememberEthereumRevealJob(scope, hash, 1);
+  rememberEthereumRevealJob(scope, hash, submissionTime + 1);
   const original = readEthereumRevealJobs(scope)[0];
   const shown: string[][] = [];
   const view = harness({}, (_hash, artworks) => { shown.push(artworks.map(value => value.tokenId)); });
@@ -371,8 +430,8 @@ test('an in-flight bundled reveal uses enriched crate scope without losing other
 for (const legacy of [false, true]) test(`${legacy ? 'legacy' : 'current'} unscoped jobs cache revealed media without claiming the transaction gallery`, async t => {
   mockPending(t);
   t.mock.method(ethereumRevealApi, 'transaction', async () => transactionResponse('revealed', [artwork()]));
-  if (legacy) writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt: 1 }]);
-  else rememberEthereumRevealJob(scope, hash, 1);
+  if (legacy) writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt: submissionTime + 1 }]);
+  else rememberEthereumRevealJob(scope, hash, submissionTime + 1);
   let shown = 0;
   const view = harness({}, () => { shown++; });
   await waitFor(() => assert.deepEqual(readEthereumRevealJobs(scope), []));
@@ -383,7 +442,7 @@ for (const legacy of [false, true]) test(`${legacy ? 'legacy' : 'current'} unsco
 test('enriching a saved job preserves its rate-limit cooldown and generation', async t => {
   mockPending(t);
   const requests = t.mock.method(ethereumRevealApi, 'transaction', async () => { throw new EthereumRevealApiError(429, 'Try later.', 60_000); });
-  rememberEthereumRevealJob(scope, hash, 1);
+  rememberEthereumRevealJob(scope, hash, submissionTime + 1);
   const view = harness();
   const key = ['ethereum111k', 'reveal-transaction', config.chainId, contract, hash];
   await waitFor(() => assert.equal(view.client.getQueryState(key)?.status, 'error'));
@@ -398,7 +457,7 @@ test('enriching a saved job preserves its rate-limit cooldown and generation', a
 
 test('a legacy reveal can finish while its pending-intent restoration is waiting for the submission lock', async t => {
   mockPending(t);
-  writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt: 1 }]);
+  writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt: submissionTime + 1 }]);
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, {}, () => { entered.resolve(); return release.promise; });
@@ -705,7 +764,7 @@ test('pending saved hashes do not starve later reveal jobs', async t => {
   mockPending(t);
   const hashes = Array.from({ length: 5 }, (_, index) => `0x${String(index + 1).padStart(64, '0')}`);
   const seen: string[] = [];
-  hashes.forEach((transactionHash, index) => rememberEthereumRevealJob(scope, transactionHash, index + 1));
+  hashes.forEach((transactionHash, index) => rememberEthereumRevealJob(scope, transactionHash, submissionTime + index + 1));
   t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash) => {
     seen.push(transactionHash);
     return transactionHash === hashes[4] ? transactionResponse('revealed', [artwork()]) : transactionResponse();
@@ -724,7 +783,7 @@ test('saved hash scheduling keeps in-flight work and prioritizes the current unp
   const signals: AbortSignal[] = [];
   const seen: string[] = [];
   let running = 0, maximum = 0;
-  hashes.forEach((transactionHash, index) => rememberEthereumRevealJob(scope, transactionHash, index + 1));
+  hashes.forEach((transactionHash, index) => rememberEthereumRevealJob(scope, transactionHash, submissionTime + index + 1));
   t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash, signal) => {
     seen.push(transactionHash);
     signals.push(signal!);
@@ -738,7 +797,7 @@ test('saved hash scheduling keeps in-flight work and prioritizes the current unp
   });
   const view = harness();
   await waitFor(() => assert.equal(seen.length, 4));
-  view.update({ pending: { ...pending(), hash: hashes[5], submittedAt: 6 } });
+  view.update({ pending: { ...pending(), hash: hashes[5], submittedAt: submissionTime + 6 } });
   await act(async () => {});
   assert.equal(seen.length, 4);
   assert.ok(signals.every(signal => !signal.aborted));

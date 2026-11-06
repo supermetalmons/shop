@@ -4,8 +4,9 @@ import type { Ethereum111kConfig } from '../../shared/ethereum/config';
 import type { EthereumInventoryItem } from '../../shared/ethereum/protocol';
 import { ETHEREUM_REVEAL_MAX_TOKEN_IDS, ETHEREUM_REVEAL_RETRY_MS, type EthereumRevealedArtwork, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../shared/ethereum/reveal';
 import { ethereumRevealApi, EthereumRevealApiError } from './revealApi';
+import { ETHEREUM_DROP_OPERATION_TTL } from './dropOperations';
 import {
-  forgetEthereumRevealJob, isEthereumCrateUnpack, readEthereumRevealJobs, restorePendingEthereumRevealJob,
+  forgetEthereumRevealJob, isEthereumCrateUnpack, isEthereumRevealJobCompleted, readEthereumRevealJobs, restorePendingEthereumRevealJob,
   subscribeEthereumRevealJobs, type EthereumPendingTransaction, type EthereumRevealJob,
 } from './state';
 
@@ -52,7 +53,9 @@ function refetchTokensWhenDue(query: TokenQuery): boolean {
 
 export function useEthereumReveals(config: Ethereum111kConfig, scope: string | null,
   inventory: readonly EthereumInventoryItem[], pending: EthereumPendingTransaction | null,
-  onRevealed: (transactionHash: string, artworks: EthereumRevealedArtwork[], submittedAt: number) => void) {
+  onRevealed: (transactionHash: string, artworks: EthereumRevealedArtwork[], submittedAt: number) => void,
+  onFailed?: (transactionHash: string, message: string) => void,
+  retainLocalJob?: (job: EthereumRevealJob) => boolean) {
   const client = useQueryClient();
   const attemptedTransactions = useRef(new Set<string>());
   const transactionIdentity = useCallback((job: EthereumRevealJob) => `${config.chainId}:${config.contractAddress}:${job.transactionHash}:${job.trackingId}`,
@@ -76,16 +79,43 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
     rememberArtworks(inventory.filter(item => item.kind === 'artwork' && item.revealStatus === 'revealed' &&
       item.chainId === config.chainId && item.contractAddress === config.contractAddress));
   }, [scope, config.enabled, config.chainId, config.contractAddress, inventory, rememberArtworks]);
+  const observedJobs = useRef<{ scope: string | null; jobs: EthereumRevealJob[] }>({ scope: null, jobs: [] });
+  const readJobs = useCallback(() => {
+    if (!scope) return [];
+    const shared = new Map(readEthereumRevealJobs(scope).map(job => [job.transactionHash, job]));
+    if (observedJobs.current.scope === scope) {
+      for (const job of observedJobs.current.jobs) {
+        if (!shared.has(job.transactionHash) && retainLocalJob?.(job) && isEthereumRevealJobCompleted(scope, job)) {
+          shared.set(job.transactionHash, job);
+        }
+      }
+    }
+    return [...shared.values()];
+  }, [scope, retainLocalJob]);
+  const isTracking = useCallback((hash: string) => readJobs().some(job => job.transactionHash === hash &&
+    job.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now()), [readJobs]);
   const [jobState, setJobState] = useState<{ scope: string | null; jobs: EthereumRevealJob[] }>({ scope: null, jobs: [] });
   const jobs = jobState.scope === scope ? jobState.jobs : [];
   const [activeState, setActiveState] = useState<{ scope: string | null; jobs: EthereumRevealJob[] }>({ scope: null, jobs: [] });
   const activeJobs = activeState.scope === scope ? activeState.jobs.filter(job => jobs.some(value => sameRevealJob(value, job))) : [];
   useEffect(() => {
-    if (!scope) { setJobState({ scope: null, jobs: [] }); return; }
-    const update = () => setJobState({ scope, jobs: readEthereumRevealJobs(scope) });
+    if (!scope) { observedJobs.current = { scope: null, jobs: [] }; setJobState(observedJobs.current); return; }
+    const update = () => {
+      const jobs = readJobs();
+      observedJobs.current = { scope, jobs: jobs.filter(job => job.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now()) };
+      for (const job of jobs) {
+        if (job.submittedAt + ETHEREUM_DROP_OPERATION_TTL <= Date.now()) {
+          forgetEthereumRevealJob(scope, job.transactionHash, job.trackingId);
+          onFailed?.(job.transactionHash, 'Your artworks are still being prepared. Check your inventory for updates.');
+        }
+      }
+      setJobState(observedJobs.current);
+    };
     update();
-    return subscribeEthereumRevealJobs(scope, update);
-  }, [scope]);
+    const unsubscribe = subscribeEthereumRevealJobs(scope, update);
+    const timer = setInterval(update, 4_000);
+    return () => { clearInterval(timer); unsubscribe(); };
+  }, [scope, onFailed, readJobs]);
   useEffect(() => {
     if (scope && pending && isEthereumCrateUnpack(pending)) {
       void restorePendingEthereumRevealJob(scope, pending.hash).catch(() => {});
@@ -202,7 +232,8 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
   });
   useEffect(() => {
     if (!scope || !config.enabled) return;
-    const tracked = new Map(readEthereumRevealJobs(scope).map(job => [job.transactionHash, job]));
+    const tracked = new Map(readJobs().filter(job => job.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now())
+      .map(job => [job.transactionHash, job]));
     const isTracked = (index: number) => tracked.get(activeJobs[index].transactionHash)?.trackingId === activeJobs[index].trackingId;
     const results = [
       ...transactions.filter((query, index) => isTracked(index) && query.isSuccess && query.data.status === 'revealed').flatMap(query => query.data!.artworks),
@@ -214,10 +245,15 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
       const hash = activeJobs[index].transactionHash;
       const crates = new Set(tracked.get(hash)?.crateTokenIds);
       const artworks = query.data.artworks.filter(artwork => crates.has(artwork.crateTokenId));
+      observedJobs.current = { scope, jobs: observedJobs.current.jobs.filter(job => !sameRevealJob(job, activeJobs[index])) };
+      setJobState(previous => previous.scope === scope
+        ? { scope, jobs: previous.jobs.filter(job => !sameRevealJob(job, activeJobs[index])) } : previous);
       if (query.data.status === 'revealed' && artworks.length) onRevealed(hash, artworks, activeJobs[index].submittedAt);
-      forgetEthereumRevealJob(scope, hash, activeJobs[index].trackingId);
+      else if (query.data.status !== 'revealed') onFailed?.(hash, query.data.status === 'reverted' ? 'The opening transaction reverted. You can try again.' : 'This transaction did not open the selected containers.');
+      else onFailed?.(hash, 'Couldn’t match the revealed artworks to your containers. Check your inventory.');
+      forgetEthereumRevealJob(scope, hash, activeJobs[index].trackingId, query.data.status === 'revealed' && artworks.length > 0);
     });
-  }, [scope, config.enabled, transactions, tokens, activeJobs, rememberArtworks, onRevealed]);
+  }, [scope, config.enabled, transactions, tokens, activeJobs, rememberArtworks, onRevealed, onFailed, readJobs]);
   const applyArtwork = useCallback((item: EthereumInventoryItem): EthereumInventoryItem => {
     const artwork = item.kind === 'artwork' && item.chainId === config.chainId && item.contractAddress === config.contractAddress ? media[item.tokenId] : undefined;
     if (!artwork) return item;
@@ -225,5 +261,5 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
       animation_url: artwork.animation_url, aspectRatio: artwork.aspectRatio, category: artwork.category,
       attributes: artwork.attributes, revealStatus: 'revealed' };
   }, [media, config.chainId, config.contractAddress]);
-  return { applyArtwork };
+  return { applyArtwork, isTracking };
 }

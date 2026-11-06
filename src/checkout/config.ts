@@ -1,4 +1,4 @@
-export const CHECKOUT_ENABLED = false;
+const CHECKOUT_ENABLED = false;
 
 export const loadCheckoutPage = () => CHECKOUT_ENABLED
   ? import('./ShippingCheckoutPage')

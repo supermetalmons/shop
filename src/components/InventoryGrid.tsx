@@ -21,6 +21,7 @@ type InventoryGridSharedProps = {
   itemClassName?: string;
   className?: string;
   pendingRevealIds?: Set<string>;
+  busyItemIds?: ReadonlySet<string>;
   onReveal?: (id: string, rect: DOMRect) => void;
   onViewItem?: (item: InventoryItem, rect: DOMRect) => void;
   canRevealItem?: (item: InventoryItem) => boolean;
@@ -62,6 +63,7 @@ type InventoryInteractionContext = {
   selected: Set<string>;
   interactionMode?: InventoryGridProps['interactionMode'];
   pendingRevealIds?: Set<string>;
+  busyItemIds?: ReadonlySet<string>;
   onReveal?: InventoryGridProps['onReveal'];
   onViewItem?: InventoryGridProps['onViewItem'];
   canRevealItem?: InventoryGridProps['canRevealItem'];
@@ -99,6 +101,7 @@ function getInventoryItemInteraction(
     selected,
     interactionMode = 'default',
     pendingRevealIds,
+    busyItemIds,
     onReveal,
     onViewItem,
     canRevealItem,
@@ -109,6 +112,18 @@ function getInventoryItemInteraction(
   const isReceipt = item.kind === 'certificate';
   const isPendingReveal = pendingRevealIds?.has(item.id) ?? false;
   const isPendingLocal = item.status === 'pending';
+  if (busyItemIds?.has(item.id)) {
+    return {
+      mode: null,
+      isReceipt,
+      isPendingReveal,
+      canSelect: false,
+      isSelected: false,
+      revealEnabled: false,
+      viewEnabled: false,
+      canInteract: false,
+    };
+  }
   if (interactionMode === 'view-only') {
     const viewEnabled = Boolean(onViewItem);
     return {
@@ -427,6 +442,7 @@ export function InventoryGrid({
   itemClassName,
   className,
   pendingRevealIds,
+  busyItemIds,
   onReveal,
   onViewItem,
   canRevealItem,
@@ -446,6 +462,7 @@ export function InventoryGrid({
     interactionMode,
     onToggle,
     pendingRevealIds,
+    busyItemIds,
     onReveal,
     onViewItem,
     canRevealItem,
@@ -459,6 +476,7 @@ export function InventoryGrid({
       interactionMode,
       onToggle,
       pendingRevealIds,
+      busyItemIds,
       onReveal,
       onViewItem,
       canRevealItem,
@@ -560,6 +578,7 @@ export function InventoryGrid({
           selected,
           interactionMode,
           pendingRevealIds,
+          busyItemIds,
           onReveal,
           onViewItem,
           canRevealItem,
@@ -576,6 +595,7 @@ export function InventoryGrid({
           canInteract,
         } = interaction;
         const hasFooter = Boolean(item.assignedDudes?.length);
+        const isBusy = busyItemIds?.has(item.id) ?? false;
         const isInteractiveCardFigure = item.kind === 'dude' && isDropFamily(item.dropId, 'card_nft_2');
         const isDrifellaShirtReceipt =
           isReceipt && isDropFamily(item.dropId, 'drifella_shirt');
@@ -619,6 +639,7 @@ export function InventoryGrid({
               isSelected ? 'inventory__item--selected' : '',
               hasFooter ? 'inventory__item--hasFooter' : '',
               isPendingReveal ? 'inventory__item--pending' : '',
+              isBusy ? 'inventory__item--busy' : '',
               isReceipt ? 'inventory__item--receipt' : '',
               isDrifellaShirtReceipt ? 'inventory__item--receipt-drifella-shirt' : '',
               isInteractiveCardFigure ? 'inventory__item--interactive-card-figure' : '',
@@ -632,7 +653,9 @@ export function InventoryGrid({
             draggable={false}
             onDragStart={(evt) => evt.preventDefault()}
             aria-pressed={canSelect ? isSelected : undefined}
-            aria-label={viewEnabled ? `View ${item.name}` : undefined}
+            aria-busy={isBusy || undefined}
+            aria-disabled={isBusy || undefined}
+            aria-label={isBusy ? item.name : viewEnabled ? `View ${item.name}` : undefined}
             onKeyDown={
               canSelect || revealEnabled || viewEnabled
                 ? (e) => {
@@ -647,6 +670,7 @@ export function InventoryGrid({
             <div className="inventory__media">
               <InventoryMedia item={item} figureMediaMode={figureMediaMode} />
             </div>
+            {isBusy ? <div className="inventory__activity" aria-hidden="true"><span /></div> : null}
             {sizeLabel && isSelected ? (
               <span className="inventory__size-badge" aria-label={`Size ${sizeLabel}`}>
                 {sizeLabel}

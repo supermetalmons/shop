@@ -10,7 +10,7 @@ import { checkedEthereumDelivery } from '../ethereum/prepared';
 import { clearEthereumSession, ethereumInventoryScope, readEthereumPending, readEthereumSubmission, runEthereumOperation } from '../ethereum/state';
 import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletError } from '../ethereum/wallet';
 import type { EthereumProviderListener } from '../wallet/injectedEthereumProviders';
-import type { EthereumDeliveryAddress, EthereumWallet } from '../ethereum/useEthereum111k';
+import type { EthereumWallet } from '../ethereum/useEthereum111k';
 import { encryptAddressPayload } from '../lib/solana';
 import { navigate } from '../navigation';
 import { checkoutApi, CheckoutApiError } from './api';
@@ -18,6 +18,7 @@ import { checkoutEntryRequestId, clearCheckoutEntryRequest } from './entry';
 import { rememberCheckoutReservation, observeCheckoutReservation, persistCheckoutReservation, useCheckoutReservations } from '../ethereum/checkoutReservations';
 
 export type CheckoutLocation = { checkoutId?: string; search: string };
+type EthereumDeliveryAddress = { formatted: string; country: string; countryCode: string; email: string };
 const checkoutQueryKey = (id: string) => ['ethereumCheckout', id] as const;
 
 function walletRequestRejected(error: unknown): boolean {

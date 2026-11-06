@@ -9,4 +9,6 @@ export const DEFAULT_BOX_SOUND_CLICK_URL = 'https://cdn.lil.org/nft/little_swag_
 
 export const REVEAL_CLOSE_FALLBACK_MS = 380;
 
+export const REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_000;
+
 export const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;

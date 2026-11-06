@@ -1,568 +1,463 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumRelicStatus, EthereumStats, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
-import { ETHEREUM_FUNCTIONS, ETHEREUM_MINT_KINDS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_RELICS, ethereumAssetId, ethereumHexQuantity, isEthereumDeliveryKind, type EthereumContainerKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MINT_KINDS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_RELICS, ethereumAssetId, ethereumHexQuantity, type EthereumContainerKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumRevealedArtwork } from '../../shared/ethereum/reveal';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
-import { encryptAddressPayload } from '../lib/solana';
 import { ethereumApi, EthereumApiError } from './api';
 import { ethereumMintRemaining } from './mint';
-import { authenticateEthereumWallet } from './auth';
-import {
-  clearEthereumInventoryRecovery, clearEthereumSession, ethereumInventoryQueryKey, ethereumInventoryScope, isEthereumPendingSaved, readEthereumExpected, readEthereumInventoryExpected, readEthereumOperation, readEthereumPending,
-  readEthereumSession, readEthereumSubmission, replaceEthereumInventoryRecovery, reserveEthereumSubmission, restoreEthereumExpected, runEthereumOperation, saveEthereumSession, subscribeEthereumOperation, subscribeEthereumPending, withEthereumSubmissionLock, writeEthereumExpected, writeEthereumStorage, type EthereumAction, type EthereumPendingTransaction, type EthereumSubmission,
-  forgetEthereumRevealJob, isEthereumCrateUnpack, readEthereumRevealJobs, rememberEthereumRevealJob,
-} from './state';
+import { ethereumInventoryQueryKey, ethereumInventoryScope, readEthereumExpected, writeEthereumExpected, forgetEthereumRevealJob, isEthereumCrateUnpack, rememberEthereumRevealJob, type EthereumRevealJob } from './state';
 import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletError } from './wallet';
-import { checkedEthereumClaim, checkedEthereumDelivery } from './prepared';
-import { recoverEthereumTransaction, readEthereumSubmittedTransaction } from './recovery';
-import { ethereumAddressEncryptionKey } from './addressEncryption';
+import { readEthereumSubmittedTransaction, ethereumSubmittedNonceConsumed } from './recovery';
 import { EMPTY_ETHEREUM_DISCOUNT_ROOT, ethereumDiscountRemaining, ethereumDiscounts, ethereumMintQuote, type EthereumMintQuote } from './discounts';
-import { checkoutReservesItems } from './checkoutReservations';
 import { useEthereumReveals } from './useEthereumReveals';
+import { useEthereumInventory } from './useEthereumInventory';
+import type { EthereumPendingMint } from './inventory';
+import { hasEthereumConfirmedInventory, readEthereumConfirmedInventory, rememberEthereumConfirmedInventory } from './confirmedInventory';
+import { ETHEREUM_DROP_OPERATION_TTL, definiteEthereumSubmissionRejection, migrateEthereumDropOperation, readEthereumDropBusy, readEthereumDropOperations, runEthereumDropRequest, subscribeEthereumDropOperations, writeEthereumDropOperation, type EthereumDropOperation } from './dropOperations';
 
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
-export type EthereumDeliveryAddress = { formatted: string; country: string; countryCode: string; email: string };
-
-function isTransactionFailure(error: unknown): error is EthereumApiError {
-  return error instanceof EthereumApiError && (error.code === 'transaction-reverted' || error.code === 'operation-failed');
-}
 
 function subscribeVisibility(listener: () => void): () => void {
   document.addEventListener('visibilitychange', listener);
   return () => document.removeEventListener('visibilitychange', listener);
 }
 
-export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, mintKind: EthereumContainerKind = 'crate', suspended = false) {
-  const queryClient = useQueryClient();
+function reserveDiscounts(stats: EthereumStats, operations: readonly EthereumDropOperation[]): EthereumStats {
+  const reserved = operations.filter(item => item.intent && item.discountedQuantity > 0).reduce((sum, item) => sum + item.discountedQuantity, 0);
+  return { ...stats, discountUsed: stats.discountUsed + reserved,
+    ...(stats.totalDiscountedMints !== undefined ? { totalDiscountedMints: stats.totalDiscountedMints + reserved } : {}) };
+}
+
+function reserveMintSupply(stats: EthereumStats, operations: readonly EthereumDropOperation[]): EthereumStats {
+  const reserved = operations.filter(item => item.action === 'mint')
+    .reduce((sum, item) => sum + item.quantity * (item.kind === 'warehouse' ? 11 : item.kind === 'crate' ? 1 : 0), 0);
+  if (!reserved) return stats;
+  const remainingCrates = Math.max(0, stats.remainingCrates - reserved);
+  return { ...stats, remainingCrates, remainingWarehouses: Math.min(stats.remainingWarehouses, Math.floor(remainingCrates / 11)) };
+}
+
+function reserveRelics(status: EthereumRelicStatus, operations: readonly EthereumDropOperation[]): EthereumRelicStatus {
+  const ids = operations.flatMap(item => item.relicId && !(status.claimedMask & (1 << (item.relicId - 1))) ? [item.relicId] : []);
+  return { ...status, claimedMask: ids.reduce((mask, id) => mask | (1 << (id - 1)), status.claimedMask),
+    remainingRelics: Math.max(0, status.remainingRelics - ids.length), remainingAllowance: Math.max(0, status.remainingAllowance - ids.length) };
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(value => { signal.removeEventListener('abort', abort); resolve(value); }, error => { signal.removeEventListener('abort', abort); reject(error); });
+    if (signal.aborted) abort();
+  });
+}
+
+export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContainerKind = 'crate', suspended = false) {
+  const client = useQueryClient();
   const pageVisible = useSyncExternalStore(subscribeVisibility, () => document.visibilityState !== 'hidden', () => true);
   const configQuery = useQuery({ queryKey: ['ethereum111k', 'config'], queryFn: ({ signal }) => ethereumApi.config(signal), retry: false, refetchInterval: 60_000 });
   const config = configQuery.data ?? DEFAULT_ETHEREUM_111K_CONFIG;
   const owner = ethereumAddress(wallet.address);
   const scope = ethereumInventoryScope(config, owner);
-  const walletRef = useRef(wallet);
-  const scopeRef = useRef(scope);
-  walletRef.current = wallet;
-  scopeRef.current = scope;
-  const mounted = useRef(false);
-  const busy = useSyncExternalStore(
-    useCallback(listener => scope ? subscribeEthereumOperation(scope, listener) : () => {}, [scope]),
-    useCallback(() => scope ? readEthereumOperation(scope) : null, [scope]),
-    () => null,
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [dismissedConfirmationError, setDismissedConfirmationError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [chainId, setChainId] = useState<number | null>(null);
-  const [sessionState, setSessionState] = useState<EthereumSession | null>(null);
-  const sessionRef = useRef<EthereumSession | null>(null);
-  const setSession = useCallback((next: EthereumSession | null) => {
-    sessionRef.current = next;
-    setSessionState(next);
+  const current = useRef({ wallet, scope, mounted: false });
+  const initiated = useRef(new Set<string>());
+  const localOperations = useRef(new Map<string, EthereumDropOperation>());
+  const confirmedUnpacks = useRef(new Set<string>());
+  const revealedUnpacks = useRef(new Set<string>());
+  const readPendingOperations = useCallback((capturedScope: string) => [...new Map([
+    ...[...localOperations.current.values()].filter(operation => operation.scope === capturedScope &&
+      operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now() && !confirmedUnpacks.current.has(operation.hash!)),
+    ...readEthereumDropOperations(capturedScope),
+  ].map(operation => [operation.id, operation])).values()], []);
+  const requestLifecycle = useRef<AbortController | null>(null);
+  const reconcilePending = useRef<((operation: EthereumDropOperation, result: EthereumTransactionConfirmResponse) => Promise<void>) | null>(null);
+  const retiredHere = useRef(new Set<string>());
+  const retireOperation = useCallback((operation: EthereumDropOperation) => {
+    retiredHere.current.add(operation.id);
+    writeEthereumDropOperation(operation.scope, operation.id, null);
   }, []);
-  const invalidateSession = useCallback((capturedScope: string, rejectedToken: string) => {
-    clearEthereumSession(capturedScope, rejectedToken);
-    if (!mounted.current || scopeRef.current !== capturedScope || sessionRef.current?.token !== rejectedToken) return false;
-    sessionRef.current = null;
-    setSessionState(current => current?.token === rejectedToken ? null : current);
-    return true;
-  }, []);
-  const [pendingState, setPending] = useState<EthereumPendingTransaction | null>(null);
-  const [submissionState, setSubmission] = useState<EthereumSubmission | null>(null);
-  const [revealed, setRevealed] = useState<{ scope: string; transactionHash: string; submittedAt: number; items: EthereumInventoryItem[] } | null>(null);
-  const announcedReveals = useRef(new Set<string>());
-  const session = sessionState?.address === owner && sessionState.chainId === config.chainId && sessionState.expiresAtMs > Date.now() ? sessionState : null;
-  const pending = pendingState?.scope === scope ? pendingState : null;
-  const submission = submissionState?.scope === scope ? submissionState : null;
-  const storageWarning = pending && scope && !isEthereumPendingSaved(scope, pending.hash)
-    ? `Transaction sent: ${pending.hash}. Browser storage failed. Keep this tab open and save this hash to recover it after a reload.` : null;
-  const requiredConfirmations = pending && ['delivery', 'claim', 'cancel'].includes(pending.action) ? config.confirmationBlocks : 1;
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  current.current.wallet = wallet;
+  current.current.scope = scope;
+  useEffect(() => { current.current.mounted = true; return () => { current.current.mounted = false; }; }, []);
   useEffect(() => {
-    setSession(scope && owner ? readEthereumSession(scope, config, owner) : null);
-    setPending(scope ? readEthereumPending(scope) : null);
-    setSubmission(scope ? readEthereumSubmission(scope) : null);
-    setError(null);
-    setNotice(null);
-    setRevealed(null);
-    if (scope) return subscribeEthereumPending(scope, () => {
-      const current = readEthereumPending(scope);
-      setPending(current);
-      const currentSubmission = readEthereumSubmission(scope);
-      setSubmission(currentSubmission);
-      if (!current && !currentSubmission) {
-        void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
-        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
-        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments', scope] });
-      }
-    });
-  }, [scope, owner, config.chainId, config.dropId, queryClient, setSession]);
+    const controller = new AbortController();
+    requestLifecycle.current = controller;
+    return () => { controller.abort(new Error('Your wallet changed. Please try again.')); };
+  }, [scope, wallet.provider]);
+  const busy = useSyncExternalStore(
+    useCallback(listener => scope ? subscribeEthereumDropOperations(scope, listener) : () => {}, [scope]),
+    useCallback(() => scope ? readEthereumDropBusy(scope) : null, [scope]), () => null);
+  const snapshot = useSyncExternalStore(
+    useCallback(listener => scope ? subscribeEthereumDropOperations(scope, listener) : () => {}, [scope]),
+    useCallback(() => scope ? JSON.stringify(readEthereumDropOperations(scope, Date.now(), true)) : '[]', [scope]), () => '[]');
+  const operations = useMemo(() => JSON.parse(snapshot) as EthereumDropOperation[], [snapshot]);
+  const [error, setError] = useState<string | null>(null);
+  const [chainId, setChainId] = useState<number | null>(null);
+  const [outcomes, setOutcomes] = useState<{ scope: string | null; results: Record<string, EthereumInventoryItem[]>; errors: Record<string, string> }>({ scope: null, results: {}, errors: {} });
+  const unpackResults = outcomes.scope === scope ? outcomes.results : {};
+  const unpackErrors = outcomes.scope === scope ? outcomes.errors : {};
+  const publishUnpack = useCallback((hash: string, items: EthereumInventoryItem[]) => {
+    if (!current.current.mounted || current.current.scope !== scope) return;
+    if (localOperations.current.has(hash)) {
+      if (confirmedUnpacks.current.delete(hash)) localOperations.current.delete(hash);
+      else revealedUnpacks.current.add(hash);
+    }
+    setOutcomes(previous => ({ scope, results: { ...(previous.scope === scope ? previous.results : {}), [hash]: items }, errors: previous.scope === scope ? previous.errors : {} }));
+  }, [scope]);
+  useEffect(() => { setError(null); if (scope) migrateEthereumDropOperation(scope); }, [scope]);
   useEffect(() => {
     const provider = wallet.provider;
     setChainId(null);
     if (!provider) return;
-    let current = true;
+    let active = true;
     let revision = 0;
-    const changed = (value: unknown) => { revision++; if (current) setChainId(ethereumChainId(value)); };
+    const changed = (value: unknown) => { revision++; if (active) setChainId(ethereumChainId(value)); };
     const captured = revision;
     void provider.request({ method: 'eth_chainId' }).then(value => {
-      if (current && revision === captured) setChainId(ethereumChainId(value));
+      if (active && revision === captured) setChainId(ethereumChainId(value));
     }).catch(() => {});
     provider.on?.('chainChanged', changed);
-    return () => { current = false; provider.removeListener?.('chainChanged', changed); };
+    return () => { active = false; provider.removeListener?.('chainChanged', changed); };
   }, [wallet.provider]);
-  useEffect(() => {
-    const provider = wallet.provider;
-    const intent = pending?.intent;
-    if (!provider || !pending || pending.nonce || !intent || !scope || !owner) return;
-    let active = true;
-    let fetching = false;
-    const captureNonce = async () => {
-      if (fetching) return;
-      fetching = true;
-      try {
-        const network = await provider.request({ method: 'eth_chainId' });
-        if (!active || ethereumChainId(network) !== config.chainId) return;
-        const actual = await readEthereumSubmittedTransaction(provider, pending.hash, config.chainId, owner, intent);
-        if (!active || !actual) return;
-        await withEthereumSubmissionLock(scope, () => {
-          const current = readEthereumPending(scope);
-          if (active && current?.hash === pending.hash && !current.nonce) {
-            writeEthereumStorage(`${scope}:pending`, { ...current, ...actual });
-          }
-        });
-      } catch {} finally { fetching = false; }
-    };
-    void captureNonce();
-    const interval = setInterval(() => { void captureNonce(); }, 4_000);
-    return () => { active = false; clearInterval(interval); };
-  }, [wallet.provider, pending, scope, owner, config.chainId]);
-  const statsKey = ['ethereum111k', 'stats', config.chainId, config.contractAddress, owner];
-  const stats = useQuery({ queryKey: statsKey,
+  const stats = useQuery({ queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress, owner],
     queryFn: ({ signal }) => ethereumApi.stats(config, owner, signal), enabled: config.enabled, retry: false, refetchInterval: 30_000 });
+  const mintSupply = useMemo(() => stats.data ? reserveMintSupply(stats.data, operations) : undefined, [stats.data, operations]);
   const relicsEnabled = config.enabled && mintKind === 'relic' && pageVisible && !suspended;
-  const relics = useQuery({ queryKey: ['ethereum111k', 'relics', config.chainId, config.contractAddress, owner],
+  const relicQuery = useQuery({ queryKey: ['ethereum111k', 'relics', config.chainId, config.contractAddress, owner],
     queryFn: ({ signal }) => ethereumApi.relics(config, owner, signal), enabled: relicsEnabled,
     retry: false, staleTime: 0, refetchInterval: 4_000, refetchOnWindowFocus: 'always' });
+  const relics = { ...relicQuery, data: useMemo(() => relicQuery.data ? reserveRelics(relicQuery.data, operations) : undefined, [relicQuery.data, operations]) };
   const relicMetadata = useQuery({ queryKey: ['ethereum111k', 'relic-metadata', config.chainId, config.contractAddress, config.metadataBaseUri],
-    queryFn: ({ signal }) => ethereumApi.relicMetadata(config, signal), enabled: relicsEnabled,
-    retry: false, staleTime: Infinity, gcTime: Infinity });
+    queryFn: ({ signal }) => ethereumApi.relicMetadata(config, signal), enabled: relicsEnabled, retry: false, staleTime: Infinity, gcTime: Infinity });
   const discountRoot = stats.data?.discountMerkleRoot;
-  const discountRemaining = stats.data ? ethereumDiscountRemaining(stats.data) : 0;
-  const discountCheckRequired = Boolean(config.enabled && owner && discountRoot &&
-    discountRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT && discountRemaining > 0);
-  const discountProof = useQuery({
-    queryKey: ['ethereum111k', 'discountProof', config.chainId, config.contractAddress, discountRoot, owner],
-    queryFn: () => ethereumDiscounts.proof(owner!, discountRoot!),
-    enabled: mintKind === 'crate' && discountCheckRequired,
-    retry: false, staleTime: Infinity,
-  });
+  const discountCheckRequired = Boolean(config.enabled && owner && discountRoot && discountRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT && stats.data && ethereumDiscountRemaining(stats.data) > 0);
+  const discountProof = useQuery({ queryKey: ['ethereum111k', 'discountProof', config.chainId, config.contractAddress, discountRoot, owner],
+    queryFn: () => ethereumDiscounts.proof(owner!, discountRoot!), enabled: mintKind === 'crate' && discountCheckRequired, retry: false, staleTime: Infinity });
   const mintQuote = (kind: EthereumMintKind, quantity: number): EthereumMintQuote | null => {
     if (!ETHEREUM_MINT_KINDS.includes(kind) || !owner || !stats.data) return null;
     if (kind === 'crate' && discountCheckRequired && !discountProof.isSuccess) return null;
-    return ethereumMintQuote(kind, quantity, stats.data, discountProof.data != null);
+    return ethereumMintQuote(kind, quantity, reserveDiscounts(stats.data, operations), discountProof.data != null);
   };
-  const inventory = useInfiniteQuery({
-    queryKey: ethereumInventoryQueryKey(scope), enabled: Boolean(scope && config.enabled),
-    initialPageParam: null as string | null,
-    queryFn: ({ pageParam, signal }) => ethereumApi.inventory(config, owner!, pageParam, signal, readEthereumInventoryExpected(scope!)),
-    getNextPageParam: page => page.nextCursor,
-    retry: false, refetchInterval: 30_000,
-  });
-  const rawItems = useMemo(() => owner && scope ? [...new Map((inventory.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()] : [], [inventory.data, owner, scope]);
-  const onArtworksRevealed = useCallback((transactionHash: string, artworks: EthereumRevealedArtwork[], submittedAt: number) => {
-    if (!scope || !owner || !config.contractAddress || !mounted.current || scopeRef.current !== scope) return;
-    const key = `${scope}:${transactionHash}`;
-    const announced = announcedReveals.current.has(key);
-    announcedReveals.current.add(key);
-    setRevealed(current => {
-      const matching = current?.scope === scope && current.transactionHash === transactionHash;
-      if (!matching && (announced || current?.scope === scope && current.submittedAt > submittedAt)) return current;
-      return { scope, transactionHash, submittedAt, items: artworks.map(artwork => ({
-        ...artwork, id: ethereumAssetId(config.chainId, config.contractAddress!, artwork.tokenId),
-        chainId: config.chainId, contractAddress: config.contractAddress!, owner,
-        kind: 'artwork', displayId: Number(artwork.tokenId), revealStatus: 'revealed',
-      })) };
-    });
-  }, [scope, owner, config.chainId, config.contractAddress]);
-  const { applyArtwork } = useEthereumReveals(config, scope, rawItems, pending, onArtworksRevealed);
+  const inventory = useEthereumInventory(config, owner, scope);
+  const rawItems = useMemo(() => scope ? inventory.data?.items ?? [] : [], [scope, inventory.data]);
+  const onArtworksRevealed = useCallback((hash: string, artworks: EthereumRevealedArtwork[]) => {
+    if (!owner || !config.contractAddress) return;
+    publishUnpack(hash, artworks.map(artwork => ({ ...artwork, id: ethereumAssetId(config.chainId, config.contractAddress!, artwork.tokenId),
+      chainId: config.chainId, contractAddress: config.contractAddress!, owner, kind: 'artwork', displayId: Number(artwork.tokenId), revealStatus: 'revealed' })));
+  }, [owner, config.chainId, config.contractAddress, publishUnpack]);
+  const onRevealFailed = useCallback((hash: string, message: string) => {
+    if (!scope || !current.current.mounted || current.current.scope !== scope) return;
+    localOperations.current.delete(hash);
+    confirmedUnpacks.current.delete(hash);
+    revealedUnpacks.current.delete(hash);
+    setOutcomes(previous => ({ scope, results: previous.scope === scope ? previous.results : {},
+      errors: { ...(previous.scope === scope ? previous.errors : {}), [hash]: message } }));
+    for (const operation of readEthereumDropOperations(scope)) {
+      if (operation.action === 'unbox' && operation.hash === hash) retireOperation(operation);
+    }
+    void client.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
+  }, [scope, client, retireOperation]);
+  const retainLocalReveal = useCallback((job: EthereumRevealJob) => {
+    const operation = localOperations.current.get(job.transactionHash);
+    return Boolean(operation?.scope === scope && operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now() &&
+      !revealedUnpacks.current.has(job.transactionHash) && isEthereumCrateUnpack(operation));
+  }, [scope]);
+  const { applyArtwork, isTracking: isTrackingReveal } = useEthereumReveals(config, scope, rawItems, null, onArtworksRevealed, onRevealFailed, retainLocalReveal);
   const items = useMemo(() => rawItems.map(applyArtwork), [rawItems, applyArtwork]);
-  const profile = useQuery({ queryKey: ['ethereum111k', 'profile', scope, session?.token],
-    queryFn: ({ signal }) => ethereumApi.profile(session!, signal), enabled: Boolean(session), retry: false });
-  const shipments = useQuery({ queryKey: ['ethereum111k', 'shipments', scope, session?.token],
-    queryFn: ({ signal }) => ethereumApi.shipments(session!, signal), enabled: Boolean(session), retry: false, refetchInterval: 30_000 });
+  const refresh = useCallback(() => {
+    if (scope) void client.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
+    void client.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
+    void client.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
+    void client.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-tokens'] });
+  }, [scope, client]);
   useEffect(() => {
-    if (!scope) return;
-    for (const cause of [profile.error, shipments.error]) {
-      if (cause instanceof EthereumApiError && cause.status === 401 && cause.rejectedSessionToken) invalidateSession(scope, cause.rejectedSessionToken);
-    }
-  }, [profile.error, shipments.error, scope, invalidateSession]);
-  const confirmation = useQuery({ queryKey: ['ethereum111k', 'transaction', scope, pending?.hash],
-    queryFn: ({ signal }) => ethereumApi.confirm(pending!.hash, config, owner!, signal, pending!),
-    enabled: Boolean(pending && owner && config.enabled), retry: false,
-    refetchInterval: 4_000,
-  });
-  const confirmationErrorKey = confirmation.error ? `${scope}:${pending?.hash}:${confirmation.errorUpdatedAt}` : null;
-  const finishing = useRef(new Set<string>());
-  const reverting = useRef(new Set<string>());
-  const inclusions = useRef(new Map<string, { applied: boolean }>());
-  useEffect(() => {
-    const result = confirmation.data;
-    if (!pending || !scope || !owner) return;
-    const transactionKey = `${scope}:${pending.hash}`;
-    if (confirmation.isSuccess && result?.status === 'pending') {
-      if (inclusions.current.delete(transactionKey)) {
-        void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
+    if (!scope || !owner || !config.enabled) return;
+    const controller = new AbortController();
+    let running = false;
+    let sweeping = false;
+    const exists = (operation: EthereumDropOperation) => !controller.signal.aborted && operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now() &&
+      (readEthereumDropOperations(scope).some(item => item.id === operation.id && item.hash === operation.hash) ||
+        operation.hash !== undefined && localOperations.current.get(operation.hash)?.id === operation.id);
+    const remove = (operation: EthereumDropOperation, message?: string) => {
+      if (operation.hash) {
+        localOperations.current.delete(operation.hash);
+        confirmedUnpacks.current.delete(operation.hash);
+        revealedUnpacks.current.delete(operation.hash);
       }
-      return;
-    }
-    if (!confirmation.isSuccess || result?.status !== 'confirmed' || result.confirmations < 1 || finishing.current.has(pending.hash)) return;
-    const inclusion = inclusions.current.get(transactionKey) ?? { applied: false };
-    inclusions.current.set(transactionKey, inclusion);
-    const confirmationKey = ['ethereum111k', 'transaction', scope, pending.hash];
-    const isCurrentInclusion = (minimumConfirmations = 1, allowCleared = false) => {
-      const latest = queryClient.getQueryState<EthereumTransactionConfirmResponse>(confirmationKey);
-      const current = readEthereumPending(scope);
-      return inclusions.current.get(transactionKey) === inclusion && latest?.status === 'success' && latest.data?.status === 'confirmed' && latest.data.confirmations >= minimumConfirmations &&
-        !readEthereumSubmission(scope) && (current?.hash === pending.hash || allowCleared && !current);
-    };
-    const release = () => {
-      finishing.current.delete(pending.hash);
-      if (inclusions.current.get(transactionKey) !== inclusion) void queryClient.invalidateQueries({ queryKey: confirmationKey });
-    };
-    const requiresFinalization = pending.action === 'delivery' || pending.action === 'claim';
-    const readyToFinish = result.confirmations >= requiredConfirmations && (!requiresFinalization || Boolean(session));
-    if (!readyToFinish && (!requiresFinalization || inclusion.applied)) return;
-    finishing.current.add(pending.hash);
-    const updateExpected = (retainSources: boolean) => {
-      const mintedIds = result.items.map(item => item.tokenId);
-      const changed = new Set([...result.burnedTokenIds, ...mintedIds]);
-      const previous = readEthereumExpected(scope);
-      const expected = [...new Set([...previous.filter(id => !changed.has(id)), ...mintedIds])].slice(-ETHEREUM_MAX_EXPECTED_IDS);
-      if (retainSources) writeEthereumExpected(scope, expected,
-        { hash: pending.hash, sourceIds: [...new Set([...previous.filter(id => !expected.includes(id)), ...result.burnedTokenIds])], mintedIds });
-      else {
-        writeEthereumExpected(scope, expected);
-        clearEthereumInventoryRecovery(scope, pending.hash);
+      retireOperation(operation);
+      if (operation.hash) forgetEthereumRevealJob(scope, operation.hash);
+      if (!message && operation.action === 'unbox' && operation.hash && current.current.mounted && current.current.scope === scope) {
+        setOutcomes(previous => ({ scope, results: previous.scope === scope ? previous.results : {},
+          errors: { ...(previous.scope === scope ? previous.errors : {}), [operation.hash!]: 'Couldn’t confirm this opening. Check your inventory or wallet.' } }));
       }
+      if (message && current.current.mounted && current.current.scope === scope) {
+        if (operation.action === 'unbox' && operation.hash) setOutcomes(previous => ({ scope,
+          results: previous.scope === scope ? previous.results : {}, errors: { ...(previous.scope === scope ? previous.errors : {}), [operation.hash!]: message } }));
+        if (operation.action !== 'unbox' && initiated.current.has(operation.id)) setError(message);
+      }
+      refresh();
     };
-    const updateInventory = () => {
-      const burned = new Set(result.burnedTokenIds);
-      updateExpected(requiresFinalization);
-      queryClient.setQueryData<InfiniteData<EthereumInventoryResponse>>(ethereumInventoryQueryKey(scope), previous => {
-        if (!previous) return { pageParams: [null], pages: [{ items: result.items, nextCursor: null, observedBlock: 0 }] };
-        const added = new Set(result.items.map(item => item.id));
-        return { ...previous, pages: previous.pages.map((page, index) => ({ ...page,
-          items: [...(index === 0 ? result.items : []), ...page.items.filter(item => !burned.has(item.tokenId) && !added.has(item.id))],
-        })) };
-      });
-      inclusion.applied = true;
+    const reconcile = async (operation: EthereumDropOperation, result: EthereumTransactionConfirmResponse) => {
+      if (!exists(operation) || operation.hash && confirmedUnpacks.current.has(operation.hash)) return;
+      await client.cancelQueries({ queryKey: ethereumInventoryQueryKey(scope) });
+      if (!exists(operation) || operation.hash && confirmedUnpacks.current.has(operation.hash)) return;
+      rememberEthereumConfirmedInventory(scope, operation.id, result.items.map(item => item.tokenId), result.burnedTokenIds, operation.submittedAt);
+      const burned = new Set(readEthereumConfirmedInventory(scope).burnedTokenIds);
+      const accepted = result.items.filter(item => !burned.has(item.tokenId));
+      const added = new Set(accepted.map(item => item.tokenId));
+      writeEthereumExpected(scope, [...new Set([...readEthereumExpected(scope).filter(id => !burned.has(id)), ...added])].slice(-ETHEREUM_MAX_EXPECTED_IDS));
+      client.setQueryData<EthereumInventoryResponse>(ethereumInventoryQueryKey(scope), previous => ({ nextCursor: null,
+        observedBlock: previous?.observedBlock ?? 0, items: [...accepted, ...(previous?.items ?? []).filter(item => !burned.has(item.tokenId) && !added.has(item.tokenId))] }));
+      if (operation.action === 'unbox') {
+        if (operation.hash && localOperations.current.has(operation.hash)) confirmedUnpacks.current.add(operation.hash);
+        if (!isEthereumCrateUnpack(operation)) publishUnpack(operation.hash!, result.items);
+        else if (operation.hash && revealedUnpacks.current.delete(operation.hash)) {
+          localOperations.current.delete(operation.hash);
+          confirmedUnpacks.current.delete(operation.hash);
+        }
+      } else if (operation.hash) localOperations.current.delete(operation.hash);
+      retireOperation(operation);
+      refresh();
     };
-    void (async () => {
+    reconcilePending.current = reconcile;
+    const check = async (operation: EthereumDropOperation) => {
+      if (!operation.hash || !exists(operation)) return;
+      if (isEthereumCrateUnpack(operation)) {
+        if (!revealedUnpacks.current.has(operation.hash) && !isTrackingReveal(operation.hash)) rememberEthereumRevealJob(scope, operation.hash, operation.submittedAt, operation);
+        if (confirmedUnpacks.current.has(operation.hash)) return;
+      }
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]);
       try {
-        if (requiresFinalization && !inclusion.applied) {
-          const updated = await withEthereumSubmissionLock(scope, async () => {
-            if (!isCurrentInclusion()) return false;
-            const interruptedInventory = queryClient.getQueryState(ethereumInventoryQueryKey(scope))?.fetchStatus === 'fetching';
-            await queryClient.cancelQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-            if (!isCurrentInclusion()) return false;
-            updateInventory();
-            if (interruptedInventory) void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-            return true;
-          });
-          if (!updated) { release(); return; }
-        }
-        if (!readyToFinish) { release(); return; }
-        if (pending.action === 'delivery' && pending.orderId !== undefined) {
-          const finalized = await ethereumApi.confirmDelivery(pending.orderId, pending.hash, session!);
-          if (finalized.status !== 'confirmed') { release(); return; }
-        }
-        if (pending.action === 'claim' && pending.claimId) {
-          const finalized = await ethereumApi.confirmClaim(pending.claimId, pending.hash, session!);
-          if (finalized.status !== 'confirmed') { release(); return; }
-        }
-        const cleared = await withEthereumSubmissionLock(scope, () => {
-          if (!isCurrentInclusion(requiredConfirmations, true)) return false;
-          if (pending.action === 'cancel') restoreEthereumExpected(scope, pending.hash);
-          if (!inclusion.applied) updateInventory();
-          if (requiresFinalization) updateExpected(false);
-          if (isEthereumCrateUnpack(pending) && readEthereumRevealJobs(scope).some(job => job.transactionHash === pending.hash.toLowerCase())) {
-            rememberEthereumRevealJob(scope, pending.hash, pending.submittedAt, pending);
+        const result = await abortable(ethereumApi.confirm(operation.hash, config, owner, signal, operation), signal);
+        if (!exists(operation) || confirmedUnpacks.current.has(operation.hash)) return;
+        if (result.status === 'confirmed' && result.confirmations >= 1) { await reconcile(operation, result); return; }
+        const wallet = current.current.wallet;
+        if (!wallet.provider || ethereumAddress(wallet.address) !== owner || current.current.scope !== scope) return;
+        const background = ethereumOperation(() => current.current.scope === scope ? current.current.wallet : { address: null, provider: null }, config);
+        const backgroundSignal = AbortSignal.any([signal, background.signal]);
+        const provider = { ...wallet.provider, request: (request: Parameters<NonNullable<EthereumWallet['provider']>['request']>[0]) => abortable(wallet.provider!.request(request), backgroundSignal) };
+        try {
+          if (ethereumChainId(await provider.request({ method: 'eth_chainId' })) !== config.chainId || !exists(operation)) return;
+          background.assertCurrent();
+          let observed = operation;
+          if (!operation.transactionSender && operation.intent) {
+            const actual = await readEthereumSubmittedTransaction(provider, operation.hash, config.chainId, owner, operation.intent);
+            background.assertCurrent();
+            if (!exists(operation)) return;
+            if (actual) {
+              observed = { ...operation, ...actual };
+              localOperations.current.set(operation.hash, observed);
+              if (readEthereumDropOperations(scope).some(item => item.id === operation.id && item.hash === operation.hash)) {
+                writeEthereumDropOperation(scope, operation.id, observed);
+              }
+            }
           }
-          writeEthereumStorage(`${scope}:pending`, null);
-          return true;
-        });
-        if (!cleared) { release(); return; }
-        if (mounted.current && scopeRef.current === scope) {
-          if (pending.action === 'unbox' && result.items.length && !announcedReveals.current.has(transactionKey)) {
-            announcedReveals.current.add(transactionKey);
-            setRevealed({ scope, transactionHash: pending.hash, submittedAt: pending.submittedAt, items: result.items });
-          }
-          if (pending.action === 'cancel') setNotice('Your wallet cancellation is confirmed.');
-          setError(null);
-        }
-        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
-        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
-        void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-        void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments', scope] });
+          const consumed = await ethereumSubmittedNonceConsumed(provider, observed, config.chainId);
+          background.assertCurrent();
+          if (consumed && ethereumChainId(await provider.request({ method: 'eth_chainId' })) === config.chainId && exists(operation)) remove(operation);
+        } finally { background.dispose(); }
       } catch (cause) {
-        release();
-        if (cause instanceof EthereumApiError && cause.status === 401 && cause.rejectedSessionToken && !invalidateSession(scope, cause.rejectedSessionToken)) return;
-        if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));
-      }
-    })();
-  }, [confirmation.data, confirmation.dataUpdatedAt, confirmation.isSuccess, requiredConfirmations, pending, scope, owner, session, queryClient, invalidateSession]);
-  useEffect(() => {
-    if (!pending || !scope || !isTransactionFailure(confirmation.error) || reverting.current.has(pending.hash)) return;
-    const failure = confirmation.error;
-    reverting.current.add(pending.hash);
-    inclusions.current.delete(`${scope}:${pending.hash}`);
-    void withEthereumSubmissionLock(scope, () => {
-      const latest = queryClient.getQueryState(['ethereum111k', 'transaction', scope, pending.hash]);
-      if (latest?.status !== 'error' || !isTransactionFailure(latest.error)) return false;
-      const current = readEthereumPending(scope);
-      if (readEthereumSubmission(scope) || current && current.hash !== pending.hash) return false;
-      restoreEthereumExpected(scope, pending.hash);
-      writeEthereumStorage(`${scope}:pending`, null);
-      return true;
-    }).then(cleared => {
-      if (!cleared) { reverting.current.delete(pending.hash); return; }
-      void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
-      if (mounted.current && scopeRef.current === scope) setError(failure.code === 'operation-failed' ? failure.message : 'The transaction reverted. Your NFTs are unchanged; you can try again.');
-    }).catch(cause => {
-      reverting.current.delete(pending.hash);
-      if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));
-    });
-  }, [confirmation.error, pending, scope, queryClient]);
-  const run = async (label: string, action: (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) => Promise<void>, allowPending = false): Promise<boolean> => {
-    if (scope && readEthereumOperation(scope)) return false;
-    if (!config.enabled || !scope || !owner) { setError(config.enabled ? 'Connect your Ethereum wallet first.' : 'The testnet contract is not deployed yet.'); return false; }
-    if (readEthereumPending(scope) && !allowPending) { setError('Wait for your pending Ethereum transaction to finish.'); return false; }
-    if (readEthereumSubmission(scope) && !allowPending) { setError('Check your wallet and recover the previous Ethereum transaction before submitting again.'); return false; }
-    const capturedWallet = walletRef.current;
-    setError(null);
-    setNotice(null);
-    try {
-      await runEthereumOperation(scope, label, async () => {
-        if (readEthereumPending(scope) && !allowPending) throw new Error('Wait for your pending Ethereum transaction to finish.');
-        if (readEthereumSubmission(scope) && !allowPending) throw new Error('Check your wallet and recover the previous Ethereum transaction before submitting again.');
-        if (!mounted.current || scopeRef.current !== scope || walletRef.current.provider !== capturedWallet.provider || walletRef.current.address !== capturedWallet.address) {
-          throw new Error('Your Ethereum wallet changed. Please try again.');
+        if (!exists(operation)) return;
+        if (cause instanceof EthereumApiError && (cause.code === 'transaction-reverted' || cause.code === 'operation-failed')) {
+          remove(operation, cause.code === 'transaction-reverted' ? 'The transaction reverted. You can try again.' : cause.message);
         }
-        const operation = ethereumOperation(() => mounted.current && scopeRef.current === scope ? walletRef.current : { address: null, provider: null }, config);
-        try { await action(operation, scope); }
-        finally { operation.dispose(); }
+      }
+    };
+    const tick = async () => {
+      if (controller.signal.aborted || sweeping) return;
+      const records = [...new Map([...[...localOperations.current.values()].filter(operation => operation.scope === scope),
+        ...readEthereumDropOperations(scope, Date.now(), true)].map(operation => [operation.id, operation])).values()];
+      const pending: EthereumDropOperation[] = [];
+      sweeping = true;
+      try {
+        for (const operation of records) {
+          if (operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL <= Date.now()) remove(operation);
+          else {
+            if (operation.hash) localOperations.current.set(operation.hash, operation);
+            pending.push(operation);
+          }
+        }
+      } finally { sweeping = false; }
+      if (running) return;
+      running = true;
+      try {
+        if (document.visibilityState === 'hidden') return;
+        for (let offset = 0; offset < pending.length && !controller.signal.aborted; offset += 4) await Promise.allSettled(pending.slice(offset, offset + 4).map(check));
+      } finally { running = false; }
+    };
+    let observed = new Set(readEthereumDropOperations(scope, Date.now(), true).map(operation => operation.id));
+    const unsubscribe = subscribeEthereumDropOperations(scope, () => {
+      const next = new Set(readEthereumDropOperations(scope, Date.now(), true).map(operation => operation.id));
+      let externallyRetired = false;
+      for (const id of observed) {
+        if (!next.has(id) && !retiredHere.current.delete(id)) {
+          externallyRetired = true;
+          const operation = [...localOperations.current.values()].find(item => item.scope === scope && item.id === id);
+          if (operation?.hash && hasEthereumConfirmedInventory(scope, id)) {
+            if (operation.action !== 'unbox' || isEthereumCrateUnpack(operation) && revealedUnpacks.current.delete(operation.hash)) {
+              localOperations.current.delete(operation.hash);
+              confirmedUnpacks.current.delete(operation.hash);
+            } else if (isEthereumCrateUnpack(operation)) confirmedUnpacks.current.add(operation.hash);
+          }
+        }
+      }
+      observed = next;
+      if (externallyRetired) void client.cancelQueries({ queryKey: ethereumInventoryQueryKey(scope) }).then(() => {
+        if (!controller.signal.aborted && current.current.scope === scope) refresh();
       });
-      return true;
+      void tick();
+    });
+    void tick();
+    const interval = setInterval(() => { void tick(); }, 4_000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      controller.abort(); clearInterval(interval); unsubscribe(); document.removeEventListener('visibilitychange', tick);
+      if (reconcilePending.current === reconcile) reconcilePending.current = null;
+    };
+  }, [scope, owner, config, client, publishUnpack, refresh, retireOperation, isTrackingReveal]);
+  const run = async <T,>(label: string, action: (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) => Promise<T>): Promise<T | null> => {
+    if (!config.enabled || !scope || !owner) { setError(config.enabled ? 'Connect your wallet first.' : 'Minting is unavailable.'); return null; }
+    const capturedWallet = wallet;
+    const lifecycle = requestLifecycle.current?.signal;
+    setError(null);
+    try {
+      return await runEthereumDropRequest(scope, label, async () => {
+        if (lifecycle?.aborted || !current.current.mounted || current.current.scope !== scope || current.current.wallet.provider !== capturedWallet.provider || current.current.wallet.address !== capturedWallet.address) throw new Error('Your wallet changed. Please try again.');
+        const operation = ethereumOperation(() => !lifecycle?.aborted && current.current.mounted && current.current.scope === scope ? current.current.wallet : { address: null, provider: null }, config);
+        const signal = AbortSignal.any([operation.signal, ...(lifecycle ? [lifecycle] : [])]);
+        try { return await abortable(action(operation, scope), signal); } finally { operation.dispose(); }
+      });
     } catch (cause) {
-      if (cause instanceof EthereumApiError && cause.status === 401 && cause.rejectedSessionToken && !invalidateSession(scope, cause.rejectedSessionToken)) return false;
-      if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));
-      return false;
+      if (current.current.mounted && current.current.scope === scope) setError(ethereumWalletError(cause));
+      return null;
     }
   };
-  const authenticate = (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) =>
-    authenticateEthereumWallet(operation, config, capturedScope, verified => {
-      if (mounted.current && scopeRef.current === capturedScope) setSession(verified);
-    });
-  const submit = async (operation: ReturnType<typeof ethereumOperation>, capturedScope: string, action: EthereumAction,
-    transaction: EthereumPreparedTransaction, details: { orderId?: number; claimId?: string } = {}, beforeSend?: () => void) => {
+  const submit = async (walletOperation: ReturnType<typeof ethereumOperation>, capturedScope: string,
+    details: Pick<EthereumDropOperation, 'action' | 'kind' | 'quantity' | 'sourceTokenIds' | 'discountedQuantity'> & { relicId?: number },
+    transaction: EthereumPreparedTransaction, beforeSend?: () => void): Promise<string> => {
     if (ethereumAddress(transaction.to) !== config.contractAddress || transaction.chainId !== config.chainId) throw new Error('The transaction targets a different collection.');
-    await operation.ensureNetwork();
-    const nonce = await operation.provider.request({ method: 'eth_getTransactionCount', params: [operation.address, 'pending'] });
-    operation.assertCurrent();
-    if (typeof nonce !== 'string' || !/^0x[0-9a-fA-F]+$/.test(nonce)) throw new Error('Your wallet did not return a valid transaction nonce. Try again.');
-    const submission: EthereumSubmission = { scope: capturedScope, action, submittedAt: Date.now(), nonce: `0x${BigInt(nonce).toString(16)}`,
-      intent: { to: transaction.to, data: transaction.data, value: transaction.value }, ...details };
+    const operation: EthereumDropOperation = { ...details, id: crypto.randomUUID(), scope: capturedScope, submittedAt: Date.now(), intent: { to: transaction.to, data: transaction.data, value: transaction.value } };
     let reserved = false;
     let hash: string;
-    try { hash = await operation.send(transaction, () => { beforeSend?.(); reserveEthereumSubmission(submission); reserved = true; }); }
-    catch (cause) {
-      if (reserved && cause && typeof cause === 'object' && 'code' in cause && cause.code === 4001) writeEthereumStorage(`${capturedScope}:pending`, null);
+    try {
+      hash = await walletOperation.send(transaction, () => {
+        beforeSend?.();
+        operation.submittedAt = Date.now();
+        initiated.current.add(operation.id);
+        writeEthereumDropOperation(capturedScope, operation.id, operation);
+        reserved = true;
+      });
+    } catch (cause) {
+      if (reserved && definiteEthereumSubmissionRejection(cause)) retireOperation(operation);
       throw cause;
     }
-    const { nonce: _reservedNonce, ...submitted } = submission;
-    const record: EthereumPendingTransaction = { ...submitted, hash };
-    writeEthereumStorage(`${capturedScope}:pending`, record);
-    if (isEthereumCrateUnpack(record)) rememberEthereumRevealJob(capturedScope, hash, record.submittedAt, record);
-    void readEthereumSubmittedTransaction(operation.provider, hash, config.chainId, operation.address, transaction).then(async actual => {
-      if (!actual) return;
-      await withEthereumSubmissionLock(capturedScope, () => {
-        const current = readEthereumPending(capturedScope);
-        if (current?.hash === hash && !current.nonce) writeEthereumStorage(`${capturedScope}:pending`, { ...current, ...actual });
-      });
-    }).catch(() => {});
+    const submitted = { ...operation, hash };
+    localOperations.current.set(hash, submitted);
+    writeEthereumDropOperation(capturedScope, operation.id, submitted);
+    if (isEthereumCrateUnpack(submitted)) rememberEthereumRevealJob(capturedScope, hash, submitted.submittedAt, submitted);
+    return hash;
   };
   const transaction = (data: string, value = '0x0'): EthereumPreparedTransaction => ({ to: config.contractAddress!, data, value, chainId: config.chainId });
-  const mint = (kind: EthereumMintKind, quantity: number, quote?: EthereumMintQuote) => {
+  const mint = async (kind: EthereumMintKind, quantity: number, quote?: EthereumMintQuote): Promise<boolean> => {
     const expected = quote ?? mintQuote(kind, quantity);
-    return run('Confirm mint in your wallet…', async (operation, capturedScope) => {
+    return await run('Confirm mint in your wallet…', async (operation, capturedScope) => {
       if (!ETHEREUM_MINT_KINDS.includes(kind)) throw new Error('This container cannot be publicly minted.');
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > config.maxMintQuantity) throw new Error('Choose a quantity from 1 to 15.');
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > config.maxMintQuantity) throw new Error(`Choose a quantity from 1 to ${config.maxMintQuantity}.`);
       if (!expected) throw new Error('Wait for your mint price to load and try again.');
-      const current = await queryClient.fetchQuery({
-        queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress, operation.address],
-        queryFn: ({ signal }) => ethereumApi.stats(config, operation.address, AbortSignal.any([signal, operation.signal])),
-        staleTime: 0,
-      });
-      operation.assertCurrent();
-      if (!current.saleActive) throw new Error('Minting is not open yet.');
-      if (quantity > ethereumMintRemaining(kind, current)) throw new Error('That quantity is no longer available. Choose fewer containers.');
-      if (kind === 'crate' && current.discountMerkleRoot !== expected.discountMerkleRoot) {
-        throw new Error('Your mint terms changed. Check the updated price and try again.');
-      }
-      const proof = kind === 'crate' && current.discountMerkleRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT &&
-        ethereumDiscountRemaining(current) > 0 ? await ethereumDiscounts.proof(operation.address, current.discountMerkleRoot) : null;
-      operation.assertCurrent();
-      const latest = ethereumMintQuote(kind, quantity, current, proof !== null);
-      if (latest.discounted !== expected.discounted || latest.unitPriceWei !== expected.unitPriceWei) {
-        throw new Error('Your mint terms changed. Check the updated price and try again.');
-      }
-      const data = latest.discounted
-        ? encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [quantity, proof!])
-        : encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses }[kind], ['uint256'], [quantity]);
-      await submit(operation, capturedScope, 'mint', transaction(data, ethereumHexQuantity(BigInt(expected.unitPriceWei) * BigInt(quantity))));
-    });
-  };
-  const claimRelic = (relicId: number) => run('Confirm relic claim in your wallet…', async (operation, capturedScope) => {
-    if (!Number.isInteger(relicId) || relicId < 1 || relicId > ETHEREUM_MAX_RELICS) throw new Error('Choose a relic from 1 to 18.');
-    await operation.ensureNetwork();
-    operation.assertCurrent();
-    const key = ['ethereum111k', 'relics', config.chainId, config.contractAddress, operation.address];
-    await queryClient.cancelQueries({ queryKey: key, exact: true });
-    operation.assertCurrent();
-    const checkedAt = Date.now();
-    const current = await queryClient.fetchQuery({ queryKey: key,
-      queryFn: ({ signal }) => ethereumApi.relics(config, operation.address, AbortSignal.any([signal, operation.signal])), staleTime: 0 });
-    operation.assertCurrent();
-    if (!current.saleActive) throw new Error('Relic claims are not open yet.');
-    if ((current.claimedMask & (1 << (relicId - 1))) !== 0) throw new Error('That relic was just claimed. Choose another relic.');
-    if (current.remainingRelics === 0) throw new Error('All allocated relics have been claimed.');
-    if (current.remainingAllowance === 0) throw new Error('This wallet has no relic claims remaining.');
-    try {
-      await submit(operation, capturedScope, 'relic-claim', transaction(encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [relicId])), {}, () => {
-        const state = queryClient.getQueryState<typeof current>(key);
-        const latest = state?.data;
-        if (Date.now() - checkedAt > 8_000 || state?.status !== 'success' || !latest || !latest.saleActive || latest.remainingRelics === 0 ||
-          latest.remainingAllowance === 0 || (latest.claimedMask & (1 << (relicId - 1))) !== 0) {
-          throw new Error('Relic availability changed. Refresh and try again.');
+      const readTerms = async () => {
+        const stats = await client.fetchQuery({ queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress, operation.address],
+          queryFn: ({ signal }) => ethereumApi.stats(config, operation.address, AbortSignal.any([signal, operation.signal])), staleTime: 0 });
+        operation.assertCurrent();
+        if (!stats.saleActive) throw new Error('Minting is not open yet.');
+        if (quantity > ethereumMintRemaining(kind, stats)) throw new Error('That quantity is no longer available. Choose fewer containers.');
+        if (kind === 'crate' && stats.discountMerkleRoot !== expected.discountMerkleRoot) throw new Error('Your mint terms changed. Check the updated price and try again.');
+        const proof = kind === 'crate' && stats.discountMerkleRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT && ethereumDiscountRemaining(stats) > 0 ? await ethereumDiscounts.proof(operation.address, stats.discountMerkleRoot) : null;
+        operation.assertCurrent();
+        return { stats, proof };
+      };
+      let terms = await readTerms();
+      const reserved = readPendingOperations(capturedScope);
+      const onchainQuote = ethereumMintQuote(kind, quantity, terms.stats, terms.proof !== null);
+      const reservedQuote = ethereumMintQuote(kind, quantity, reserveDiscounts(terms.stats, reserved), terms.proof !== null);
+      const supplyReserved = quantity > ethereumMintRemaining(kind, reserveMintSupply(terms.stats, reserved));
+      const discountedReserved = onchainQuote.discounted && !reservedQuote.discounted;
+      const affected = reserved.filter(item => item.hash &&
+        (supplyReserved && item.action === 'mint' || discountedReserved && item.discountedQuantity > 0));
+      if (affected.length) {
+        const signal = AbortSignal.any([operation.signal, AbortSignal.timeout(10_000)]);
+        for (let offset = 0; offset < affected.length; offset += 4) {
+          await Promise.all(affected.slice(offset, offset + 4).map(async pending => {
+            const result = await abortable(ethereumApi.confirm(pending.hash!, config, operation.address, signal, pending), signal);
+            operation.assertCurrent();
+            if (result.status === 'confirmed' && result.confirmations >= 1) await reconcilePending.current?.(pending, result);
+          }));
         }
-      });
-    } finally {
-      void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
-    }
-  });
-  const unbox = (selected: EthereumInventoryItem | readonly EthereumInventoryItem[], canOpen?: () => boolean) => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
-    const items: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
-    if (!items.length || items.length > config.maxUnboxQuantity || new Set(items.map(item => item.tokenId)).size !== items.length ||
-      items.some(item => item.owner !== operation.address || item.chainId !== config.chainId || item.contractAddress !== config.contractAddress ||
-        (item.kind !== 'crate' && !(items.length === 1 && (item.kind === 'warehouse' || item.kind === 'relic'))))) {
-      throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse or relic.`);
-    }
+        terms = await readTerms();
+      }
+      const pending = readPendingOperations(capturedScope);
+      const assertSupply = () => {
+        if (quantity > ethereumMintRemaining(kind, reserveMintSupply(terms.stats, readPendingOperations(capturedScope)))) {
+          throw new Error('That quantity is no longer available. Choose fewer containers.');
+        }
+      };
+      assertSupply();
+      const latest = ethereumMintQuote(kind, quantity, reserveDiscounts(terms.stats, pending), terms.proof !== null);
+      if (!latest.discounted && pending.some(item => !item.hash && item.discountedQuantity > 0) &&
+        ethereumMintQuote(kind, quantity, terms.stats, terms.proof !== null).discounted) {
+        throw new Error('Your earlier mint is still being checked. Please try again shortly.');
+      }
+      if (latest.discounted !== expected.discounted || latest.unitPriceWei !== expected.unitPriceWei) throw new Error('Your mint terms changed. Check the updated price and try again.');
+      const data = latest.discounted ? encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [quantity, terms.proof!]) :
+        encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses }[kind], ['uint256'], [quantity]);
+      await submit(operation, capturedScope, { action: 'mint', kind, quantity, sourceTokenIds: [], discountedQuantity: latest.discounted ? quantity : 0 },
+        transaction(data, ethereumHexQuantity(BigInt(expected.unitPriceWei) * BigInt(quantity))), assertSupply);
+      return true;
+    }) === true;
+  };
+  const claimRelic = async (relicId: number): Promise<boolean> => await run('Confirm relic claim in your wallet…', async (operation, capturedScope) => {
+    if (!Number.isInteger(relicId) || relicId < 1 || relicId > ETHEREUM_MAX_RELICS) throw new Error('Choose a relic from 1 to 18.');
+    const key = ['ethereum111k', 'relics', config.chainId, config.contractAddress, operation.address];
+    await client.cancelQueries({ queryKey: key, exact: true });
+    operation.assertCurrent();
+    await client.fetchQuery({ queryKey: key, queryFn: ({ signal }) => ethereumApi.relics(config, operation.address, AbortSignal.any([signal, operation.signal])), staleTime: 0 });
+    operation.assertCurrent();
     const assertAvailable = () => {
-      if (checkoutReservesItems(items) || canOpen?.() === false) throw new Error('Check the redemption status of your selected items before opening them.');
+      const state = client.getQueryState<EthereumRelicStatus>(key);
+      if (state?.status !== 'success' || !state.data || Date.now() - state.dataUpdatedAt >= 8_000) throw new Error('Relic availability changed. Please try again.');
+      const latest = reserveRelics(state.data, readPendingOperations(capturedScope));
+      if (!latest.saleActive) throw new Error('Relic availability changed. Please try again.');
+      if ((latest.claimedMask & (1 << (relicId - 1))) !== 0) throw new Error('That relic was just claimed. Choose another relic.');
+      if (latest.remainingRelics === 0) throw new Error('All allocated relics have been claimed.');
+      if (latest.remainingAllowance === 0) throw new Error('This wallet has no relic claims remaining.');
     };
     assertAvailable();
-    const data = items.length === 1
-      ? encodeCall(items[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : items[0].kind === 'relic' ? ETHEREUM_FUNCTIONS.unboxRelic : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [items[0].tokenId])
-      : encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [items.map(item => item.tokenId)]);
-    await submit(operation, capturedScope, 'unbox', transaction(data), {}, assertAvailable);
+    await submit(operation, capturedScope, { action: 'relic-claim', kind: 'relic', quantity: 1, sourceTokenIds: [], discountedQuantity: 0, relicId },
+      transaction(encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [relicId])), assertAvailable);
+    return true;
+  }) === true;
+  const unbox = (selected: EthereumInventoryItem | readonly EthereumInventoryItem[]): Promise<string | null> => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
+    const selectedItems: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
+    if (!selectedItems.length || selectedItems.length > config.maxUnboxQuantity || new Set(selectedItems.map(item => item.tokenId)).size !== selectedItems.length ||
+      selectedItems.some(item => item.owner !== operation.address || item.chainId !== config.chainId || item.contractAddress !== config.contractAddress ||
+        (item.kind !== 'crate' && !(selectedItems.length === 1 && (item.kind === 'warehouse' || item.kind === 'relic'))))) throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse or relic.`);
+    const sourceTokenIds = selectedItems.map(item => item.tokenId);
+    const assertAvailable = () => {
+      if (readPendingOperations(capturedScope).some(record => record.sourceTokenIds.some(id => sourceTokenIds.includes(id)))) throw new Error('These containers are already opening.');
+    };
+    assertAvailable();
+    const data = selectedItems.length === 1 ? encodeCall(selectedItems[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : selectedItems[0].kind === 'relic' ? ETHEREUM_FUNCTIONS.unboxRelic : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [selectedItems[0].tokenId]) :
+      encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [sourceTokenIds]);
+    return submit(operation, capturedScope, { action: 'unbox', kind: selectedItems[0].kind as EthereumContainerKind, quantity: selectedItems.length, sourceTokenIds, discountedQuantity: 0 }, transaction(data), assertAvailable);
   });
-  const deliver = (selected: EthereumInventoryItem[], address: EthereumDeliveryAddress) => run('Confirm delivery in your wallet…', async (operation, capturedScope) => {
-    if (!selected.length || selected.length > config.maxDeliveryItems || selected.some(item => item.owner !== operation.address || !isEthereumDeliveryKind(item.kind))) throw new Error('Choose up to 50 artworks, crates or relics for delivery.');
-    const orderedItems = [...selected].sort((left, right) => {
-      const leftId = BigInt(left.tokenId), rightId = BigInt(right.tokenId);
-      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
-    });
-    const signedIn = await authenticate(operation, capturedScope);
-    operation.assertCurrent();
-    const addressKey = ethereumAddressEncryptionKey(encryptionKey, config.chainId, import.meta.env?.DEV === true, import.meta.env?.VITE_111K_LOCAL_ADDRESS_PUBLIC_KEY);
-    const encrypted = encryptAddressPayload(address.formatted, addressKey);
-    const saved = await ethereumApi.saveAddress({ encrypted: encrypted.cipherText, hint: encrypted.hint, country: address.country, countryCode: address.countryCode, email: address.email }, signedIn);
-    operation.assertCurrent();
-    const prepared = await ethereumApi.prepareDelivery(orderedItems.map(item => item.tokenId), saved.address.id, crypto.randomUUID(), signedIn, operation.signal);
-    operation.assertCurrent();
-    const request = checkedEthereumDelivery(prepared, config, operation.address, orderedItems);
-    await submit(operation, capturedScope, 'delivery', request, { orderId: prepared.orderId });
-  });
-  const transfer = (item: EthereumInventoryItem, destination: string) => run('Confirm transfer in your wallet…', async (operation, capturedScope) => {
-    const recipient = ethereumAddress(destination.trim());
-    if (!recipient || recipient === operation.address || /^0x0{40}$/.test(recipient)) throw new Error('Enter another valid Ethereum wallet address.');
-    if (item.owner !== operation.address || !item.kind.endsWith('_receipt')) throw new Error('Select a receipt you own.');
-    await submit(operation, capturedScope, 'transfer', transaction(encodeCall(ETHEREUM_FUNCTIONS.transfer, ['address', 'address', 'uint256'], [operation.address, recipient, item.tokenId])));
-  });
-  const claim = (item: EthereumInventoryItem, code: string) => run('Confirm claim in your wallet…', async (operation, capturedScope) => {
-    if (item.kind !== 'crate_receipt' || item.owner !== operation.address || !code.trim()) throw new Error('Enter the code for a crate receipt you own.');
-    const signedIn = await authenticate(operation, capturedScope);
-    const prepared = await ethereumApi.prepareClaim(item.tokenId, code.trim(), signedIn, operation.signal);
-    operation.assertCurrent();
-    await submit(operation, capturedScope, 'claim', checkedEthereumClaim(prepared, config, item.tokenId), { claimId: prepared.claimId });
-  });
-  const signIn = () => run('Sign in with Ethereum…', async (operation, capturedScope) => { await authenticate(operation, capturedScope); }, true);
-  const replacePending = (replacementHash: string) => run('Checking replacement transaction…', async (operation, capturedScope) => {
-    const captured = readEthereumPending(capturedScope);
-    const submission = readEthereumSubmission(capturedScope);
-    if (!captured && !submission) throw new Error('This transaction is no longer pending.');
-    await operation.ensureNetwork();
-    const replacement = await recoverEthereumTransaction({ provider: operation.provider, config, owner: operation.address,
-      pending: captured ?? submission!, transactionHash: replacementHash, assertCurrent: operation.assertCurrent });
-    operation.assertCurrent();
-    if (captured ? readEthereumPending(capturedScope)?.hash !== captured.hash :
-      readEthereumPending(capturedScope) || readEthereumSubmission(capturedScope)?.submittedAt !== submission!.submittedAt) {
-      throw new Error('The pending transaction changed. Refresh and try again.');
-    }
-    if (captured) replaceEthereumInventoryRecovery(capturedScope, captured.hash, replacement.hash);
-    if (isEthereumCrateUnpack(replacement)) rememberEthereumRevealJob(capturedScope, replacement.hash, replacement.submittedAt, replacement);
-    if (captured && captured.hash !== replacement.hash) forgetEthereumRevealJob(capturedScope, captured.hash);
-    writeEthereumStorage(`${capturedScope}:pending`, replacement);
-  }, true);
-  const dismissPending = async () => {
-    if (!scope || readEthereumOperation(scope) || !pending && !submission) return;
-    try {
-      const cleared = await withEthereumSubmissionLock(scope, () => {
-        const current = readEthereumPending(scope);
-        const currentSubmission = readEthereumSubmission(scope);
-        if (pending ? current?.hash !== pending.hash : current || currentSubmission?.submittedAt !== submission?.submittedAt) return false;
-        writeEthereumStorage(`${scope}:pending`, null);
-        if (current) {
-          forgetEthereumRevealJob(scope, current.hash);
-          queryClient.removeQueries({ queryKey: ['ethereum111k', 'reveal-transaction', config.chainId, config.contractAddress, current.hash.toLowerCase()], exact: true });
-          queryClient.removeQueries({ queryKey: ['ethereum111k', 'transaction', scope, current.hash], exact: true });
-        }
-        return true;
-      });
-      if (!cleared || !mounted.current || scopeRef.current !== scope) return;
-      setError(null);
-      setNotice('Stopped tracking. The original transaction may still execute; check your wallet before submitting again.');
-    } catch (cause) {
-      if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));
-    }
-  };
-  const disconnect = () => {
-    if (scope) saveEthereumSession(scope, null);
-    if (session) void ethereumApi.logout(session).catch(() => {});
-    setSession(null);
-    wallet.disconnect();
-  };
-  const refresh = useCallback(() => {
-    if (scope) void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
-    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'relics'] });
-    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'discountProof'] });
-    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments'] });
-    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] });
-    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-transaction'] });
-    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-tokens'] });
-  }, [scope, queryClient]);
-  return {
-    config, configQuery, stats, relics, relicMetadata, discountProof, discountCheckRequired, mintQuote, inventory, items, scope, owner, chainId, profile, shipments, session,
-    pending, submission, storageWarning, requiredConfirmations, confirmations: confirmation.data?.confirmations ?? 0, busy, notice, error: error ?? (confirmation.error && confirmationErrorKey !== dismissedConfirmationError ? ethereumWalletError(confirmation.error) : null),
-    revealed: revealed?.scope === scope ? revealed.items.map(applyArtwork) : null,
-    applyArtwork,
-    closeReveal: () => setRevealed(null), clearError: () => { setError(null); setDismissedConfirmationError(confirmationErrorKey); },
-    mint, claimRelic, unbox, deliver, transfer, claim, signIn, disconnect, refresh, replacePending, dismissPending,
-  };
+  const pendingMints = useMemo<EthereumPendingMint[]>(() => operations.filter(operation => operation.action !== 'unbox').map(operation => ({
+    id: operation.id, kind: operation.kind, quantity: operation.quantity, submittedAt: operation.submittedAt,
+    ...(operation.relicId ? { image: relicMetadata.data?.[operation.relicId - 1]?.image } : {}),
+  })), [operations, relicMetadata.data]);
+  const pendingItemIds = useMemo(() => new Set(operations.flatMap(operation => operation.sourceTokenIds.map(id => ethereumAssetId(config.chainId, config.contractAddress!, id)))), [operations, config.chainId, config.contractAddress]);
+  const pendingRelicIds = useMemo(() => new Set(operations.flatMap(operation => operation.relicId ? [operation.relicId] : [])), [operations]);
+  return { config, configQuery, stats, mintSupply, relics, relicMetadata, discountProof, discountCheckRequired, mintQuote, inventory, items, scope, owner, chainId,
+    operations, pendingMints, pendingItemIds, pendingRelicIds, busy, error, unpackResults, unpackErrors, applyArtwork,
+    clearError: () => setError(null), mint, claimRelic, unbox, refresh };
 }

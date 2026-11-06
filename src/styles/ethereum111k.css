@@ -1,6 +1,3 @@
-.ethereum111k {
-  width: 100%;
-}
 .ethereum111k__mint-title {
   display: flex;
   align-items: center;
@@ -136,21 +133,6 @@
   line-height: 1.2;
   text-align: center;
 }
-.ethereum111k__pending {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-top: 24px;
-  padding: 16px 0;
-  border-block: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
-  font-size: 13px;
-}
-.ethereum111k .app-section__head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
 .ethereum111k__wallets {
   display: grid;
   gap: 12px;
@@ -184,11 +166,19 @@
 .ethereum111k__artwork-media--viewer {
   margin-inline: auto;
 }
+.ethereum111k__artwork-media--fullscreen {
+  width: 100%;
+  height: 100%;
+}
 .ethereum111k__artwork-media > img {
   display: block;
   width: 100%;
   height: auto;
   object-fit: contain;
+}
+.ethereum111k__artwork-media--fullscreen > img {
+  height: 100%;
+  max-height: 100%;
 }
 .ethereum111k__artwork-media > video,
 .ethereum111k__model,
@@ -237,93 +227,7 @@
   text-decoration: underline;
   pointer-events: auto;
 }
-.ethereum111k__receipt-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin: 16px 0;
-}
-.ethereum111k__receipt-form {
-  display: grid;
-  gap: 12px;
-}
-.ethereum111k__receipt-form label {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-.ethereum111k__receipt-form input {
-  width: 100%;
-  min-width: 0;
-}
-.ethereum111k__stop-tracking {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-}
-.ethereum111k__orders {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.ethereum111k__orders li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
-  font-size: 13px;
-}
-.ethereum111k__orders small {
-  display: block;
-  color: var(--muted);
-  margin-top: 4px;
-}
-.ethereum111k__reveal {
-  max-width: 960px;
-}
-.ethereum111k__reveal-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 16px;
-}
-.ethereum111k__reveal-grid button {
-  display: grid;
-  align-self: start;
-  gap: 8px;
-  background: none;
-  border: 0;
-  padding: 0;
-  color: var(--fg);
-  font-size: 12px;
-  animation: ethereum111k-enter 260ms ease-out both;
-}
-.ethereum111k__reveal-grid img {
-  width: 100%;
-  height: auto;
-  object-fit: contain;
-  border-radius: 3px;
-}
-@keyframes ethereum111k-enter {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@media (max-width: 620px) {
-  .ethereum111k__reveal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-  .ethereum111k__selection {
-    max-width: calc(100vw - 24px);
-    flex-wrap: wrap;
-    gap: 8px;
-    bottom: max(12px, env(safe-area-inset-bottom));
-  }
-  .ethereum111k__selection .selection-panel__left { flex-basis: 100%; }
-  .ethereum111k__selection .selection-panel__actions { gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
-  .ethereum111k__selection button, .ethereum111k__receipt-actions button { min-height: 44px; }
-  .ethereum111k__receipt-form input { font-size: 16px; }
-}
 @media (prefers-reduced-motion: reduce) {
   .ethereum111k__mint-kind svg { transition: none; }
   .ethereum111k__relic-image { transition: none; }
-  .ethereum111k__reveal-grid button { animation: none; }
 }

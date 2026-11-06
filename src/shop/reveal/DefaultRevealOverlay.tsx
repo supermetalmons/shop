@@ -1,7 +1,7 @@
-import { ModalFocusScope } from '../../components/ModalFocusScope';
 import { MediaWithFallback } from '../../components/MediaWithFallback';
 import { joinDropAssetUrl } from '../../lib/dropContent';
 import type { ShopRevealController } from './useShopReveal';
+import { RevealOverlayShell } from './RevealOverlayShell';
 
 export function DefaultRevealOverlay({ reveal, suspended: revealOverlaySuspended }: {
   reveal: ShopRevealController;
@@ -17,28 +17,22 @@ export function DefaultRevealOverlay({ reveal, suspended: revealOverlaySuspended
   } = reveal.presentation;
   const { revealFrameCountForDropId } = reveal.assets;
   return revealOverlay ? (
-    <ModalFocusScope
-      ariaLabel={`${revealOverlay.name} unboxing`}
-      suspended={revealOverlayClosing || revealOverlaySuspended}
-      className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}${revealOverlaySuspended ? ' reveal-overlay--suspended' : ''}`}
+    <RevealOverlayShell
+      name={revealOverlay.name}
+      imageSrc={revealBoxFrameSrc}
+      stage={revealOverlayStage}
+      active={revealOverlayActive}
+      closing={revealOverlayClosing}
+      suspended={revealOverlaySuspended}
       style={revealOverlayStyle}
-      onClick={() => {
-        if (!revealOverlayClosing && !revealOverlaySuspended) {
-          handleRevealOverlayDismiss();
-        }
-      }}
-      onContextMenu={(evt) => evt.preventDefault()}
-      onDragStart={(evt) => evt.preventDefault()}
+      busy={revealLoading === revealOverlay.id}
+      disabled={Boolean(revealOverlayClosing || revealOverlay.phase !== 'ready' || revealOverlay.autoOpening ||
+        (revealOverlayContent.reveal.mode === 'animated' && revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId)))}
+      showOutcome={showRevealOutcome}
+      onDismiss={handleRevealOverlayDismiss}
+      onReveal={handleRevealOverlayClick}
+      onTransitionEnd={handleRevealOverlayTransitionEnd}
     >
-      <div className="reveal-overlay__backdrop" />
-      <div
-        className="reveal-overlay__frame"
-        onTransitionEnd={handleRevealOverlayTransitionEnd}
-      >
-        <div
-          className={`reveal-overlay__shine${showRevealOutcome ? ' reveal-overlay__shine--visible' : ''}`}
-          aria-hidden="true"
-        />
         {revealMediaItems.length ? (
           <div
             className={`reveal-overlay__media${showRevealOutcome ? ' reveal-overlay__media--visible' : ''}`}
@@ -95,32 +89,6 @@ export function DefaultRevealOverlay({ reveal, suspended: revealOverlaySuspended
             })}
           </div>
         ) : null}
-        <button
-          type="button"
-          className="reveal-overlay__box"
-          aria-label={`Reveal ${revealOverlay.name}`}
-          aria-busy={revealLoading === revealOverlay.id}
-          aria-disabled={
-            revealOverlayClosing ||
-            revealOverlay.phase !== 'ready' ||
-            revealOverlay.autoOpening ||
-            (revealOverlayContent.reveal.mode === 'animated' &&
-              revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId))
-          }
-          onClick={(evt) => {
-            evt.stopPropagation();
-            handleRevealOverlayClick();
-          }}
-        >
-          <MediaWithFallback
-            imageSources={revealBoxFrameSrc ? [revealBoxFrameSrc] : []}
-            imageProps={{ alt: revealOverlay.name, className: 'reveal-overlay__image', draggable: false }}
-            renderPlaceholder={(hidden) => (
-              <div className="reveal-overlay__image reveal-overlay__image--placeholder" hidden={hidden} aria-hidden="true" />
-            )}
-          />
-        </button>
-      </div>
-    </ModalFocusScope>
+    </RevealOverlayShell>
   ) : null;
 }

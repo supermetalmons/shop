@@ -1,10 +1,6 @@
-import {
-  useRef
-} from 'react';
 import { FaBoxOpen } from 'react-icons/fa6';
 import { MediaWithFallback } from '../../components/MediaWithFallback';
-import { useModalFocusScope } from '../../components/ModalFocusScope';
-import { useViewerDismissInput } from '../../hooks/useViewerDismissInput';
+import { MediaViewerOverlay } from './MediaViewerOverlay';
 import { ReceiptImageViewerOverlayProps, ReceiptViewerImageShellStyle } from './types';
 
 export function ReceiptImageViewerOverlay({
@@ -24,58 +20,17 @@ export function ReceiptImageViewerOverlay({
   onTransitionEnd,
 }: ReceiptImageViewerOverlayProps) {
   const interactionSuspended = closing || suspended;
-  const dismissInput = useViewerDismissInput({ enabled: !interactionSuspended, onDismiss, resetKey: imageSrc });
   const receiptImages = images?.length ? images : [{ key: 'receipt-image', name: alt, image: imageSrc }];
   const multiReceiptClass = receiptImages.length > 1 ? ' receipt-viewer-overlay__image-shell--multi' : '';
   const imageShellStyle: ReceiptViewerImageShellStyle | undefined =
     receiptImages.length > 1
       ? { '--receipt-viewer-count': String(receiptImages.length) }
       : undefined;
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  useModalFocusScope({
-    dialogRef,
-    focusKey: closing ? 'closing' : active ? 'active' : 'opening',
-    suspended,
-  });
-
   return (
-    <div
-      {...dismissInput}
-      ref={dialogRef}
-      className={`reveal-overlay reveal-overlay--viewer receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''
-        }`}
-      role="dialog"
-      aria-modal={suspended ? undefined : 'true'}
-      aria-hidden={suspended || undefined}
-      aria-label={`${alt} viewer`}
-      inert={suspended || undefined}
-      tabIndex={-1}
-      style={overlayStyle}
-      onContextMenu={(evt) => evt.preventDefault()}
-      onDragStart={(evt) => evt.preventDefault()}
-    >
-      <div className="reveal-overlay__backdrop" />
-      <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
-        <div className={`receipt-viewer-overlay__image-shell${multiReceiptClass}`} style={imageShellStyle}>
-          {receiptImages.map((receiptImage, index) => (
-            <div className="receipt-viewer-overlay__image-frame" key={`${receiptImage.key}:${index}`}>
-              <MediaWithFallback
-                dropId={dropId}
-                imageSources={receiptImage.image ? [receiptImage.image] : []}
-                imageProps={{
-                  alt: receiptImage.name || alt,
-                  className: 'receipt-viewer-overlay__image',
-                  draggable: false,
-                }}
-                renderPlaceholder={(hidden) => (
-                  <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" hidden={hidden} aria-hidden="true" />
-                )}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-      {explorerHref || transfer || adminIrlRedeem ? (
+    <MediaViewerOverlay name={alt} resetKey={imageSrc} active={active} closing={closing} suspended={suspended}
+      className={`receipt-viewer-overlay receipt-viewer-overlay--${viewerSize}`} style={overlayStyle}
+      onDismiss={onDismiss} onTransitionEnd={onTransitionEnd}
+      controls={explorerHref || transfer || adminIrlRedeem ? (
         <div
           className="receipt-viewer-overlay__controls"
           data-viewer-dismiss-ignore
@@ -132,6 +87,25 @@ export function ReceiptImageViewerOverlay({
           ) : null}
         </div>
       ) : null}
-    </div>
+    >
+        <div className={`receipt-viewer-overlay__image-shell${multiReceiptClass}`} style={imageShellStyle}>
+          {receiptImages.map((receiptImage, index) => (
+            <div className="receipt-viewer-overlay__image-frame" key={`${receiptImage.key}:${index}`}>
+              <MediaWithFallback
+                dropId={dropId}
+                imageSources={receiptImage.image ? [receiptImage.image] : []}
+                imageProps={{
+                  alt: receiptImage.name || alt,
+                  className: 'receipt-viewer-overlay__image',
+                  draggable: false,
+                }}
+                renderPlaceholder={(hidden) => (
+                  <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" hidden={hidden} aria-hidden="true" />
+                )}
+              />
+            </div>
+          ))}
+        </div>
+    </MediaViewerOverlay>
   );
 }

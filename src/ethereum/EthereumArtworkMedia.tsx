@@ -12,7 +12,12 @@ class ModelErrorBoundary extends Component<{ children: ReactNode; onError: () =>
   render() { return this.state.failed ? null : this.props.children; }
 }
 
-export function EthereumArtworkMedia({ item, viewer = false }: { item: EthereumInventoryItem; viewer?: boolean }) {
+export function EthereumArtworkMedia({ item, viewer = false, fullscreen = false, chrome = true }: {
+  item: EthereumInventoryItem;
+  viewer?: boolean;
+  fullscreen?: boolean;
+  chrome?: boolean;
+}) {
   const preview = ethereumInventoryView(item);
   const dimensions = preview.imageDimensions;
   const ratio = dimensions ? dimensions.width / dimensions.height : undefined;
@@ -57,14 +62,27 @@ export function EthereumArtworkMedia({ item, viewer = false }: { item: EthereumI
     return () => media.pause();
   }, [active, animation, reducedMotion]);
   const showVideo = Boolean(animation && active && failedVideo !== animation && (viewer || !reducedMotion));
-  return <span ref={root} className={`ethereum111k__artwork-media${viewer ? ' ethereum111k__artwork-media--viewer' : ''}`}
-    style={{ aspectRatio: ratio, ...(viewer && ratio ? { width: `min(100%, ${maximumWidth}calc(60svh * ${ratio}))` } : {}) }}>
+  const toggleVideo = () => {
+    const media = video.current;
+    if (!media) return;
+    if (media.paused) playMutedAutoplayVideo(media);
+    else media.pause();
+  };
+  return <span ref={root} className={`ethereum111k__artwork-media${viewer ? ' ethereum111k__artwork-media--viewer' : ''}${fullscreen ? ' ethereum111k__artwork-media--fullscreen' : ''}`}
+    style={{ aspectRatio: ratio, ...(viewer && ratio && !fullscreen ? { width: `min(100%, ${maximumWidth}calc(60svh * ${ratio}))` } : {}) }}>
     <img className={viewer ? 'ethereum111k__view-image' : undefined} src={preview.image}
       width={dimensions?.width} height={dimensions?.height} alt={item.name} loading="lazy" decoding="async"
       hidden={modelReady || failedImage === preview.image} onError={() => setFailedImage(preview.image ?? null)} />
     {showVideo ? <video key={animation} ref={video} src={animation} poster={preview.image}
       width={dimensions?.width} height={dimensions?.height} aria-label={item.name}
-      autoPlay={!reducedMotion} loop muted playsInline controls={viewer} preload="metadata"
+      autoPlay={!reducedMotion} loop muted playsInline controls={viewer && chrome} preload="metadata"
+      tabIndex={viewer && !chrome ? 0 : undefined} role={viewer && !chrome ? 'button' : undefined}
+      onClick={viewer && !chrome ? toggleVideo : undefined}
+      onKeyDown={viewer && !chrome ? event => {
+        if (event.key !== ' ' && event.key !== 'Enter') return;
+        event.preventDefault();
+        toggleVideo();
+      } : undefined}
       style={{ opacity: viewer || readyVideo === animation ? 1 : 0 }}
       onLoadedData={event => {
         setReadyVideo(animation!);
@@ -78,7 +96,7 @@ export function EthereumArtworkMedia({ item, viewer = false }: { item: EthereumI
       </ModelErrorBoundary>
     </span> : null}
     {failedImage === preview.image && !modelReady && (!showVideo || readyVideo !== animation) ? <span className="placeholder" role="status">Artwork unavailable</span> : null}
-    {model ? <span className="ethereum111k__model-status" role="status">
+    {model && chrome ? <span className="ethereum111k__model-status" role="status">
       {failedModel === modelSession ? <>3D model unavailable. <button type="button" onClick={() => {
         setModelAttempt(value => value + 1);
         setModelViewer(createModelViewer);

@@ -3,10 +3,9 @@ import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
-import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
-import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
+import { encodeCall } from '../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
-import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumSession, EthereumTransactionConfirmResponse } from '../shared/ethereum/api.ts';
+import type { EthereumInventoryItem, EthereumTransactionConfirmResponse } from '../shared/ethereum/api.ts';
 import type { EthereumRevealTransactionResponse } from '../shared/ethereum/reveal.ts';
 import type { EIP1193Provider } from '../src/wallet/injectedEthereumProviders.ts';
 
@@ -14,2908 +13,1162 @@ let { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { useEthereum111k } = await import('../src/ethereum/useEthereum111k.ts');
-const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi, EthereumApiError } = await import('../src/ethereum/api.ts');
 const { ethereumRevealApi } = await import('../src/ethereum/revealApi.ts');
 const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
-const { rememberCheckoutReservation } = await import('../src/ethereum/checkoutReservations.ts');
-const { ethereumInventoryScope, readEthereumExpected, readEthereumOperation, readEthereumPending, readEthereumRevealJobs, readEthereumSession, readEthereumSubmission, rememberEthereumRevealJob, reserveEthereumSubmission, saveEthereumSession, writeEthereumStorage } = await import('../src/ethereum/state.ts');
+const { ethereumInventoryScope, readEthereumExpected, readEthereumPending, readEthereumRevealJobs, rememberEthereumRevealJob, writeEthereumStorage } = await import('../src/ethereum/state.ts');
+const { ETHEREUM_DROP_OPERATION_TTL, readEthereumDropOperations, writeEthereumDropOperation } = await import('../src/ethereum/dropOperations.ts');
+const { rememberEthereumConfirmedInventory } = await import('../src/ethereum/confirmedInventory.ts');
 type Wallet = Parameters<typeof useEthereum111k>[0];
 dom.window.close();
 
-const deliveryConfigId = 1;
 const owner = '0x1111111111111111111111111111111111111111';
 const other = '0x2222222222222222222222222222222222222222';
 const contract = '0x3333333333333333333333333333333333333333';
-const hash = `0x${'ab'.repeat(32)}`;
 const config = resolveEthereum111kConfig({ contractAddress: contract });
+const scope = ethereumInventoryScope(config, owner)!;
+const hashFor = (index: number) => `0x${index.toString(16).padStart(64, 'a')}`;
 const statistics = { chainId: config.chainId, contractAddress: contract, owner, allocatedCrates: 0, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 0,
-  cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingRelics: 0,
+  cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingRelics: 18,
   discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT, discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0 };
+const relicStatus = { chainId: config.chainId, contractAddress: contract, owner, observedBlock: 1, blockHash: `0x${'0'.repeat(64)}`,
+  saleActive: true, relicsAllocated: 18, relicsMinted: 0, remainingRelics: 18, claimedMask: 0, relicLimit: 2, relicsUsed: 0, remainingAllowance: 2 };
 const clients: InstanceType<typeof QueryClient>[] = [];
+let confirmations: Map<string, EthereumTransactionConfirmResponse | Error>;
+let reveals: Map<string, EthereumRevealTransactionResponse>;
 
 beforeEach(context => {
   const t = context as TestContext;
   ({ dom } = setupFrontendDom());
-  const held = new Set<string>();
-  const waiting = new Map<string, (() => void)[]>();
-  Object.defineProperty(navigator, 'locks', { configurable: true, value: {
-    async request(name: string, options: { ifAvailable?: boolean }, callback: (lock: object | null) => unknown) {
-      if (held.has(name)) {
-        if (options.ifAvailable) return callback(null);
-        await new Promise<void>(resolve => {
-          const queue = waiting.get(name) ?? [];
-          queue.push(resolve);
-          waiting.set(name, queue);
-        });
-      } else held.add(name);
-      try { return await callback({ name }); }
-      finally {
-        const next = waiting.get(name)?.shift();
-        if (next) next();
-        else held.delete(name);
-      }
-    },
-  } });
+  confirmations = new Map();
+  reveals = new Map();
   t.mock.method(ethereumApi, 'config', async () => config);
   t.mock.method(ethereumApi, 'stats', async (_config, address) => ({ ...statistics, owner: address }));
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => ({ ...relicStatus, owner: address }));
+  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [], nextCursor: null, observedBlock: 1 }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 1, items: [], burnedTokenIds: [] }));
-  t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
-    dropId: config.dropId, deploymentId: 'test', status: 'pending', artworks: [], retryAfterMs: 2_000 }));
+  t.mock.method(ethereumApi, 'confirm', async transactionHash => {
+    const result = confirmations.get(transactionHash);
+    if (result instanceof Error) throw result;
+    return result ?? { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] };
+  });
+  t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash) => reveals.get(transactionHash) ?? {
+    chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test', status: 'pending', artworks: [], retryAfterMs: 2_000,
+  });
   t.mock.method(ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ chainId: config.chainId, contractAddress: contract,
     dropId: config.dropId, deploymentId: 'test', artworks: [], retryAfterMs: 2_000,
     unresolved: tokenIds.map(tokenId => ({ tokenId, status: 'recovering' as const })) }));
+  const schedule = globalThis.setInterval;
+  t.mock.method(globalThis, 'setInterval', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+    schedule(callback, delay === 4_000 ? 20 : delay, ...args));
 });
 afterEach(async () => {
   await act(async () => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
   dom.window.close();
 });
 
-function token(address = owner, tokenId = '111112'): EthereumInventoryItem {
+function token(tokenId = '111112', address = owner, kind: EthereumInventoryItem['kind'] = 'crate'): EthereumInventoryItem {
   return { id: ethereumAssetId(config.chainId, contract, tokenId), tokenId, chainId: config.chainId, contractAddress: contract,
-    owner: address, displayId: 1, kind: 'crate', name: 'Crate #1', image: 'data:image/svg+xml,%3Csvg/%3E' };
+    owner: address, displayId: Number(tokenId), kind, name: `${kind} ${tokenId}`, image: 'data:image/svg+xml,%3Csvg/%3E' };
 }
-function wallet(address: string | null = owner): Wallet & { sent: unknown[]; connections: number } {
+function wallet(address: string | null = owner) {
+  const transactions = new Map<string, Record<string, unknown>>();
   const sent: unknown[] = [];
   const provider: EIP1193Provider = { request: async ({ method, params }) => {
     if (method === 'eth_accounts') return address ? [address] : [];
     if (method === 'eth_chainId') return '0xaa36a7';
-    if (method === 'eth_getTransactionCount') { assert.deepEqual(params, [address, 'pending']); return '0x7'; }
-    if (method === 'eth_sendTransaction') { sent.push(params); return hash; }
+    if (method === 'eth_sendTransaction') {
+      sent.push(params);
+      const hash = hashFor(sent.length);
+      const transaction = (params as Record<string, unknown>[])[0];
+      transactions.set(hash, { ...transaction, input: transaction.data, hash, nonce: `0x${sent.length.toString(16)}` });
+      return hash;
+    }
+    if (method === 'eth_getTransactionByHash') return transactions.get((params as string[])[0]) ?? null;
+    if (method === 'eth_getTransactionCount') return '0x0';
+    if (method === 'eth_getTransactionReceipt') return null;
     throw new Error(`Unexpected ${method}`);
   } };
-  const result: Wallet & { sent: unknown[]; connections: number } = {
-    address, provider: address ? provider : null, status: address ? 'connected' : 'disconnected', ready: true,
-    wallets: [], error: null, connect() { result.connections++; }, disconnect() {}, cancel() {}, selectWallet() {},
-    chooseWallet() {}, changeAccount() {}, checkAccount() {},
-    sent, connections: 0,
-  };
-  return result;
+  let connections = 0;
+  const result: Wallet = { address, provider: address ? provider : null, status: address ? 'connected' : 'disconnected', ready: true,
+    wallets: [], error: null, connect() { connections++; }, disconnect() {}, cancel() {}, selectWallet() {}, chooseWallet() {}, changeAccount() {}, checkAccount() {} };
+  return { ...result, sent, transactions, get connections() { return connections; } };
 }
-function harness(initialWallet = wallet(), strict = false, encryptionKey = '') {
+function harness(initialWallet = wallet(), kind: Parameters<typeof useEthereum111k>[1] = 'crate', strict = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   clients.push(client);
   const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
-  return { ...renderHook(({ wallet: current }) => useEthereum111k(current, encryptionKey), { initialProps: { wallet: initialWallet }, wrapper, reactStrictMode: strict }), client };
+  return { ...renderHook(({ wallet: current, mintKind }) => useEthereum111k(current, mintKind), {
+    initialProps: { wallet: initialWallet, mintKind: kind }, wrapper, reactStrictMode: strict,
+  }), client };
 }
-function speedUpConfirmationPolls(t: TestContext) {
+async function ready(view: ReturnType<typeof harness>) {
+  await waitFor(() => assert.equal(view.result.current.stats.isSuccess, true));
+  await waitFor(() => assert.equal(view.result.current.inventory.isSuccess, true));
+}
+async function mint(view: ReturnType<typeof harness>, kind: 'crate' | 'warehouse' = 'crate', quantity = 1) {
+  let succeeded = false;
+  await act(async () => { succeeded = await view.result.current.mint(kind, quantity); });
+  assert.equal(succeeded, true);
+}
+function savedOperation(hash = hashFor(1), submittedAt = Date.now()) {
+  return { id: 'restored', scope, action: 'mint' as const, kind: 'crate' as const, quantity: 1, sourceTokenIds: [], discountedQuantity: 0, submittedAt, hash,
+    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]), value: '0x0' } };
+}
+
+function manualRecoveryTicks(t: TestContext) {
   const schedule = globalThis.setInterval;
-  t.mock.method(globalThis, 'setInterval', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
-    schedule(callback, delay === 4_000 ? 25 : delay, ...args));
+  const cancel = globalThis.clearInterval;
+  const callbacks = new Map<ReturnType<typeof setInterval>, () => void>();
+  t.mock.method(globalThis, 'setInterval', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    const timer = schedule(callback, delay === 4_000 ? 2_147_483_647 : delay, ...args);
+    if (delay === 4_000) callbacks.set(timer, () => callback(...args));
+    return timer;
+  });
+  t.mock.method(globalThis, 'clearInterval', (timer: Parameters<typeof clearInterval>[0]) => {
+    callbacks.delete(timer as ReturnType<typeof setInterval>);
+    cancel(timer);
+  });
+  return async () => { await act(async () => { for (const callback of [...callbacks.values()]) callback(); }); };
 }
 
-test('111k stays disconnected after wallet initialization and restoration failure, including in StrictMode', async () => {
-  const disconnected = wallet(null);
-  disconnected.ready = false;
-  const view = harness(disconnected, true);
-  assert.equal(disconnected.connections, 0);
-  view.rerender({ wallet: { ...disconnected, ready: true } });
-  view.rerender({ wallet: { ...disconnected, ready: true, error: 'Cancelled' } });
-  await waitFor(() => assert.equal(view.result.current.stats.data?.saleActive, true));
-  assert.equal(disconnected.connections, 0);
-});
-
-for (const scenario of ['fresh', 'remembered', 'locked', 'unavailable'] as const) {
-  test(`111k ${scenario} wallet only requests permission after explicit connection`, async () => {
-    const requests: string[] = [];
-    const provider: EIP1193Provider = { request: async ({ method }) => {
-      requests.push(method);
-      if (method === 'eth_accounts') {
-        if (scenario === 'locked') throw new Error('Wallet locked');
-        return scenario === 'unavailable' ? [] : [owner];
-      }
-      if (method === 'eth_chainId') return '0x1';
-      if (method === 'eth_requestAccounts') return [owner];
-      throw new Error(`Unexpected wallet prompt: ${method}`);
-    } };
-    window.addEventListener('eip6963:requestProvider', () => {
-      window.dispatchEvent(new dom.window.CustomEvent('eip6963:announceProvider', { detail: {
-        info: { uuid: '111k-wallet', name: 'Ethereum wallet', rdns: 'com.example.wallet', icon: '' }, provider,
-      } }));
-    });
-    if (scenario !== 'fresh') window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'announced', rdns: 'com.example.wallet' }));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-    clients.push(client);
-    const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
-    const view = renderHook(() => {
-      const ethereumWallet = useMiNoteEthereumWallet(true);
-      const model = useEthereum111k(ethereumWallet, '');
-      return { wallet: ethereumWallet, model };
-    }, { wrapper, reactStrictMode: true });
-    await waitFor(() => {
-      assert.equal(view.result.current.wallet.ready, true);
-      assert.equal(view.result.current.model.stats.data?.saleActive, true);
-      if (scenario === 'remembered') assert.equal(view.result.current.model.chainId, 1);
-    });
-    assert.deepEqual(requests, scenario === 'fresh' ? [] : scenario === 'remembered' ? ['eth_accounts', 'eth_chainId'] : ['eth_accounts']);
-    assert.equal(view.result.current.wallet.error, null);
-    if (scenario === 'remembered') {
-      assert.equal(view.result.current.model.owner, owner);
-      return;
-    }
-    assert.equal(view.result.current.model.owner, null);
-    assert.equal(view.result.current.wallet.status, 'disconnected');
-    act(() => view.result.current.wallet.connect());
-    await waitFor(() => assert.equal(view.result.current.model.owner, owner));
-    assert.equal(requests.filter(method => method === 'eth_requestAccounts').length, 1);
-    assert.ok(requests.every(method => ['eth_accounts', 'eth_requestAccounts', 'eth_chainId'].includes(method)));
-  });
-}
-
-test('Ethereum inventory works without a Solana wallet and discards late results from another owner', async t => {
-  let finishFirst: (result: EthereumInventoryResponse) => void = () => {};
-  t.mock.method(ethereumApi, 'inventory', async (_config, address) => address === owner
-    ? await new Promise<EthereumInventoryResponse>(resolve => { finishFirst = resolve; })
-    : { items: [token(other)], nextCursor: null, observedBlock: 2 });
-  const view = harness();
-  await waitFor(() => assert.equal(view.result.current.inventory.isFetching, true));
-  view.rerender({ wallet: wallet(other) });
-  await waitFor(() => assert.equal(view.result.current.items[0]?.owner, other));
-  await act(async () => { finishFirst({ items: [token(owner)], nextCursor: null, observedBlock: 1 }); });
-  assert.ok(view.result.current.items.every(item => item.owner === other));
-  view.rerender({ wallet: wallet(null) });
-  assert.deepEqual(view.result.current.items, []);
-});
-
-test('one mint transaction is captured, confirmed and reconciled through expected token IDs', async t => {
-  let confirmed = false;
-  const minted = token();
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmed ? 'confirmed' : 'pending', confirmations: 1, items: confirmed ? [minted] : [], burnedTokenIds: [] }));
-  t.mock.method(ethereumApi, 'inventory', async (_config, _address, _cursor, _signal, expected = []) => ({ items: expected.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 4 }));
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.stats.data?.saleActive, true));
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 2), true); });
-  assert.equal(connected.sent.length, 1);
-  const sent = (connected.sent[0] as [{ value: string; from: string; to: string }])[0];
-  assert.equal(BigInt(sent.value), BigInt(config.cratePriceWei) * 2n);
-  assert.equal(sent.from, owner);
-  assert.equal(sent.to, contract);
-  const scope = ethereumInventoryScope(config, owner)!;
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-  assert.equal(connected.sent.length, 1);
-  confirmed = true;
-  act(() => view.result.current.refresh());
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  await waitFor(() => assert.equal(view.result.current.items[0]?.id, minted.id));
-  assert.deepEqual(readEthereumExpected(scope), [minted.tokenId]);
-});
-
-for (const change of [
-  { discountUsed: 1 },
-  { maxDiscountedMints: 500, totalDiscountedMints: 500 },
-  { discountCratePriceWei: '40000000000000' },
-  { discountMerkleRoot: `0x${'34'.repeat(32)}` },
-]) {
-  test(`discounted mint rejects changed terms instead of sending at public price: ${JSON.stringify(change)}`, async t => {
-    let current = { ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}`, maxDiscountedMints: 500, totalDiscountedMints: 499 };
-    t.mock.method(ethereumApi, 'stats', async () => current);
-    t.mock.method(ethereumDiscounts, 'proof', async () => []);
-    const connected = wallet();
-    const view = harness(connected);
-    await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
-    const quote = view.result.current.mintQuote('crate', 1)!;
-    current = { ...current, ...change };
-    await act(async () => { assert.equal(await view.result.current.mint('crate', 1, quote), false); });
-    assert.equal(connected.sent.length, 0);
-    assert.equal(readEthereumPending(ethereumInventoryScope(config, owner)!), null);
-    assert.match(view.result.current.error!, /mint terms changed/);
-  });
-}
-
-test('discount usage refreshes after confirmation and never changes warehouse pricing', async t => {
-  let used = 0;
-  let confirmed = false;
-  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}`, discountUsed: used }));
-  t.mock.method(ethereumDiscounts, 'proof', async () => []);
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmed ? 'confirmed' : 'pending', confirmations: 1,
-    items: confirmed ? [token()] : [], burnedTokenIds: [] }));
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
-  assert.equal(view.result.current.mintQuote('warehouse', 1)?.discounted, false);
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
-  const sent = (connected.sent[0] as [{ data: string; value: string }])[0];
-  assert.equal(sent.data, encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, []]));
-  assert.equal(BigInt(sent.value), 50_000_000_000_000n);
-  used = 1;
-  confirmed = true;
-  act(() => view.result.current.refresh());
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false));
-  assert.equal(view.result.current.stats.data?.discountUsed, 1);
-  assert.equal(view.result.current.mintQuote('warehouse', 1)?.unitPriceWei, config.warehousePriceWei);
-});
-
-test('late discount data from another wallet cannot change the current wallet quote or usage', async t => {
-  let finish!: (proof: string[] | null) => void;
-  const root = `0x${'12'.repeat(32)}`;
-  t.mock.method(ethereumApi, 'stats', async (_config, address) => ({ ...statistics, owner: address, discountMerkleRoot: root }));
-  t.mock.method(ethereumDiscounts, 'proof', async address => address === owner
-    ? new Promise(resolve => { finish = resolve; }) : null);
-  const view = harness();
-  await waitFor(() => assert.ok(finish));
-  view.rerender({ wallet: wallet(other) });
-  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false));
-  await act(async () => { finish([]); });
-  assert.equal(view.result.current.stats.data?.owner, other);
-  assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false);
-  view.rerender({ wallet: wallet(null) });
-  assert.equal(view.result.current.mintQuote('crate', 1), null);
-});
-
-test('a captured pending transaction recovers only for its Ethereum account', async () => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  const view = harness();
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
-  await waitFor(() => assert.equal(view.result.current.confirmations, 1));
-  view.rerender({ wallet: wallet(other) });
-  assert.equal(view.result.current.pending, null);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-  await waitFor(() => assert.equal(view.result.current.inventory.isFetching, false));
-});
-
-test('dismissing a polling error preserves recovery and allows later errors and confirmation', async t => {
-  let now = Date.now();
-  t.mock.method(Date, 'now', () => now);
-  let failure: Error | null = new EthereumApiError(503, 'RPC temporarily unavailable');
-  const confirm = t.mock.method(ethereumApi, 'confirm', async () => {
-    if (failure) throw failure;
-    return { status: 'confirmed' as const, confirmations: 1, items: [token()], burnedTokenIds: [] };
-  });
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: now });
-  const view = harness();
-  await waitFor(() => assert.equal(view.result.current.error, 'RPC temporarily unavailable'));
-  act(() => view.result.current.clearError());
-  assert.equal(view.result.current.error, null);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-  now += 4_000;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.equal(view.result.current.error, 'RPC temporarily unavailable'));
-  failure = null;
-  now += 4_000;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.equal(view.result.current.error, null);
-  assert.ok(confirm.mock.callCount() >= 3);
-});
-
-test('a dismissed polling error does not hide errors for a replacement transaction', async t => {
-  const now = Date.now();
-  t.mock.method(Date, 'now', () => now);
-  t.mock.method(ethereumApi, 'confirm', async () => { throw new EthereumApiError(503, 'RPC temporarily unavailable'); });
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: now });
-  const view = harness();
-  await waitFor(() => assert.equal(view.result.current.error, 'RPC temporarily unavailable'));
-  act(() => view.result.current.clearError());
-  assert.equal(view.result.current.error, null);
-  act(() => writeEthereumStorage(`${scope}:pending`, { scope, hash: `0x${'cd'.repeat(32)}`, action: 'mint', submittedAt: now }));
-  await waitFor(() => assert.equal(view.result.current.error, 'RPC temporarily unavailable'));
-});
-
-test('an explicitly reverted transaction clears recovery; unknown transactions remain pending', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  t.mock.method(ethereumApi, 'confirm', async () => { throw new EthereumApiError(409, 'Reverted', 'transaction-reverted'); });
-  const view = harness();
-  await waitFor(() => assert.match(view.result.current.error ?? '', /reverted/));
-  assert.equal(view.result.current.pending, null);
-  assert.equal(readEthereumPending(scope), null);
-});
-
-test('ambiguous successful mints keep tracking and block another purchase', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  t.mock.method(ethereumApi, 'confirm', async () => {
-    throw new EthereumApiError(409, 'This transaction contains multiple matching operations.', 'operation-ambiguous');
-  });
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.match(view.result.current.error ?? '', /multiple matching operations/));
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-  assert.equal(connected.sent.length, 0);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-});
-
-for (const action of ['delivery', 'claim'] as const) {
-  test(`a re-mined ${action} without its operation restores inventory and clears failed tracking`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-    let state: 'included' | 'pending' | 'failed' = 'included';
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-      items: [state === 'included' ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
-    }));
-    const confirm = t.mock.method(ethereumApi, 'confirm', async () => {
-      if (state === 'failed') throw new EthereumApiError(409, 'The Ethereum operation did not succeed.', 'operation-failed');
-      return { status: state === 'included' ? 'confirmed' : 'pending', confirmations: 1,
-        items: state === 'included' ? [receipt] : [], burnedTokenIds: state === 'included' ? [original.tokenId] : [] };
-    });
-    const view = harness();
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-    assert.equal(confirm.mock.calls[0].arguments[4]?.action, action);
-    state = 'pending';
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-    assert.equal(readEthereumPending(scope)?.hash, hash);
-    state = 'failed';
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.equal(view.result.current.pending, null));
-    assert.match(view.result.current.error ?? '', /operation did not succeed/);
-    assert.ok(readEthereumExpected(scope).includes(original.tokenId));
-  });
-}
-
-test('Ethereum delivery sends once, encrypts the address and automatically publishes at three confirmations', async t => {
-  speedUpConfirmationPolls(t);
-  let confirmations = 1;
-  let published = 0;
-  let confirmationAttempts = 0;
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations, items: [], burnedTokenIds: ['111112'] }));
-  t.mock.method(ethereumApi, 'confirmDelivery', async () => {
-    confirmationAttempts++;
-    if (confirmationAttempts === 1) return { status: 'pending', confirmations: 2 };
-    published++;
-    return { status: 'confirmed', confirmations: 3 };
-  });
-  const scope = ethereumInventoryScope(config, owner)!;
-  window.sessionStorage.setItem(`ethereum111k:${scope}:session`, JSON.stringify({
-    token: 'ethereum-session', address: owner, chainId: config.chainId, dropId: '111k_devnet', expiresAtMs: Date.now() + 3_600_000,
-  }));
-  t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-  let savedEncrypted = '';
-  t.mock.method(ethereumApi, 'saveAddress', async (body, session) => {
-    assert.equal(session.address, owner);
-    savedEncrypted = body.encrypted;
-    return { address: { ...body, id: 'saved-ethereum-address' } };
-  });
-  t.mock.method(ethereumApi, 'prepareDelivery', async (ids, addressId, requestId, session) => {
-    assert.deepEqual(ids, ['111112']);
-    assert.equal(addressId, 'saved-ethereum-address');
-    assert.match(requestId, /^[0-9a-f-]{36}$/);
-    assert.equal(session.address, owner);
-    const deadline = Math.floor(Date.now() / 1000) + 600;
-    const signature = `0x${'ab'.repeat(65)}`;
-    const receiptIdsHash = ethereumReceiptIdsHash(['2000001']);
-    return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash, configId: deliveryConfigId },
-      transaction: { to: contract, data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash, deliveryConfigId], signature]), value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`, chainId: config.chainId } };
-  });
-  const connected = wallet();
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  clients.push(client);
-  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
-  const view = renderHook(() => useEthereum111k(connected, 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4='), { wrapper });
-  await waitFor(() => assert.ok(view.result.current.session));
-  await act(async () => { assert.equal(await view.result.current.deliver([token()], { formatted: 'Test Name\n123 Example Street', country: 'United States', countryCode: 'US', email: 'test@example.com' }), true); });
-  assert.ok(savedEncrypted.length > 60);
-  assert.ok(!savedEncrypted.includes('Example Street'));
-  assert.equal(readEthereumPending(scope)?.orderId, 42);
-  assert.equal(connected.sent.length, 1);
-  await waitFor(() => assert.equal(view.result.current.confirmations, 1));
-  assert.equal(view.result.current.error, null);
-  assert.equal(published, 0);
-  confirmations = 2;
-  await waitFor(() => assert.equal(view.result.current.confirmations, 2));
-  assert.equal(published, 0);
-  assert.equal(view.result.current.error, null);
-  confirmations = 3;
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.equal(published, 1);
-  assert.equal(confirmationAttempts, 2);
-  assert.equal(connected.sent.length, 1);
-  assert.equal(readEthereumPending(scope), null);
-});
-
-for (const differentArtworkOrder of [false, true]) test(`delivery sorts a copy of mixed tokens numerically${differentArtworkOrder ? ' when artwork numbers have another order' : ''}`, async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  saveEthereumSession(scope, {
-    token: 'ethereum-session', address: owner, chainId: config.chainId, dropId: config.dropId, expiresAtMs: Date.now() + 3_600_000,
-  });
-  t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-  t.mock.method(ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'saved-ethereum-address' } }));
-  const selected: EthereumInventoryItem[] = [
-    { ...token(owner, '117189'), kind: 'relic', displayId: 18, name: 'Relic #18' },
-    token(),
-    { ...token(owner, '10'), kind: 'artwork', displayId: 850, name: 'Artwork #850' },
-    { ...token(owner, '2'), kind: 'artwork', displayId: 842, name: 'Artwork #842' },
-  ];
-  if (differentArtworkOrder) selected.push({ ...token(owner, '21'), kind: 'artwork', displayId: 1, name: 'Artwork #1' });
-  const originalSelection = structuredClone(selected);
-  Object.freeze(selected);
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: selected, nextCursor: null, observedBlock: 1 }));
-  const deadline = Math.floor(Date.now() / 1000) + 600;
-  const signature = `0x${'ab'.repeat(65)}`;
-  const tokenIds = differentArtworkOrder ? ['2', '10', '21', '111112', '117189'] : ['2', '10', '111112', '117189'];
-  const receiptIdsHash = ethereumReceiptIdsHash(differentArtworkOrder ? ['1000842', '1000850', '1000001', '2000001', '3000018'] : ['1000842', '1000850', '2000001', '3000018']);
-  const prepare = t.mock.method(ethereumApi, 'prepareDelivery', async ids => {
-    assert.deepEqual(ids, tokenIds);
-    return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash, configId: deliveryConfigId },
-      transaction: { to: contract, data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32,uint256),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash, deliveryConfigId], signature]), value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`, chainId: config.chainId } };
-  });
-  const connected = wallet();
-  const view = harness(connected, false, 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=');
-  await waitFor(() => assert.equal(view.result.current.items.length, selected.length));
-  await act(async () => {
-    assert.equal(await view.result.current.deliver(selected, {
-      formatted: 'Test Name\n123 Example Street', country: 'United States', countryCode: 'US', email: 'test@example.com',
-    }), true);
-  });
-  assert.equal(prepare.mock.callCount(), 1);
-  assert.equal(connected.sent.length, 1);
-  const [sent] = connected.sent[0] as [{ data: string }];
-  assert.deepEqual(decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32,uint256)', 'bytes'], `0x${sent.data.slice(10)}`), [
-    tokenIds.map(BigInt), [42n, owner, BigInt(config.deliveryFeeWei), BigInt(deadline), receiptIdsHash, BigInt(deliveryConfigId)], signature,
-  ]);
-  assert.equal(readEthereumPending(scope)?.intent?.data, sent.data);
-  assert.deepEqual(selected, originalSelection);
-  assert.deepEqual(view.result.current.items, originalSelection);
-});
-
-test('unboxing reveals artwork at first inclusion without waiting for fulfillment confirmations', async t => {
-  const artworks: EthereumInventoryItem[] = Array.from({ length: 20 }, (_, index) => ({
-    ...token(owner, String(index + 1)), kind: 'artwork', displayId: 821 + index, name: `Artwork #${821 + index}`,
-  }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1, items: artworks, burnedTokenIds: ['111153'] }));
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.scope));
-  await act(async () => { assert.equal(await view.result.current.unbox({ ...token(owner, '111153'), displayId: 42 }), true); });
-  await waitFor(() => assert.equal(view.result.current.revealed?.length, 20));
-  assert.equal(view.result.current.revealed?.[0].displayId, 821);
-  assert.equal(view.result.current.pending, null);
-  assert.equal(connected.sent.length, 1);
-});
-
-test('crate unpack starts artwork retrieval at broadcast and displays the faster confirmed reveal before receipt polling finishes', async t => {
-  const artworks = Array.from({ length: 40 }, (_, index) => ({ tokenId: String(index + 1), crateTokenId: index < 20 ? '111112' : '111113',
-    category: 'painting' as const, name: `Painting ${index + 1}`, image: `https://wip.lil.org/reveal-test/${index + 1}.webp`,
-    aspectRatio: { width: 400, height: 600 }, observation: { transactionHash: hash, blockNumber: 42, blockHash: `0x${'cc'.repeat(32)}` } }));
-  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => {
-    assert.equal(requestedHash, hash);
-    return { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
-      status: 'revealed', artworks, retryAfterMs: 0 };
-  });
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.scope));
-  await act(async () => { assert.equal(await view.result.current.unbox(token()), true); });
-  await waitFor(() => assert.equal(view.result.current.revealed?.[0].image, artworks[0].image));
-  assert.equal(view.result.current.revealed?.length, 20);
-  assert.deepEqual(view.result.current.revealed?.[0].aspectRatio, { width: 400, height: 600 });
-  assert.equal(view.result.current.pending?.hash, hash);
-  assert.equal(view.result.current.items.length, 0);
-  assert.equal(connected.sent.length, 1);
-  assert.equal(readEthereumRevealJobs(view.result.current.scope!).length, 0);
-  act(() => view.result.current.closeReveal());
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
-    items: artworks.slice(0, 20).map(artwork => ({ ...token(owner, artwork.tokenId), ...artwork, kind: 'artwork' as const })), burnedTokenIds: ['111112'] }));
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.equal(view.result.current.revealed, null);
-});
-
-for (const replacement of [false, true]) test(`a bundled unpack gallery retains its crate scope after reload${replacement ? ' and wrapped replacement' : ''}`, async t => {
-  const replacementHash = `0x${'cd'.repeat(32)}`;
-  const connected = wallet();
-  const first = harness(connected);
-  await waitFor(() => assert.ok(first.result.current.scope));
-  await act(async () => { assert.equal(await first.result.current.unbox(token()), true); });
-  const scope = first.result.current.scope!;
-  const originalJob = readEthereumRevealJobs(scope)[0];
-  assert.deepEqual(originalJob.crateTokenIds, ['111112']);
-  first.unmount();
-  const request = connected.provider!.request;
-  connected.provider!.request = async args => {
-    if (args.method === 'eth_getTransactionByHash') {
-      if ((args.params as string[])[0] === hash) return null;
-      return { hash: replacementHash, from: other, to: owner, input: '0x5678', value: '0x0', nonce: '0x9', chainId: '0xaa36a7' };
-    }
-    if (args.method === 'eth_getCode') return '0x6000';
-    if (args.method === 'eth_getTransactionReceipt') return {
-      transactionHash: replacementHash, status: '0x1', blockNumber: '0x65', blockHash: wrappedBlockHash,
-      logs: [owner, other].map((address, index) => ({ address: contract,
-        topics: [ETHEREUM_EVENT_TOPICS.CrateUnboxed, encodeAbi(['uint256'], [111112 + index]), encodeAbi(['address'], [address])],
-        data: encodeAbi(['uint256', 'uint256'], [1 + index * 20, 20]),
-      })),
-    };
-    if (args.method === 'eth_getBlockByNumber') return { hash: wrappedBlockHash };
-    return request(args);
-  };
-  const view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
-  assert.deepEqual(readEthereumRevealJobs(scope), [originalJob]);
-  if (replacement) {
-    await act(async () => { assert.equal(await view.result.current.replacePending(replacementHash), true); });
-    assert.deepEqual(readEthereumRevealJobs(scope).map(job => [job.transactionHash, job.crateTokenIds]), [[replacementHash, ['111112']]]);
-  }
-  const trackedHash = replacement ? replacementHash : hash;
-  const artworks = Array.from({ length: 40 }, (_, index) => ({ tokenId: String(index + 1),
-    crateTokenId: index < 20 ? '111112' : '111113', category: 'painting' as const, name: `Painting ${index + 1}`,
-    image: `https://wip.lil.org/reveal-test/${index + 1}.webp`, aspectRatio: { width: 400, height: 600 },
-    observation: { transactionHash: trackedHash, blockNumber: 101, blockHash: wrappedBlockHash },
-  }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
-    items: [{ ...token(owner, '1'), kind: 'artwork' }], burnedTokenIds: ['111112'] }));
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [{ ...token(owner, '1'), kind: 'artwork' }], nextCursor: null, observedBlock: 101 }));
-  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => {
-    assert.equal(requestedHash, trackedHash);
-    return { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
-      status: 'revealed', artworks, retryAfterMs: 0 };
-  });
-  act(() => view.result.current.refresh());
-  await waitFor(() => assert.equal(view.result.current.revealed?.length, 20));
-  assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), artworks.slice(0, 20).map(item => item.tokenId));
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.deepEqual(view.result.current.items.map(item => item.tokenId), ['1']);
-  assert.equal(view.result.current.applyArtwork({ ...token(other, '40'), kind: 'artwork' }).image, artworks[39].image);
-  assert.equal(connected.sent.length, 1);
-});
-
-test('confirmation persists a legacy gallery scope before delayed restoration loses the pending intent', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt: 1 }]);
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'unbox', submittedAt: 1,
-    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0' } });
-  const requestLock = navigator.locks.request.bind(navigator.locks);
-  const releaseRestore = Promise.withResolvers<void>();
-  let delayed = false;
-  Object.defineProperty(navigator, 'locks', { configurable: true, value: { async request(name: string,
-    options: { ifAvailable?: boolean }, run: (lock: object | null) => unknown) {
-    if (!delayed && !options.ifAvailable) { delayed = true; await releaseRestore.promise; }
-    return requestLock(name, options, run);
-  } } });
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
-    items: [{ ...token(owner, '1'), kind: 'artwork' }], burnedTokenIds: ['111112'] }));
-  const view = harness();
-  try {
-    await waitFor(() => assert.ok(view.result.current.revealed));
-    await waitFor(() => assert.equal(view.result.current.pending, null));
-    assert.deepEqual(readEthereumRevealJobs(scope), [{ transactionHash: hash, submittedAt: 1, trackingId: 'legacy', crateTokenIds: ['111112'] }]);
-  } finally { releaseRestore.resolve(); }
-  const artworks = Array.from({ length: 40 }, (_, index) => ({ tokenId: String(index + 1),
-    crateTokenId: index < 20 ? '111112' : '111113', category: 'painting' as const, name: `Painting ${index + 1}`,
-    image: `https://wip.lil.org/reveal-test/${index + 1}.webp`, aspectRatio: { width: 400, height: 600 },
-    observation: { transactionHash: hash, blockNumber: 101, blockHash: wrappedBlockHash } }));
-  t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
-    dropId: config.dropId, deploymentId: 'test', status: 'revealed', artworks, retryAfterMs: 0 }));
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-transaction'], refetchType: 'all' }); });
-  await waitFor(() => assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), artworks.slice(0, 20).map(item => item.tokenId)));
-});
-
-test('published inventory artwork survives an older delayed transaction confirmation', async t => {
-  const published: EthereumInventoryItem = { ...token(owner, '1'), kind: 'artwork', name: 'Revealed artwork',
-    description: 'Published description', image: 'https://wip.lil.org/reveal-test/1.webp', revealStatus: 'revealed',
-    category: 'video', animation_url: 'https://wip.lil.org/reveal-test/1.mp4', aspectRatio: { width: 400, height: 600 },
-    attributes: [{ trait_type: 'type', value: 'video' }] };
-  const placeholder: EthereumInventoryItem = { ...token(owner, '1'), kind: 'artwork', name: 'Artwork 1',
-    image: 'https://wip.lil.org/111k/artwork_placeholder.png', revealStatus: 'unrevealed' };
-  const confirmation = Promise.withResolvers<EthereumTransactionConfirmResponse>();
-  const laterInventory = Promise.withResolvers<EthereumInventoryResponse>();
-  let inventoryCalls = 0;
-  t.mock.method(ethereumApi, 'inventory', async () => ++inventoryCalls === 1
-    ? { items: [published], nextCursor: null, observedBlock: 42 } : laterInventory.promise);
-  t.mock.method(ethereumApi, 'confirm', () => confirmation.promise);
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'unbox', submittedAt: 1,
-    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0' } });
-  const view = harness();
-  await waitFor(() => assert.deepEqual(view.result.current.items, [published]));
-  await act(async () => { confirmation.resolve({ status: 'confirmed', confirmations: 1,
-    items: [placeholder], burnedTokenIds: ['111112'] }); });
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.deepEqual(view.result.current.items, [published]);
-  assert.deepEqual(view.result.current.revealed, [published]);
-  await act(async () => { laterInventory.resolve({ items: [placeholder], nextCursor: null, observedBlock: 43 }); });
-  await waitFor(() => assert.equal(view.result.current.inventory.isFetching, false));
-  assert.deepEqual(view.result.current.items, [published]);
-});
-
-for (const gallery of ['open', 'closed', 'newer'] as const) test(`complete unpack media preserves ownership and the ${gallery} gallery`, async t => {
-  const minted = Array.from({ length: 311 }, (_, index) => ({ ...token(owner, String(index + 1)), kind: 'artwork' as const }));
-  const crates = [...Array.from({ length: 14 }, (_, index) => token(owner, String(111112 + index))), token(owner, '116666')];
-  const newerHash = `0x${'cd'.repeat(32)}`;
-  const newer = { ...token(owner, '1000'), kind: 'artwork' as const };
-  const owned = minted.slice(0, 1);
-  t.mock.method(ethereumApi, 'confirm', async requestedHash => ({ status: 'confirmed', confirmations: 1,
-    items: requestedHash === hash ? minted.slice(0, 1) : [newer], burnedTokenIds: requestedHash === hash ? crates.map(item => item.tokenId) : ['111127'] }));
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [...owned], nextCursor: null, observedBlock: 42 }));
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.scope));
-  await act(async () => { assert.equal(await view.result.current.unbox(crates), true); });
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.equal(readEthereumRevealJobs(view.result.current.scope!).length, 1);
-  assert.equal(view.result.current.revealed?.length, 1);
-  assert.equal(view.result.current.revealed?.[0].image, minted[0].image);
-  if (gallery !== 'open') act(() => view.result.current.closeReveal());
-  if (gallery === 'newer') {
-    owned.push(newer);
-    const request = connected.provider!.request;
-    connected.provider!.request = args => args.method === 'eth_sendTransaction' ? Promise.resolve(newerHash) : request(args);
-    await act(async () => { assert.equal(await view.result.current.unbox(token(owner, '111127')), true); });
-    await waitFor(() => assert.equal(view.result.current.revealed?.[0].tokenId, newer.tokenId));
-  }
-  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => ({
-    chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
-    status: requestedHash === hash ? 'revealed' : 'pending', retryAfterMs: 0,
-    artworks: requestedHash === hash ? [...minted, ...Array.from({ length: 20 }, (_, index) => token(other, String(312 + index)))].map((artwork, index) => ({ tokenId: artwork.tokenId,
-      crateTokenId: index < 280 ? String(111112 + Math.floor(index / 20)) : index < 311 ? '116666' : '111126', category: 'egg' as const,
-      name: `Egg ${artwork.tokenId}`, image: `https://wip.lil.org/reveal-test/egg-${artwork.tokenId}.webp`,
-      aspectRatio: { width: 800, height: 800 }, observation: { transactionHash: hash, blockNumber: 42, blockHash: `0x${'cc'.repeat(32)}` } })) : [],
-  }));
-  await act(async () => { await view.client.invalidateQueries({
-    queryKey: ['ethereum111k', 'reveal-transaction', config.chainId, contract, hash], refetchType: 'all',
-  }); });
-  await waitFor(() => assert.ok(readEthereumRevealJobs(view.result.current.scope!).every(job => job.transactionHash !== hash)));
-  if (gallery === 'open') {
-    assert.equal(view.result.current.revealed?.length, 311);
-    assert.ok(view.result.current.revealed?.every(item => item.category === 'egg'));
-  } else if (gallery === 'closed') assert.equal(view.result.current.revealed, null);
-  else assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), [newer.tokenId]);
-  assert.deepEqual(view.result.current.items.map(item => item.tokenId).sort(), owned.map(item => item.tokenId).sort());
-  assert.equal(view.result.current.items.find(item => item.tokenId === '1')?.image, 'https://wip.lil.org/reveal-test/egg-1.webp');
-});
-
-for (const source of ['newer unpack', 'older saved job', 'another account'] as const) test(`first reveal from ${source} respects the current gallery`, async t => {
-  const first = { ...token(owner, '1'), kind: 'artwork' as const };
-  const incomingHash = `0x${'cd'.repeat(32)}`;
-  const artworks = Array.from({ length: 20 }, (_, index) => ({ tokenId: String(index + 21), crateTokenId: '111113',
-    category: 'painting' as const, name: `Painting ${index + 21}`, image: `https://wip.lil.org/reveal-test/${index + 21}.webp`,
-    aspectRatio: { width: 400, height: 600 }, observation: { transactionHash: incomingHash, blockNumber: 43, blockHash: `0x${'cc'.repeat(32)}` } }));
-  t.mock.method(ethereumApi, 'confirm', async requestedHash => ({ status: requestedHash === hash ? 'confirmed' : 'pending', confirmations: 1,
-    items: requestedHash === hash ? [first] : [], burnedTokenIds: requestedHash === hash ? ['111112'] : [] }));
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.scope));
-  await act(async () => { assert.equal(await view.result.current.unbox(token()), true); });
-  await waitFor(() => assert.equal(view.result.current.revealed?.[0].tokenId, first.tokenId));
-  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => ({
-    chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test', retryAfterMs: 2_000,
-    status: requestedHash === incomingHash ? 'revealed' : 'pending', artworks: requestedHash === incomingHash ? artworks : [],
-  }));
-  if (source === 'newer unpack') {
-    const request = connected.provider!.request;
-    connected.provider!.request = args => args.method === 'eth_sendTransaction' ? Promise.resolve(incomingHash) : request(args);
-    await act(async () => { assert.equal(await view.result.current.unbox(token(owner, '111113')), true); });
-  } else if (source === 'older saved job') {
-    const scope = view.result.current.scope!;
-    act(() => rememberEthereumRevealJob(scope, incomingHash, 1, { scope, action: 'unbox', submittedAt: 1,
-      intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111113']), value: '0x0' } }));
-  } else {
-    const otherScope = ethereumInventoryScope(config, other)!;
-    rememberEthereumRevealJob(otherScope, incomingHash, 1, { scope: otherScope, action: 'unbox', submittedAt: 1,
-      intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111113']), value: '0x0' } });
-    view.rerender({ wallet: wallet(other) });
-  }
-  await waitFor(() => assert.ok(readEthereumRevealJobs(view.result.current.scope!).every(job => job.transactionHash !== incomingHash)));
-  if (source === 'older saved job') assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), [first.tokenId]);
-  else {
-    await waitFor(() => assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), artworks.map(item => item.tokenId)));
-    assert.ok(view.result.current.revealed?.every(item => item.owner === (source === 'another account' ? other : owner)));
-    if (source === 'newer unpack') assert.equal(view.result.current.pending?.hash, incomingHash);
-  }
-  assert.ok(view.result.current.items.every(item => !artworks.some(artwork => artwork.tokenId === item.tokenId)));
-});
-
-test('unboxing checks new checkout reservations after the final wallet network read', async t => {
-  let finishNetwork!: (chainId: string) => void;
-  const finalNetwork = new Promise<string>(resolve => { finishNetwork = resolve; });
-  let nonceRead = false;
-  let finalNetworkReads = 0;
-  const connected = wallet();
-  const request = connected.provider!.request;
-  t.mock.method(connected.provider!, 'request', async args => {
-    if (args.method === 'eth_getTransactionCount') nonceRead = true;
-    if (args.method === 'eth_chainId' && nonceRead && ++finalNetworkReads === 2) return finalNetwork;
-    return request(args);
-  });
-  const view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.chainId, config.chainId));
-  let opening!: Promise<boolean>;
-  await act(async () => { opening = view.result.current.unbox(token()); });
-  await waitFor(() => assert.equal(finalNetworkReads, 2));
-  rememberCheckoutReservation({ checkoutId: '11111111-1111-4111-8111-111111111111',
-    dropId: '111k_devnet', chainId: config.chainId, contractAddress: contract, config,
-    tokenIds: ['111112'], items: [token()], unavailableTokenIds: [], wallet: owner, status: 'pending', orderId: 42,
-    transactionHash: hash, confirmations: 0, requiredConfirmations: 3, quoteExpiresAtMs: Date.now() + 60_000,
-    attempt: { attemptId: '22222222-2222-4222-8222-222222222222', status: 'submitted', transactionHash: hash } });
-  await act(async () => { finishNetwork('0xaa36a7'); assert.equal(await opening, false); });
-  assert.equal(connected.sent.length, 0);
-  assert.match(view.result.current.error!, /redemption status/);
-  assert.equal(readEthereumPending(view.result.current.scope!), null);
-  assert.equal(readEthereumSubmission(view.result.current.scope!), null);
-});
-
-for (const count of [1, 15, 16, 50]) {
-  test(`opening ${count} selected crates ${count <= 15 ? 'submits one ordered transaction' : 'rejects before wallet submission'}`, async () => {
-    const selected = Array.from({ length: count }, (_, index) => ({
-      ...token(owner, String(111112 + count - index - 1)), displayId: count - index,
-    }));
-    const originalIds = selected.map(item => item.tokenId);
-    const connected = wallet();
-    const view = harness(connected);
-    await waitFor(() => assert.ok(view.result.current.scope));
-    await act(async () => { assert.equal(await view.result.current.unbox(selected), count <= 15); });
-    assert.deepEqual(selected.map(item => item.tokenId), originalIds);
-    assert.equal(connected.sent.length, count <= 15 ? 1 : 0);
-    const scope = ethereumInventoryScope(config, owner)!;
-    if (count <= 15) {
-      const [sent] = connected.sent[0] as [{ data: string }];
-      const expected = count === 1 ? encodeCall('unboxCrate(uint256)', ['uint256'], [originalIds[0]])
-        : encodeCall('unboxCrates(uint256[])', ['uint256[]'], [originalIds]);
-      assert.equal(sent.data, expected);
-      assert.equal(readEthereumPending(scope)?.intent?.data, expected);
-    } else {
-      assert.match(view.result.current.error ?? '', /up to 15/);
-      assert.equal(readEthereumPending(scope), null);
-      assert.equal(readEthereumSubmission(scope), null);
-    }
-  });
-}
-
-for (const kind of ['warehouse', 'relic'] as const) test(`opening rejects duplicate, mixed, foreign and multiple ${kind} selections`, async () => {
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.scope));
-  const crate = token();
-  const firstId = kind === 'warehouse' ? '116667' : '117172';
-  const warehouse: EthereumInventoryItem = { ...token(owner, firstId), kind };
-  for (const selected of [[], [crate, crate], [crate, warehouse], [warehouse, { ...warehouse, tokenId: '116668' }],
-    [{ ...crate, kind: 'artwork' as const }], [token(other)], [{ ...crate, chainId: 1 }], [{ ...crate, contractAddress: other }]]) {
-    await act(async () => { assert.equal(await view.result.current.unbox(selected), false); });
-  }
-  assert.equal(connected.sent.length, 0);
-  await act(async () => { assert.equal(await view.result.current.unbox([warehouse]), true); });
-  assert.equal(connected.sent.length, 1);
-  assert.equal((connected.sent[0] as [{ data: string }])[0].data, encodeCall(kind === 'warehouse' ? ETHEREUM_FUNCTIONS.unboxWarehouse : ETHEREUM_FUNCTIONS.unboxRelic, ['uint256'], [firstId]));
-});
-
-test('relic receipts reject opening, delivery and claims while remaining transferable', async t => {
-  const receipt: EthereumInventoryItem = { ...token(owner, '3000018'), kind: 'relic_receipt', displayId: 18, name: 'Relic Receipt #18' };
-  const prepareClaim = t.mock.method(ethereumApi, 'prepareClaim');
-  const prepareDelivery = t.mock.method(ethereumApi, 'prepareDelivery');
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.scope));
-  await act(async () => { assert.equal(await view.result.current.unbox([receipt]), false); });
-  await act(async () => { assert.equal(await view.result.current.deliver([receipt], {
-    formatted: 'Test Name\n123 Example Street', country: 'United States', countryCode: 'US', email: 'test@example.com',
-  }), false); });
-  await act(async () => { assert.equal(await view.result.current.claim(receipt, 'ABCDEF123456'), false); });
-  assert.equal(prepareClaim.mock.callCount(), 0);
-  assert.equal(prepareDelivery.mock.callCount(), 0);
-  assert.equal(connected.sent.length, 0);
-  await act(async () => { assert.equal(await view.result.current.transfer(receipt, other), true); });
-  assert.equal(connected.sent.length, 1);
-  assert.equal((connected.sent[0] as [{ data: string }])[0].data,
-    encodeCall(ETHEREUM_FUNCTIONS.transfer, ['address', 'address', 'uint256'], [owner, other, receipt.tokenId]));
-});
-
-test('a fifteen-crate bonus batch retains all 311 artworks through first inclusion, stale indexing and reload', async t => {
-  const selected = [...Array.from({ length: 14 }, (_, index) => ({ ...token(owner, String(111112 + index)), displayId: index + 1 })),
-    { ...token(owner, '116666'), displayId: 5555 }];
-  const artworks: EthereumInventoryItem[] = Array.from({ length: 311 }, (_, index) => ({
-    ...token(owner, String(index + 1)), kind: 'artwork', displayId: index < 280 ? index + 1 : 111081 + index - 280,
-    name: `Artwork #${index + 1}`,
-  }));
-  const previous: EthereumInventoryItem[] = Array.from({ length: 100 }, (_, index) => ({
-    ...token(owner, String(index + 50000)), kind: 'artwork', displayId: index + 50000,
-  }));
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:expected`, previous.map(item => item.tokenId));
-  let included = false;
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-    items: included ? [...previous, ...artworks].filter(item => expected.includes(item.tokenId)) : [...previous, ...selected],
-    nextCursor: null, observedBlock: 10,
-  }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-    items: included ? artworks : [], burnedTokenIds: included ? selected.map(item => item.tokenId) : [] }));
-  const connected = wallet();
-  let view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.items.length, 115));
-  await act(async () => { assert.equal(await view.result.current.unbox(selected), true); });
-  assert.equal(connected.sent.length, 1);
-  included = true;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.equal(view.result.current.revealed?.length, 311));
-  assert.equal(view.result.current.pending, null);
-  const expectedIds = new Set([...previous, ...artworks].map(item => item.tokenId));
-  assert.deepEqual(new Set(readEthereumExpected(scope)), expectedIds);
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
-  assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), expectedIds);
-  view.unmount();
-  view.client.clear();
-  view = harness(connected);
-  await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), expectedIds));
-  assert.equal(view.result.current.items.length, 411);
-  assert.equal(connected.sent.length, 1);
-});
-
-test('crate receipt claims keep polling until three confirmations without another wallet transaction', async t => {
-  speedUpConfirmationPolls(t);
-  let confirmations = 1;
-  let published = 0;
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations, items: [], burnedTokenIds: ['2000001'] }));
-  t.mock.method(ethereumApi, 'confirmClaim', async () => { published++; return { status: 'confirmed', confirmations: 3 }; });
-  const scope = ethereumInventoryScope(config, owner)!;
-  window.sessionStorage.setItem(`ethereum111k:${scope}:session`, JSON.stringify({
-    token: 'ethereum-session', address: owner, chainId: config.chainId, dropId: '111k_devnet', expiresAtMs: Date.now() + 3_600_000,
-  }));
-  t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-  t.mock.method(ethereumApi, 'prepareClaim', async (receiptId, code) => {
-    assert.equal(receiptId, '2000001');
-    assert.equal(code, 'ABCDEF123456');
-    const claimId = `0x${'cd'.repeat(32)}`;
-    const deadline = Math.floor(Date.now() / 1000) + 600;
-    const signature = `0x${'ab'.repeat(65)}`;
-    return { claimId, receiptId, expiresAtMs: deadline * 1000, deadline, signature,
-      transaction: { to: contract, data: encodeCall('claimCrateReceipt(uint256,bytes32,uint256,bytes)', ['uint256', 'bytes32', 'uint256', 'bytes'], [receiptId, claimId, deadline, signature]), value: '0x0', chainId: config.chainId } };
-  });
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.session));
-  const receipt = { ...token(owner, '2000001'), kind: 'crate_receipt' as const };
-  await act(async () => { assert.equal(await view.result.current.claim(receipt, 'ABCDEF123456'), true); });
-  assert.equal(readEthereumPending(scope)?.action, 'claim');
-  assert.equal(connected.sent.length, 1);
-  await waitFor(() => assert.equal(view.result.current.confirmations, 1));
-  assert.equal(published, 0);
-  confirmations = 2;
-  await waitFor(() => assert.equal(view.result.current.confirmations, 2));
-  assert.equal(published, 0);
-  assert.equal(view.result.current.error, null);
-  confirmations = 3;
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.equal(published, 1);
-  assert.equal(connected.sent.length, 1);
-});
-
-for (const action of ['delivery', 'claim'] as const) {
-  for (const authenticated of [true, false]) {
-    test(`${action} updates inventory at first inclusion while ${authenticated ? 'signed in' : 'restored without a session'} and finalizes at three confirmations`, async t => {
-      const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-        kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-      const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-        kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-      let confirmations = 0;
-      const scope = ethereumInventoryScope(config, owner)!;
-      if (authenticated) savedSession(owner);
-      writeEthereumStorage(`${scope}:pending`, { scope, hash, action, submittedAt: Date.now(), orderId: 42, claimId: hash });
-      writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-      const inventory = t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-        items: [confirmations === 0 ? original : receipt].filter(item => expected.includes(item.tokenId)),
-        nextCursor: null, observedBlock: 10 + confirmations,
-      }));
-      t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-      t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-      t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmations === 0 ? 'pending' : 'confirmed', confirmations,
-        items: confirmations === 0 ? [] : [receipt], burnedTokenIds: confirmations === 0 ? [] : [original.tokenId] }));
-      const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => ({ status: 'confirmed', confirmations: 3 }));
-      const connected = wallet();
-      const view = harness(connected);
-      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-      assert.equal(view.result.current.confirmations, 0);
-      assert.equal(inventory.mock.callCount(), 1);
-      confirmations = 1;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-      assert.equal(inventory.mock.callCount(), 1);
-      assert.deepEqual(readEthereumExpected(scope), [receipt.tokenId]);
-      assert.equal(readEthereumPending(scope)?.hash, hash);
-      assert.equal(finalize.mock.callCount(), 0);
-      confirmations = 2;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      await waitFor(() => assert.equal(view.result.current.confirmations, 2));
-      assert.equal(readEthereumPending(scope)?.hash, hash);
-      assert.equal(finalize.mock.callCount(), 0);
-      confirmations = 3;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      if (!authenticated) {
-        await waitFor(() => assert.equal(view.result.current.confirmations, 3));
-        assert.equal(readEthereumPending(scope)?.hash, hash);
-        assert.equal(finalize.mock.callCount(), 0);
-        savedSession(owner);
-        await act(async () => { assert.equal(await view.result.current.signIn(), true); });
-      }
-      await waitFor(() => assert.equal(view.result.current.pending, null));
-      assert.equal(finalize.mock.callCount(), 1);
-      assert.deepEqual(readEthereumExpected(scope), [receipt.tokenId]);
-      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]);
-      assert.equal(connected.sent.length, 0);
-    });
-  }
-}
-
-for (const action of ['delivery', 'claim'] as const) {
-  test(`${action} restores unindexed originals after reorgs and reloads before applying a re-mined inclusion`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-    let included = false;
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-    const inventory = t.mock.method(ethereumApi, 'inventory', async (currentConfig, currentOwner, _cursor, _signal, expected = []) => ({
-      items: [included ? receipt : original].filter(item => item.owner === currentOwner &&
-        item.chainId === currentConfig.chainId && item.contractAddress === currentConfig.contractAddress && expected.includes(item.tokenId)),
-      nextCursor: null, observedBlock: 10,
-    }));
-    t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-      items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] }));
-    const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim');
-    let view = harness();
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-    included = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-    assert.equal(inventory.mock.callCount(), 1);
-    included = false;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-    assert.equal(view.result.current.confirmations, 0);
-    assert.equal(inventory.mock.callCount(), 2);
-    assert.equal(readEthereumPending(scope)?.hash, hash);
-    included = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-    assert.equal(view.result.current.confirmations, 1);
-    assert.equal(inventory.mock.callCount(), 2);
-    assert.equal(finalize.mock.callCount(), 0);
-    assert.equal(readEthereumPending(scope)?.hash, hash);
-    view.unmount();
-    view.client.clear();
-    included = false;
-    view = harness();
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-    assert.equal(view.result.current.confirmations, 0);
-    const reloadReads = inventory.mock.callCount();
-    assert.ok(reloadReads >= 3);
-    assert.equal(readEthereumPending(scope)?.hash, hash);
-    included = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-    assert.equal(inventory.mock.callCount(), reloadReads);
-    assert.equal(finalize.mock.callCount(), 0);
-  });
-}
-
-for (const action of ['delivery', 'claim'] as const) {
-  test(`${action} restores an unindexed original when a previously included transaction reverts`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-    let state: 'pending' | 'included' | 'reverted' = 'pending';
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-      items: [state === 'included' ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
-    }));
-    t.mock.method(ethereumApi, 'confirm', async () => {
-      if (state === 'reverted') throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
-      return { status: state === 'included' ? 'confirmed' : 'pending', confirmations: state === 'included' ? 1 : 0,
-        items: state === 'included' ? [receipt] : [], burnedTokenIds: state === 'included' ? [original.tokenId] : [] };
-    });
-    const view = harness();
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-    state = 'included';
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-    state = 'reverted';
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => {
-      assert.equal(view.result.current.pending, null);
-      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
-    });
-    assert.match(view.result.current.error ?? '', /reverted/);
-    assert.ok(readEthereumExpected(scope).includes(original.tokenId));
-  });
-}
-
-for (const action of ['delivery', 'claim'] as const) {
-  test(`${action} ignores cached success after a definitive revert without retrying finalization`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    let reverted = false;
-    savedSession(owner);
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    t.mock.method(ethereumApi, 'confirm', async () => {
-      if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
-      return { status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [] };
-    });
-    const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
-      if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
-      return { status: 'pending', confirmations: 2, orderId: 42 };
-    });
-    const view = harness();
-    await waitFor(() => assert.equal(finalize.mock.callCount(), 1));
-    reverted = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.equal(view.result.current.pending, null));
-    assert.equal(finalize.mock.callCount(), 1);
-    assert.match(view.result.current.error ?? '', /reverted/);
-  });
-
-  test(`late ${action} finalization cannot consume recovery after a definitive revert`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-    let confirmations = 0;
-    let reverted = false;
-    let finish: (() => void) | undefined;
-    savedSession(owner);
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-      items: [confirmations && !reverted ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
-    }));
-    t.mock.method(ethereumApi, 'confirm', async () => {
-      if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
-      return { status: confirmations ? 'confirmed' : 'pending', confirmations, items: confirmations ? [receipt] : [],
-        burnedTokenIds: confirmations ? [original.tokenId] : [] };
-    });
-    const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
-      await new Promise<void>(resolve => { finish = resolve; });
-      return { status: 'confirmed', confirmations: 3, orderId: 42 };
-    });
-    const view = harness();
-    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-    confirmations = 3;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => { assert.ok(finish); assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]); });
-    reverted = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await act(async () => { finish!(); });
-    await waitFor(() => {
-      assert.equal(view.result.current.pending, null);
-      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
-    });
-    assert.deepEqual(readEthereumExpected(scope), [original.tokenId]);
-    assert.equal(finalize.mock.callCount(), 1);
-    assert.match(view.result.current.error ?? '', /reverted/);
-  });
-
-  for (const stage of ['overlay', 'cleanup'] as const) {
-    test(`${action} ${stage} queued behind the submission lock cannot commit cached success after a definitive revert`, async t => {
-      const scope = ethereumInventoryScope(config, owner)!;
-      const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-        kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-      const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-        kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-      let confirmations = 0;
-      let reverted = false;
-      let finish: (() => void) | undefined;
-      if (stage === 'cleanup') savedSession(owner);
-      writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-      writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-      t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-      t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-      t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-        items: [confirmations && !reverted ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
-      }));
-      t.mock.method(ethereumApi, 'confirm', async () => {
-        if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
-        return { status: confirmations ? 'confirmed' : 'pending', confirmations, items: confirmations ? [receipt] : [],
-          burnedTokenIds: confirmations ? [original.tokenId] : [] };
-      });
-      t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
-        await new Promise<void>(resolve => { finish = resolve; });
-        return { status: 'confirmed', confirmations: 3, orderId: 42 };
-      });
-      const view = harness();
-      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-      if (stage === 'cleanup') {
-        confirmations = 3;
-        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-        await waitFor(() => assert.ok(finish));
-      }
-      let release: (() => void) | undefined;
-      const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
-        assert.ok(lock);
-        await new Promise<void>(resolve => { release = resolve; });
-      });
-      const requests = t.mock.method(navigator.locks, 'request');
-      try {
-        if (stage === 'cleanup') await act(async () => { finish!(); });
-        else {
-          confirmations = 1;
-          await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-        }
-        await waitFor(() => assert.ok(requests.mock.callCount() > 0));
-        reverted = true;
-        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      } finally {
-        await act(async () => { release!(); await competing; });
-      }
-      await waitFor(() => {
-        assert.equal(view.result.current.pending, null);
-        assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
-      });
-      assert.deepEqual(readEthereumExpected(scope), [original.tokenId]);
-      assert.match(view.result.current.error ?? '', /reverted/);
-    });
-  }
-
-  test(`dismissing an included ${action} preserves its original NFT through a later orphan and unrelated mint`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-    const minted = token(owner, '111113');
-    const nextHash = `0x${'cd'.repeat(32)}`;
-    let included = false;
-    let nextMinted = false;
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-      items: [included ? receipt : original, ...(nextMinted ? [minted] : [])].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
-    }));
-    t.mock.method(ethereumApi, 'confirm', async transactionHash => {
-      if (transactionHash === nextHash) {
-        nextMinted = true;
-        return { status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [] };
-      }
-      return { status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-        items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] };
-    });
-    const connected = wallet();
-    const request = connected.provider!.request;
-    connected.provider!.request = async args => args.method === 'eth_sendTransaction' ? nextHash : request(args);
-    let view = harness(connected);
-    await waitFor(() => { assert.ok(view.result.current.stats.data); assert.equal(view.result.current.items[0]?.tokenId, original.tokenId); });
-    included = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.equal(view.result.current.items[0]?.tokenId, receipt.tokenId));
-    await act(async () => { await view.result.current.dismissPending(); });
-    assert.equal(view.result.current.pending, null);
-    included = false;
-    await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
-    await waitFor(() => { assert.equal(view.result.current.pending, null); assert.equal(nextMinted, true); });
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
-    assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), new Set([original.tokenId, minted.tokenId]));
-    view.unmount();
-    view.client.clear();
-    view = harness(connected);
-    await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), new Set([original.tokenId, minted.tokenId])));
-  });
-}
-
-for (const reload of [false, true]) {
-  test(`a reorg of fifty indexed delivery items preserves one hundred unrelated unindexed holdings${reload ? ' across reload' : ''}`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const selected: EthereumInventoryItem[] = Array.from({ length: 50 }, (_, index) => ({
-      ...token(owner, String(index + 1)), kind: 'artwork', displayId: index + 1,
-    }));
-    const untouched: EthereumInventoryItem[] = Array.from({ length: 100 }, (_, index) => ({
-      ...token(owner, String(index + 51)), kind: 'artwork', displayId: index + 51,
-    }));
-    const receipts: EthereumInventoryItem[] = selected.map(item => ({
-      ...token(owner, String(1_000_000 + item.displayId)), kind: 'artwork_receipt', displayId: item.displayId,
-    }));
-    let included = false;
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-    writeEthereumStorage(`${scope}:expected`, untouched.map(item => item.tokenId));
-    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-      items: [...(included ? [] : selected.slice(0, 30)), ...[...untouched, ...(included ? receipts : [])].filter(item => expected.includes(item.tokenId))],
-      nextCursor: null, observedBlock: 10,
-    }));
-    t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-      items: included ? receipts : [], burnedTokenIds: included ? selected.map(item => item.tokenId) : [] }));
-    let view = harness();
-    await waitFor(() => assert.equal(view.result.current.items.length, 130));
-    included = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.equal(view.result.current.items.length, 150));
-    if (reload) {
-      view.unmount();
-      view.client.clear();
-      included = false;
-      view = harness();
-    } else {
-      included = false;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    }
-    await waitFor(() => {
-      const ids = new Set(view.result.current.items.map(item => item.tokenId));
-      assert.ok(untouched.every(item => ids.has(item.tokenId)));
-      assert.ok(receipts.every(item => !ids.has(item.tokenId)));
-    });
-    assert.equal(readEthereumPending(scope)?.hash, hash);
-  });
-}
-
-for (const reorg of [false, true]) {
-  test(`a fifty-item delivery preserves one hundred unindexed holdings through ${reorg ? 'reorgs and reloads' : 'ordinary finalization'}`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const originals: EthereumInventoryItem[] = Array.from({ length: 100 }, (_, index) => ({
-      ...token(owner, String(index + 1)), kind: 'artwork', displayId: index + 1,
-    }));
-    const selected = originals.slice(0, 50);
-    const untouched = originals.slice(50);
-    const receipts: EthereumInventoryItem[] = selected.map(item => ({
-      ...token(owner, String(1_000_000 + item.displayId)), kind: 'artwork_receipt', displayId: item.displayId,
-    }));
-    const originalIds = new Set(originals.map(item => item.tokenId));
-    const deliveredIds = new Set([...untouched, ...receipts].map(item => item.tokenId));
-    let confirmations = 0;
-    savedSession(owner);
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-    writeEthereumStorage(`${scope}:expected`, [...originalIds]);
-    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-      items: (confirmations ? [...untouched, ...receipts] : originals).filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
-    }));
-    t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmations ? 'confirmed' : 'pending', confirmations,
-      items: confirmations ? receipts : [], burnedTokenIds: confirmations ? selected.map(item => item.tokenId) : [] }));
-    t.mock.method(ethereumApi, 'confirmDelivery', async () => ({ status: 'confirmed', confirmations: 3, orderId: 42 }));
-    let view = harness();
-    await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), originalIds));
-    confirmations = 1;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds));
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
-    assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds);
-    assert.equal(view.result.current.items.length, 100);
-    if (reorg) {
-      confirmations = 0;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), originalIds));
-      assert.equal(view.result.current.items.length, 100);
-      assert.equal(readEthereumPending(scope)?.hash, hash);
-      confirmations = 1;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds));
-      view.unmount();
-      view.client.clear();
-      confirmations = 0;
-      view = harness();
-      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), originalIds));
-      assert.equal(view.result.current.items.length, 100);
-      assert.equal(readEthereumPending(scope)?.hash, hash);
-      confirmations = 1;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds));
-    }
-    confirmations = 3;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.equal(view.result.current.pending, null));
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
-    assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds);
-    assert.equal(view.result.current.items.length, 100);
-  });
-}
-
-test('transient confirmation errors do not replay an inclusion over newer receipt ownership', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  const original = token();
-  const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
-  let included = false;
-  let transferred = false;
-  let failure = false;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-  const inventory = t.mock.method(ethereumApi, 'inventory', async () => ({
-    items: transferred ? [] : included ? [receipt] : [original], nextCursor: null, observedBlock: 10,
-  }));
-  t.mock.method(ethereumApi, 'confirm', async () => {
-    if (failure) throw new EthereumApiError(503, 'Temporary RPC failure');
-    return { status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-      items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] };
-  });
-  const view = harness();
-  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-  included = true;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-  transferred = true;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
-  await waitFor(() => assert.deepEqual(view.result.current.items, []));
-  failure = true;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.equal(view.result.current.error, 'Temporary RPC failure'));
-  assert.deepEqual(view.result.current.items, []);
-  failure = false;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.equal(view.result.current.error, null));
-  assert.deepEqual(view.result.current.items, []);
-  assert.equal(inventory.mock.callCount(), 2);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-});
-
-test('first-inclusion work queued behind the submission lock cannot apply an orphaned receipt', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  const original = token();
-  const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
-  let included = false;
-  let finishInventory: ((response: EthereumInventoryResponse) => void) | undefined;
-  let inventorySignal: AbortSignal | undefined;
-  let reads = 0;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-  writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal) => {
-    if (++reads === 1) return { items: [original], nextCursor: null, observedBlock: 10 };
-    inventorySignal = signal;
-    return new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
-  });
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-    items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] }));
-  const view = harness();
-  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-  let release: (() => void) | undefined;
-  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
-    assert.ok(lock);
-    await new Promise<void>(resolve => { release = resolve; });
-  });
-  const requests = t.mock.method(navigator.locks, 'request');
-  try {
-    included = true;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => assert.equal(requests.mock.callCount(), 1));
-    included = false;
-    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-    await waitFor(() => { assert.equal(view.result.current.confirmations, 0); assert.ok(finishInventory); });
-  } finally {
-    await act(async () => { release!(); await competing; });
-  }
-  assert.equal(inventorySignal?.aborted, false);
-  await act(async () => { finishInventory!({ items: [original], nextCursor: null, observedBlock: 10 }); });
-  assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
-  assert.deepEqual(readEthereumExpected(scope), [original.tokenId]);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-});
-
-for (const action of ['delivery', 'claim'] as const) {
-  for (const outcome of ['confirmed', 'pending', 'error'] as const) {
-    test(`late ${action} finalization returning ${outcome} cannot clear a re-mined transaction that has only one confirmation`, async t => {
-      const scope = ethereumInventoryScope(config, owner)!;
-      const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
-        kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
-      const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-        kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-      let confirmations = 0;
-      let finish: (() => void) | undefined;
-      savedSession(owner);
-      writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-      t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-      t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-      t.mock.method(ethereumApi, 'inventory', async () => ({
-        items: confirmations ? [receipt] : [original], nextCursor: null, observedBlock: 10,
-      }));
-      t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmations ? 'confirmed' : 'pending', confirmations,
-        items: confirmations ? [receipt] : [], burnedTokenIds: confirmations ? [original.tokenId] : [] }));
-      const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
-        await new Promise<void>(resolve => { finish = resolve; });
-        if (outcome === 'error') throw new EthereumApiError(503, 'Finalization temporarily unavailable');
-        return { status: outcome, confirmations: outcome === 'confirmed' ? 3 : 0 };
-      });
-      const view = harness();
-      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-      confirmations = 1;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-      confirmations = 3;
-      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-      await waitFor(() => assert.ok(finish));
-      try {
-        confirmations = 0;
-        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-        await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-        confirmations = 1;
-        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-        await waitFor(() => assert.equal(view.result.current.confirmations, 1));
-      } finally {
-        await act(async () => { finish!(); });
-      }
-      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-      assert.equal(view.result.current.pending?.hash, hash);
-      assert.equal(readEthereumPending(scope)?.hash, hash);
-      assert.equal(finalize.mock.callCount(), 1);
-    });
-  }
-}
-
-for (const action of ['delivery', 'claim'] as const) {
-  test(`reloading a pending ${action} restarts an interrupted inventory load`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const original = token(owner, action === 'delivery' ? '111112' : '2000001');
-    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
-      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
-    const unrelated = token(owner, '111113');
-    let finishInventory: ((response: EthereumInventoryResponse) => void) | undefined;
-    let inventorySignal: AbortSignal | undefined;
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    const inventory = t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal, expected = []) => {
-      if (!finishInventory) {
-        inventorySignal = signal;
-        return new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
-      }
-      assert.ok(expected.includes(receipt.tokenId));
-      return { items: [receipt, unrelated], nextCursor: 'next-page', observedBlock: 11 };
-    });
-    t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
-      items: [receipt], burnedTokenIds: [original.tokenId] }));
-    const view = harness();
-    await waitFor(() => {
-      assert.equal(inventory.mock.callCount(), 2);
-      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId, unrelated.tokenId]);
-      assert.equal(view.result.current.inventory.hasNextPage, true);
-    });
-    assert.equal(inventorySignal?.aborted, true);
-    await act(async () => { finishInventory!({ items: [original], nextCursor: null, observedBlock: 10 }); });
-    assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId, unrelated.tokenId]);
-    assert.equal(view.result.current.inventory.hasNextPage, true);
-    assert.equal(readEthereumPending(scope)?.hash, hash);
-    assert.equal(view.result.current.session, null);
-  });
-}
-
-test('first-inclusion receipts survive an older inventory request completing afterward', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  const original = token();
-  const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-  let included = false;
-  let finishInventory: ((response: EthereumInventoryResponse) => void) | undefined;
-  let inventorySignal: AbortSignal | undefined;
-  let reads = 0;
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal) => {
-    if (++reads === 1) return { items: [original], nextCursor: null, observedBlock: 10 };
-    if (reads > 2) return { items: [receipt], nextCursor: null, observedBlock: 11 };
-    inventorySignal = signal;
-    return new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
-  });
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-    items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] }));
-  const view = harness();
-  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
-  act(() => { void view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
-  await waitFor(() => assert.ok(finishInventory));
-  included = true;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
-  assert.equal(inventorySignal?.aborted, true);
-  await act(async () => { finishInventory!({ items: [original], nextCursor: null, observedBlock: 10 }); });
-  assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-});
-
-for (const newer of ['reservation', 'transaction', 'cleared'] as const) {
-  test(`first-inclusion inventory rejects ${newer} pending state after waiting for the submission lock`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const original = token();
-    const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: 1 });
-    t.mock.method(ethereumApi, 'inventory', async () => ({ items: [original], nextCursor: null, observedBlock: 10 }));
-    let finish: ((result: EthereumTransactionConfirmResponse) => void) | undefined;
-    t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>(resolve => { finish = resolve; }));
-    const view = harness();
-    await waitFor(() => { assert.ok(finish); assert.equal(view.result.current.items.length, 1); });
-    let release: (() => void) | undefined;
-    const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
-      assert.ok(lock);
-      await new Promise<void>(resolve => { release = resolve; });
-    });
-    const requests = t.mock.method(navigator.locks, 'request');
-    await act(async () => { finish!({ status: 'confirmed', confirmations: 1, items: [receipt], burnedTokenIds: [original.tokenId] }); });
-    await waitFor(() => assert.equal(requests.mock.callCount(), 1));
-    assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
-    const key = `ethereum111k:${scope}:pending`;
-    const replacement = newer === 'cleared' ? null : JSON.stringify({ scope, action: 'mint', submittedAt: 2, nonce: '0x8',
-      hash: `0x${(newer === 'reservation' ? '00' : 'cd').repeat(32)}`, ...(newer === 'reservation' ? { awaitingHash: true } : {}) });
-    if (replacement === null) window.localStorage.removeItem(key);
-    else window.localStorage.setItem(key, replacement);
-    await act(async () => { release!(); await competing; });
-    assert.equal(window.localStorage.getItem(key), replacement);
-    assert.deepEqual(readEthereumExpected(scope), []);
-    assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
-  });
-}
-
-test('a wallet cancellation replacement recovers after reload and is acknowledged only after three confirmations', async t => {
-  speedUpConfirmationPolls(t);
-  const scope = ethereumInventoryScope(config, owner)!;
-  const replacementHash = `0x${'cd'.repeat(32)}`;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now(), nonce: '0x7',
-    intent: { to: contract, data: '0x12345678', value: '0x123' } });
-  let confirmations = 1;
-  t.mock.method(ethereumApi, 'confirm', async transactionHash => ({ status: transactionHash === replacementHash ? 'confirmed' : 'pending',
-    confirmations: transactionHash === replacementHash ? confirmations : 0, items: [], burnedTokenIds: [] }));
-  const connected = wallet();
-  const originalRequest = connected.provider!.request;
-  connected.provider!.request = async args => args.method === 'eth_getTransactionByHash'
-    ? { hash: replacementHash, from: owner, to: owner, input: '0x', value: '0x0', nonce: '0x7', chainId: '0xaa36a7' }
-    : originalRequest(args);
-  const view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
-  await act(async () => { assert.equal(await view.result.current.replacePending(replacementHash), true); });
-  await waitFor(() => assert.equal(view.result.current.confirmations, 1));
-  assert.equal(view.result.current.pending?.action, 'cancel');
-  assert.equal(view.result.current.notice, null);
-  assert.equal(connected.sent.length, 0);
-  confirmations = 3;
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.match(view.result.current.notice ?? '', /cancellation is confirmed/);
-  assert.equal(readEthereumPending(scope), null);
-  assert.equal(connected.sent.length, 0);
-});
-
-test('explicit stop-tracking unlocks the UI without claiming cancellation or submitting again', async () => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
-  await act(async () => { await view.result.current.dismissPending(); });
-  assert.equal(view.result.current.pending, null);
-  assert.equal(readEthereumPending(scope), null);
-  assert.match(view.result.current.notice ?? '', /may still execute/);
-  assert.equal(connected.sent.length, 0);
-});
-
-for (const status of ['pending', 'revealed'] as const) test(`stop-tracking removes only its reveal job and ignores a late ${status} response`, async t => {
-  let now = Date.now();
-  t.mock.method(Date, 'now', () => now);
-  const late = Promise.withResolvers<EthereumRevealTransactionResponse>();
-  const unrelatedHash = `0x${'cd'.repeat(32)}`;
-  let revealSignal: AbortSignal | undefined;
-  const requests = t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash, signal) => {
-    if (requestedHash === hash) { revealSignal = signal; return late.promise; }
-    return { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
-      status: 'pending' as const, artworks: [], retryAfterMs: 1000 };
-  });
-  const artworks = Array.from({ length: 20 }, (_, index) => ({ tokenId: String(index + 1), crateTokenId: '111112',
-    category: 'painting' as const, name: `Painting ${index + 1}`, image: `https://wip.lil.org/reveal-test/${index + 1}.webp`,
-    aspectRatio: { width: 400, height: 600 }, observation: { transactionHash: hash, blockNumber: 42, blockHash: `0x${'cc'.repeat(32)}` } }));
-  const view = harness();
-  await waitFor(() => assert.ok(view.result.current.scope));
-  const scope = view.result.current.scope!;
-  await act(async () => { assert.equal(await view.result.current.unbox(token()), true); });
-  await waitFor(() => assert.ok(revealSignal));
-  act(() => rememberEthereumRevealJob(scope, unrelatedHash, now - 1));
-  await act(async () => { await view.result.current.dismissPending(); });
-  assert.equal(readEthereumPending(scope), null);
-  assert.deepEqual(readEthereumRevealJobs(scope).map(job => job.transactionHash), [unrelatedHash]);
-  assert.equal(revealSignal!.aborted, true);
-  assert.equal(view.client.getQueryState(['ethereum111k', 'reveal-transaction', config.chainId, contract, hash]), undefined);
-  await act(async () => {
-    late.resolve({ chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
-      status, artworks: status === 'revealed' ? artworks : [], retryAfterMs: 1000 });
-    await late.promise;
-    now += 60_000;
-    await new Promise(resolve => setTimeout(resolve, 300));
-  });
-  assert.equal(requests.mock.calls.filter(call => call.arguments[1] === hash).length, 1);
-  assert.equal(view.result.current.revealed, null);
-  assert.deepEqual(readEthereumRevealJobs(scope).map(job => job.transactionHash), [unrelatedHash]);
-  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [{ ...token(owner, '1'), kind: 'artwork' as const }], nextCursor: null, observedBlock: 42 }));
-  t.mock.method(ethereumRevealApi, 'tokens', async () => ({ chainId: config.chainId, contractAddress: contract,
-    dropId: config.dropId, deploymentId: 'test', artworks: [artworks[0]], unresolved: [], retryAfterMs: 0 }));
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
-  await waitFor(() => assert.equal(view.result.current.items[0]?.image, artworks[0].image));
-  assert.equal(view.result.current.revealed, null);
-});
-
-function savedSession(address: string): EthereumSession {
-  const session: EthereumSession = { token: `session-${address}`, address, chainId: config.chainId, dropId: config.dropId, expiresAtMs: Date.now() + 3_600_000 };
-  saveEthereumSession(ethereumInventoryScope(config, address)!, session);
-  return session;
-}
-
-test('cached sign-in cannot restore a session rejected by concurrent delivery finalization', async t => {
-  const session = savedSession(owner);
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-  t.mock.method(ethereumApi, 'profile', async current => ({ wallet: current.address, addresses: [] }));
-  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [] }));
-  let rejectFinalization: ((cause: Error) => void) | undefined;
-  const finalize = t.mock.method(ethereumApi, 'confirmDelivery', () => new Promise((_resolve, reject) => { rejectFinalization = reject; }));
-  const view = harness();
-  await waitFor(() => assert.ok(rejectFinalization));
-
-  await act(async () => {
-    rejectFinalization!(new EthereumApiError(401, 'Session expired', null, session.token));
-    assert.equal(await view.result.current.signIn(), true);
-  });
-
-  assert.equal(view.result.current.session, null);
-  assert.equal(readEthereumSession(scope, config, owner), null);
-  assert.equal(finalize.mock.callCount(), 1);
-});
-
-test('a late delivery 401 cannot clear the session restored for another account', async t => {
-  const originalSession = savedSession(owner);
-  const otherSession = savedSession(other);
-  t.mock.method(ethereumApi, 'profile', async session => ({ wallet: session.address, addresses: [] }));
-  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-  let rejectAddress: ((cause: Error) => void) | undefined;
-  t.mock.method(ethereumApi, 'saveAddress', () => new Promise((_resolve, reject) => { rejectAddress = reject; }));
-  const view = harness(wallet(), false, 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=');
-  await waitFor(() => assert.equal(view.result.current.session?.address, owner));
-  let delivery: Promise<boolean> | undefined;
-  act(() => { delivery = view.result.current.deliver([token()], { formatted: 'Name\n123 Street', country: 'United States', countryCode: 'US', email: 'test@example.com' }); });
-  await waitFor(() => assert.ok(rejectAddress));
-  view.rerender({ wallet: wallet(other) });
-  await waitFor(() => assert.deepEqual(view.result.current.session, otherSession));
-  await act(async () => { rejectAddress!(new EthereumApiError(401, 'Session expired', null, originalSession.token)); assert.equal(await delivery, false); });
-  assert.deepEqual(view.result.current.session, otherSession);
-  assert.equal(readEthereumSession(ethereumInventoryScope(config, owner)!, config, owner), null);
-  assert.equal(view.result.current.error, null);
-});
-
-test('sign-in restores a valid cached session without another wallet signature', async t => {
-  t.mock.method(ethereumApi, 'profile', async session => ({ wallet: session.address, addresses: [] }));
-  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-  const challenge = t.mock.method(ethereumApi, 'challenge', async () => { throw new Error('Unexpected authentication challenge'); });
-  const view = harness();
-  await waitFor(() => assert.ok(view.result.current.scope));
-  assert.equal(view.result.current.session, null);
-  const session = savedSession(owner);
-  await act(async () => { assert.equal(await view.result.current.signIn(), true); });
-  assert.deepEqual(view.result.current.session, session);
-  assert.equal(challenge.mock.callCount(), 0);
-});
-
-test('returning before wallet approval tracks the transaction submitted by the unmounted page', async t => {
-  let finishSend: ((hash: string) => void) | undefined;
-  let sends = 0;
-  const connected = wallet();
-  const originalRequest = connected.provider!.request;
-  connected.provider!.request = async args => {
-    if (args.method !== 'eth_sendTransaction') return originalRequest(args);
-    sends++;
-    return await new Promise<string>(resolve => { finishSend = resolve; });
-  };
-  let confirmed = false;
-  const confirmation = t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmed ? 'confirmed' as const : 'pending' as const,
-    confirmations: confirmed ? 1 : 0, items: [], burnedTokenIds: [] }));
-  const first = harness(connected);
-  await waitFor(() => assert.ok(first.result.current.stats.data));
-  let mint: Promise<boolean> | undefined;
-  act(() => { mint = first.result.current.mint('crate', 1); });
-  await waitFor(() => assert.ok(finishSend));
-  first.unmount();
-  const second = harness(connected);
-  await waitFor(() => assert.ok(second.result.current.scope));
-  assert.equal(second.result.current.pending, null);
-  assert.equal(second.result.current.busy, 'Confirm mint in your wallet…');
-  await act(async () => { assert.equal(await second.result.current.mint('crate', 1), false); });
-  assert.equal(sends, 1);
-  await act(async () => { finishSend!(hash); assert.equal(await mint, true); });
-  await waitFor(() => assert.equal(second.result.current.pending?.hash, hash));
-  assert.equal(second.result.current.busy, null);
-  await waitFor(() => assert.ok(confirmation.mock.callCount()));
-  confirmed = true;
-  act(() => second.result.current.refresh());
-  await waitFor(() => assert.equal(second.result.current.pending, null));
-  assert.equal(readEthereumPending(ethereumInventoryScope(config, owner)!), null);
-});
-
-for (const cancellation of [false, true]) {
-  test(`approval after navigating away captures the nonce for ${cancellation ? 'cancellation' : 'speed-up'} recovery`, async () => {
-    const connected = wallet();
-    const request = connected.provider!.request;
-    const replacementHash = `0x${'cd'.repeat(32)}`;
-    let finishSend: ((hash: string) => void) | undefined;
-    let sentTransaction: Record<string, unknown> | undefined;
-    let originalAvailable = true;
-    let originalLookups = 0;
-    connected.provider!.request = async args => {
-      if (args.method === 'eth_sendTransaction') {
-        sentTransaction = (args.params as Record<string, unknown>[])[0];
-        return new Promise(resolve => { finishSend = resolve; });
-      }
-      if (args.method !== 'eth_getTransactionByHash') return request(args);
-      const requestedHash = (args.params as string[])[0];
-      if (requestedHash === hash) {
-        originalLookups++;
-        if (!originalAvailable) return null;
-      }
-      const cancelled = requestedHash === replacementHash && cancellation;
-      return { hash: requestedHash, from: owner, to: cancelled ? owner : contract,
-        input: cancelled ? '0x' : sentTransaction!.data, value: cancelled ? '0x0' : sentTransaction!.value,
-        nonce: '0x8', chainId: '0xaa36a7' };
-    };
-    const first = harness(connected);
-    await waitFor(() => assert.ok(first.result.current.stats.data));
-    let mint: Promise<boolean> | undefined;
-    act(() => { mint = first.result.current.mint('crate', 1); });
-    await waitFor(() => assert.ok(finishSend));
-    first.unmount();
-    await act(async () => { finishSend!(hash); assert.equal(await mint, true); });
-    const scope = ethereumInventoryScope(config, owner)!;
-    await waitFor(() => assert.equal(readEthereumPending(scope)?.nonce, '0x8'));
-    assert.equal(originalLookups, 1);
-    originalAvailable = false;
-    const second = harness(connected);
-    await waitFor(() => assert.equal(second.result.current.pending?.hash, hash));
-    await act(async () => { assert.equal(await second.result.current.replacePending(replacementHash), true); });
-    assert.equal(readEthereumPending(scope)?.hash, replacementHash);
-    assert.equal(readEthereumPending(scope)?.action, cancellation ? 'cancel' : 'mint');
-    assert.equal(originalLookups, 1);
-  });
-}
-
-test('a rejected approval releases the shared guard after its initiating page unmounts', async () => {
-  const connected = wallet();
-  const originalRequest = connected.provider!.request;
-  let rejectSend: ((cause: Error) => void) | undefined;
-  let firstRequest = true;
-  connected.provider!.request = async args => {
-    if (args.method !== 'eth_sendTransaction' || !firstRequest) return originalRequest(args);
-    firstRequest = false;
-    return await new Promise<string>((_resolve, reject) => { rejectSend = reject; });
-  };
-  const first = harness(connected);
-  await waitFor(() => assert.ok(first.result.current.stats.data));
-  let mint: Promise<boolean> | undefined;
-  act(() => { mint = first.result.current.mint('crate', 1); });
-  await waitFor(() => assert.ok(rejectSend));
-  first.unmount();
-  const second = harness(connected);
-  await waitFor(() => assert.equal(second.result.current.busy, 'Confirm mint in your wallet…'));
-  assert.equal(window.localStorage.length, 1);
-  await act(async () => { rejectSend!(Object.assign(new Error('Cancelled'), { code: 4001 })); assert.equal(await mint, false); });
-  await waitFor(() => assert.equal(second.result.current.busy, null));
-  const scope = ethereumInventoryScope(config, owner)!;
-  assert.equal(readEthereumOperation(scope), null);
-  assert.equal(readEthereumPending(scope), null);
-  assert.equal(readEthereumSubmission(scope), null);
-  await act(async () => { assert.equal(await second.result.current.mint('crate', 1), true); });
-  assert.equal(connected.sent.length, 1);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-});
-
-test('a browser lock held by another tab rejects an action without queuing a wallet request', async () => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  const lockName = `ethereum111k-submission:${scope}`;
-  let release: (() => void) | undefined;
-  const competing = navigator.locks.request(lockName, { ifAvailable: true }, async lock => {
-    assert.ok(lock);
-    await new Promise<void>(resolve => { release = resolve; });
-  });
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.stats.data && release));
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-  assert.match(view.result.current.error ?? '', /already in progress/);
-  assert.equal(connected.sent.length, 0);
-  assert.equal(readEthereumOperation(scope), null);
-  release!();
-  await competing;
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
-  assert.equal(connected.sent.length, 1);
-});
-
-test('a missing browser lock API fails before any wallet transaction request', async () => {
-  Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.stats.data));
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-  assert.match(view.result.current.error ?? '', /Update your browser/);
-  assert.equal(connected.sent.length, 0);
-  assert.equal(view.result.current.busy, null);
-});
-
-test('pending storage is rechecked after acquiring the browser lock', async t => {
-  let grant: (() => void) | undefined;
-  t.mock.method(navigator.locks, 'request', async (_name, _options, callback) => {
-    await new Promise<void>(resolve => { grant = resolve; });
-    return callback({ name: 'granted', mode: 'exclusive' });
-  });
-  const connected = wallet();
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.stats.data));
-  let mint: Promise<boolean> | undefined;
-  act(() => { mint = view.result.current.mint('crate', 1); });
-  await waitFor(() => assert.ok(grant));
-  const scope = ethereumInventoryScope(config, owner)!;
-  act(() => writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() }));
-  await act(async () => { grant!(); assert.equal(await mint, false); });
-  assert.equal(connected.sent.length, 0);
-  assert.equal(view.result.current.busy, null);
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-});
-
-for (const change of ['account', 'provider', 'unmount'] as const) {
-  test(`a ${change} change before lock acquisition prevents the old action from sending`, async t => {
-    let grant: (() => void) | undefined;
-    t.mock.method(navigator.locks, 'request', async (_name, _options, callback) => {
-      await new Promise<void>(resolve => { grant = resolve; });
-      return callback({ name: 'granted', mode: 'exclusive' });
-    });
-    const connected = wallet();
-    const view = harness(connected);
-    await waitFor(() => assert.ok(view.result.current.stats.data));
-    let mint: Promise<boolean> | undefined;
-    act(() => { mint = view.result.current.mint('crate', 1); });
-    await waitFor(() => assert.ok(grant));
-    const replacement = wallet(change === 'account' ? other : owner);
-    if (change === 'unmount') view.unmount();
-    else view.rerender({ wallet: replacement });
-    await act(async () => { grant!(); assert.equal(await mint, false); });
-    assert.equal(connected.sent.length, 0);
-    assert.equal(replacement.sent.length, 0);
-    assert.equal(readEthereumOperation(ethereumInventoryScope(config, owner)!), null);
-    assert.equal(readEthereumPending(ethereumInventoryScope(config, owner)!), null);
-  });
-}
-
-for (const blockedStorage of [false, true]) {
-  test(`a late finalization 401 preserves a fresh session for the same account${blockedStorage ? ' with blocked session storage' : ''}`, async t => {
-    let now = Date.now();
-    t.mock.method(Date, 'now', () => now);
-    const previousSession = savedSession(owner);
-    const freshSession = { ...previousSession, token: 'fresh-session' };
-    const scope = ethereumInventoryScope(config, owner)!;
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-    t.mock.method(ethereumApi, 'profile', async session => ({ wallet: session.address, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    t.mock.method(ethereumApi, 'logout', async () => ({}));
-    t.mock.method(ethereumApi, 'challenge', async () => ({ challengeId: 'new-challenge', message: 'Sign in', expiresAtMs: Date.now() + 60_000 }));
-    t.mock.method(ethereumApi, 'verify', async () => freshSession);
-    t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [] }));
-    let rejectFinalization: ((cause: Error) => void) | undefined;
-    const finalizedTokens: string[] = [];
-    t.mock.method(ethereumApi, 'confirmDelivery', async (_order, _hash, session) => {
-      finalizedTokens.push(session.token);
-      if (session.token === previousSession.token) await new Promise<void>((_resolve, reject) => { rejectFinalization = reject; });
-      return { status: 'confirmed', confirmations: 3, orderId: 42 };
-    });
-    const connected = wallet();
-    const originalRequest = connected.provider!.request;
-    connected.provider!.request = async args => args.method === 'personal_sign' ? `0x${'ab'.repeat(65)}` : originalRequest(args);
-    const view = harness(connected);
-    await waitFor(() => assert.ok(rejectFinalization));
-    act(() => view.result.current.disconnect());
-    view.rerender({ wallet: wallet(null) });
-    view.rerender({ wallet: connected });
-    if (blockedStorage) Object.defineProperty(window, 'sessionStorage', { configurable: true, get() { throw new Error('Storage blocked'); } });
-    await act(async () => { assert.equal(await view.result.current.signIn(), true); });
-    assert.equal(view.result.current.session?.token, freshSession.token);
-    await act(async () => { rejectFinalization!(new EthereumApiError(401, 'Old session expired', null, previousSession.token)); });
-    assert.equal(view.result.current.session?.token, freshSession.token);
-    assert.equal(view.result.current.error, null);
-    if (!blockedStorage) assert.equal(readEthereumSession(scope, config, owner)?.token, freshSession.token);
-    now++;
-    act(() => view.result.current.refresh());
-    await waitFor(() => assert.equal(view.result.current.pending, null));
-    assert.deepEqual(finalizedTokens, [previousSession.token, freshSession.token]);
-  });
-}
-
-for (const endpoint of ['profile', 'shipments'] as const) {
-  test(`a current ${endpoint} 401 clears its session even when storage becomes blocked`, async t => {
-    const session = savedSession(owner);
-    t.mock.method(ethereumApi, 'profile', async current => ({ wallet: current.address, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    let rejectRequest: ((cause: Error) => void) | undefined;
-    t.mock.method(ethereumApi, endpoint, () => new Promise((_resolve, reject) => { rejectRequest = reject; }));
-    const view = harness();
-    await waitFor(() => assert.ok(rejectRequest));
-    Object.defineProperty(window, 'sessionStorage', { configurable: true, get() { throw new Error('Storage blocked'); } });
-    await act(async () => { rejectRequest!(new EthereumApiError(401, 'Session expired', null, session.token)); });
-    await waitFor(() => assert.equal(view.result.current.session, null));
-  });
-}
-
-test('two mounted trackers both clear when one finishes the shared transaction', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  const minted = token();
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-    items: expected.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
-  }));
-  const confirmations: ((result: EthereumTransactionConfirmResponse) => void)[] = [];
-  t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>(resolve => { confirmations.push(resolve); }));
-  const first = harness();
-  await waitFor(() => assert.equal(confirmations.length, 1));
-  const second = harness();
-  await waitFor(() => assert.equal(confirmations.length, 2));
-  const result: EthereumTransactionConfirmResponse = { status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [] };
-  await act(async () => { confirmations[0](result); });
-  await waitFor(() => assert.equal(first.result.current.pending, null));
-  await waitFor(() => assert.equal(second.result.current.pending, null));
-  await waitFor(() => assert.deepEqual(first.result.current.items, [minted]));
-  await waitFor(() => assert.deepEqual(second.result.current.items, [minted]));
-  await act(async () => { confirmations[1](result); });
-  assert.equal(second.result.current.pending, null);
-  assert.equal(readEthereumPending(scope), null);
-});
-
-test('browser storage events synchronize another tab’s replacement and completion', async () => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  const key = `ethereum111k:${scope}:pending`;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  const view = harness();
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
-  const replacementHash = `0x${'cd'.repeat(32)}`;
-  act(() => {
-    const newValue = JSON.stringify({ scope, hash: replacementHash, action: 'mint', submittedAt: Date.now() });
-    window.localStorage.setItem(key, newValue);
-    window.dispatchEvent(new window.StorageEvent('storage', { key, newValue, storageArea: window.localStorage }));
-  });
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, replacementHash));
-  act(() => {
-    window.localStorage.removeItem(key);
-    window.dispatchEvent(new window.StorageEvent('storage', { key, newValue: null, storageArea: window.sessionStorage }));
-  });
-  assert.equal(view.result.current.pending?.hash, replacementHash);
-  act(() => {
-    window.dispatchEvent(new window.StorageEvent('storage', { key, newValue: null, storageArea: window.localStorage }));
-  });
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-});
-
-test('storage failure after broadcast retains the hash, warns, and reconciles the unboxed inventory', async t => {
-  let confirmed = false;
-  const artwork: EthereumInventoryItem = { ...token(owner, '1'), kind: 'artwork', name: 'Artwork #1' };
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmed ? 'confirmed' as const : 'pending' as const, confirmations: confirmed ? 1 : 0,
-    items: confirmed ? [artwork] : [], burnedTokenIds: confirmed ? ['111112'] : [] }));
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({ items: expected.includes('1') ? [artwork] : [token()], nextCursor: null, observedBlock: 1 }));
-  const connected = wallet();
-  const request = connected.provider!.request;
-  connected.provider!.request = async args => {
-    const result = await request(args);
-    if (args.method === 'eth_sendTransaction') Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new Error('Storage blocked'); } });
-    return result;
-  };
-  const first = harness(connected);
-  await waitFor(() => assert.ok(first.result.current.scope));
-  await act(async () => { assert.equal(await first.result.current.unbox(token()), true); });
-  const scope = ethereumInventoryScope(config, owner)!;
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-  assert.match(first.result.current.storageWarning ?? '', new RegExp(hash));
-  first.unmount();
-  const second = harness(connected);
-  await waitFor(() => assert.equal(second.result.current.pending?.hash, hash));
-  assert.match(second.result.current.storageWarning ?? '', /Keep this tab open/);
-  await act(async () => { assert.equal(await second.result.current.mint('crate', 1), false); });
-  assert.equal(connected.sent.length, 1);
-  confirmed = true;
-  act(() => second.result.current.refresh());
-  await waitFor(() => assert.equal(second.result.current.pending, null));
-  await waitFor(() => assert.deepEqual(second.result.current.items, [artwork]));
-  assert.deepEqual(second.result.current.revealed, [artwork]);
-  assert.deepEqual(readEthereumExpected(scope), ['1']);
-  assert.equal(readEthereumPending(scope), null);
-});
-
-for (const failure of ['blocked', 'full', 'silent'] as const) {
-  test(`${failure} browser storage prevents wallet submission in separate windows`, async () => {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt) {
-        const locks = navigator.locks;
-        await act(async () => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
-        dom.window.close();
-        ({ dom } = setupFrontendDom());
-        Object.defineProperty(navigator, 'locks', { configurable: true, value: locks });
-      }
-      if (failure === 'blocked') Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new Error('Storage blocked'); } });
-      else Object.defineProperty(window, 'localStorage', { configurable: true, value: {
-        getItem: () => null, removeItem() {}, setItem() { if (failure === 'full') throw new Error('Quota exceeded'); },
-      } });
-      const connected = wallet();
-      const view = harness(connected);
-      await waitFor(() => assert.ok(view.result.current.stats.data));
-      await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-      assert.match(view.result.current.error ?? '', /Browser storage is unavailable/);
-      assert.equal(connected.sent.length, 0);
-      assert.equal(view.result.current.pending, null);
-    }
-  });
-}
-
-for (const actualNonce of ['0x7', '0x8']) test(`a failed post-broadcast write recovers wallet nonce ${actualNonce} after reload`, async () => {
-  const connected = wallet();
-  const request = connected.provider!.request;
-  const storage = window.localStorage;
-  connected.provider!.request = async args => {
-    const result = await request(args);
-    if (args.method === 'eth_sendTransaction') Object.defineProperty(window, 'localStorage', { configurable: true, value: {
-      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage), setItem() { throw new Error('Quota exceeded'); },
-    } });
-    return result;
-  };
-  const first = harness(connected);
-  await waitFor(() => assert.ok(first.result.current.stats.data));
-  await act(async () => { assert.equal(await first.result.current.mint('crate', 1), true); });
-  assert.equal(first.result.current.pending?.hash, hash);
-  assert.equal(first.result.current.pending?.nonce, undefined);
-  assert.match(first.result.current.storageWarning ?? '', /Transaction sent/);
-  const scope = ethereumInventoryScope(config, owner)!;
-  const key = `ethereum111k:${scope}:pending`;
-  const reserved = storage.getItem(key)!;
-  assert.equal(JSON.parse(reserved).awaitingHash, true);
-  assert.equal(JSON.parse(reserved).nonce, '0x7');
-  const locks = navigator.locks;
-  await act(async () => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
-  dom.window.close();
-  ({ dom } = setupFrontendDom());
-  Object.defineProperty(navigator, 'locks', { configurable: true, value: locks });
-  window.localStorage.setItem(key, reserved);
-  const nextWallet = wallet();
-  const nextRequest = nextWallet.provider!.request;
-  const oldHash = `0x${'cd'.repeat(32)}`;
-  let matchingIntent = false;
-  nextWallet.provider!.request = async args => args.method === 'eth_getTransactionByHash'
-    ? { hash: (args.params as string[])[0], from: owner, to: contract, input: matchingIntent ? JSON.parse(reserved).intent.data : '0x1234', value: JSON.parse(reserved).intent.value,
-      nonce: (args.params as string[])[0] === oldHash ? '0x6' : actualNonce, chainId: '0xaa36a7' }
-    : nextRequest(args);
-  const second = harness(nextWallet);
-  await waitFor(() => assert.ok(second.result.current.stats.data));
-  assert.ok(second.result.current.submission);
-  assert.equal(second.result.current.pending, null);
-  await act(async () => { assert.equal(await second.result.current.mint('crate', 1), false); });
-  assert.equal(nextWallet.sent.length, 0);
-  await act(async () => { assert.equal(await second.result.current.replacePending(hash), false); });
-  assert.match(second.result.current.error ?? '', /does not match the saved/);
-  assert.ok(second.result.current.submission);
-  matchingIntent = true;
-  await act(async () => { assert.equal(await second.result.current.replacePending(oldHash), false); });
-  assert.match(second.result.current.error ?? '', /does not match the saved Ethereum request nonce/);
-  assert.ok(second.result.current.submission);
-  assert.equal(second.result.current.pending, null);
-  await act(async () => { assert.equal(await second.result.current.replacePending(hash), true); });
-  assert.equal(second.result.current.pending?.hash, hash);
-  assert.equal(second.result.current.pending?.nonce, actualNonce);
-  assert.equal(second.result.current.submission, null);
-  assert.equal(second.result.current.storageWarning, null);
-  assert.equal(readEthereumSubmission(scope), null);
-  assert.equal(JSON.parse(window.localStorage.getItem(key)!).hash, hash);
-});
-
-for (const readBlocked of [false, true]) {
-  for (const replacement of ['reservation', 'transaction', 'removed'] as const) {
-    test(`recovery fallback yields to ${replacement} before storage events after ${readBlocked ? 'blocked' : 'readable'} storage failure`, () => {
-      const scope = ethereumInventoryScope(config, owner)!;
-      const key = `ethereum111k:${scope}:pending`;
-      const storage = window.localStorage;
-      const submittedAt = Date.now();
-      const intent = { to: contract, data: '0x', value: '0x0' };
-      reserveEthereumSubmission({ scope, action: 'mint', nonce: '0x7', submittedAt, intent });
-      if (readBlocked) Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new Error('Storage blocked'); } });
-      else Object.defineProperty(window, 'localStorage', { configurable: true, value: {
-        getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage), setItem() { throw new Error('Quota exceeded'); },
-      } });
-      writeEthereumStorage(`${scope}:pending`, { scope, action: 'mint', hash, submittedAt, intent });
-      assert.equal(readEthereumPending(scope)?.hash, hash);
-      Object.defineProperty(window, 'localStorage', { configurable: true, value: storage });
-      assert.equal(readEthereumPending(scope)?.hash, hash, 'The original reservation must retain its actual in-memory hash');
-      const nextHash = `0x${'cd'.repeat(32)}`;
-      if (replacement === 'removed') storage.removeItem(key);
-      else storage.setItem(key, JSON.stringify({ scope, action: 'mint', submittedAt: submittedAt + 1, nonce: '0x8', intent,
-        hash: replacement === 'transaction' ? nextHash : `0x${'0'.repeat(64)}`,
-        ...(replacement === 'reservation' ? { awaitingHash: true } : {}),
-      }));
-      assert.equal(readEthereumPending(scope)?.hash ?? null, replacement === 'transaction' ? nextHash : null);
-      assert.equal(readEthereumSubmission(scope)?.nonce ?? null, replacement === 'reservation' ? '0x8' : null);
-    });
-  }
-}
-
-for (const method of ['eth_accounts', 'eth_chainId']) {
-  test(`a repeated ${method} failure leaves no submission marker and permits retry after remount`, async () => {
-    const connected = wallet();
-    const request = connected.provider!.request;
-    let nonceRead = false;
-    let fail = true;
-    connected.provider!.request = async args => {
-      if (args.method === 'eth_getTransactionCount') nonceRead = true;
-      if (args.method === method && nonceRead && fail) throw new Error('Provider temporarily unavailable');
-      return request(args);
-    };
-    const first = harness(connected);
-    await waitFor(() => assert.ok(first.result.current.stats.data));
-    await act(async () => { assert.equal(await first.result.current.mint('crate', 1), false); });
-    const scope = ethereumInventoryScope(config, owner)!;
-    assert.equal(first.result.current.error, 'Provider temporarily unavailable');
-    assert.equal(connected.sent.length, 0);
-    assert.equal(readEthereumSubmission(scope), null);
-    assert.equal(window.localStorage.getItem(`ethereum111k:${scope}:pending`), null);
-    first.unmount();
-    fail = false;
-    const second = harness(connected);
-    await waitFor(() => assert.ok(second.result.current.stats.data));
-    await act(async () => { assert.equal(await second.result.current.mint('crate', 1), true); });
-    assert.equal(connected.sent.length, 1);
-    assert.equal(readEthereumPending(scope)?.hash, hash);
-  });
-}
-
-test('an uncertain wallet error preserves the submission marker for recovery', async () => {
-  const connected = wallet();
-  const request = connected.provider!.request;
-  connected.provider!.request = async args => {
-    if (args.method === 'eth_sendTransaction') {
-      assert.ok(readEthereumSubmission(ethereumInventoryScope(config, owner)!));
-      throw new Error('Wallet disconnected');
-    }
-    return request(args);
-  };
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.stats.data));
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-  assert.ok(view.result.current.submission);
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-  assert.match(view.result.current.error ?? '', /recover the previous/);
-  await act(async () => { await view.result.current.dismissPending(); });
-  assert.equal(view.result.current.submission, null);
-});
-
-test('an invalid pending nonce prevents wallet submission before reserving recovery', async () => {
-  const connected = wallet();
-  const request = connected.provider!.request;
-  connected.provider!.request = async args => args.method === 'eth_getTransactionCount' ? null : request(args);
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.stats.data));
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
-  assert.match(view.result.current.error ?? '', /valid transaction nonce/);
-  assert.equal(connected.sent.length, 0);
-  assert.equal(view.result.current.submission, null);
-  assert.equal(view.result.current.pending, null);
-  assert.equal(readEthereumSubmission(view.result.current.scope!), null);
-  assert.equal(readEthereumPending(view.result.current.scope!), null);
-});
-
-test('a confirmed transaction finishes when its stored record has already disappeared', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  let finish: ((result: EthereumTransactionConfirmResponse) => void) | undefined;
-  t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>(resolve => { finish = resolve; }));
-  const view = harness();
-  await waitFor(() => assert.ok(finish));
-  window.localStorage.removeItem(`ethereum111k:${scope}:pending`);
-  await act(async () => { finish!({ status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] }); });
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  assert.deepEqual(readEthereumExpected(scope), [token().tokenId]);
-});
-
-for (const outcome of ['confirmed', 'reverted'] as const) {
-  for (const newer of ['none', 'reservation', 'transaction'] as const) {
-    test(`${outcome} cleanup waits for the submission lock and rechecks ${newer === 'none' ? 'the original transaction' : `a newer ${newer}`}`, async t => {
-      const scope = ethereumInventoryScope(config, owner)!;
-      const key = `ethereum111k:${scope}:pending`;
-      writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: 1 });
-      let finish: (() => void) | undefined;
-      t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>((resolve, reject) => {
-        finish = () => outcome === 'confirmed'
-          ? resolve({ status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] })
-          : reject(new EthereumApiError(409, 'Reverted', 'transaction-reverted'));
-      }));
-      const view = harness();
-      await waitFor(() => assert.ok(finish));
-      let release: (() => void) | undefined;
-      const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
-        assert.ok(lock);
-        await new Promise<void>(resolve => { release = resolve; });
-      });
-      const requests = t.mock.method(navigator.locks, 'request');
-      await act(async () => { finish!(); });
-      await waitFor(() => assert.equal(requests.mock.callCount(), 1));
-      assert.equal(readEthereumPending(scope)?.hash, hash);
-      assert.doesNotMatch(view.result.current.error ?? '', /already in progress/);
-      const replacement = newer === 'none' ? null : JSON.stringify({ scope, action: 'mint', submittedAt: 2, nonce: '0x8',
-        hash: `0x${(newer === 'reservation' ? '00' : 'cd').repeat(32)}`, ...(newer === 'reservation' ? { awaitingHash: true } : {}) });
-      if (replacement) window.localStorage.setItem(key, replacement);
-      await act(async () => { release!(); await competing; });
-      assert.equal(window.localStorage.getItem(key), replacement);
-      assert.deepEqual(readEthereumExpected(scope), outcome === 'confirmed' && newer === 'none' ? [token().tokenId] : []);
-      if (newer === 'none') assert.equal(view.result.current.pending, null);
-    });
-  }
-}
-
-test('stop-tracking rechecks the displayed transaction after waiting for another tab', async () => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: 1 });
-  const view = harness();
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
-  let release: (() => void) | undefined;
-  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
-    assert.ok(lock);
-    await new Promise<void>(resolve => { release = resolve; });
-  });
-  let dismissed: Promise<void> | undefined;
-  act(() => { dismissed = view.result.current.dismissPending(); });
-  assert.equal(readEthereumPending(scope)?.hash, hash);
-  const nextHash = `0x${'cd'.repeat(32)}`;
-  window.localStorage.setItem(`ethereum111k:${scope}:pending`, JSON.stringify({ scope, hash: nextHash, action: 'mint', submittedAt: 2 }));
-  await act(async () => { release!(); await competing; await dismissed; });
-  assert.equal(readEthereumPending(scope)?.hash, nextHash);
-  assert.equal(view.result.current.notice, null);
-});
-
-test('stop-tracking cannot remove reveal jobs or requests after a newer unpack takes its place', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  const previous = { scope, hash, action: 'unbox' as const, submittedAt: 1,
-    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0' } };
-  writeEthereumStorage(`${scope}:pending`, previous);
-  const late = Promise.withResolvers<EthereumRevealTransactionResponse>();
-  const signals: AbortSignal[] = [];
-  t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, signal) => { signals.push(signal!); return late.promise; });
-  const view = harness();
-  await waitFor(() => assert.equal(signals.length, 1));
-  const release = Promise.withResolvers<void>();
-  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, {}, () => release.promise);
-  let dismissed: Promise<void> | undefined;
-  act(() => { dismissed = view.result.current.dismissPending(); });
-  const nextHash = `0x${'cd'.repeat(32)}`;
-  act(() => {
-    rememberEthereumRevealJob(scope, nextHash, 2);
-    writeEthereumStorage(`${scope}:pending`, { ...previous, hash: nextHash, submittedAt: 2 });
-  });
-  await act(async () => { release.resolve(); await competing; await dismissed; });
-  assert.equal(readEthereumPending(scope)?.hash, nextHash);
-  assert.deepEqual(readEthereumRevealJobs(scope).map(job => job.transactionHash), [hash, nextHash]);
-  assert.ok(signals.every(signal => !signal.aborted));
-  assert.equal(view.result.current.notice, null);
-  await act(async () => {
-    late.resolve({ chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
-      status: 'pending', artworks: [], retryAfterMs: 2000 });
-    await late.promise;
-  });
-});
-
-for (const failure of ['missing', 'error'] as const) {
-  for (const reload of [false, true]) {
-    test(`nonce capture retries ${failure} RPC results${reload ? ' after reload' : ''} and enables replacement recovery`, async t => {
-      speedUpConfirmationPolls(t);
-      const connected = wallet();
-      const request = connected.provider!.request;
-      const replacementHash = `0x${'cd'.repeat(32)}`;
-      let sentTransaction: Record<string, unknown> | undefined;
-      let visible = false;
-      let removed = false;
-      let lookups = 0;
-      connected.provider!.request = async args => {
-        if (args.method === 'eth_sendTransaction') sentTransaction = (args.params as Record<string, unknown>[])[0];
-        if (args.method !== 'eth_getTransactionByHash') return request(args);
-        const requestedHash = (args.params as string[])[0];
-        if (requestedHash === hash) {
-          lookups++;
-          if (removed) return null;
-          if (!visible) {
-            if (failure === 'error') throw new Error('RPC temporarily unavailable');
-            return null;
-          }
-        }
-        return { hash: requestedHash, from: owner, to: contract, input: sentTransaction!.data,
-          value: sentTransaction!.value, nonce: '0x8', chainId: '0xaa36a7' };
-      };
-      let view = harness(connected);
-      await waitFor(() => assert.ok(view.result.current.stats.data));
-      await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
-      await waitFor(() => assert.ok(lookups > 0));
-      const scope = ethereumInventoryScope(config, owner)!;
-      assert.equal(readEthereumPending(scope)?.nonce, undefined);
-      if (reload) {
-        view.unmount();
-        view.client.clear();
-        const previousLookups = lookups;
-        view = harness(connected);
-        await waitFor(() => assert.ok(lookups > previousLookups));
-        assert.equal(readEthereumPending(scope)?.nonce, undefined);
-      }
-      visible = true;
-      await waitFor(() => assert.equal(readEthereumPending(scope)?.nonce, '0x8'));
-      removed = true;
-      const capturedLookups = lookups;
-      await act(async () => { assert.equal(await view.result.current.replacePending(replacementHash), true); });
-      assert.equal(readEthereumPending(scope)?.hash, replacementHash);
-      assert.equal(readEthereumPending(scope)?.nonce, '0x8');
-      assert.equal(lookups, capturedLookups);
-    });
-  }
-}
-
-test('late nonce enrichment rechecks the transaction under the submission lock', async t => {
-  const connected = wallet();
-  const request = connected.provider!.request;
-  const finishLookups: ((value: unknown) => void)[] = [];
-  let sentTransaction: Record<string, unknown> | undefined;
-  connected.provider!.request = async args => {
-    if (args.method === 'eth_getTransactionByHash') return new Promise(resolve => { finishLookups.push(resolve); });
-    if (args.method === 'eth_sendTransaction') sentTransaction = (args.params as Record<string, unknown>[])[0];
-    return request(args);
-  };
-  const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.stats.data));
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
-  assert.ok(finishLookups.length && sentTransaction);
-  const scope = ethereumInventoryScope(config, owner)!;
-  let release: (() => void) | undefined;
-  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
-    assert.ok(lock);
-    await new Promise<void>(resolve => { release = resolve; });
-  });
-  const requests = t.mock.method(navigator.locks, 'request');
-  await act(async () => { finishLookups.forEach(finish => finish({ hash, from: owner, to: contract, input: sentTransaction!.data,
-    value: sentTransaction!.value, nonce: '0x7', chainId: '0xaa36a7' })); });
-  assert.equal(requests.mock.callCount(), finishLookups.length);
-  assert.equal(readEthereumPending(scope)?.nonce, undefined);
-  const nextHash = `0x${'cd'.repeat(32)}`;
-  window.localStorage.setItem(`ethereum111k:${scope}:pending`, JSON.stringify({ scope, hash: nextHash, action: 'mint', submittedAt: 2 }));
-  await act(async () => { release!(); await competing; });
-  assert.equal(readEthereumPending(scope)?.hash, nextHash);
-  assert.equal(readEthereumPending(scope)?.nonce, undefined);
-});
-
-test('late delivery finalization cannot clear a newer replacement transaction', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  savedSession(owner);
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
-  const replacementHash = `0x${'cd'.repeat(32)}`;
-  t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-  t.mock.method(ethereumApi, 'confirm', async transactionHash => ({ status: transactionHash === hash ? 'confirmed' as const : 'pending' as const,
-    confirmations: transactionHash === hash ? 3 : 0, items: [], burnedTokenIds: [] }));
-  let finishDelivery: (() => void) | undefined;
-  t.mock.method(ethereumApi, 'confirmDelivery', async () => {
-    await new Promise<void>(resolve => { finishDelivery = resolve; });
-    return { status: 'confirmed', confirmations: 3 };
-  });
-  const view = harness();
-  await waitFor(() => assert.ok(finishDelivery));
-  act(() => writeEthereumStorage(`${scope}:pending`, { ...readEthereumPending(scope), hash: replacementHash }));
-  await waitFor(() => assert.equal(view.result.current.pending?.hash, replacementHash));
-  await act(async () => { finishDelivery!(); });
-  assert.equal(view.result.current.pending?.hash, replacementHash);
-  assert.equal(readEthereumPending(scope)?.hash, replacementHash);
-});
-
-for (const action of ['delivery', 'claim'] as const) {
-  test(`late ${action} finalization preserves a new transaction reservation`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    savedSession(owner);
-    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
-    const nextHash = `0x${'cd'.repeat(32)}`;
-    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    t.mock.method(ethereumApi, 'confirm', async transactionHash => ({
-      status: transactionHash === hash ? 'confirmed' as const : 'pending' as const,
-      confirmations: transactionHash === hash ? 3 : 0, items: [], burnedTokenIds: [],
-    }));
-    let finishOld: (() => void) | undefined;
-    t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
-      await new Promise<void>(resolve => { finishOld = resolve; });
-      return { status: 'confirmed', confirmations: 3 };
-    });
-    const connected = wallet();
-    const request = connected.provider!.request;
-    let finishSend: ((hash: string) => void) | undefined;
-    connected.provider!.request = async args => args.method === 'eth_sendTransaction'
-      ? new Promise<string>(resolve => { finishSend = resolve; }) : request(args);
-    const view = harness(connected);
-    await waitFor(() => { assert.ok(finishOld); assert.ok(view.result.current.stats.data); });
-    await act(async () => { await view.result.current.dismissPending(); });
-    let nextMint: Promise<boolean> | undefined;
-    act(() => { nextMint = view.result.current.mint('crate', 1); });
-    await waitFor(() => assert.ok(finishSend));
-    const key = `ethereum111k:${scope}:pending`;
-    const reserved = window.localStorage.getItem(key);
-    assert.equal(readEthereumSubmission(scope)?.action, 'mint');
-    try {
-      await act(async () => { finishOld!(); });
-      assert.equal(window.localStorage.getItem(key), reserved);
-      assert.equal(view.result.current.submission?.action, 'mint');
-      assert.equal(readEthereumPending(scope), null);
-    } finally {
-      await act(async () => { finishSend!(nextHash); await nextMint; });
-    }
-    assert.equal(readEthereumPending(scope)?.hash, nextHash);
-    assert.equal(readEthereumSubmission(scope), null);
-  });
-}
-
-for (const failureCode of ['transaction-reverted', 'operation-failed']) test(`${failureCode} cleanup preserves a new reservation before its storage event arrives`, async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
-  let rejectConfirmation: ((error: Error) => void) | undefined;
-  t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>((_resolve, reject) => {
-    rejectConfirmation = reject;
-  }));
-  harness();
-  await waitFor(() => assert.ok(rejectConfirmation));
-  const key = `ethereum111k:${scope}:pending`;
-  const reserved = JSON.stringify({ scope, hash: `0x${'0'.repeat(64)}`, awaitingHash: true,
-    action: 'mint', nonce: '0x8', submittedAt: Date.now(), intent: { to: contract, data: '0x', value: '0x0' } });
-  window.localStorage.setItem(key, reserved);
-  await act(async () => { rejectConfirmation!(new EthereumApiError(409, 'Failed', failureCode)); });
-  assert.equal(window.localStorage.getItem(key), reserved);
-  assert.equal(readEthereumSubmission(scope)?.nonce, '0x8');
-});
-
-for (const action of ['delivery', 'claim'] as const) {
-  test(`late ${action} finalization cannot clear a newer saved reservation hidden by its old fallback`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    savedSession(owner);
-    const key = `ethereum111k:${scope}:pending`;
-    const storage = window.localStorage;
-    const submittedAt = Date.now();
-    const intent = { to: contract, data: '0x', value: '0x0' };
-    const submission = { scope, action, orderId: 42, claimId: hash, submittedAt, intent };
-    reserveEthereumSubmission({ ...submission, nonce: '0x7' });
-    Object.defineProperty(window, 'localStorage', { configurable: true, value: {
-      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage), setItem() { throw new Error('Quota exceeded'); },
-    } });
-    writeEthereumStorage(`${scope}:pending`, { ...submission, hash });
-    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage });
-    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed' as const, confirmations: 3, items: [], burnedTokenIds: [] }));
-    let finishOld: (() => void) | undefined;
-    t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
-      await new Promise<void>(resolve => { finishOld = resolve; });
-      return { status: 'confirmed', confirmations: 3 };
-    });
-    const view = harness();
-    await waitFor(() => assert.ok(finishOld));
-    assert.equal(view.result.current.pending?.hash, hash);
-    const reserved = JSON.stringify({ scope, hash: `0x${'0'.repeat(64)}`, awaitingHash: true,
-      action: 'mint', nonce: '0x8', submittedAt: submittedAt + 1, intent });
-    storage.setItem(key, reserved);
-    await act(async () => { finishOld!(); });
-    assert.equal(storage.getItem(key), reserved);
-    assert.equal(readEthereumSubmission(scope)?.nonce, '0x8');
-    act(() => window.dispatchEvent(new window.StorageEvent('storage', { key, storageArea: storage })));
-    assert.equal(view.result.current.pending, null);
-    assert.equal(view.result.current.submission?.nonce, '0x8');
-  });
-}
-
-for (const submitted of [false, true]) {
-  test(`a collection change ${submitted ? 'preserves an already submitted transaction' : 'aborts transaction preparation'}`, async () => {
-    const connected = wallet();
-    const request = connected.provider!.request;
-    let resume: (() => void) | undefined;
-    connected.provider!.request = async args => {
-      const result = await request(args);
-      if (args.method === (submitted ? 'eth_sendTransaction' : 'eth_getTransactionCount')) {
-        await new Promise<void>(resolve => { resume = resolve; });
-      }
-      return result;
-    };
-    const view = harness(connected);
-    await waitFor(() => assert.ok(view.result.current.stats.data));
-    const previousScope = view.result.current.scope!;
-    let mint: Promise<boolean> | undefined;
-    act(() => { mint = view.result.current.mint('crate', 1); });
-    await waitFor(() => assert.ok(resume));
-    assert.equal(connected.sent.length, submitted ? 1 : 0);
-    const replacement = resolveEthereum111kConfig({ contractAddress: '0x4444444444444444444444444444444444444444' });
-    act(() => { view.client.setQueryData(['ethereum111k', 'config'], replacement); });
-    await waitFor(() => assert.equal(view.result.current.scope, ethereumInventoryScope(replacement, owner)));
-    await act(async () => { resume!(); assert.equal(await mint, submitted); });
-    assert.equal(connected.sent.length, submitted ? 1 : 0);
-    assert.equal(readEthereumPending(previousScope)?.hash ?? null, submitted ? hash : null);
-    assert.equal(readEthereumSubmission(previousScope), null);
-    assert.equal(readEthereumOperation(previousScope), null);
-    assert.equal(view.result.current.pending, null);
-    assert.equal(view.result.current.busy, null);
-  });
-}
-
-const wrappedBlockHash = `0x${'ef'.repeat(32)}`;
-function wrappedMintReceipt(transactionHash: string) {
-  return { transactionHash, from: other, to: owner, status: '0x1', blockNumber: '0x65', blockHash: wrappedBlockHash, logs: [{
-    address: contract,
-    topics: ['0xf74beeed6afd1c86b1e7db3a5e02e09ce36876cd81ef0a532aab80ccab145aed', encodeAbi(['address'], [owner])],
-    data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, 1, config.cratePriceWei]),
-  }] };
-}
-
-for (const action of ['mint', 'transfer', 'unbox'] as const) {
-  test(`a contract-wallet ${action} ${action === 'unbox' ? 'recovers its lost hash without a chain-height checkpoint' : 'keeps an ambiguous lost-hash submission blocked'} after reload`, async () => {
-    const connected = wallet();
-    const request = connected.provider!.request;
-    const storage = window.localStorage;
-    connected.provider!.request = async args => {
-      if (args.method === 'eth_getTransactionByHash') return null;
-      const result = await request(args);
-      if (args.method === 'eth_sendTransaction') Object.defineProperty(window, 'localStorage', { configurable: true, value: {
-        getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage), setItem() { throw new Error('Quota exceeded'); },
-      } });
-      return result;
-    };
-    const first = harness(connected);
-    await waitFor(() => assert.ok(first.result.current.stats.data));
-    await act(async () => {
-      const submitted = action === 'mint' ? first.result.current.mint('crate', 1) : action === 'unbox' ? first.result.current.unbox(token()) :
-        first.result.current.transfer({ ...token(owner, '2000001'), kind: 'crate_receipt' }, other);
-      assert.equal(await submitted, true);
-    });
-    const scope = ethereumInventoryScope(config, owner)!;
-    const key = `ethereum111k:${scope}:pending`;
-    const reserved = storage.getItem(key)!;
-    assert.equal(JSON.parse(reserved).awaitingHash, true);
-    assert.equal(JSON.parse(reserved).nonce, '0x7');
-    assert.equal(connected.sent.length, 1);
-    const locks = navigator.locks;
-    await act(async () => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
-    dom.window.close();
-    ({ dom } = setupFrontendDom());
-    Object.defineProperty(navigator, 'locks', { configurable: true, value: locks });
-    window.localStorage.setItem(key, reserved);
-    const receipt = { ...wrappedMintReceipt(hash), blockNumber: '0x1' };
-    if (action === 'unbox') receipt.logs = [{ address: contract,
-      topics: ['0xe69ab792dddbde960afe57d10ae0b0010bff06941200790103ff188c4f2e00e1', encodeAbi(['uint256'], [111112]), encodeAbi(['address'], [owner])],
-      data: encodeAbi(['uint256', 'uint256'], [1, 20]),
-    }];
-    if (action === 'transfer') receipt.logs = [{ address: contract,
-      topics: [ETHEREUM_EVENT_TOPICS.Transfer, encodeAbi(['address'], [owner]), encodeAbi(['address'], [other]), encodeAbi(['uint256'], [2000001])], data: '0x',
-    }];
-    const restoredWallet = wallet();
-    const restoredRequest = restoredWallet.provider!.request;
-    restoredWallet.provider!.request = async args => {
-      if (args.method === 'eth_getTransactionByHash') return { hash, from: other, to: owner, input: '0x1234', value: '0x0', nonce: '0x2', chainId: '0xaa36a7' };
-      if (args.method === 'eth_getCode') { assert.deepEqual(args.params, [owner, 'latest']); return '0x6000'; }
-      if (args.method === 'eth_getTransactionReceipt') { assert.deepEqual(args.params, [hash]); return receipt; }
-      if (args.method === 'eth_getBlockByNumber') { assert.deepEqual(args.params, ['0x1', false]); return { hash: wrappedBlockHash }; }
-      return restoredRequest(args);
-    };
-    const restored = harness(restoredWallet);
-    await waitFor(() => assert.ok(restored.result.current.submission));
-    await act(async () => { assert.equal(await restored.result.current.mint('crate', 1), false); });
-    await act(async () => { assert.equal(await restored.result.current.replacePending(hash), action === 'unbox'); });
-    assert.equal(restoredWallet.sent.length, 0);
-    if (action !== 'unbox') {
-      assert.match(restored.result.current.error ?? '', /cannot.*safely recover/i);
-      assert.equal(restored.result.current.submission?.action, action);
-      assert.equal(restored.result.current.pending, null);
-      assert.equal(window.localStorage.getItem(key), reserved);
-      await act(async () => { assert.equal(await restored.result.current.mint('crate', 1), false); });
-      assert.equal(restoredWallet.sent.length, 0);
-      return;
-    }
-    assert.equal(restored.result.current.submission, null);
-    assert.equal(restored.result.current.pending?.hash, hash);
-    assert.equal(restored.result.current.pending?.nonce, '0x2');
-    assert.equal(restored.result.current.pending?.transactionSender, other);
-    assert.equal(restored.result.current.pending?.intent?.to, contract);
-    assert.equal(readEthereumSubmission(scope), null);
-    assert.equal(JSON.parse(window.localStorage.getItem(key)!).hash, hash);
-  });
-}
-
-test('a contract-wallet mint persists the relayer nonce and recovers a mined replacement after remount', async () => {
-  const connected = wallet();
-  const request = connected.provider!.request;
-  const replacementHash = `0x${'cd'.repeat(32)}`;
-  let originalAvailable = true;
-  let originalLookups = 0;
-  connected.provider!.request = async args => {
-    if (args.method === 'eth_getTransactionByHash') {
-      const transactionHash = (args.params as string[])[0];
-      if (transactionHash === hash) {
-        originalLookups++;
-        if (!originalAvailable) return null;
-      }
-      return { hash: transactionHash, from: other, to: owner, input: '0x1234', value: '0x0', nonce: '0x2', chainId: '0xaa36a7' };
-    }
-    if (args.method === 'eth_getCode') { assert.deepEqual(args.params, [owner, 'latest']); return '0x6000'; }
-    if (args.method === 'eth_getTransactionReceipt') { assert.deepEqual(args.params, [replacementHash]); return wrappedMintReceipt(replacementHash); }
-    if (args.method === 'eth_getBlockByNumber') { assert.deepEqual(args.params, ['0x65', false]); return { hash: wrappedBlockHash }; }
-    return request(args);
-  };
-  const first = harness(connected);
-  await waitFor(() => assert.ok(first.result.current.stats.data));
-  await act(async () => { assert.equal(await first.result.current.mint('crate', 1), true); });
-  const scope = ethereumInventoryScope(config, owner)!;
-  await waitFor(() => assert.equal(readEthereumPending(scope)?.nonce, '0x2'));
-  assert.equal(readEthereumPending(scope)?.transactionSender, other);
-  const transactionCallHash = readEthereumPending(scope)?.transactionCallHash;
-  assert.match(transactionCallHash ?? '', /^0x[0-9a-f]{64}$/);
-  assert.equal(connected.sent.length, 1);
-  first.unmount();
-  first.client.clear();
-  originalAvailable = false;
-  const completedLookups = originalLookups;
-  const restored = harness(connected);
-  await waitFor(() => assert.equal(restored.result.current.pending?.hash, hash));
-  assert.equal(restored.result.current.pending?.transactionCallHash, transactionCallHash);
-  await act(async () => { assert.equal(await restored.result.current.replacePending(replacementHash), true); });
-  assert.equal(originalLookups, completedLookups);
-  assert.equal(connected.sent.length, 1);
-  assert.equal(restored.result.current.pending?.hash, replacementHash);
-  assert.equal(restored.result.current.pending?.nonce, '0x2');
-  assert.equal(restored.result.current.pending?.transactionSender, other);
-  assert.equal(restored.result.current.pending?.transactionCallHash, transactionCallHash);
-  assert.equal(restored.result.current.pending?.action, 'mint');
-  assert.equal(readEthereumSubmission(scope), null);
-});
-
-test('a known contract-wallet unbox recovers a new relayer transaction and unblocks subsequent actions', async t => {
-  const scope = ethereumInventoryScope(config, owner)!;
-  const replacementHash = `0x${'cd'.repeat(32)}`;
-  const newRelayer = '0x4444444444444444444444444444444444444444';
-  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'unbox', submittedAt: Date.now(), nonce: '0x2', transactionSender: other,
-    intent: { to: contract, data: encodeCall('unboxCrate(uint256)', ['uint256'], [111112]), value: '0x0' } });
-  const connected = wallet();
-  const request = connected.provider!.request;
-  let originalLookups = 0;
-  connected.provider!.request = async args => {
-    if (args.method === 'eth_getTransactionByHash') {
-      if ((args.params as string[])[0] === hash) { originalLookups++; return null; }
-      return { hash: replacementHash, from: newRelayer, to: owner, input: '0x5678', value: '0x0', nonce: '0x9', chainId: '0xaa36a7' };
-    }
-    if (args.method === 'eth_getCode') return '0x6000';
-    if (args.method === 'eth_getTransactionReceipt') return { ...wrappedMintReceipt(replacementHash), from: newRelayer, logs: [{ address: contract,
-      topics: ['0xe69ab792dddbde960afe57d10ae0b0010bff06941200790103ff188c4f2e00e1', encodeAbi(['uint256'], [111112]), encodeAbi(['address'], [owner])],
-      data: encodeAbi(['uint256', 'uint256'], [1, 20]),
+async function foreignCompletedCrateReveal(t: TestContext, confirmed = true) {
+  const tick = manualRecoveryTicks(t);
+  const source = token();
+  const hash = hashFor(1);
+  const response: EthereumRevealTransactionResponse = { chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', status: 'revealed', retryAfterMs: 0, artworks: [{
+      tokenId: '1', crateTokenId: source.tokenId, name: 'Painting', description: '', image: 'https://cdn.mons.shop/111k/paintings/1.png', category: 'painting',
+      attributes: [], aspectRatio: { width: 1, height: 1 }, observation: { transactionHash: hash, blockHash: hashFor(9), blockNumber: 1 },
     }] };
-    if (args.method === 'eth_getBlockByNumber') return { hash: wrappedBlockHash };
-    return request(args);
-  };
+  if (confirmed) confirmations.set(hash, { status: 'confirmed', confirmations: 1,
+    items: [token('1', owner, 'artwork')], burnedTokenIds: [source.tokenId] });
+  const gate = Promise.withResolvers<EthereumRevealTransactionResponse>();
+  const signals: AbortSignal[] = [];
+  const request = t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash, signal) => {
+    assert.equal(transactionHash, hash);
+    signals.push(signal!);
+    return signals.length === 1 ? gate.promise : response;
+  });
+  const first = harness();
+  await ready(first);
+  await act(async () => { assert.equal(await first.result.current.unbox(source), hash); });
+  await waitFor(() => assert.equal(request.mock.callCount(), 1));
+  if (confirmed) await waitFor(() => assert.equal(first.result.current.operations.length, 0));
+  const second = harness();
+  await waitFor(() => assert.equal(second.result.current.unpackResults[hash]?.length, 1));
+  await waitFor(() => assert.deepEqual(readEthereumRevealJobs(scope), []));
+  assert.equal(request.mock.callCount(), 2);
+  assert.equal(first.result.current.unpackResults[hash], undefined);
+  return { first, second, gate, response, hash, tick, request, signals };
+}
+
+test('inventory loads without Solana or a wallet interaction, and late old-owner inventory cannot replace the new owner', async t => {
+  let finish!: (result: { items: EthereumInventoryItem[]; nextCursor: null; observedBlock: number }) => void;
+  t.mock.method(ethereumApi, 'inventory', async (_config, address) => address === owner ? new Promise(resolve => { finish = resolve; }) : { items: [token('111113', other)], nextCursor: null, observedBlock: 1 });
+  const first = wallet();
+  const view = harness(first);
+  await waitFor(() => assert.ok(finish));
+  view.rerender({ wallet: wallet(other), mintKind: 'crate' });
+  await waitFor(() => assert.equal(view.result.current.items[0]?.owner, other));
+  await act(async () => finish({ items: [token()], nextCursor: null, observedBlock: 1 }));
+  assert.equal(view.result.current.items[0]?.owner, other);
+  assert.equal(first.connections, 0);
+  assert.equal(first.sent.length, 0);
+});
+
+test('two mint submissions keep independent placeholders and confirm in either order', async () => {
+  const connected = wallet();
   const view = harness(connected);
-  await waitFor(() => { assert.equal(view.result.current.pending?.hash, hash); assert.ok(view.result.current.stats.data); });
-  await act(async () => { assert.equal(await view.result.current.replacePending(replacementHash), true); });
-  assert.equal(view.result.current.pending?.hash, replacementHash);
-  assert.equal(view.result.current.pending?.transactionSender, newRelayer);
-  assert.equal(view.result.current.pending?.nonce, '0x9');
-  assert.equal(originalLookups, 0);
-  t.mock.method(ethereumApi, 'confirm', async transactionHash => ({ status: transactionHash === replacementHash ? 'confirmed' : 'pending',
-    confirmations: transactionHash === replacementHash ? 1 : 0,
-    items: transactionHash === replacementHash ? [{ ...token(owner, '1'), kind: 'artwork' }] : [],
-    burnedTokenIds: transactionHash === replacementHash ? ['111112'] : [] }));
-  act(() => view.result.current.refresh());
-  await waitFor(() => assert.equal(view.result.current.pending, null));
+  await ready(view);
+  await mint(view, 'crate', 2);
+  assert.equal(view.result.current.busy, null);
+  await mint(view, 'warehouse');
+  assert.equal(connected.sent.length, 2);
+  assert.deepEqual(view.result.current.pendingMints.map(item => [item.kind, item.quantity]), [['crate', 2], ['warehouse', 1]]);
+  confirmations.set(hashFor(2), { status: 'confirmed', confirmations: 1, items: [token('116667', owner, 'warehouse')], burnedTokenIds: [] });
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 1));
+  assert.equal(view.result.current.pendingMints[0].kind, 'crate');
+  confirmations.set(hashFor(1), { status: 'confirmed', confirmations: 1, items: [token(), token('111113')], burnedTokenIds: [] });
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 0));
+  assert.deepEqual(new Set(readEthereumExpected(scope)), new Set(['116667', '111112', '111113']));
   assert.equal(readEthereumPending(scope), null);
-  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
-  assert.equal(connected.sent.length, 1);
 });
 
+test('a pending mint allows an unrelated unpack and only its source is locked', async () => {
+  const view = harness();
+  await ready(view);
+  await mint(view);
+  let unpackHash: string | null = null;
+  await act(async () => { unpackHash = await view.result.current.unbox(token('116667', owner, 'warehouse')); });
+  assert.equal(unpackHash, hashFor(2));
+  assert.deepEqual([...view.result.current.pendingItemIds], [token('116667', owner, 'warehouse').id]);
+  await act(async () => { assert.equal(await view.result.current.unbox(token('116667', owner, 'warehouse')), null); });
+  await act(async () => { assert.equal(await view.result.current.unbox(token('117172', owner, 'relic')), hashFor(3)); });
+  confirmations.set(hashFor(2), { status: 'confirmed', confirmations: 1, items: [token(), token('111113')], burnedTokenIds: ['116667'] });
+  await waitFor(() => assert.equal(view.result.current.unpackResults[hashFor(2)]?.length, 2));
+  assert.equal(view.result.current.pendingMints.length, 1);
+  assert.equal(view.result.current.pendingItemIds.has(token('116667', owner, 'warehouse').id), false);
+  assert.equal(view.result.current.pendingItemIds.has(token('117172', owner, 'relic').id), true);
+});
 
-test('relics have no public mint quote or transaction path', async () => {
+test('the wallet request guard rejects duplicate calls only until broadcast', async t => {
+  const connected = wallet();
+  let release!: () => void;
+  const original = connected.provider!.request;
+  t.mock.method(connected.provider!, 'request', async request => {
+    if (request.method === 'eth_sendTransaction' && !release) await new Promise<void>(resolve => { release = resolve; });
+    return original(request);
+  });
+  const view = harness(connected);
+  await ready(view);
+  let sending!: Promise<boolean>;
+  act(() => { sending = view.result.current.mint('crate', 1); });
+  await waitFor(() => assert.ok(release));
+  assert.ok(view.result.current.busy);
+  await act(async () => { assert.equal(await view.result.current.mint('warehouse', 1), false); });
+  await act(async () => { release(); assert.equal(await sending, true); });
+  assert.equal(view.result.current.busy, null);
+  await mint(view, 'warehouse');
+  assert.equal(connected.sent.length, 2);
+});
+
+test('rejected approval removes its hint while an uncertain send remains locally pending and never auto-resubmits', async t => {
+  const connected = wallet();
+  let ambiguous = false;
+  const original = connected.provider!.request;
+  const request = t.mock.method(connected.provider!, 'request', async value => {
+    if (value.method === 'eth_sendTransaction') throw ambiguous ? new Error('Connection lost') : Object.assign(new Error('Rejected'), { code: 4001 });
+    return original(value);
+  });
+  const view = harness(connected);
+  await ready(view);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
+  assert.equal(view.result.current.pendingMints.length, 0);
+  ambiguous = true;
+  await act(async () => { assert.equal(await view.result.current.mint('warehouse', 2), false); });
+  assert.equal(view.result.current.pendingMints.length, 1);
+  assert.equal(view.result.current.pendingMints[0].quantity, 2);
+  assert.equal(view.result.current.busy, null);
+  assert.equal(readEthereumDropOperations(scope)[0].hash, undefined);
+  await act(async () => { view.result.current.refresh(); });
+  assert.equal(request.mock.calls.filter(call => call.arguments[0].method === 'eth_sendTransaction').length, 2);
+});
+
+test('local storage failure preserves pending hints in memory and never prevents submission', async t => {
+  t.mock.method(window.Storage.prototype, 'setItem', () => { throw new Error('Storage unavailable'); });
   const connected = wallet();
   const view = harness(connected);
-  await waitFor(() => assert.ok(view.result.current.mintQuote('crate', 1)));
-  assert.equal(Reflect.apply(view.result.current.mintQuote, undefined, ['relic', 1]), null);
-  await act(async () => { assert.equal(await Reflect.apply(view.result.current.mint, undefined, ['relic', 1]), false); });
-  assert.match(view.result.current.error ?? '', /cannot be publicly minted/);
-  assert.equal(connected.sent.length, 0);
+  await ready(view);
+  await mint(view);
+  assert.equal(connected.sent.length, 1);
+  assert.equal(view.result.current.pendingMints.length, 1);
+  assert.equal(view.result.current.error, null);
+  confirmations.set(hashFor(1), { status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] });
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 0));
 });
 
-test('a relic opening retains all 111 crates through stale indexing and reload', async t => {
-  const relic: EthereumInventoryItem = { ...token(owner, '117172'), kind: 'relic', name: 'Relic #1' };
-  const crates = Array.from({ length: 111 }, (_, index) => ({ ...token(owner, String(111112 + index)),
-    displayId: index + 1, name: `Crate #${index + 1}` }));
-  const scope = ethereumInventoryScope(config, owner)!;
-  let included = false;
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
-    items: included ? crates.filter(crate => expected.includes(crate.tokenId)) : [relic],
-    nextCursor: null, observedBlock: 10,
+test('restored operations reconcile silently and never expose a gallery-open state', async () => {
+  writeEthereumDropOperation(scope, 'restored', savedOperation());
+  const view = harness(wallet(), 'crate', true);
+  await ready(view);
+  assert.equal(view.result.current.pendingMints.length, 1);
+  confirmations.set(hashFor(1), { status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] });
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 0));
+  assert.equal(view.result.current.error, null);
+  assert.equal('revealed' in view.result.current, false);
+  assert.deepEqual(view.result.current.unpackResults, {});
+});
+
+test('legacy mint state migrates once without changing disabled checkout delivery state', async () => {
+  const legacy = savedOperation();
+  writeEthereumStorage(`${scope}:pending`, legacy);
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 1));
+  assert.equal(readEthereumPending(scope), null);
+  assert.equal(readEthereumDropOperations(scope)[0].id, `legacy-${legacy.hash.slice(2)}`);
+  await act(async () => { view.unmount(); });
+  writeEthereumStorage(`${scope}:pending`, { ...legacy, action: 'delivery', orderId: 42 });
+  const next = harness();
+  await ready(next);
+  assert.equal(readEthereumPending(scope)?.action, 'delivery');
+  await mint(next, 'warehouse');
+  assert.equal(readEthereumPending(scope)?.action, 'delivery');
+});
+
+test('a migrated legacy reveal preserves its delayed receipt and inventory hints while indexing lags', async t => {
+  const source = token();
+  const minted = token('1', owner, 'artwork');
+  const hash = hashFor(1);
+  const submittedAt = Date.now() - 1000;
+  writeEthereumStorage(`${scope}:pending`, { scope, action: 'unbox', hash, submittedAt,
+    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [source.tokenId]), value: '0x0' } });
+  writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt }]);
+  const receipt = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  t.mock.method(ethereumApi, 'confirm', async () => receipt.promise);
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+    items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
   }));
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
-    items: included ? crates : [], burnedTokenIds: included ? [relic.tokenId] : [] }));
+  const artwork = { tokenId: minted.tokenId, crateTokenId: source.tokenId, name: 'Painting', description: '', image: 'https://cdn.mons.shop/111k/paintings/1.png', category: 'painting' as const,
+    attributes: [], aspectRatio: { width: 1, height: 1 }, observation: { transactionHash: hash, blockHash: hashFor(9), blockNumber: 1 } };
+  const revealRequest = t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', status: 'revealed' as const, artworks: [artwork], retryAfterMs: 0 }));
   const connected = wallet();
-  let view = harness(connected);
-  await waitFor(() => assert.equal(view.result.current.items.length, 1));
-  await act(async () => { assert.equal(await view.result.current.unbox(relic), true); });
-  included = true;
-  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
-  await waitFor(() => assert.equal(view.result.current.revealed?.length, 111));
-  assert.equal(view.result.current.pending, null);
-  assert.deepEqual(readEthereumExpected(scope), crates.map(crate => crate.tokenId));
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.unpackResults[hash]?.[0].name, 'Painting'));
+  assert.deepEqual(view.result.current.unpackErrors, {});
+  assert.equal(readEthereumDropOperations(scope).length, 1);
+  assert.equal(readEthereumPending(scope), null);
+  await act(async () => { receipt.resolve({ status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [source.tokenId] }); });
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [minted.tokenId]));
+  assert.deepEqual(readEthereumExpected(scope), [minted.tokenId]);
+  assert.deepEqual(readEthereumDropOperations(scope), []);
+  assert.deepEqual(readEthereumRevealJobs(scope), []);
   view.unmount();
-  view.client.clear();
-  view = harness(connected);
-  await waitFor(() => assert.deepEqual(view.result.current.items.map(crate => crate.tokenId), crates.map(crate => crate.tokenId)));
-  assert.equal(connected.sent.length, 1);
-});
-
-function relicStatus(address: string | null = owner) {
-  return { chainId: config.chainId, contractAddress: contract, owner: address, observedBlock: 1, blockHash: `0x${'01'.repeat(32)}`,
-    saleActive: true, relicsAllocated: 12, relicsMinted: 0, remainingRelics: 12, claimedMask: 0,
-    relicLimit: address ? 3 : 0, relicsUsed: 0, remainingAllowance: address ? 3 : 0 };
-}
-
-function relicHarness(initialWallet = wallet()) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  clients.push(client);
-  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
-  return { ...renderHook(({ wallet: current, kind, suspended }) => useEthereum111k(current, '', kind, suspended),
-    { initialProps: { wallet: initialWallet, kind: 'relic' as 'crate' | 'relic', suspended: false }, wrapper }), client };
-}
-
-test('relic claims submit one zero-value ID and confirm without receipt authentication', async t => {
-  let confirmed = false;
-  let reads = 0;
-  const minted = { ...token(owner, '117189'), kind: 'relic' as const, displayId: 18, name: 'Relic #18' };
-  t.mock.method(globalThis, 'fetch', async input => {
-    const url = new URL(String(input));
-    assert.equal(url.pathname, '/ethereum/111k/relics');
-    assert.deepEqual(Object.fromEntries(url.searchParams), { chainId: String(config.chainId), contractAddress: contract, owner });
-    reads++;
-    return Response.json(relicStatus());
-  });
-  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
-  t.mock.method(ethereumApi, 'challenge', async () => { throw new Error('Relic claims must not authenticate'); });
-  t.mock.method(ethereumApi, 'confirmClaim', async () => { throw new Error('Relic claims must not finalize physical receipt claims'); });
-  t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmed ? 'confirmed' : 'pending', confirmations: 1,
-    items: confirmed ? [minted] : [], burnedTokenIds: [] }));
-  t.mock.method(ethereumApi, 'inventory', async (_config, _address, _cursor, _signal, expected = []) => ({
-    items: expected.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 2 }));
-  const connected = wallet();
-  const view = relicHarness(connected);
-  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
-  const before = reads;
-  await act(async () => { assert.equal(await view.result.current.claimRelic(18), true); });
-  assert.ok(reads > before);
-  assert.equal(connected.sent.length, 1);
-  assert.deepEqual(connected.sent[0], [{ from: owner, to: contract,
-    data: encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), value: '0x0', chainId: '0xaa36a7' }]);
-  const scope = ethereumInventoryScope(config, owner)!;
-  assert.equal(readEthereumPending(scope)?.action, 'relic-claim');
-  assert.equal(readEthereumSession(scope, config, owner), null);
-  await act(async () => { assert.equal(await view.result.current.claimRelic(2), false); });
-  confirmed = true;
-  act(() => view.result.current.refresh());
-  await waitFor(() => assert.equal(view.result.current.pending, null));
-  await waitFor(() => assert.equal(view.result.current.items[0]?.tokenId, '117189'));
-  assert.deepEqual(readEthereumExpected(scope), ['117189']);
-});
-
-for (const [change, message] of [
-  [{ claimedMask: 1 << 17, relicsMinted: 1, remainingRelics: 11 }, /just claimed/],
-  [{ remainingAllowance: 0, relicLimit: 0 }, /no relic claims/],
-  [{ remainingRelics: 0, relicsMinted: 12 }, /All allocated/],
-  [{ saleActive: false }, /not open/],
-] as const) test(`relic preflight rejects changed chain state: ${String(message)}`, async t => {
-  let current = relicStatus();
-  t.mock.method(ethereumApi, 'relics', async () => current);
-  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
-  const connected = wallet();
-  const view = relicHarness(connected);
-  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
-  current = { ...current, ...change };
-  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
-  assert.match(view.result.current.error ?? '', message);
+  const restored = harness(connected);
+  await ready(restored);
+  assert.deepEqual(restored.result.current.items.map(item => item.tokenId), [minted.tokenId]);
+  assert.deepEqual(restored.result.current.unpackResults, {});
+  assert.equal(revealRequest.mock.callCount(), 1);
   assert.equal(connected.sent.length, 0);
-  assert.equal(readEthereumSubmission(ethereumInventoryScope(config, owner)!), null);
 });
 
-test('relic polling stops outside the visible panel and never reloads cached metadata', async t => {
-  speedUpConfirmationPolls(t);
-  let reads = 0;
-  let metadataReads = 0;
-  t.mock.method(globalThis, 'fetch', async input => {
-    const url = new URL(String(input));
-    assert.equal(url.pathname, '/ethereum/111k/relics');
-    assert.deepEqual(Object.fromEntries(url.searchParams), { chainId: String(config.chainId), contractAddress: contract, owner });
-    reads++;
-    return Response.json(relicStatus());
+test('expired restored hints disappear without declaring cancellation or retrying the transaction', async () => {
+  writeEthereumDropOperation(scope, 'restored', savedOperation(hashFor(1), Date.now() - ETHEREUM_DROP_OPERATION_TTL - 1));
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 0));
+  assert.equal(readEthereumDropOperations(scope, Date.now(), true).length, 0);
+  assert.equal(view.result.current.error, null);
+  assert.equal(connected.sent.length, 0);
+});
+
+test('transient receipt errors preserve other pending transactions and explicit revert removes only its hint', async () => {
+  const view = harness();
+  await ready(view);
+  await mint(view);
+  await mint(view, 'warehouse');
+  confirmations.set(hashFor(1), new Error('RPC unavailable'));
+  confirmations.set(hashFor(2), new EthereumApiError(409, 'Reverted', 'transaction-reverted'));
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 1));
+  assert.equal(view.result.current.pendingMints[0].kind, 'crate');
+  assert.equal(view.result.current.busy, null);
+});
+
+test('a consumed observed nonce retires only a missing-receipt hint and refreshes inventory', async t => {
+  const connected = wallet();
+  let count = '0x0';
+  let receipt: unknown = { status: '0x1' };
+  const original = connected.provider!.request;
+  t.mock.method(connected.provider!, 'request', async request => request.method === 'eth_getTransactionCount' ? count : request.method === 'eth_getTransactionReceipt' ? receipt : original(request));
+  const view = harness(connected);
+  await ready(view);
+  await mint(view);
+  await waitFor(() => assert.equal(readEthereumDropOperations(scope)[0]?.nonce, '0x1'));
+  count = '0x2';
+  confirmations.set(hashFor(1), { status: 'pending', confirmations: 1, items: [], burnedTokenIds: [] });
+  await act(async () => { view.result.current.refresh(); });
+  assert.equal(view.result.current.pendingMints.length, 1);
+  receipt = null;
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 0));
+  assert.equal(view.result.current.error, null);
+  assert.deepEqual(readEthereumExpected(scope), []);
+});
+
+test('pending discounts reserve allowance without changing warehouse prices or blocking a public mint', async t => {
+  const root = `0x${'d'.repeat(64)}`;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: root, discountAllowance: 2 }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 2)?.discounted, true));
+  await mint(view, 'crate', 2);
+  assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false);
+  assert.equal(view.result.current.mintQuote('warehouse', 1)?.unitPriceWei, statistics.warehousePriceWei);
+  await mint(view, 'crate');
+  assert.deepEqual(readEthereumDropOperations(scope).map(item => item.discountedQuantity), [2, 0]);
+});
+
+test('pending discounts reserve the global cap and leave public-price minting available', async t => {
+  const root = `0x${'d'.repeat(64)}`;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: root, discountAllowance: 2,
+    maxDiscountedMints: 10, totalDiscountedMints: 9 }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
+  await mint(view);
+  const quote = view.result.current.mintQuote('crate', 1)!;
+  assert.equal(quote.discounted, false);
+  assert.equal(quote.unitPriceWei, statistics.cratePriceWei);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1, quote), true); });
+  assert.equal(connected.sent.length, 2);
+  const request = (connected.sent[1] as Record<string, unknown>[])[0];
+  assert.equal(request.data, encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]));
+  assert.equal(BigInt(request.value as string), BigInt(statistics.cratePriceWei));
+  assert.deepEqual(readEthereumDropOperations(scope).map(item => item.discountedQuantity), [1, 0]);
+});
+
+test('a reverted discounted mint releases both the final crate and global discount slot', async t => {
+  const root = `0x${'d'.repeat(64)}`;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, remainingCrates: 1, remainingWarehouses: 0,
+    discountMerkleRoot: root, discountAllowance: 2, maxDiscountedMints: 10, totalDiscountedMints: 9 }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
+  await mint(view);
+  assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false);
+  confirmations.set(hashFor(1), new EthereumApiError(409, 'Reverted', 'transaction-reverted'));
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 0));
+  assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true);
+  await mint(view);
+  assert.equal(connected.sent.length, 2);
+  const request = (connected.sent[1] as Record<string, unknown>[])[0];
+  assert.equal(request.data, encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, []]));
+  assert.equal(BigInt(request.value as string), BigInt(statistics.discountCratePriceWei));
+});
+
+for (const scenario of [
+  { name: 'an exhausted discount allowance permits a public mint despite earlier receipt metadata failures', allowance: 1, used: 1, quantity: 1, discounted: false, allowed: true },
+  { name: 'a quantity above the remaining discount allowance permits a public mint despite earlier receipt metadata failures', allowance: 4, used: 1, quantity: 4, discounted: false, allowed: true },
+  { name: 'an unaffected discounted price permits another mint despite earlier receipt metadata failures', allowance: 4, used: 1, quantity: 1, discounted: true, allowed: true },
+  { name: 'an uncertain discount price still blocks a mint when its earlier receipt cannot be confirmed', allowance: 1, used: 0, quantity: 1, discounted: false, allowed: false },
+]) test(scenario.name, async t => {
+  const root = `0x${'d'.repeat(64)}`;
+  let used = 0;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: root, discountAllowance: scenario.allowance, discountUsed: used }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
+  await mint(view);
+  used = scenario.used;
+  confirmations.set(hashFor(1), new EthereumApiError(503, 'Ethereum metadata is temporarily unavailable.', 'unavailable'));
+  await act(async () => { await view.result.current.stats.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.stats.data?.discountUsed, used));
+  const quote = view.result.current.mintQuote('crate', scenario.quantity)!;
+  assert.equal(quote.discounted, scenario.discounted);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', scenario.quantity, quote), scenario.allowed); });
+  assert.equal(connected.sent.length, scenario.allowed ? 2 : 1);
+  assert.ok(readEthereumDropOperations(scope).some(operation => operation.hash === hashFor(1)));
+  if (scenario.allowed) {
+    const request = (connected.sent[1] as Record<string, unknown>[])[0];
+    const unitPrice = scenario.discounted ? statistics.discountCratePriceWei : statistics.cratePriceWei;
+    const signature = scenario.discounted ? ETHEREUM_FUNCTIONS.mintCratesDiscounted : ETHEREUM_FUNCTIONS.mintCrates;
+    assert.equal(BigInt(request.value as string), BigInt(unitPrice) * BigInt(scenario.quantity));
+    assert.equal((request.data as string).slice(0, 10), encodeCall(signature, [], []));
+    assert.equal(view.result.current.error, null);
+  } else assert.match(view.result.current.error!, /metadata is temporarily unavailable/);
+});
+
+test('mint rechecks changed price and supply before requesting a transaction', async t => {
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  const originalQuote = view.result.current.mintQuote('crate', 1)!;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, cratePriceWei: '999' }));
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1, originalQuote), false); });
+  assert.match(view.result.current.error!, /terms changed/);
+  assert.equal(connected.sent.length, 0);
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, remainingWarehouses: 0 }));
+  await act(async () => { assert.equal(await view.result.current.mint('warehouse', 1), false); });
+  assert.match(view.result.current.error!, /no longer available/);
+});
+
+test('a pending mint reserves the final crate before another wallet request', async t => {
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, remainingCrates: 1, remainingWarehouses: 0 }));
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await mint(view);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
+  assert.match(view.result.current.error!, /no longer available/);
+  assert.equal(connected.sent.length, 1);
+  assert.equal(view.result.current.pendingMints.length, 1);
+});
+
+for (const remainingCrates of [11, 12]) test(`a pending warehouse reserves eleven crates from the shared ${remainingCrates}-crate supply`, async t => {
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, remainingCrates, remainingWarehouses: 1 }));
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await mint(view, 'warehouse');
+  if (remainingCrates === 12) await mint(view);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
+  assert.match(view.result.current.error!, /no longer available/);
+  assert.equal(connected.sent.length, remainingCrates === 12 ? 2 : 1);
+  assert.deepEqual(view.result.current.pendingMints.map(item => item.kind), remainingCrates === 12 ? ['warehouse', 'crate'] : ['warehouse']);
+});
+
+test('a pending crate prevents a warehouse mint when fewer than eleven unreserved crates remain', async t => {
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, remainingCrates: 11, remainingWarehouses: 1 }));
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await mint(view);
+  await act(async () => { assert.equal(await view.result.current.mint('warehouse', 1), false); });
+  assert.match(view.result.current.error!, /no longer available/);
+  assert.equal(connected.sent.length, 1);
+});
+
+test('a just-confirmed mint is reconciled before its supply reservation rejects a valid mint', async t => {
+  manualRecoveryTicks(t);
+  let remainingCrates = 2;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, remainingCrates, remainingWarehouses: 0 }));
+  const background = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  let firstMintChecks = 0;
+  t.mock.method(ethereumApi, 'confirm', async hash => {
+    if (hash !== hashFor(1)) return { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] };
+    if (++firstMintChecks === 1) return background.promise;
+    return { status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] };
   });
-  t.mock.method(ethereumApi, 'relicMetadata', async () => { metadataReads++; return []; });
   const connected = wallet();
-  const view = relicHarness(connected);
-  await waitFor(() => assert.ok(reads >= 2));
-  assert.equal(metadataReads, 1);
-  const pause = async (next: { kind: 'crate' | 'relic'; suspended: boolean }, hidden: boolean) => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: hidden ? 'hidden' : 'visible' });
-    act(() => { document.dispatchEvent(new dom.window.Event('visibilitychange')); view.rerender({ wallet: connected, ...next }); });
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
-    const before = reads;
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
-    assert.equal(reads, before);
-  };
-  await pause({ kind: 'crate', suspended: false }, false);
-  await pause({ kind: 'relic', suspended: true }, false);
-  await pause({ kind: 'relic', suspended: false }, true);
-  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-  const before = reads;
-  act(() => document.dispatchEvent(new dom.window.Event('visibilitychange')));
-  await waitFor(() => assert.ok(reads > before));
-  act(() => view.result.current.refresh());
-  await waitFor(() => assert.ok(reads > before + 1));
-  assert.equal(metadataReads, 1);
+  const view = harness(connected);
+  await ready(view);
+  await mint(view);
+  await waitFor(() => assert.equal(firstMintChecks, 1));
+  remainingCrates = 1;
+  await mint(view);
+  assert.equal(connected.sent.length, 2);
+  assert.deepEqual(readEthereumDropOperations(scope).map(item => item.hash), [hashFor(2)]);
+  await act(async () => { background.resolve({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }); });
+  assert.deepEqual(readEthereumDropOperations(scope).map(item => item.hash), [hashFor(2)]);
 });
 
-test('late relic availability from another wallet cannot authorize the current wallet', async t => {
-  let finish: (value: ReturnType<typeof relicStatus>) => void = () => {};
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => address === owner
-    ? new Promise<ReturnType<typeof relicStatus>>(resolve => { finish = resolve; })
-    : { ...relicStatus(address), relicLimit: 0, remainingAllowance: 0 });
-  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
-  const view = relicHarness();
-  await waitFor(() => assert.equal(view.result.current.relics.isFetching, true));
-  const changed = wallet(other);
-  act(() => view.rerender({ wallet: changed, kind: 'relic', suspended: false }));
-  await waitFor(() => assert.equal(view.result.current.relics.data?.owner, other));
-  await act(async () => { finish(relicStatus(owner)); });
-  assert.equal(view.result.current.relics.data?.owner, other);
-  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
-  assert.equal(changed.sent.length, 0);
+test('pending relic claims reserve selected IDs and allowance while leaving the next eligible claim available', async () => {
+  const view = harness(wallet(), 'relic');
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.relics.isSuccess, true));
+  await act(async () => { assert.equal(await view.result.current.claimRelic(1), true); });
+  assert.equal(view.result.current.relics.data?.remainingAllowance, 1);
+  assert.equal(view.result.current.relics.data?.claimedMask, 1);
+  await act(async () => { assert.equal(await view.result.current.claimRelic(1), false); });
+  await act(async () => { assert.equal(await view.result.current.claimRelic(2), true); });
+  assert.equal(view.result.current.relics.data?.remainingAllowance, 0);
+  await act(async () => { assert.equal(await view.result.current.claimRelic(3), false); });
+  assert.deepEqual([...view.result.current.pendingRelicIds], [1, 2]);
 });
 
-test('a relic claim with an uncertain broadcast stays recoverable after remount', async t => {
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => relicStatus(address));
-  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
-  const connected = wallet();
-  const request = connected.provider!.request;
-  connected.provider!.request = async args => {
-    if (args.method === 'eth_sendTransaction') throw new Error('Connection lost after submitting');
-    return request(args);
-  };
-  const view = relicHarness(connected);
-  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
-  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
-  const scope = ethereumInventoryScope(config, owner)!;
-  assert.equal(readEthereumSubmission(scope)?.action, 'relic-claim');
-  view.unmount();
-  const restored = relicHarness(connected);
-  await waitFor(() => assert.equal(restored.result.current.submission?.action, 'relic-claim'));
-  await act(async () => { assert.equal(await restored.result.current.claimRelic(1), false); });
-  assert.match(restored.result.current.error ?? '', /recover the previous/);
+test('a warehouse unpack returns all 111 results under its hash without restoring a presentation', async () => {
+  const source = token('117172', owner, 'relic');
+  const result = Array.from({ length: 111 }, (_, index) => token(String(111112 + index)));
+  const view = harness();
+  await ready(view);
+  let hash: string | null = null;
+  await act(async () => { hash = await view.result.current.unbox(source); });
+  confirmations.set(hash!, { status: 'confirmed', confirmations: 1, items: result, burnedTokenIds: [source.tokenId] });
+  await waitFor(() => assert.equal(view.result.current.unpackResults[hash!]?.length, 111));
+  assert.equal(view.result.current.pendingItemIds.size, 0);
+  assert.equal(readEthereumExpected(scope).length, 111);
+  assert.equal('revealed' in view.result.current, false);
 });
 
-for (const failure of ['stale', 'refresh-error'] as const) test(`relic submission stops if availability becomes ${failure} during wallet checks`, async t => {
-  let failReads = false;
-  let now = Date.now();
-  t.mock.method(Date, 'now', () => now);
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => {
-    if (failReads) throw new Error('RPC unavailable');
-    return relicStatus(address);
+test('published crate artworks arrive by transaction hash before the receipt and survive later receipt placeholders', async () => {
+  const view = harness();
+  await ready(view);
+  let hash: string | null = null;
+  await act(async () => { hash = await view.result.current.unbox(token()); });
+  await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'reveal-transaction', config.chainId, contract, hash])?.status, 'success'));
+  const artwork = { tokenId: '1', crateTokenId: '111112', name: 'Revealed painting', description: '', image: 'https://cdn.mons.shop/111k/paintings/1.png', category: 'painting' as const, attributes: [], aspectRatio: { width: 1, height: 1 }, observation: { transactionHash: hash!, blockHash: hashFor(9), blockNumber: 1 } };
+  reveals.set(hash!, { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test', status: 'revealed', artworks: [artwork], retryAfterMs: 0 });
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-transaction'] }); });
+  await waitFor(() => assert.equal(view.result.current.unpackResults[hash!]?.[0].name, 'Revealed painting'), { timeout: 3_500 });
+  confirmations.set(hash!, { status: 'confirmed', confirmations: 1, items: [token('1', owner, 'artwork')], burnedTokenIds: ['111112'] });
+  await waitFor(() => assert.equal(view.result.current.operations.length, 0));
+  assert.equal(view.result.current.unpackResults[hash!][0].name, 'Revealed painting');
+});
+
+test('restored reveal jobs return data silently and results never leak to another account', async () => {
+  const hash = hashFor(5);
+  const pending = { ...savedOperation(hash), action: 'unbox' as const, sourceTokenIds: ['111112'], intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0' } };
+  rememberEthereumRevealJob(scope, hash, Date.now(), pending);
+  reveals.set(hash, { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test', status: 'revealed', retryAfterMs: 0,
+    artworks: [{ tokenId: '1', crateTokenId: '111112', name: 'Painting', description: '', image: 'https://cdn.mons.shop/111k/paintings/1.png', category: 'painting', attributes: [], aspectRatio: { width: 1, height: 1 }, observation: { transactionHash: hash, blockHash: hashFor(9), blockNumber: 1 } }] });
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.unpackResults[hash]?.length, 1));
+  assert.equal('revealed' in view.result.current, false);
+  view.rerender({ wallet: wallet(other), mintKind: 'crate' });
+  await waitFor(() => assert.equal(view.result.current.owner, other));
+  assert.deepEqual(view.result.current.unpackResults, {});
+});
+
+for (const status of ['reverted', 'not_unpack'] as const) {
+  test(`a terminal ${status} reveal releases the source and gives only its active session a retry outcome`, async () => {
+    const view = harness();
+    await ready(view);
+    let hash: string | null = null;
+    await act(async () => { hash = await view.result.current.unbox(token()); });
+    reveals.set(hash!, { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test', status, artworks: [], retryAfterMs: 0 });
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-transaction'] }); });
+    await waitFor(() => assert.ok(view.result.current.unpackErrors[hash!]), { timeout: 3_500 });
+    assert.equal(view.result.current.pendingItemIds.size, 0);
+    assert.equal(view.result.current.error, null);
   });
-  t.mock.method(ethereumApi, 'relicMetadata', async () => []);
+}
+
+test('lease expiry releases an open unpack session without a permanent spinner or a false cancellation notice', async () => {
+  const view = harness();
+  await ready(view);
+  let hash: string | null = null;
+  await act(async () => { hash = await view.result.current.unbox(token('116667', owner, 'warehouse')); });
+  const [operation] = readEthereumDropOperations(scope);
+  act(() => { writeEthereumDropOperation(scope, operation.id, { ...operation, submittedAt: Date.now() - ETHEREUM_DROP_OPERATION_TTL }); });
+  await waitFor(() => assert.ok(view.result.current.unpackErrors[hash!]));
+  assert.equal(view.result.current.pendingItemIds.size, 0);
+  assert.equal(view.result.current.error, null);
+});
+
+test('bounded receipt polling checks every operation with at most four concurrent requests', async t => {
+  for (let index = 0; index < 9; index++) writeEthereumDropOperation(scope, `pending-${index}`, { ...savedOperation(hashFor(index + 1)), id: `pending-${index}` });
+  const gates = Array.from({ length: 9 }, () => Promise.withResolvers<void>());
+  const seen: string[] = [];
+  let concurrent = 0, maximum = 0;
+  t.mock.method(ethereumApi, 'confirm', async hash => {
+    seen.push(hash);
+    concurrent++;
+    maximum = Math.max(maximum, concurrent);
+    try {
+      const index = Array.from({ length: 9 }, (_, index) => hashFor(index + 1)).indexOf(hash);
+      await gates[index].promise;
+      return { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] };
+    } finally { concurrent--; }
+  });
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(seen.length, 4));
+  await act(async () => { gates.slice(0, 4).forEach(gate => gate.resolve()); });
+  await waitFor(() => assert.equal(seen.length, 8));
+  await act(async () => { gates.slice(4).forEach(gate => gate.resolve()); });
+  await waitFor(() => assert.equal(new Set(seen).size, 9));
+  assert.equal(maximum, 4);
+});
+
+test('account changes release a hung wallet request and preserve a late broadcast only for its original scope', async t => {
   const connected = wallet();
-  const view = relicHarness(connected);
-  await waitFor(() => assert.equal(view.result.current.relics.data?.remainingAllowance, 3));
-  const request = connected.provider!.request;
-  connected.provider!.request = async args => {
-    if (args.method === 'eth_getTransactionCount') {
-      if (failure === 'stale') now += 9_000;
-      else {
-        failReads = true;
-        await view.result.current.relics.refetch();
-      }
+  const gate = Promise.withResolvers<void>();
+  let waiting = false;
+  const original = connected.provider!.request;
+  t.mock.method(connected.provider!, 'request', async request => {
+    if (request.method === 'eth_sendTransaction' && !waiting) { waiting = true; await gate.promise; }
+    return original(request);
+  });
+  const view = harness(connected);
+  await ready(view);
+  let sending!: Promise<boolean>;
+  act(() => { sending = view.result.current.mint('crate', 1); });
+  await waitFor(() => assert.equal(waiting, true));
+  view.rerender({ wallet: wallet(other), mintKind: 'crate' });
+  await act(async () => { assert.equal(await sending, false); });
+  assert.equal(view.result.current.busy, null);
+  await act(async () => { gate.resolve(); });
+  await waitFor(() => assert.equal(readEthereumDropOperations(scope)[0]?.hash, hashFor(1)));
+  assert.equal(view.result.current.pendingMints.length, 0);
+  view.rerender({ wallet: connected, mintKind: 'crate' });
+  await ready(view);
+  await mint(view, 'warehouse');
+  assert.equal(connected.sent.length, 2);
+});
+
+test('a hung confirmation cannot starve later operations or prevent lease cleanup', async t => {
+  const timeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, 'timeout', milliseconds => timeout(milliseconds === 10_000 ? 40 : milliseconds));
+  for (let index = 0; index < 5; index++) writeEthereumDropOperation(scope, `pending-${index}`, { ...savedOperation(hashFor(index + 1)), id: `pending-${index}` });
+  const seen = new Set<string>();
+  t.mock.method(ethereumApi, 'confirm', async hash => {
+    seen.add(hash);
+    if (hash === hashFor(1)) return new Promise<EthereumTransactionConfirmResponse>(() => {});
+    return { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] };
+  });
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(seen.size, 5));
+  const operation = readEthereumDropOperations(scope).find(item => item.hash === hashFor(1))!;
+  act(() => writeEthereumDropOperation(scope, operation.id, { ...operation, submittedAt: Date.now() - ETHEREUM_DROP_OPERATION_TTL }));
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 4));
+});
+
+test('an account network change during a nonce read cannot retire a hint using another chain’s result', async t => {
+  const connected = wallet();
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  connected.provider!.on = (event, listener) => { const entries = listeners.get(event) ?? new Set(); entries.add(listener); listeners.set(event, entries); };
+  connected.provider!.removeListener = (event, listener) => { listeners.get(event)?.delete(listener); };
+  const gate = Promise.withResolvers<string>();
+  let requested = false;
+  let switched = false;
+  const original = connected.provider!.request;
+  t.mock.method(connected.provider!, 'request', async request => {
+    if (request.method === 'eth_getTransactionCount') {
+      if (!switched) { requested = true; return gate.promise; }
+      return '0x0';
     }
-    return request(args);
-  };
-  await act(async () => { assert.equal(await view.result.current.claimRelic(18), false); });
-  assert.match(view.result.current.error ?? '', /availability changed/);
+    return original(request);
+  });
+  writeEthereumDropOperation(scope, 'restored', { ...savedOperation(), nonce: '0x1', transactionSender: owner });
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(requested, true));
+  act(() => {
+    switched = true;
+    for (const listener of listeners.get('chainChanged') ?? []) listener('0x1');
+    for (const listener of listeners.get('chainChanged') ?? []) listener('0xaa36a7');
+    gate.resolve('0x99');
+  });
+  await act(async () => {});
+  assert.equal(view.result.current.pendingMints.length, 1);
+  assert.equal(readEthereumDropOperations(scope)[0].hash, hashFor(1));
+});
+
+test('another tab retiring an unpack hint does not strand its initiating session', async () => {
+  const view = harness();
+  await ready(view);
+  let hash: string | null = null;
+  await act(async () => { hash = await view.result.current.unbox(token('116667', owner, 'warehouse')); });
+  const [operation] = readEthereumDropOperations(scope);
+  act(() => writeEthereumDropOperation(scope, operation.id, null));
+  confirmations.set(hash!, { status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: ['116667'] });
+  await waitFor(() => assert.equal(view.result.current.unpackResults[hash!]?.length, 1));
+});
+
+test('a delayed older mint confirmation cannot resurrect a container burned by a newer unpack when refetch fails', async t => {
+  const minted = token();
+  const artwork = token('1', owner, 'artwork');
+  const first = savedOperation(hashFor(1));
+  const unpack = { ...savedOperation(hashFor(2)), id: 'unpack', action: 'unbox' as const, sourceTokenIds: [minted.tokenId],
+    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [minted.tokenId]), value: '0x0' } };
+  writeEthereumDropOperation(scope, first.id, first);
+  writeEthereumDropOperation(scope, unpack.id, unpack);
+  const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  let loaded = false;
+  t.mock.method(ethereumApi, 'inventory', async () => {
+    if (loaded) throw new Error('Indexer unavailable');
+    loaded = true;
+    return { items: [minted], nextCursor: null, observedBlock: 1 };
+  });
+  t.mock.method(ethereumApi, 'confirm', async hash => hash === first.hash ? gate.promise : { status: 'confirmed', confirmations: 1, items: [artwork], burnedTokenIds: [minted.tokenId] });
+  const view = harness();
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), ['1']));
+  await act(async () => { gate.resolve({ status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [] }); });
+  await waitFor(() => assert.equal(view.result.current.operations.length, 0));
+  assert.deepEqual(view.result.current.items.map(item => item.tokenId), ['1']);
+  assert.deepEqual(readEthereumExpected(scope), ['1']);
+});
+
+test('a just-mined discounted mint is reconciled before another public-price request can charge more than the new quote', async t => {
+  const root = `0x${'d'.repeat(64)}`;
+  let used = 0;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: root, discountAllowance: 4, discountUsed: used }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 2)?.discounted, true));
+  await mint(view, 'crate', 2);
+  used = 2;
+  await act(async () => { await view.result.current.stats.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.stats.data?.discountUsed, 2));
+  const stalePublicQuote = view.result.current.mintQuote('crate', 1)!;
+  assert.equal(stalePublicQuote.discounted, false);
+  confirmations.set(hashFor(1), { status: 'confirmed', confirmations: 1, items: [token(), token('111113')], burnedTokenIds: [] });
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1, stalePublicQuote), false); });
+  assert.match(view.result.current.error!, /terms changed/);
+  assert.equal(connected.sent.length, 1);
+  assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true);
+});
+
+test('two completed fifteen-crate unpacks retain all 600 artworks while ownership indexing lags', async t => {
+  const artworks = Array.from({ length: 600 }, (_, index) => token(String(index + 1), owner, 'artwork'));
+  const indexed = new Map(artworks.map(item => [item.tokenId, item]));
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expectedIds) => ({
+    items: (expectedIds ?? []).flatMap(id => indexed.has(id) ? [indexed.get(id)!] : []), nextCursor: null, observedBlock: 10,
+  }));
+  for (let index = 0; index < 2; index++) {
+    const sourceTokenIds = Array.from({ length: 15 }, (_, offset) => String(111112 + index * 15 + offset));
+    const operation = { ...savedOperation(hashFor(index + 1)), id: `unpack-${index}`, action: 'unbox' as const, quantity: 15, sourceTokenIds,
+      intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [sourceTokenIds]), value: '0x0' } };
+    writeEthereumDropOperation(scope, operation.id, operation);
+    confirmations.set(operation.hash, { status: 'confirmed', confirmations: 1, items: artworks.slice(index * 300, index * 300 + 300), burnedTokenIds: sourceTokenIds });
+  }
+  const view = harness();
+  await waitFor(() => assert.equal(view.result.current.operations.length, 0));
+  await waitFor(() => assert.equal(view.result.current.items.length, 600));
+  await act(async () => { await view.result.current.inventory.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.inventory.isFetching, false));
+  assert.equal(view.result.current.items.length, 600);
+  assert.equal(readEthereumExpected(scope).length, 500);
+});
+
+test('a canceled pre-send read cannot resume after the original deployment scope returns', async t => {
+  const connected = wallet();
+  const gate = Promise.withResolvers<void>();
+  let waiting = false;
+  let completedRead = false;
+  const original = connected.provider!.request;
+  t.mock.method(connected.provider!, 'request', async request => {
+    if (request.method === 'eth_accounts') {
+      waiting = true;
+      await gate.promise;
+      completedRead = true;
+    }
+    return original(request);
+  });
+  const view = harness(connected);
+  await ready(view);
+  let sending!: Promise<boolean>;
+  act(() => { sending = view.result.current.mint('crate', 1); });
+  await waitFor(() => assert.equal(waiting, true));
+  const changed = resolveEthereum111kConfig({ contractAddress: '0x4444444444444444444444444444444444444444' });
+  act(() => view.client.setQueryData(['ethereum111k', 'config'], changed));
+  await waitFor(() => assert.equal(view.result.current.config.contractAddress, changed.contractAddress));
+  await act(async () => { assert.equal(await sending, false); });
+  act(() => view.client.setQueryData(['ethereum111k', 'config'], config));
+  await waitFor(() => assert.equal(view.result.current.config.contractAddress, contract));
+  await act(async () => { gate.resolve(); });
+  await waitFor(() => assert.equal(completedRead, true));
   assert.equal(connected.sent.length, 0);
-  assert.equal(readEthereumSubmission(ethereumInventoryScope(config, owner)!), null);
+  assert.equal(readEthereumDropOperations(scope).length, 0);
+  await mint(view);
+  assert.equal(connected.sent.length, 1);
+});
+
+for (const [label, update, expectedError] of [
+  ['claimed ID', { claimedMask: 1 }, /already|just claimed/],
+  ['paused sale', { saleActive: false }, /availability changed/],
+  ['exhausted allowance', { remainingAllowance: 0 }, /no relic claims remaining/],
+] as const) {
+  test(`relic submission rechecks a newer ${label} snapshot before opening the wallet transaction`, async t => {
+    const connected = wallet();
+    const gate = Promise.withResolvers<void>();
+    let waiting = false;
+    let latest = { ...relicStatus };
+    t.mock.method(ethereumApi, 'relics', async () => latest);
+    const original = connected.provider!.request;
+    t.mock.method(connected.provider!, 'request', async request => {
+      if (request.method === 'eth_accounts') { waiting = true; await gate.promise; }
+      return original(request);
+    });
+    const view = harness(connected, 'relic');
+    await ready(view);
+    let claiming!: Promise<boolean>;
+    act(() => { claiming = view.result.current.claimRelic(1); });
+    await waitFor(() => assert.equal(waiting, true));
+    latest = { ...latest, ...update, observedBlock: 2 };
+    act(() => view.client.setQueryData(['ethereum111k', 'relics', config.chainId, contract, owner], latest));
+    await act(async () => { gate.resolve(); assert.equal(await claiming, false); });
+    assert.equal(connected.sent.length, 0);
+    assert.equal(view.result.current.pendingMints.length, 0);
+    assert.match(view.result.current.error!, expectedError);
+  });
+}
+
+test('another observer confirming a mint refreshes this observer before its older pending response settles', async t => {
+  const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  const minted = token();
+  const reads: string[][] = [];
+  let confirmationCalls = 0;
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => {
+    reads.push([...(expected ?? [])]);
+    return { items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1 };
+  });
+  t.mock.method(ethereumApi, 'confirm', async () => ++confirmationCalls === 1 ? gate.promise : {
+    status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [],
+  });
+  const first = harness();
+  await ready(first);
+  await mint(first);
+  await waitFor(() => assert.equal(confirmationCalls, 1));
+  const second = harness();
+  await waitFor(() => assert.equal(second.result.current.items.length, 1));
+  await waitFor(() => assert.equal(first.result.current.pendingMints.length, 0));
+  await waitFor(() => assert.equal(first.result.current.items.length, 1));
+  await act(async () => { gate.resolve({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }); });
+  await waitFor(() => assert.equal(first.result.current.inventory.isFetching || second.result.current.inventory.isFetching, false));
+  assert.equal(reads.filter(ids => ids.includes(minted.tokenId)).length, 2);
+  const readCount = reads.length;
+  await act(async () => { window.dispatchEvent(new window.StorageEvent('storage', { key: `ethereum111k:drop-operation:v1:${scope}:duplicate` })); });
+  assert.equal(reads.length, readCount);
+});
+
+test('local confirmation performs one inventory refresh and foreign-scope ledger changes do not refresh it', async t => {
+  let reads = 0;
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => {
+    reads++;
+    return { items: expected?.includes('111112') ? [token()] : [], nextCursor: null, observedBlock: 1 };
+  });
+  const view = harness();
+  await ready(view);
+  assert.equal(reads, 1);
+  await mint(view);
+  confirmations.set(hashFor(1), { status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] });
+  await waitFor(() => assert.equal(view.result.current.items.length, 1));
+  await waitFor(() => assert.equal(view.result.current.inventory.isFetching, false));
+  assert.equal(reads, 2);
+  const otherScope = ethereumInventoryScope(config, other)!;
+  await act(async () => {
+    writeEthereumDropOperation(otherScope, 'foreign', { ...savedOperation(), id: 'foreign', scope: otherScope });
+    writeEthereumDropOperation(otherScope, 'foreign', null);
+  });
+  assert.equal(reads, 2);
+});
+
+test('a hashless discounted mint cannot charge public price while chain allowance remains', async t => {
+  const root = `0x${'d'.repeat(64)}`;
+  let used = 0;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: root, discountAllowance: 4, discountUsed: used }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const connected = wallet();
+  let first = true;
+  const original = connected.provider!.request;
+  t.mock.method(connected.provider!, 'request', async request => {
+    if (request.method === 'eth_sendTransaction' && first) {
+      first = false;
+      await original(request);
+      used = 2;
+      throw new Error('Connection lost after broadcast');
+    }
+    return original(request);
+  });
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 2)?.discounted, true));
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 2), false); });
+  await act(async () => { await view.result.current.stats.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.stats.data?.discountUsed, 2));
+  assert.equal(readEthereumDropOperations(scope)[0]?.hash, undefined);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
+  assert.match(view.result.current.error!, /earlier mint is still being checked/);
+  assert.equal(connected.sent.length, 1);
+  await act(async () => { assert.equal(await view.result.current.unbox(token('116667', owner, 'warehouse')), hashFor(2)); });
+  await mint(view, 'warehouse');
+  await mint(view, 'crate', 3);
+  const request = (connected.sent[3] as Record<string, unknown>[])[0];
+  assert.equal(BigInt(request.value as string), BigInt(statistics.cratePriceWei) * 3n);
+});
+
+test('foreign confirmation replaces an in-flight initial inventory read with confirmed hints', async t => {
+  const operation = savedOperation();
+  const minted = token();
+  writeEthereumDropOperation(scope, operation.id, operation);
+  const initial = Promise.withResolvers<{ items: EthereumInventoryItem[]; nextCursor: null; observedBlock: number }>();
+  const reads: { signal: AbortSignal | undefined; expected: string[] }[] = [];
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal, expected) => {
+    reads.push({ signal, expected: [...expected ?? []] });
+    if (reads.length === 1) return initial.promise;
+    return { items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 2 };
+  });
+  const view = harness();
+  await waitFor(() => assert.equal(reads.length, 1));
+  act(() => {
+    rememberEthereumConfirmedInventory(scope, operation.id, [minted.tokenId], [], operation.submittedAt);
+    writeEthereumDropOperation(scope, operation.id, null);
+  });
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [minted.tokenId]));
+  assert.equal(reads[0].signal?.aborted, true);
+  assert.deepEqual(reads[1].expected, [minted.tokenId]);
+  await act(async () => { initial.resolve({ items: [], nextCursor: null, observedBlock: 1 }); });
+  assert.deepEqual(view.result.current.items.map(item => item.tokenId), [minted.tokenId]);
+  assert.equal(reads.length, 2);
+});
+
+test('a stale discounted preflight cannot cancel the foreign confirmation inventory refresh', async t => {
+  const operation = { ...savedOperation(hashFor(99)), discountedQuantity: 1 };
+  writeEthereumDropOperation(scope, operation.id, operation);
+  const root = `0x${'d'.repeat(64)}`;
+  let used = 0;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: root, discountAllowance: 1, discountUsed: used }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const background = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  const preflight = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  let oldChecks = 0;
+  t.mock.method(ethereumApi, 'confirm', async hash => hash === operation.hash ? (++oldChecks === 1 ? background.promise : preflight.promise) :
+    { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] });
+  const inventory = Promise.withResolvers<{ items: EthereumInventoryItem[]; nextCursor: null; observedBlock: number }>();
+  const signals: AbortSignal[] = [];
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal) => {
+    signals.push(signal!);
+    return signals.length === 1 ? { items: [], nextCursor: null, observedBlock: 1 } : inventory.promise;
+  });
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.discountProof.isSuccess, true));
+  assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false);
+  let sending!: Promise<boolean>;
+  act(() => { sending = view.result.current.mint('crate', 1); });
+  await waitFor(() => assert.equal(oldChecks, 2));
+  act(() => {
+    used = 1;
+    rememberEthereumConfirmedInventory(scope, operation.id, ['111112'], [], operation.submittedAt);
+    writeEthereumDropOperation(scope, operation.id, null);
+  });
+  await waitFor(() => assert.equal(signals.length, 2));
+  await act(async () => {
+    preflight.resolve({ status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] });
+    assert.equal(await sending, true);
+  });
+  assert.equal(signals[1].aborted, false);
+  await act(async () => { inventory.resolve({ items: [token()], nextCursor: null, observedBlock: 2 }); });
+  await waitFor(() => assert.equal(view.result.current.items.length, 1));
+  assert.equal(signals.length, 2);
+});
+
+test('a submitted mint still populates inventory when storage is cleared before confirmation', async t => {
+  const minted = token();
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+    items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
+  }));
+  const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  let requested = false;
+  t.mock.method(ethereumApi, 'confirm', async () => { requested = true; return gate.promise; });
+  const view = harness();
+  await ready(view);
+  await mint(view);
+  await waitFor(() => assert.equal(requested, true));
+  act(() => { window.localStorage.clear(); window.dispatchEvent(new window.StorageEvent('storage', { key: null })); });
+  await act(async () => { gate.resolve({ status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [] }); });
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [minted.tokenId]));
+  assert.deepEqual(readEthereumExpected(scope), [minted.tokenId]);
+  assert.equal(view.result.current.operations.length, 0);
+});
+
+test('a restored mint still populates inventory when storage is cleared during confirmation', async t => {
+  const minted = token();
+  writeEthereumDropOperation(scope, 'restored', savedOperation());
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+    items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
+  }));
+  const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  let requested = false;
+  t.mock.method(ethereumApi, 'confirm', async () => { requested = true; return gate.promise; });
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await waitFor(() => assert.equal(requested, true));
+  act(() => { window.localStorage.clear(); window.dispatchEvent(new window.StorageEvent('storage', { key: null })); });
+  await act(async () => { gate.resolve({ status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [] }); });
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [minted.tokenId]));
+  assert.deepEqual(readEthereumExpected(scope), [minted.tokenId]);
+  assert.deepEqual(view.result.current.unpackResults, {});
+  assert.equal(connected.sent.length, 0);
+});
+
+test('restored mints queued behind the receipt batch survive storage loss', async t => {
+  const minted = Array.from({ length: 5 }, (_, index) => token(String(111112 + index)));
+  for (let index = 0; index < minted.length; index++) {
+    writeEthereumDropOperation(scope, `queued-${index}`, { ...savedOperation(hashFor(index + 1)), id: `queued-${index}` });
+  }
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+    items: minted.filter(item => expected?.includes(item.tokenId)), nextCursor: null, observedBlock: 1,
+  }));
+  const gate = Promise.withResolvers<void>();
+  const seen = new Set<string>();
+  t.mock.method(ethereumApi, 'confirm', async hash => {
+    seen.add(hash);
+    await gate.promise;
+    const index = minted.findIndex((_item, index) => hashFor(index + 1) === hash);
+    return { status: 'confirmed', confirmations: 1, items: [minted[index]], burnedTokenIds: [] };
+  });
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(seen.size, 4));
+  act(() => { window.localStorage.clear(); window.dispatchEvent(new window.StorageEvent('storage', { key: null })); });
+  await act(async () => { gate.resolve(); });
+  await waitFor(() => assert.equal(view.result.current.items.length, minted.length));
+  assert.equal(seen.size, minted.length);
+  assert.deepEqual(new Set(readEthereumExpected(scope)), new Set(minted.map(item => item.tokenId)));
+});
+
+test('an early crate reveal keeps its source guarded and reconciles after storage loss', async t => {
+  const source = token();
+  const minted = token('1', owner, 'artwork');
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+    items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
+  }));
+  const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  t.mock.method(ethereumApi, 'confirm', async () => gate.promise);
+  const hash = hashFor(1);
+  const artwork = { tokenId: '1', crateTokenId: source.tokenId, name: 'Painting', description: '', image: 'https://cdn.mons.shop/111k/paintings/1.png', category: 'painting' as const,
+    attributes: [], aspectRatio: { width: 1, height: 1 }, observation: { transactionHash: hash, blockHash: hashFor(9), blockNumber: 1 } };
+  const revealRequest = t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', status: 'revealed' as const, artworks: [artwork], retryAfterMs: 0 }));
+  const connected = wallet();
+  const view = harness(connected);
+  await ready(view);
+  await act(async () => { assert.equal(await view.result.current.unbox(source), hash); });
+  await waitFor(() => assert.equal(view.result.current.unpackResults[hash]?.length, 1));
+  act(() => { window.localStorage.clear(); window.dispatchEvent(new window.StorageEvent('storage', { key: null })); });
+  await act(async () => { assert.equal(await view.result.current.unbox(source), null); });
+  assert.match(view.result.current.error!, /already opening/);
+  assert.equal(connected.sent.length, 1);
+  await act(async () => { gate.resolve({ status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [source.tokenId] }); });
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [minted.tokenId]));
+  assert.deepEqual(readEthereumExpected(scope), [minted.tokenId]);
+  assert.equal(view.result.current.unpackResults[hash][0].name, 'Painting');
+  assert.equal(revealRequest.mock.calls.length, 1);
+});
+
+test('a slower initiating observer receives its crate reveal after another observer completes the shared job', async t => {
+  const { first, second, gate, response, hash, tick, request } = await foreignCompletedCrateReveal(t);
+  await act(async () => { gate.resolve(response); });
+  await waitFor(() => assert.equal(first.result.current.unpackResults[hash]?.[0].name, 'Painting'));
+  assert.equal(second.result.current.unpackResults[hash]?.[0].name, 'Painting');
+  await tick();
+  await tick();
+  assert.equal(request.mock.callCount(), 2);
+  assert.deepEqual(readEthereumRevealJobs(scope), []);
+  assert.deepEqual(first.result.current.unpackErrors, {});
+});
+
+test('a retained reveal cannot publish into another wallet after foreign completion', async t => {
+  const { first, gate, response, hash, tick, request, signals } = await foreignCompletedCrateReveal(t);
+  first.rerender({ wallet: wallet(other), mintKind: 'crate' });
+  await waitFor(() => assert.equal(first.result.current.owner, other));
+  await act(async () => { gate.resolve(response); });
+  await tick();
+  assert.equal(signals[0].aborted, true);
+  assert.equal(first.result.current.unpackResults[hash], undefined);
+  assert.deepEqual(first.result.current.unpackErrors, {});
+  assert.equal(request.mock.callCount(), 2);
+});
+
+test('unmounting the initiating observer cancels its retained reveal after foreign completion', async t => {
+  const { first, gate, response, tick, request, signals } = await foreignCompletedCrateReveal(t);
+  first.unmount();
+  await act(async () => { gate.resolve(response); });
+  await tick();
+  assert.equal(signals[0].aborted, true);
+  assert.equal(first.client.getQueryData(['ethereum111k', 'revealed-artworks', config.chainId, contract]), undefined);
+  assert.equal(request.mock.callCount(), 2);
+  assert.deepEqual(readEthereumRevealJobs(scope), []);
+});
+
+test('an expired active opening discards a retained response after foreign completion', async t => {
+  const { first, gate, response, hash, tick, request } = await foreignCompletedCrateReveal(t);
+  const expired = Date.now() + ETHEREUM_DROP_OPERATION_TTL + 1;
+  t.mock.method(Date, 'now', () => expired);
+  await tick();
+  await waitFor(() => assert.ok(first.result.current.unpackErrors[hash]));
+  await act(async () => { gate.resolve(response); });
+  await tick();
+  assert.equal(first.result.current.unpackResults[hash], undefined);
+  assert.equal(request.mock.callCount(), 2);
+  assert.deepEqual(readEthereumRevealJobs(scope), []);
+});
+
+test('a terminal receipt failure discards a retained response after foreign completion', async t => {
+  const { first, gate, response, hash, tick, request } = await foreignCompletedCrateReveal(t, false);
+  confirmations.set(hash, new EthereumApiError(409, 'Reverted', 'transaction-reverted'));
+  await tick();
+  await waitFor(() => assert.match(first.result.current.unpackErrors[hash] ?? '', /reverted/));
+  await act(async () => { gate.resolve(response); });
+  await tick();
+  assert.equal(first.result.current.unpackResults[hash], undefined);
+  assert.equal(request.mock.callCount(), 2);
+  assert.deepEqual(readEthereumRevealJobs(scope), []);
 });

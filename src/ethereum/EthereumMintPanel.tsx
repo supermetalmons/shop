@@ -46,7 +46,7 @@ export function EthereumMintPanel({
   const formId = 'ethereum-mint-form';
 
   return <MintPanelFrame
-    ariaLabel="111K testnet mint"
+    ariaLabel="111K mint"
     quantity={quantity}
     quantityLabel={quantityLabel}
     boxMedia={{ aspectRatio: ETHEREUM_CONTAINER_MEDIA[kind].aspectRatio }}

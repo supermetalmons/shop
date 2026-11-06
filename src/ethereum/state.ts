@@ -31,11 +31,11 @@ export function ethereumInventoryScope(config: Pick<Ethereum111kConfig, 'chainId
 
 export function ethereumInventoryQueryKey(scope: string | null) { return ['ethereum111k', 'inventory', scope] as const; }
 
-export function ethereumInventoryView(item: EthereumInventoryItem): EthereumInventoryView {
+export function ethereumInventoryView(item: EthereumInventoryItem, dropId = '111k_devnet'): EthereumInventoryView {
   const containerMedia = item.kind === 'crate' || item.kind === 'warehouse' ? ETHEREUM_CONTAINER_MEDIA[item.kind] : undefined;
   return {
     id: ethereumAssetId(item.chainId, item.contractAddress, item.tokenId),
-    dropId: '111k_devnet', name: item.name, image: containerMedia?.src ?? item.image,
+    dropId, name: item.name, image: containerMedia?.src ?? item.image,
     ...(containerMedia ? { imageDimensions: { width: containerMedia.width, height: containerMedia.height } } : {}),
     ...(!containerMedia && item.aspectRatio ? { imageDimensions: item.aspectRatio } : {}),
     ...((item.category === 'video' || item.category === 'animated') && item.animation_url
@@ -64,17 +64,7 @@ const storageFallbacks = new WeakMap<Window, Map<string, { value: unknown; basel
 const storageSnapshots = new WeakMap<Window, Map<string, string | null>>();
 const activeOperations = new WeakMap<Window, Map<string, { label: string }>>();
 
-export function readEthereumOperation(scope: string): string | null {
-  return typeof window === 'undefined' ? null : activeOperations.get(window)?.get(scope)?.label ?? null;
-}
-
-export function subscribeEthereumOperation(scope: string, listener: () => void): () => void {
-  const changed = (event: Event) => { if ((event as CustomEvent<string>).detail === `${scope}:operation`) listener(); };
-  window.addEventListener(STORAGE_CHANGED_EVENT, changed);
-  return () => window.removeEventListener(STORAGE_CHANGED_EVENT, changed);
-}
-
-export async function withEthereumSubmissionLock<T>(scope: string, run: () => T): Promise<T> {
+async function withEthereumSubmissionLock<T>(scope: string, run: () => T): Promise<T> {
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
   if (typeof locks?.request !== 'function') throw new Error('This browser cannot safely coordinate wallet transactions. Update your browser and try again.');
   return locks.request(`ethereum111k-submission:${scope}`, {}, run);
@@ -141,27 +131,6 @@ export function writeEthereumStorage(key: string, value: unknown): void {
   window.dispatchEvent(new window.CustomEvent(STORAGE_CHANGED_EVENT, { detail: key }));
 }
 
-export function reserveEthereumSubmission(submission: EthereumSubmission): void {
-  const key = `${submission.scope}:pending`;
-  const value = JSON.stringify({ ...submission, hash: `0x${'0'.repeat(64)}`, awaitingHash: true });
-  try {
-    window.localStorage.setItem(`${STORAGE_PREFIX}${key}`, value);
-    if (readPersistedEthereumStorage(key) !== value) throw new Error('Storage unavailable');
-  } catch {
-    try { window.localStorage.removeItem(`${STORAGE_PREFIX}${key}`); } catch {}
-    throw new Error('Browser storage is unavailable. Enable storage or free up space before submitting an Ethereum transaction.');
-  }
-  storageFallbacks.get(window)?.delete(key);
-  window.dispatchEvent(new window.CustomEvent(STORAGE_CHANGED_EVENT, { detail: key }));
-}
-
-export function isEthereumPendingSaved(scope: string, hash: string): boolean {
-  try {
-    const value = JSON.parse(readPersistedEthereumStorage(`${scope}:pending`) ?? 'null');
-    return value?.hash === hash && !value.awaitingHash;
-  } catch { return false; }
-}
-
 function subscribeEthereumStorage(key: string, listener: () => void, prefixes: readonly string[] = []): () => void {
   const matches = (value: unknown) => typeof value === 'string' && (value === key || prefixes.some(prefix => value.startsWith(prefix)));
   const changed = (event: Event) => { if (matches((event as CustomEvent<string>).detail)) listener(); };
@@ -178,10 +147,6 @@ function subscribeEthereumStorage(key: string, listener: () => void, prefixes: r
   };
 }
 
-export function subscribeEthereumPending(scope: string, listener: () => void): () => void {
-  return subscribeEthereumStorage(`${scope}:pending`, listener);
-}
-
 export function subscribeEthereumRevealJobs(scope: string, listener: () => void): () => void {
   return subscribeEthereumStorage(`${scope}:reveals`, listener, [revealJobPrefix(scope), revealClosedPrefix(scope)]);
 }
@@ -191,6 +156,7 @@ const REVEAL_TRACKING_ID = /^(?:legacy|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89a
 const revealJobPrefix = (scope: string) => `${scope}:reveal-job:v2:`;
 const revealClosedPrefix = (scope: string) => `${scope}:reveal-closed:v2:`;
 const revealClosedKey = (scope: string, hash: string, trackingId: string) => `${revealClosedPrefix(scope)}${hash}:${trackingId}`;
+const revealCompletedKey = (scope: string, hash: string, trackingId: string) => `${revealClosedKey(scope, hash, trackingId)}:revealed`;
 
 function ethereumStorageKeys(prefix: string): Set<string> {
   if (typeof window === 'undefined') return new Set();
@@ -232,7 +198,14 @@ function currentEthereumRevealJob(scope: string, hash: string): EthereumRevealJo
 }
 
 function ethereumRevealJobClosed(scope: string, job: EthereumRevealJob): boolean {
-  return readEthereumStorage(revealClosedKey(scope, job.transactionHash, job.trackingId)) === true;
+  return readEthereumStorage(revealClosedKey(scope, job.transactionHash, job.trackingId)) === true ||
+    readEthereumStorage(revealCompletedKey(scope, job.transactionHash, job.trackingId)) === true;
+}
+
+export function isEthereumRevealJobCompleted(scope: string, job: EthereumRevealJob): boolean {
+  return currentEthereumRevealJob(scope, job.transactionHash)?.trackingId === job.trackingId &&
+    readEthereumStorage(revealClosedKey(scope, job.transactionHash, job.trackingId)) !== true &&
+    readEthereumStorage(revealCompletedKey(scope, job.transactionHash, job.trackingId)) === true;
 }
 
 function intendedRevealCrateIds(scope: string, hash: string, operation?: EthereumSubmission | null): string[] | null {
@@ -268,12 +241,12 @@ export function rememberEthereumRevealJob(scope: string, transactionHash: string
     ...(crateTokenIds ? { crateTokenIds } : {}) });
 }
 
-export function forgetEthereumRevealJob(scope: string, transactionHash: string, expectedTrackingId?: string): void {
+export function forgetEthereumRevealJob(scope: string, transactionHash: string, expectedTrackingId?: string, completed = false): void {
   const hash = transactionHash.toLowerCase();
   if (!REVEAL_HASH.test(hash)) return;
   const trackingId = expectedTrackingId ?? currentEthereumRevealJob(scope, hash)?.trackingId ?? 'legacy';
   if (!REVEAL_TRACKING_ID.test(trackingId)) return;
-  const key = revealClosedKey(scope, hash, trackingId);
+  const key = completed ? revealCompletedKey(scope, hash, trackingId) : revealClosedKey(scope, hash, trackingId);
   if (readEthereumStorage(key) !== true) writeEthereumStorage(key, true);
 }
 
@@ -288,7 +261,7 @@ export async function restorePendingEthereumRevealJob(scope: string, transaction
       return;
     }
     const prefix = `${revealClosedPrefix(scope)}${hash}:`;
-    if ([...ethereumStorageKeys(prefix)].some(key => REVEAL_TRACKING_ID.test(key.slice(prefix.length)) && readEthereumStorage(key) === true)) return;
+    if ([...ethereumStorageKeys(prefix)].some(key => REVEAL_TRACKING_ID.test(key.slice(prefix.length).replace(/:revealed$/, '')) && readEthereumStorage(key) === true)) return;
     rememberEthereumRevealJob(scope, hash, pending.submittedAt, pending);
   });
 }

@@ -40,7 +40,7 @@ import { isUserRejectedError } from '../commerce/transactionSupport';
 import { persistCompletedReveal } from '../persistedState';
 import type { InventoryItem } from '../../types';
 import { calcInteractiveCardViewerTargetRectInViewport, calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
-import { pickRandomSoundUrl } from './sounds';
+import { pickRandomSoundUrl, REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS } from './sounds';
 import type { EarlyPackRevealGate, ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
 import type { ShopRevealOptions } from './contracts';
 import { useRevealAssets } from './useRevealAssets';
@@ -336,7 +336,7 @@ export function useShopReveal(options: ShopRevealOptions) {
         : [];
       preloadInteractiveCardPackRevealCardAssetsForDropId(revealDrop.dropId, interactiveRevealFigureIds);
       if (revealed.length) {
-        revealDismissLockedUntilRef.current = Date.now() + 1_000;
+        revealDismissLockedUntilRef.current = Date.now() + REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS;
       }
       if (!usesInteractiveCardPackFlow && revealed.length && revealContent.figures.revealPresentation === 'videos') {
         const mediaIds = Array.from(

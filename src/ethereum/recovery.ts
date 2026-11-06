@@ -52,6 +52,15 @@ export async function readEthereumSubmittedTransaction(provider: EIP1193Provider
   return { nonce: transaction.nonce, transactionSender: transaction.from, transactionCallHash: transactionCallHash(transaction) };
 }
 
+export async function ethereumSubmittedNonceConsumed(provider: EIP1193Provider,
+  operation: { hash?: string; nonce?: string; transactionSender?: string }, chainId: number): Promise<boolean> {
+  if (!operation.hash || !operation.nonce || !operation.transactionSender) return false;
+  if (ethereumChainId(await provider.request({ method: 'eth_chainId' })) !== chainId) return false;
+  const count = await provider.request({ method: 'eth_getTransactionCount', params: [operation.transactionSender, 'latest'] });
+  if (typeof count !== 'string' || !/^0x[0-9a-f]+$/i.test(count) || BigInt(count) <= BigInt(operation.nonce)) return false;
+  return await provider.request({ method: 'eth_getTransactionReceipt', params: [operation.hash] }) === null;
+}
+
 function ethereumTransactionMatchesIntent(actual: Pick<WalletTransaction, 'to' | 'data' | 'value'>, intended: Pick<EthereumPreparedTransaction, 'to' | 'data' | 'value'>): boolean {
   return ethereumAddress(actual.to) === ethereumAddress(intended.to) && actual.data.toLowerCase() === intended.data.toLowerCase() &&
     BigInt(actual.value) === BigInt(intended.value);

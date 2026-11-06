@@ -18,3 +18,7 @@ Keep `useShopPreorderRecovery` mounted across shop routes so both mainnet and de
 Inventory source state precedes reveal; inventory presentation consumes reveal's frozen views afterward. Viewer commands take explicit items. Mint actions capture the displayed inventory snapshot, while receipt ownership checks and claim recovery use raw inventory.
 
 Delivery and numeric claims share the prepared-transaction ledger. Receipt transfers and admin redemption share a separate receipt-operation ledger. Preserve wallet generations, persistence keys, and pending-submission recovery when changing those boundaries.
+
+Full Ethereum drops adapt their items into the shared inventory, selection bar, reveal shell, and fullscreen media viewer. Their operation records are local hints scoped to owner and deployment; each expires thirty minutes after submission and only a wallet request or its consumed items are locked. Confirmation and reveal reconciliation update inventory independently of the ephemeral presentation session. Restored records must never open an overlay. Checkout reservations, status requests, and request locks do not participate in full-drop minting or unpacking. Keep the direct-payment relic pages and Solana history separate from this composition.
+
+Ethereum redemption entry, claim validation, transaction replacement, and legacy inventory-recovery helpers remain covered by tests for checkout compatibility, although the full drop no longer exposes their UI. Their dormant production exports are recorded in the existing export baseline.

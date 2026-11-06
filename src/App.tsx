@@ -80,7 +80,7 @@ function App({ route, suspended = false }: AppProps) {
   const notificationDropFamily = drop.upcomingDropRoute?.dropFamily ?? drop.routeDrop?.dropFamily;
   const isNfcPage = route.kind === 'nfc';
   const commerceUiSuspended = suspended || isNfcPage;
-  const isEthereum111kPage = route.ethereumDropId === '111k_devnet';
+  const isEthereum111kPage = route.kind === 'ethereum-drop';
   const ethereumWallet = useMiNoteEthereumWallet(isEthereum111kPage && !commerceUiSuspended);
   const feedback = useShopFeedback(statusUiSuspended);
   const { showToast, showSuccessHud } = feedback;
@@ -423,10 +423,6 @@ function App({ route, suspended = false }: AppProps) {
           header={shopHeader}
           onModalOpenChange={onEthereumModalOpenChange}
           wallet={ethereumWallet}
-          claimReceiptId={route.ethereumClaimReceiptId}
-          claimCode={route.ethereumClaimCode}
-          checkoutReturnId={route.ethereumCheckoutReturnId}
-          addressEncryptionPublicKey={ADDRESS_ENCRYPTION_PUBLIC_KEY}
           solanaInventoryItems={inventory.inventoryItems}
           solanaSelected={selection.selected}
           onSolanaToggle={selection.toggleSelected}

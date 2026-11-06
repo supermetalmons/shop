@@ -84,6 +84,42 @@
   -webkit-user-select: none;
 }
 
+.inventory__activity {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+
+.inventory__activity span {
+  width: 26px;
+  height: 26px;
+  border: 2px solid rgba(80, 80, 80, 0.2);
+  border-top-color: #666;
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 0 0 6px var(--bg);
+  animation: inventory-activity 0.8s linear infinite;
+}
+
+@keyframes inventory-activity {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .inventory__activity { background: rgba(0, 0, 0, 0.45); }
+  .inventory__activity span {
+    border-color: rgba(220, 220, 220, 0.2);
+    border-top-color: #ddd;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inventory__activity span { animation: none; }
+}
+
 @media (prefers-color-scheme: dark) {
   .inventory__size-badge {
     color: #b5b5b9;
