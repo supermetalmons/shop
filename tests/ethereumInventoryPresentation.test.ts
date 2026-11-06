@@ -86,41 +86,56 @@ test('recovered results never open an overlay on mount or after reload', () => {
   assert.equal(second.result.current.open, false);
 });
 
-test('a static container gesture submits once and only its own results are presented', async () => {
+test('opening unpack submits immediately and only its own results are presented', async () => {
   const submitted = Promise.withResolvers<string | null>();
   let sends = 0;
   const initial = options({ onUnpack: () => { sends++; return submitted.promise; } });
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
   act(() => { assert.equal(view.result.current.openUnpack([item()]), true); });
-  assert.equal(sends, 0);
-  let first!: Promise<void>;
+  assert.equal(sends, 1);
+  assert.equal(view.result.current.overlay?.attempted, true);
   await act(async () => {
-    first = view.result.current.requestUnpack();
+    assert.equal(view.result.current.openUnpack([item()]), false);
+    await view.result.current.requestUnpack();
     await view.result.current.requestUnpack();
   });
   assert.equal(sends, 1);
   view.rerender({ ...initial, unpackResults: { [otherHash]: [item('2', 'artwork')] } });
   assert.equal(view.result.current.overlay?.results.length, 0);
-  await act(async () => { submitted.resolve(hash); await first; });
+  await act(async () => { submitted.resolve(hash); });
   const artworks = [item('1', 'artwork')];
   view.rerender({ ...initial, unpackResults: { [hash]: artworks, [otherHash]: [item('2', 'artwork')] } });
   assert.deepEqual(view.result.current.overlay?.results, artworks);
 });
 
+test('empty, suspended, and viewer presentations never submit an unpack', () => {
+  let sends = 0;
+  const initial = options({ onUnpack: async () => { sends++; return hash; } });
+  const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
+  act(() => { assert.equal(view.result.current.openUnpack([]), false); });
+  view.rerender({ ...initial, suspended: true });
+  act(() => { assert.equal(view.result.current.openUnpack([item()]), false); });
+  view.rerender(initial);
+  act(() => { assert.equal(view.result.current.openViewer(item('1', 'artwork')), true); });
+  act(() => { assert.equal(view.result.current.openUnpack([item()]), false); });
+  assert.equal(sends, 0);
+});
+
 test('Escape during wallet approval retains the Solana keyboard escape and ignores late results', async () => {
   const submitted = Promise.withResolvers<string | null>();
-  const initial = options({ onUnpack: () => submitted.promise });
+  let sends = 0;
+  const initial = options({ onUnpack: () => ++sends === 1 ? submitted.promise : Promise.resolve(otherHash) });
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
   act(() => { view.result.current.openUnpack([item()]); });
-  let sending!: Promise<void>;
-  act(() => { sending = view.result.current.requestUnpack(); });
   fireEvent.keyDown(document, { key: 'Escape' });
-  await act(async () => { submitted.resolve(hash); await sending; });
+  await act(async () => { submitted.resolve(hash); });
   view.rerender({ ...initial, unpackResults: { [hash]: [item('1', 'artwork')] } });
   assert.equal(view.result.current.overlay?.transactionHash, undefined);
   assert.equal(view.result.current.overlay?.results.length, 0);
   await waitFor(() => assert.equal(view.result.current.open, false));
-  act(() => { view.result.current.openUnpack([item('111113')]); });
+  await act(async () => { view.result.current.openUnpack([item('111113')]); });
+  assert.equal(sends, 2);
+  assert.equal(view.result.current.overlay?.transactionHash, otherHash);
   assert.equal(view.result.current.overlay?.results.length, 0);
 });
 
@@ -131,12 +146,6 @@ for (const input of ['mouse', 'touch'] as const) test(`${input} outside dismissa
   const initial = options({ onUnpack: () => submitted.promise });
   const view = presentationView(initial);
   act(() => { view.presentation.openUnpack([item()]); });
-  outsideGesture(view.getByRole('dialog'), input);
-  assert.equal(view.presentation.overlay?.closing, true);
-  await waitFor(() => assert.equal(view.presentation.open, false));
-
-  act(() => { view.presentation.openUnpack([item()]); });
-  fireEvent.click(view.getByRole('button', { name: `Reveal ${item().name}` }));
   assert.equal(view.presentation.overlay?.attempted, true);
   outsideGesture(view.getByRole('dialog'), input);
   assert.equal(view.presentation.overlay?.closing, false);
@@ -161,7 +170,6 @@ for (const suspended of [false, true]) test(`an empty successful unpack closes s
   const initial = options({ onError: message => errors.push(message) });
   const view = presentationView(initial);
   act(() => { view.presentation.openUnpack([item()]); });
-  fireEvent.click(view.getByRole('button', { name: `Reveal ${item().name}` }));
   await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
   view.rerenderOptions({ ...initial, suspended, unpackResults: { [otherHash]: [] } });
   assert.equal(view.presentation.overlay?.attempted, true);
@@ -184,17 +192,16 @@ for (const failure of ['wallet rejection', 'confirmed failure'] as const) test(`
   } });
   const view = presentationView(initial);
   act(() => { view.presentation.openUnpack([item()]); });
-  fireEvent.click(view.getByRole('button', { name: `Reveal ${item().name}` }));
   if (failure === 'confirmed failure') {
     await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
     view.rerenderOptions({ ...initial, unpackErrors: { [hash]: 'Reverted' } });
   }
   await waitFor(() => assert.equal(view.presentation.overlay?.attempted, false));
+  assert.equal(calls, 1);
   outsideGesture(view.getByRole('dialog'), 'touch');
   assert.equal(view.presentation.overlay?.closing, true);
   await waitFor(() => assert.equal(view.presentation.open, false));
   act(() => { view.presentation.openUnpack([item()]); });
-  fireEvent.click(view.getByRole('button', { name: `Reveal ${item().name}` }));
   await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, otherHash));
   assert.equal(calls, 2);
   outsideGesture(view.getByRole('dialog'), 'touch');
@@ -206,11 +213,9 @@ test('changing account invalidates pending presentation immediately', async () =
   const initial = options({ onUnpack: () => submitted.promise });
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
   act(() => { view.result.current.openUnpack([item()]); });
-  let sending!: Promise<void>;
-  act(() => { sending = view.result.current.requestUnpack(); });
   view.rerender({ ...initial, scope: 'other-account' });
   assert.equal(view.result.current.open, false);
-  await act(async () => { submitted.resolve(hash); await sending; });
+  await act(async () => { submitted.resolve(hash); });
   assert.equal(view.result.current.open, false);
 });
 
@@ -218,13 +223,14 @@ test('wallet rejection and confirmed failures allow a one-tap retry', async () =
   let calls = 0;
   const initial = options({ onUnpack: async () => ++calls === 1 ? null : calls === 2 ? hash : otherHash });
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
-  act(() => { view.result.current.openUnpack([item()]); });
-  await act(async () => { await view.result.current.requestUnpack(); });
+  await act(async () => { view.result.current.openUnpack([item()]); });
+  assert.equal(calls, 1);
   assert.equal(view.result.current.overlay?.attempted, false);
   await act(async () => { await view.result.current.requestUnpack(); });
   assert.equal(view.result.current.overlay?.transactionHash, hash);
   view.rerender({ ...initial, unpackErrors: { [hash]: 'Reverted' } });
   assert.equal(view.result.current.overlay?.attempted, false);
+  assert.equal(calls, 2);
   await act(async () => { await view.result.current.requestUnpack(); });
   assert.equal(view.result.current.overlay?.transactionHash, otherHash);
   assert.equal(calls, 3);
@@ -234,8 +240,7 @@ test('terminal errors wait for an active suspended session to resume and announc
   const messages: string[] = [];
   const initial = options({ onError: message => messages.push(message) });
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
-  act(() => { view.result.current.openUnpack([item()]); });
-  await act(async () => { await view.result.current.requestUnpack(); });
+  await act(async () => { view.result.current.openUnpack([item()]); });
   const failed = { ...initial, unpackErrors: { [hash]: 'Opening failed' } };
   view.rerender({ ...failed, suspended: true });
   assert.deepEqual(messages, []);
@@ -251,8 +256,7 @@ for (const change of ['close', 'scope'] as const) test(`${change} while suspende
   const messages: string[] = [];
   const initial = options({ onError: message => messages.push(message) });
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
-  act(() => { view.result.current.openUnpack([item()]); });
-  await act(async () => { await view.result.current.requestUnpack(); });
+  await act(async () => { view.result.current.openUnpack([item()]); });
   const failed = { ...initial, unpackErrors: { [hash]: 'Opening failed' }, suspended: true };
   view.rerender(failed);
   if (change === 'close') act(() => { view.result.current.close(); });
@@ -280,10 +284,8 @@ test('viewer hydration retains the session and source snapshot while updating it
 test('dense reveal renders every result through the shared reveal shell without a gallery or media players', async () => {
   const initial = options();
   const hook = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
-  act(() => { hook.result.current.openUnpack([item()]); });
+  await act(async () => { hook.result.current.openUnpack([item()]); });
   const view = render(createElement(EthereumInventoryOverlays, { presentation: hook.result.current }));
-  const reveal = view.getByRole('button', { name: `Reveal ${item().name}` });
-  await act(async () => { fireEvent.click(reveal); });
   hook.rerender({ ...initial, unpackResults: { [hash]: Array.from({ length: 311 }, (_, index) => item(String(index + 1), 'artwork')) } });
   view.rerender(createElement(EthereumInventoryOverlays, { presentation: hook.result.current }));
   const dialog = view.getByRole('dialog');

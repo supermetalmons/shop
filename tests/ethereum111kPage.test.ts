@@ -856,12 +856,13 @@ test('a pending discounted mint switches the next mint to public pricing when it
   assert.deepEqual(transactions.map(transaction => BigInt(transaction.value)), [50_000_000_000_000n, 100_000_000_000_000n]);
 });
 
-test('unpacking starts only from the static image inside the shared blurry overlay', async t => {
+test('opening the shared blurry overlay starts unpacking without another interaction', async t => {
   const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
   const hash = `0x${'ab'.repeat(32)}`;
+  const submitted = deferred<string>();
   let sent = 0;
   const connected: EthereumWallet = { ...wallet, provider: { request: async ({ method }) => {
-    if (method === 'eth_sendTransaction') { sent++; return hash; }
+    if (method === 'eth_sendTransaction') { sent++; return submitted.promise; }
     if (method === 'eth_chainId') return '0xaa36a7';
     if (method === 'eth_getTransactionCount') return '0x7';
     if (method === 'eth_getTransactionByHash') return null;
@@ -877,13 +878,20 @@ test('unpacking starts only from the static image inside the shared blurry overl
   const overlay = view.getByRole('dialog', { name: 'Warehouse #1 unboxing' });
   assert.ok(overlay.classList.contains('reveal-overlay'));
   assert.equal(overlay.querySelector('.modal__head'), null);
-  assert.equal(sent, 0);
+  assert.equal(document.querySelector('.selection-panel--inventory'), null);
+  assert.equal(view.container.querySelector('[data-inventory-id][aria-pressed="true"]'), null);
   const reveal = view.getByRole('button', { name: 'Reveal Warehouse #1' });
-  fireEvent.click(reveal);
-  fireEvent.click(reveal);
+  assert.equal(reveal.getAttribute('aria-busy'), 'true');
   await waitFor(() => assert.equal(sent, 1));
+  fireEvent.click(reveal);
+  fireEvent.click(reveal);
+  await act(async () => { submitted.resolve(hash); });
+  assert.equal(sent, 1);
   await waitFor(() => assert.equal(overlay.querySelectorAll('.reveal-overlay__media-item').length, 1));
   assert.equal(view.queryByRole('button', { name: 'Transaction changed?' }), null);
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.equal(view.queryByRole('dialog'), null));
+  assert.equal(document.querySelector('.selection-panel--inventory'), null);
 });
 
 test('a stored checkout and callback URL do not affect full-drop unpacking or start checkout requests', async t => {
@@ -917,7 +925,6 @@ test('a stored checkout and callback URL do not affect full-drop unpacking or st
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)));
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)!);
   fireEvent.click(view.getByRole('button', { name: 'Open' }));
-  fireEvent.click(view.getByRole('button', { name: 'Reveal Warehouse #1' }));
   await waitFor(() => assert.equal(transactions.length, 1));
   assert.equal(transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [warehouse.tokenId]));
   await waitFor(() => assert.equal(document.querySelectorAll('.reveal-overlay__media-item').length, 1));
@@ -952,6 +959,12 @@ test('viewing Ethereum artwork uses the shared fullscreen shell without modal or
   assert.ok(overlay.classList.contains('reveal-overlay--viewer'));
   assert.equal(overlay.querySelector('.modal__head'), null);
   assert.equal(view.queryByRole('button', { name: /Send|Transfer|Claim|Close/ }), null);
+  assert.equal(document.querySelector('.selection-panel--inventory'), null);
+  assert.equal(view.container.querySelector(`[data-inventory-id="${artwork.id}"]`)!.getAttribute('aria-pressed'), 'false');
+  fireEvent.click(overlay.querySelector('.reveal-overlay__backdrop')!);
+  await waitFor(() => assert.equal(view.queryAllByRole('dialog').length, 0));
+  assert.equal(document.querySelector('.selection-panel--inventory'), null);
+  assert.equal(view.container.querySelector(`[data-inventory-id="${artwork.id}"]`)!.getAttribute('aria-pressed'), 'false');
 });
 
 for (const category of ['painting', 'video'] as const) test(`an open ${category} viewer receives recovered media and aspect ratio without reopening`, async t => {
@@ -1003,7 +1016,6 @@ for (const source of ['reveal', 'confirmation'] as const) test(`an active ${sour
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${item().id}"]`)!);
   fireEvent.click(view.getByRole('button', { name: 'Open' }));
   const trigger = view.getByRole('button', { name: 'Reveal Crate #1' });
-  fireEvent.click(trigger);
   await waitFor(() => assert.equal(toasts.length, 1));
   assert.match(toasts[0], /reverted/);
   assert.equal(trigger.getAttribute('aria-busy'), 'false');
@@ -1025,7 +1037,6 @@ for (const mode of ['closed', 'recovered'] as const) test(`${mode} unpack failur
   if (mode === 'closed') {
     fireEvent.click(view.container.querySelector(`[data-inventory-id="${item().id}"]`)!);
     fireEvent.click(view.getByRole('button', { name: 'Open' }));
-    fireEvent.click(view.getByRole('button', { name: 'Reveal Crate #1' }));
     await waitFor(() => assert.ok(request.mock.callCount()));
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => assert.equal(view.queryByRole('dialog'), null));

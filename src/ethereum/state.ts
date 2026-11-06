@@ -49,13 +49,9 @@ export function ethereumInventoryView(item: EthereumInventoryItem, dropId = '111
 
 export function isEthereumInventoryView(item: InventoryItem): item is EthereumInventoryView { return 'ethereum' in item; }
 
-export function toggleEthereumSelection(selected: ReadonlySet<string>, item: EthereumInventoryItem, items: ReadonlyMap<string, EthereumInventoryItem>, maximum: number): Set<string> {
+export function toggleEthereumSelection(selected: ReadonlySet<string>, item: EthereumInventoryItem): Set<string> {
   if (item.kind.endsWith('_receipt')) return new Set(selected);
-  const next = new Set(selected);
-  if (next.has(item.id)) { next.delete(item.id); return next; }
-  if (item.kind === 'warehouse' || [...next].some(id => items.get(id)?.kind === 'warehouse')) return new Set([item.id]);
-  if (next.size < maximum) next.add(item.id);
-  return next;
+  return new Set(selected.has(item.id) ? [] : [item.id]);
 }
 
 const STORAGE_PREFIX = 'ethereum111k:';

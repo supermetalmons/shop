@@ -126,7 +126,6 @@ export function useEthereumInventoryPresentation(options: PresentationOptions) {
       active: false, closing: false, closeMode: 'return', attempted: false, results: [], resultsVisible: false });
     return true;
   }, [update]);
-  const openUnpack = useCallback((items: readonly EthereumInventoryItem[], rect?: DOMRect | null) => present('unpack', items, rect), [present]);
   const openViewer = useCallback((item: EthereumInventoryItem, rect?: DOMRect | null) => present('viewer', [item], rect), [present]);
   useLayoutEffect(() => {
     const state = current.current;
@@ -194,6 +193,11 @@ export function useEthereumInventoryPresentation(options: PresentationOptions) {
     if (latest?.session !== session || latest.closing || latest.scope !== optionsRef.current.scope) return;
     update({ ...latest, attempted: Boolean(transactionHash), transactionHash: transactionHash?.toLowerCase() });
   }, [update]);
+  const openUnpack = useCallback((items: readonly EthereumInventoryItem[], rect?: DOMRect | null) => {
+    if (!present('unpack', items, rect)) return false;
+    void requestUnpack();
+    return true;
+  }, [present, requestUnpack]);
   useEffect(() => {
     const state = current.current;
     if (!state || state.mode !== 'unpack' || state.closing || !state.transactionHash || state.scope !== options.scope) return;

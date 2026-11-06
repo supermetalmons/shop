@@ -401,29 +401,23 @@ test('Ethereum inventory validates supplemental ownership and rejects excess IDs
   assert.equal(fetch.mock.callCount(), 2);
 });
 
-test('Ethereum selection caps delivery at 50 and keeps warehouses separate from shippable items', () => {
-  const rows = Array.from({ length: 51 }, (_, index) => item(String(index + 1)));
-  const warehouse = item('116667', 'warehouse');
-  const receipt = item('1000001', 'artwork_receipt');
-  const index = new Map([...rows, warehouse, receipt].map(row => [row.id, row]));
-  const selected = new Set(rows.slice(0, 50).map(row => row.id));
-  assert.equal(toggleEthereumSelection(selected, rows[50], index, 50).size, 50);
-  assert.deepEqual([...toggleEthereumSelection(selected, warehouse, index, 50)], [warehouse.id]);
-  assert.deepEqual([...toggleEthereumSelection(new Set([warehouse.id]), rows[0], index, 50)], [rows[0].id]);
-  assert.equal(toggleEthereumSelection(selected, receipt, index, 50).size, 50);
+test('Ethereum inventory selects only the latest item and lets it be deselected', () => {
+  const rows = [item('1'), item('2'), item('111112', 'crate'), item('111113', 'crate'),
+    item('116667', 'warehouse'), item('117172', 'relic'), item('117173', 'relic')];
+  let selected = new Set<string>();
+  for (const row of rows) {
+    selected = toggleEthereumSelection(selected, row);
+    assert.deepEqual([...selected], [row.id]);
+    assert.deepEqual([...toggleEthereumSelection(selected, row)], []);
+  }
 });
 
-test('relics join artwork and crate selections while their receipts remain unselectable', () => {
-  const artwork = item('1');
-  const crate = item('111112', 'crate');
-  const relics = [item('117172', 'relic'), item('117173', 'relic')];
-  const receipt = item('3000001', 'relic_receipt');
-  const index = new Map([artwork, crate, ...relics, receipt].map(row => [row.id, row]));
-  let selected = new Set([artwork.id, crate.id]);
-  for (const relic of relics) selected = toggleEthereumSelection(selected, relic, index, 50);
-  assert.deepEqual([...selected], [artwork.id, crate.id, ...relics.map(row => row.id)]);
-  assert.deepEqual(toggleEthereumSelection(selected, receipt, index, 50), selected);
-  assert.equal(toggleEthereumSelection(new Set([relics[0].id]), relics[1], index, 1).size, 1);
+test('Ethereum receipts remain unselectable and preserve the current selection', () => {
+  const selected = new Set([item('117172', 'relic').id]);
+  for (const receipt of [item('1000001', 'artwork_receipt'), item('2000001', 'crate_receipt'), item('3000001', 'relic_receipt')]) {
+    assert.deepEqual(toggleEthereumSelection(selected, receipt), selected);
+    assert.deepEqual([...toggleEthereumSelection(new Set(), receipt)], []);
+  }
 });
 
 test('delivery authorization bytes must match the selected IDs, wallet, order, signature and exact fee', async () => {

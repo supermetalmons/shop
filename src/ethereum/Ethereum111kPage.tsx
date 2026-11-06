@@ -116,14 +116,11 @@ export default function Ethereum111kPage({
   const inventory = useMemo(() => buildEthereumInventoryItems({ items: model.items, pendingMints: model.pendingMints,
     solanaItems: solanaInventoryItems, dropId: model.config.dropId }), [model.items, model.pendingMints, model.config.dropId, solanaInventoryItems]);
   const combinedSelection = selected.size ? selected : solanaSelected;
-  const onUnpack = async (items: readonly EthereumInventoryItem[]) => {
+  const onUnpack = (items: readonly EthereumInventoryItem[]) => {
     mintAction.clearError();
     relicAction.clearError();
     model.clearError();
-    const hash = await model.unbox(items);
-    if (hash) setSelection(current => current.scope === model.scope
-      ? { ...current, ids: new Set([...current.ids].filter(id => !items.some(item => item.id === id))) } : current);
-    return hash;
+    return model.unbox(items);
   };
   const presentation = useEthereumInventoryPresentation({ scope: model.scope, onUnpack,
     unpackResults: model.unpackResults, unpackErrors: model.unpackErrors, applyArtwork: model.applyArtwork, onError: showToast, suspended });
@@ -168,13 +165,14 @@ export default function Ethereum111kPage({
     if (item) {
       clearSolanaSelection();
       setSelection(current => ({ scope: model.scope, ids: toggleEthereumSelection(
-        current.scope === model.scope ? current.ids : new Set(), item, itemsById, model.config.maxUnboxQuantity) }));
+        current.scope === model.scope ? current.ids : new Set(), item) }));
     } else if (!externalBusy) { clear(); onSolanaToggle(id); }
   };
   const view = (item: InventoryItem, rect: DOMRect) => {
     if (suspended || inventory.busyItemIds.has(item.id)) return;
-    if (isEthereumInventoryView(item)) { clearSolanaSelection(); presentation.openViewer(item.ethereum, rect); }
-    else onSolanaView(item, rect);
+    if (isEthereumInventoryView(item)) {
+      if (presentation.openViewer(item.ethereum, rect)) { clearSolanaSelection(); clear(); }
+    } else onSolanaView(item, rect);
   };
   const itemRect = (item: EthereumInventoryItem) => {
     const target = document.querySelector<HTMLElement>(`[data-inventory-id="${item.id}"]`);
@@ -216,8 +214,8 @@ export default function Ethereum111kPage({
       selectedOverflow={Math.max(0, selectedViews.length - 5)} canViewSelected={selectedItems.length === 1}
       canOpenSelected={canOpenSelected} canShipSelected={false} hasPreorderSelected={false}
       selectedBox={canOpenSelected ? selectedViews[0] : null} clearSelection={clear}
-      handleViewSelectedItem={() => { if (selectedItems[0]) presentation.openViewer(selectedItems[0], itemRect(selectedItems[0])); }}
-      handleOpenSelectedBox={() => { if (canOpenSelected && !selectedPending) presentation.openUnpack(selectedItems, itemRect(selectedItems[0])); }}
+      handleViewSelectedItem={() => { if (selectedItems[0] && presentation.openViewer(selectedItems[0], itemRect(selectedItems[0]))) clear(); }}
+      handleOpenSelectedBox={() => { if (canOpenSelected && !selectedPending && presentation.openUnpack(selectedItems, itemRect(selectedItems[0]))) clear(); }}
       handleOpenShip={() => {}} walletActionBusy={actionBlocked || selectedPending} startOpenLoading={null}
       openActionLabelForDropId={() => 'Open'} openActionProgressForDropId={() => 'Opening…'} />
     <EthereumInventoryOverlays presentation={presentation} suspended={suspended} />
