@@ -1438,7 +1438,16 @@ test('D1 assignment returns an existing valid assignment without touching the po
 });
 
 test('D1 assignment excludes stale pool entries and retries commit conflicts', async () => {
-  const harness = createCommerceD1Harness();
+  let injectConflict = false;
+  let commitBatches = 0;
+  const harness = createCommerceD1Harness({
+    observeStatement: ({ sql }) => {
+      if (injectConflict && sql.startsWith('INSERT INTO commerce_commit_guards')) {
+        commitBatches += 1;
+        if (commitBatches === 1) throw new Error('commerce transaction conflict');
+      }
+    },
+  });
   const repository = new D1CommerceRepository(harness.db);
   await repository.run(1, async (unit) => {
     await unit.create(commerceKeys.dudePool(DROP_ID), { available: [1, 2] });
@@ -1447,18 +1456,7 @@ test('D1 assignment excludes stale pool entries and retries commit conflicts', a
   const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
   initializeCommerceInventory(harness, { ...runtime, dropFamily: runtime.config.dropFamily });
   let sleeps = 0;
-  let batches = 0;
-  const baseBatch = harness.db.batch.bind(harness.db);
-  const flakyDb = {
-    prepare: harness.db.prepare.bind(harness.db),
-    async batch<T>(statements: D1PreparedStatement[]) {
-      if (statements.length >= 4) {
-        batches += 1;
-        if (batches === 1) throw new Error('commerce transaction conflict');
-      }
-      return baseBatch<T>(statements);
-    },
-  } as D1Database;
+  injectConflict = true;
   const dependencySubset = {
     randomInt: () => 0,
     sleep: async () => {
@@ -1467,7 +1465,7 @@ test('D1 assignment excludes stale pool entries and retries commit conflicts', a
   };
 
   const result = await revealDudesTestHooks.assignDudes(
-    revealContext(flakyDb),
+    revealContext(harness.db),
     revealDudesTestHooks.runtimeForDrop(DROP_ID),
     BOX_ASSET.toBase58(),
     dependencySubset,
@@ -1475,6 +1473,7 @@ test('D1 assignment excludes stale pool entries and retries commit conflicts', a
 
   assert.deepEqual(result, { dudeIds: [2], outcome: 'created' });
   assert.equal(sleeps, 1);
+  assert.equal(commitBatches, 2);
   assert.equal((await repository.get(commerceKeys.dudeAssignment(DROP_ID, '2')))?.data.boxAssetId, BOX_ASSET.toBase58());
   assert.deepEqual((await repository.get(commerceKeys.boxAssignment(DROP_ID, BOX_ASSET.toBase58())))?.data.dudeIds, [2]);
 });

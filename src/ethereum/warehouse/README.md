@@ -57,6 +57,6 @@ npm run build
 ```
 
 Regenerate the original PCM ice samples with
-`node scripts/generate-warehouse-sounds.mjs`. `ice-impact.wav` is a short impact;
+`npm run generate:warehouse-sounds`. `ice-impact.wav` is a short impact;
 `ice-critical.wav` includes the heavier strike and collapse tail. Playback uses
 the shared sound player, unlocks on user input and is never a readiness gate.

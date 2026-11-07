@@ -40,7 +40,7 @@ import {
   type CommerceSqlQuery,
 } from '../../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../shared/commerceQuerySql.ts';
-import { receiptClaimFailureDiscoveryQuery } from '../../cloud/workers/api/src/receiptClaimFailureNotifications.ts';
+import { receiptClaimFailureDiscoveryQuery } from '../../cloud/workers/api/src/receiptClaimFailureOutboxStore.ts';
 import { requestedPreorderInventoryQuery } from '../../cloud/workers/api/src/preorderInventoryQueries.ts';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import test, { after, afterEach, beforeEach } from 'node:test';
+import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, useLayoutEffect } from 'react';
 import type { EthereumInventoryItem } from '../shared/ethereum/protocol.ts';
 import type { CrateSceneProps } from '../src/ethereum/crate/CrateScene.tsx';
@@ -70,7 +70,7 @@ const { useEthereumInventoryPresentation } = await import('../src/ethereum/useEt
 const { EthereumInventoryOverlays } = await import('../src/ethereum/EthereumInventoryOverlays.tsx');
 
 const sources: HTMLCanvasElement[] = [];
-beforeEach(t => {
+beforeEach((t: TestContext) => {
   sceneProps = null;
   warehouseProps = null;
   warehousePreparations = 0;

@@ -5,6 +5,9 @@ import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { assignCommerceDudes } from '../src/commerceDudeAssignments.ts';
 import { CommerceRepositoryError, D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { pickDudeIdsForAssignment } from '../../../../shared/assignDudesPicker.ts';
+import { CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS, CARD_NFT_2_COMMON_CARD_IDS } from '../../../../shared/cardNft2RevealIds.ts';
+import { CARD_NFT_2_MAX_CARD_ID } from '../../../../shared/cardNft2AssetCore.ts';
 
 const DROP_ID = 'inventory-runtime';
 const GENERATION = '00000000-0000-4000-8000-000000000010';
@@ -225,6 +228,258 @@ test('inventory guards bound assignment reads during backfill and allocation', a
     const repository = new D1CommerceRepository(db);
     assert.deepEqual((await repository.get(commerceKeys.dudeAssignment(DROP_ID, String(dudeId))))?.data,
       { dudeId, boxAssetId: 'new-box', inventoryGeneration: GENERATION });
+  } finally {
+    await server.close();
+  }
+});
+
+test('D1 compact snapshots preserve pool order for rarity selection in one batch', async () => {
+  const server = inventoryRuntimeServer();
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const { COMMERCE_DB: db } = await worker.getEnv();
+    await pause(db);
+    const pool = [CARD_NFT_2_COMMON_CARD_IDS[1], CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS[0],
+      CARD_NFT_2_COMMON_CARD_IDS[0], CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS[1]];
+    await db.batch([
+      db.prepare(`INSERT INTO commerce_inventory_drops (drop_id, generation, ready, drop_family, items_per_box, max_dude_id, initialized_at_ms)
+        VALUES (?, ?, 0, 'card_nft_2', 3, ?, 100)`).bind(DROP_ID, GENERATION, CARD_NFT_2_MAX_CARD_ID),
+      ...pool.map((id, index) => db.prepare('INSERT INTO commerce_available_dudes VALUES (?, ?, ?)').bind(DROP_ID, id, index)),
+      db.prepare('UPDATE commerce_inventory_drops SET ready = 1 WHERE drop_id = ?').bind(DROP_ID),
+      db.prepare("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1"),
+    ]);
+    await resume(db);
+    let inventoryRows = 0;
+    let inventoryBatches = 0;
+    const sampledDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+          inventoryBatches++;
+          const results = await target.batch<Record<string, unknown>>(statements);
+          for (const result of results) {
+            assert.ok(result.results.length <= 1);
+            assert.ok(result.results.every(row => !Object.hasOwn(row, 'dude_id') && !Object.hasOwn(row, 'pool_position')));
+            inventoryRows += result.results.length;
+          }
+          return results;
+        };
+        return Reflect.get(target, property, target);
+      },
+    });
+    const repository = new D1CommerceRepository(sampledDb);
+    const randomInt = (maximum: number) => maximum - 1;
+    const config = { dropId: DROP_ID, dropFamily: 'card_nft_2', itemsPerBox: 3, maxDudeId: CARD_NFT_2_MAX_CARD_ID };
+    const sampled = await repository.getDudeInventory(config);
+    assert.deepEqual(sampled.pool, pool);
+    const actual = await pickDudeIdsForAssignment({ ...config, pool: sampled.pool, randomInt, isAssigned: () => false });
+    const expected = await pickDudeIdsForAssignment({ ...config, pool: [...pool], randomInt, isAssigned: () => false });
+    assert.deepEqual(actual, expected);
+    assert.equal(inventoryRows, 3);
+    assert.equal(inventoryBatches, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('native D1 snapshots tolerate disjoint assignments after loading and before commit', async () => {
+  const server = inventoryRuntimeServer();
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const { COMMERCE_DB: db } = await worker.getEnv();
+    await pause(db);
+    await db.batch([
+      db.prepare(`INSERT INTO commerce_inventory_drops (drop_id, generation, ready, drop_family, items_per_box, max_dude_id, initialized_at_ms)
+        VALUES (?, ?, 0, 'clear_cards', 3, 100, 100)`).bind(DROP_ID, GENERATION),
+      ...Array.from({ length: 100 }, (_, index) => db.prepare('INSERT INTO commerce_available_dudes VALUES (?, ?, ?)')
+        .bind(DROP_ID, index + 1, index)),
+      db.prepare('UPDATE commerce_inventory_drops SET ready = 1 WHERE drop_id = ?').bind(DROP_ID),
+      db.prepare("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1"),
+    ]);
+    await resume(db);
+    const repository = new D1CommerceRepository(db);
+    const competitor = new D1CommerceRepository(db);
+    const config = { dropId: DROP_ID, dropFamily: 'clear_cards', itemsPerBox: 3, maxDudeId: 100,
+      nowMs: 100, signal: new AbortController().signal };
+    let competitors = 0;
+    const allocateCompetitor = () => assignCommerceDudes({ ...config, repository: competitor,
+      boxAssetId: `other-${++competitors}`, randomInt: (maximum) => maximum - 1 });
+    const loadInventory = repository.getDudeInventory.bind(repository);
+    let snapshots = 0;
+    repository.getDudeInventory = async (args, signal) => {
+      snapshots++;
+      const inventory = await loadInventory(args, signal);
+      await allocateCompetitor();
+      return inventory;
+    };
+    const run = repository.run.bind(repository);
+    repository.run = (nowMs, operation) => run(nowMs, async transaction => {
+      const result = await operation(transaction);
+      await allocateCompetitor();
+      return result;
+    });
+    let retries = 0;
+    const result = await assignCommerceDudes({ ...config, repository, boxAssetId: 'target',
+      randomInt: () => 0, sleep: async () => { retries++; } });
+    assert.deepEqual(result, { dudeIds: [1, 2, 3], outcome: 'created' });
+    assert.equal(snapshots, 1);
+    assert.equal(retries, 0);
+    assert.equal(competitors, 2);
+    assert.equal((await available(db)).length, 91);
+  } finally {
+    await server.close();
+  }
+});
+
+test('native D1 returns the winning same-box assignment after a stale snapshot', async () => {
+  const server = inventoryRuntimeServer();
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const { COMMERCE_DB: db } = await worker.getEnv();
+    await pause(db);
+    await db.batch([
+      metadata(db, GENERATION, 1),
+      db.prepare('INSERT INTO commerce_available_dudes VALUES (?, 1, 0)').bind(DROP_ID),
+      db.prepare('UPDATE commerce_inventory_drops SET ready = 1 WHERE drop_id = ?').bind(DROP_ID),
+      db.prepare("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1"),
+    ]);
+    await resume(db);
+    const repository = new D1CommerceRepository(db);
+    const winner = new D1CommerceRepository(db);
+    const args = { dropId: DROP_ID, dropFamily: 'poncho_drifella', itemsPerBox: 1, maxDudeId: 1,
+      nowMs: 100, signal: new AbortController().signal, boxAssetId: 'same-box', randomInt: () => 0 };
+    const loadInventory = repository.getDudeInventory.bind(repository);
+    repository.getDudeInventory = async (config, signal) => {
+      const inventory = await loadInventory(config, signal);
+      assert.deepEqual(await assignCommerceDudes({ ...args, repository: winner }),
+        { dudeIds: [1], outcome: 'created' });
+      return inventory;
+    };
+    let retries = 0;
+    assert.deepEqual(await assignCommerceDudes({ ...args, repository, sleep: async () => { retries++; } }),
+      { dudeIds: [1], outcome: 'existing' });
+    assert.equal(retries, 1);
+    assert.deepEqual(await available(db), []);
+    assert.equal((await winner.get(commerceKeys.dudeAssignment(DROP_ID, '1')))?.data.boxAssetId, 'same-box');
+  } finally {
+    await server.close();
+  }
+});
+
+test('native D1 retries an overlapping snapshot without assigning a figure twice', async () => {
+  const server = inventoryRuntimeServer();
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const { COMMERCE_DB: db } = await worker.getEnv();
+    await pause(db);
+    await db.batch([
+      metadata(db),
+      ...[1, 2, 3, 4].map((id) => db.prepare('INSERT INTO commerce_available_dudes VALUES (?, ?, ?)')
+        .bind(DROP_ID, id, id - 1)),
+      db.prepare('UPDATE commerce_inventory_drops SET ready = 1 WHERE drop_id = ?').bind(DROP_ID),
+      db.prepare("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1"),
+    ]);
+    await resume(db);
+    const repository = new D1CommerceRepository(db);
+    const competitor = new D1CommerceRepository(db);
+    const args = { dropId: DROP_ID, dropFamily: 'poncho_drifella', itemsPerBox: 1, maxDudeId: 4,
+      nowMs: 100, signal: new AbortController().signal, randomInt: () => 0 };
+    const loadInventory = repository.getDudeInventory.bind(repository);
+    let snapshots = 0;
+    repository.getDudeInventory = async (config, signal) => {
+      snapshots++;
+      return loadInventory(config, signal);
+    };
+    const run = repository.run.bind(repository);
+    let commits = 0;
+    repository.run = (nowMs, operation) => run(nowMs, async transaction => {
+      const result = await operation(transaction);
+      if (++commits === 1) {
+        assert.deepEqual(await assignCommerceDudes({ ...args, repository: competitor, boxAssetId: 'competitor' }),
+          { dudeIds: [1], outcome: 'created' });
+      }
+      return result;
+    });
+    let retries = 0;
+    assert.deepEqual(await assignCommerceDudes({ ...args, repository, boxAssetId: 'target',
+      sleep: async () => { retries++; } }), { dudeIds: [2], outcome: 'created' });
+    assert.equal(snapshots, 2);
+    assert.equal(commits, 2);
+    assert.equal(retries, 1);
+    assert.deepEqual(await available(db), [3, 4]);
+    assert.equal((await repository.get(commerceKeys.dudeAssignment(DROP_ID, '1')))?.data.boxAssetId, 'competitor');
+    assert.equal((await repository.get(commerceKeys.dudeAssignment(DROP_ID, '2')))?.data.boxAssetId, 'target');
+  } finally {
+    await server.close();
+  }
+});
+
+test('native D1 reads a full card inventory once with a compact JSON payload', async (t) => {
+  const inventorySize = CARD_NFT_2_MAX_CARD_ID;
+  const server = inventoryRuntimeServer();
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const { COMMERCE_DB: db } = await worker.getEnv();
+    await pause(db);
+    await db.batch([
+      db.prepare(`INSERT INTO commerce_inventory_drops
+        (drop_id, generation, ready, drop_family, items_per_box, max_dude_id, initialized_at_ms)
+        VALUES (?, ?, 0, 'card_nft_2', 3, ?, 100)`).bind(DROP_ID, GENERATION, inventorySize),
+      db.prepare(`INSERT INTO commerce_available_dudes (drop_id, dude_id, pool_position)
+        WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id + 1 FROM ids WHERE id < ?)
+        SELECT ?, id, id - 1 FROM ids`).bind(inventorySize, DROP_ID),
+      db.prepare('UPDATE commerce_inventory_drops SET ready = 1 WHERE drop_id = ?').bind(DROP_ID),
+      db.prepare("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1"),
+    ]);
+    await resume(db);
+    const config = { dropId: DROP_ID, dropFamily: 'card_nft_2', itemsPerBox: 3, maxDudeId: inventorySize };
+    const pool = Array.from({ length: inventorySize }, (_, index) => index + 1);
+    for (const { label, fraction } of [
+      { label: 'low', fraction: 0 },
+      { label: 'midpoint', fraction: 0.5 },
+      { label: 'high', fraction: 0.999999 },
+    ]) {
+      const batches: { returned: number; rowsRead: number; bytes: number }[] = [];
+      const measuredDb = new Proxy(db, {
+        get(target, property) {
+          if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+            const results = await target.batch<Record<string, unknown>>(statements);
+            assert.ok(results.every(result => result.results.length <= 1));
+            assert.ok(results.every(result => result.results.every(row =>
+              !Object.hasOwn(row, 'dude_id') && !Object.hasOwn(row, 'pool_position'))));
+            batches.push({
+              returned: results.reduce((sum, result) => sum + result.results.length, 0),
+              rowsRead: results.reduce((sum, result) => sum + result.meta.rows_read, 0),
+              bytes: new TextEncoder().encode(JSON.stringify(results.map(result => result.results))).length,
+            });
+            return results;
+          };
+          return Reflect.get(target, property, target);
+        },
+      });
+      const randomInt = (maximum: number) => Math.floor(maximum * fraction);
+      const snapshot = await new D1CommerceRepository(measuredDb).getDudeInventory(config);
+      assert.deepEqual(snapshot.pool, pool, label);
+      const actual = await pickDudeIdsForAssignment({ ...config, pool: snapshot.pool, randomInt, isAssigned: () => false });
+      const expected = await pickDudeIdsForAssignment({ ...config, pool: [...pool], randomInt, isAssigned: () => false });
+      assert.deepEqual(actual, expected, label);
+      assert.equal(batches.length, 1, label);
+      const [{ returned, rowsRead, bytes }] = batches;
+      assert.equal(returned, 3, label);
+      assert.ok(rowsRead >= inventorySize && rowsRead <= inventorySize + 8,
+        `${label} snapshot read ${rowsRead} rows for ${inventorySize} cards.`);
+      assert.ok(bytes < 64 * 1024, `${label} snapshot transferred ${bytes} bytes.`);
+      t.diagnostic(`${label} picks read ${rowsRead} D1 rows and transferred ${bytes} bytes in one batch for ${inventorySize} cards.`);
+    }
   } finally {
     await server.close();
   }

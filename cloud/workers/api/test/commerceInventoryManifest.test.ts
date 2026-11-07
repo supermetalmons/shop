@@ -79,15 +79,43 @@ function unavailable(error: unknown): boolean {
   return true;
 }
 
-test('explicit inventory reads its authorization and sparse IDs in one consistent D1 batch', async (t) => {
+function repositoryWithInventoryRows(
+  harness: CommerceD1Harness,
+  change: (available: Record<string, unknown>[], assignments: Record<string, unknown>[]) => void,
+): D1CommerceRepository {
+  const db = new Proxy(harness.db, {
+    get(target, property) {
+      if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+        const results = await target.batch<Record<string, unknown>>(statements);
+        change(results[2].results, results[4].results);
+        return results;
+      };
+      return Reflect.get(target, property, target);
+    },
+  });
+  return new D1CommerceRepository(db);
+}
+
+test('explicit inventory reads ordered available rows and assignments in one consistent D1 batch', async (t) => {
   const f = await fixture(t);
-  assert.deepEqual(await f.repository.getDudeInventory(f.args), { generation: f.generation, pool: [2, 3, 1401, 1430] });
+  const rowCounts: number[] = [];
+  const inventory = await repositoryWithInventoryRows(f.harness, (available, assignments) => {
+    rowCounts.push(available.length, assignments.length);
+  }).getDudeInventory(f.args);
+  assert.equal(inventory.generation, f.generation);
+  assert.equal(inventory.pool.length, 4);
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].method, 'batch');
   if (f.calls[0].method !== 'batch') assert.fail('expected an atomic D1 read');
   assert.equal(f.calls[0].statements.length, 5);
+  assert.match(f.calls[0].statements[2].sql, /SELECT dude_id, pool_position/);
+  assert.match(f.calls[0].statements[2].sql, /ORDER BY pool_position LIMIT 100001/);
   assert.match(f.calls[0].statements[3].sql, /commerce_inventory_initializations/);
   assert.match(f.calls[0].statements[4].sql, /dude_assignment/);
+  assert.match(f.calls[0].statements[4].sql, /AS inventory_generation/);
+  assert.match(f.calls[0].statements[4].sql, /LIMIT \?/);
+  assert.deepEqual(rowCounts, [4, 0]);
+  assert.deepEqual(inventory, { generation: f.generation, pool: [2, 3, 1401, 1430] });
 });
 
 test('available plus assigned cards conserve the manifest through ID 1430 and exhaustion', async (t) => {
@@ -127,6 +155,40 @@ for (const [label, sql] of [
   });
 }
 
+for (const [label, field, value] of [
+  ['string available ID', 'dude_id', '2'],
+  ['null available ID', 'dude_id', null],
+  ['fractional available ID', 'dude_id', 2.5],
+  ['missing available ID', 'dude_id', undefined],
+  ['string pool position', 'pool_position', '0'],
+  ['null pool position', 'pool_position', null],
+  ['fractional pool position', 'pool_position', 0.5],
+  ['negative pool position', 'pool_position', -1],
+  ['missing pool position', 'pool_position', undefined],
+] as const) {
+  test(`explicit inventory rejects ${label} from its row response`, async (t) => {
+    const f = await fixture(t);
+    const repository = repositoryWithInventoryRows(f.harness, (available) => {
+      available[0][field] = value;
+    });
+
+    await assert.rejects(repository.getDudeInventory(f.args), unavailable);
+  });
+}
+
+for (const corruption of ['reversed order', 'duplicate ID', 'duplicate position'] as const) {
+  test(`explicit inventory rejects available rows with ${corruption}`, async (t) => {
+    const f = await fixture(t);
+    const repository = repositoryWithInventoryRows(f.harness, (available) => {
+      if (corruption === 'reversed order') available.reverse();
+      else if (corruption === 'duplicate ID') available[1].dude_id = available[0].dude_id;
+      else available[1].pool_position = available[0].pool_position;
+    });
+
+    await assert.rejects(repository.getDudeInventory(f.args), unavailable);
+  });
+}
+
 for (const [label, sql] of [
   ['available and assigned overlap', "INSERT INTO commerce_available_dudes VALUES ('sparse', 1430, 3)"],
   ['lost assigned card', "DELETE FROM commerce_documents WHERE document_path = 'drops/sparse/dudeAssignments/1430'"],
@@ -142,6 +204,54 @@ for (const [label, sql] of [
   });
 }
 
+for (const [label, field, value] of [
+  ['string assigned ID', 'dude_id', '1430'],
+  ['null assigned ID', 'dude_id', null],
+  ['fractional assigned ID', 'dude_id', 1430.5],
+  ['missing assigned ID', 'dude_id', undefined],
+  ['numeric assignment identity', 'document_id', 1430],
+  ['missing assignment identity', 'document_id', undefined],
+  ['null assignment generation', 'inventory_generation', null],
+  ['missing assignment generation', 'inventory_generation', undefined],
+] as const) {
+  test(`explicit inventory rejects ${label} from its row response`, async (t) => {
+    const f = await fixture(t);
+    assign(f.harness, f.args.dropId, f.generation, 1430);
+    const repository = repositoryWithInventoryRows(f.harness, (_available, assignments) => {
+      assignments[0][field] = value;
+    });
+
+    await assert.rejects(repository.getDudeInventory(f.args), unavailable);
+  });
+}
+
+for (const corruption of ['duplicate figure and identity', 'duplicate document identity', 'available overlap'] as const) {
+  test(`explicit inventory rejects assigned rows with ${corruption}`, async (t) => {
+    const f = await fixture(t);
+    for (const id of [1401, 1430]) assign(f.harness, f.args.dropId, f.generation, id);
+    const repository = repositoryWithInventoryRows(f.harness, (available, assignments) => {
+      if (corruption === 'duplicate figure and identity') assignments[1] = { ...assignments[0] };
+      else if (corruption === 'duplicate document identity') assignments[1].document_id = assignments[0].document_id;
+      else {
+        assignments[0].dude_id = available[0].dude_id;
+        assignments[0].document_id = String(available[0].dude_id);
+      }
+    });
+
+    await assert.rejects(repository.getDudeInventory(f.args), unavailable);
+  });
+}
+
+test('explicit inventory rejects an assignment response larger than its manifest', async (t) => {
+  const f = await fixture(t);
+  for (const id of f.args.inventoryManifest.cardIds) assign(f.harness, f.args.dropId, f.generation, id);
+  const repository = repositoryWithInventoryRows(f.harness, (_available, assignments) => {
+    assignments.push({ ...assignments[0] });
+  });
+
+  await assert.rejects(repository.getDudeInventory(f.args), unavailable);
+});
+
 test('dense existing drops retain the three-query read and need no explicit authorization', async (t) => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
@@ -152,11 +262,108 @@ test('dense existing drops retain the three-query read and need no explicit auth
   assert.deepEqual(await repository.getDudeInventory(dense), { generation, pool: [1, 2, 3] });
   assign(harness, dense.dropId, generation, 2);
   assert.deepEqual(await repository.getDudeInventory(dense), { generation, pool: [1, 3] });
-  assert.equal(calls.length, 2);
-  for (const call of calls) {
+  const summaries = calls.filter((call) => call.method === 'batch' &&
+    call.statements.some(({ sql }) => sql.includes('COUNT(*) AS available_count')));
+  assert.equal(summaries.length, 2);
+  for (const call of summaries) {
     assert.equal(call.method, 'batch');
     if (call.method !== 'batch') assert.fail('expected a D1 read batch');
     assert.equal(call.statements.length, 3);
     assert.ok(call.statements.every(({ sql }) => !sql.includes('commerce_inventory_initializations')));
   }
 });
+
+test('an inventory snapshot keeps its ordered IDs when another assignment commits', async (t) => {
+  const f = await fixture(t);
+  const inventory = await f.repository.getDudeInventory(f.args);
+  assign(f.harness, f.args.dropId, f.generation, 2);
+  assert.deepEqual(inventory, { generation: f.generation, pool: [2, 3, 1401, 1430] });
+  assert.deepEqual(await f.repository.getDudeInventory(f.args), { generation: f.generation, pool: [3, 1401, 1430] });
+});
+
+for (const timing of ['before', 'during'] as const) {
+  test(`cancellation ${timing} the compact inventory read preserves its reason`, async (t) => {
+    const harness = createCommerceD1Harness();
+    t.after(() => harness.database.close());
+    initializeCommerceInventory(harness, dense);
+    const controller = new AbortController();
+    const reason = new Error('inventory read cancelled');
+    let batches = 0;
+    const db = new Proxy(harness.db, {
+      get(target, property) {
+        if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+          batches += 1;
+          const results = await target.batch(statements);
+          controller.abort(reason);
+          return results;
+        };
+        return Reflect.get(target, property, target);
+      },
+    });
+    if (timing === 'before') controller.abort(reason);
+
+    await assert.rejects(new D1CommerceRepository(db).getDudeInventory(dense, controller.signal),
+      (error: unknown) => error === reason);
+
+    assert.equal(batches, timing === 'before' ? 0 : 1);
+  });
+}
+
+for (const size of [100_000, 100_001]) {
+  test(`compact inventory ${size === 100_000 ? 'accepts its limit' : 'rejects overflow without truncating'}`, async (t) => {
+    const statements: string[] = [];
+    const harness = createCommerceD1Harness({ observeStatement: ({ sql }) => statements.push(sql) });
+    t.after(() => harness.database.close());
+    const config = { ...dense, maxDudeId: 100_001 };
+    const generation = initializeCommerceInventory(harness, { ...config, available: [1] });
+    const pool = Array.from({ length: size }, (_, index) => index + 1);
+    const db = new Proxy(harness.db, {
+      get(target, property) {
+        if (property === 'batch') return async (prepared: D1PreparedStatement[]) => {
+          const results = await target.batch(prepared);
+          results[2].results = [{ available_ids_json: JSON.stringify(pool), available_count: size, invalid_count: 0 }];
+          return results;
+        };
+        return Reflect.get(target, property, target);
+      },
+    });
+    const snapshot = new D1CommerceRepository(db).getDudeInventory(config);
+
+    if (size === 100_000) assert.deepEqual(await snapshot, { generation, pool });
+    else await assert.rejects(snapshot, unavailable);
+
+    const aggregate = statements.filter((sql) => sql.includes('json_group_array'));
+    assert.equal(aggregate.length, 1);
+    assert.match(aggregate[0], /ORDER BY pool_position LIMIT 100001/);
+  });
+}
+
+for (const [label, json, count] of [
+  ['string ID', '["1"]', 1],
+  ['fractional ID', '[1.5]', 1],
+  ['zero ID', '[0]', 1],
+  ['out-of-range ID', '[4]', 1],
+  ['unsafe integer ID', '[9007199254740992]', 1],
+  ['null ID', '[null]', 1],
+  ['non-array JSON', '{"id":1}', 1],
+  ['malformed JSON', '[1', 1],
+  ['inconsistent count', '[1,2]', 1],
+] as const) {
+  test(`compact inventory rejects ${label}`, async (t) => {
+    const harness = createCommerceD1Harness();
+    t.after(() => harness.database.close());
+    initializeCommerceInventory(harness, dense);
+    const db = new Proxy(harness.db, {
+      get(target, property) {
+        if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+          const results = await target.batch(statements);
+          results[2].results = [{ available_ids_json: json, available_count: count, invalid_count: 0 }];
+          return results;
+        };
+        return Reflect.get(target, property, target);
+      },
+    });
+
+    await assert.rejects(new D1CommerceRepository(db).getDudeInventory(dense), unavailable);
+  });
+}

@@ -448,6 +448,7 @@ try {
       commerce.database.exec(await readFile(resolve(root, 'cloud/workers/api/commerce-migrations/0037_ethereum_111k.sql'), 'utf8'));
     }
     ops.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql'), 'utf8'));
+    ops.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0010_ethereum_profile_address_guards.sql'), 'utf8'));
     const environment = testEnvironment(contract, key, d1Database(ops), commerce.db);
     const api = apiClient(environment);
     const challenge = await api<EthereumAuthChallenge>(ETHEREUM_API_PATHS.authChallenge, { dropId: '111k_devnet', address: buyer, chainId: 31337 });
@@ -906,6 +907,7 @@ try {
       paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = ? WHERE singleton = 1`)
       .run(relicContract.toLowerCase(), Date.now());
     relicOps.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql'), 'utf8'));
+    relicOps.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0010_ethereum_profile_address_guards.sql'), 'utf8'));
     const api = apiClient(testEnvironment(relicContract, key, d1Database(relicOps), relicCommerce.db));
     const challenge = await api<EthereumAuthChallenge>(ETHEREUM_API_PATHS.authChallenge,
       { dropId: '111k_devnet', address: buyer, chainId: 31337 });

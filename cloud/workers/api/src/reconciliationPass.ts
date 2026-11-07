@@ -17,6 +17,7 @@ type ReconciliationPaging<T> = {
   monotonicNowMs?: () => number;
   inspectionLimit?: number;
   budgetMs?: number | null;
+  budgetStartedAtMs?: number;
   awaitInitialLoad?: boolean;
 };
 
@@ -74,12 +75,12 @@ async function drainPagedReconciliationCandidates<T>(
   const monotonicNowMs = paging.monotonicNowMs || (() => performance.now());
   const inspectionLimit = paging.inspectionLimit ?? RECONCILIATION_INSPECTION_LIMIT;
   const budgetMs = paging.budgetMs === null ? Infinity : paging.budgetMs ?? RECONCILIATION_BUDGET_MS;
-  const startedAtMs = monotonicNowMs();
+  const startedAtMs = paging.budgetStartedAtMs ?? monotonicNowMs();
   const failures: unknown[] = [];
   const seen = new Set<string>();
   let startAfter: T | undefined;
   try {
-    if (!Number.isSafeInteger(inspectionLimit) || inspectionLimit < 1 || !(budgetMs > 0)) {
+    if (!Number.isSafeInteger(inspectionLimit) || inspectionLimit < 1 || !(budgetMs > 0) || !Number.isFinite(startedAtMs)) {
       throw new RangeError('Invalid reconciliation pass limits');
     }
     if (args.checkAbortedBeforeLoad !== false) args.signal.throwIfAborted();

@@ -19,6 +19,13 @@ recovery use their dedicated state tables. Parent JSON no longer carries duplica
 notification, checkout lifecycle, or projection metadata.
 Applied migrations and prior schema checkpoints remain unchanged.
 
+Figure allocation reads one ordered snapshot and applies rarity selection locally.
+Dense inventories use a compact ID array. Manifest-backed inventories read available
+and assigned rows once and validate eligibility, positions, generations and complete
+accounting in the Worker. Snapshots support at most 100,000 available IDs; larger
+pools fail closed instead of being truncated. Atomic assignment guards reject stale
+generations and overlapping claims, and retries reuse an existing box assignment.
+
 ## Inspect current state
 
 ```sh

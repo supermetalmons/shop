@@ -5,73 +5,12 @@ import {
   type D1Profile,
   type D1ProfileAddress,
 } from '../../../../shared/profileD1.js';
+import { saveProfileAddress } from './profilePersistence.js';
 
 export {
   type D1Profile,
   type D1ProfileAddress,
 } from '../../../../shared/profileD1.js';
-
-function fail(message: string): never {
-  throw new Error(message);
-}
-
-const D1_WRITE_ATTEMPTS = 2;
-const RETRYABLE_D1_ERROR_PARTS = [
-  'network connection lost',
-  'storage caused object to be reset',
-  'reset because its code was updated',
-  'cannot resolve d1 db due to transient issue',
-] as const;
-
-function profileUpsert(db: D1Database, profile: D1Profile): D1PreparedStatement {
-  return db.prepare(`INSERT INTO profiles (
-    wallet,
-    email,
-    created_at_ms,
-    updated_at_ms
-  ) VALUES (?, ?, ?, ?)
-  ON CONFLICT (wallet) DO UPDATE SET
-    email = CASE
-      WHEN excluded.email IS NOT NULL AND (
-        profiles.email IS NULL OR excluded.updated_at_ms >= profiles.updated_at_ms
-      )
-        THEN excluded.email
-      ELSE profiles.email
-    END,
-    created_at_ms = MIN(profiles.created_at_ms, excluded.created_at_ms),
-    updated_at_ms = CASE
-      WHEN excluded.email IS NULL THEN profiles.updated_at_ms
-      WHEN profiles.email IS NULL THEN excluded.updated_at_ms
-      ELSE MAX(profiles.updated_at_ms, excluded.updated_at_ms)
-    END`)
-    .bind(profile.wallet, profile.email ?? null, profile.createdAtMs, profile.updatedAtMs);
-}
-
-function d1ErrorText(error: unknown): string {
-  if (!(error instanceof Error)) return String(error).toLowerCase();
-  const cause = error.cause instanceof Error ? error.cause.message : String(error.cause || '');
-  return `${error.message} ${cause}`.toLowerCase();
-}
-
-function isRetryableD1Error(error: unknown): boolean {
-  const text = d1ErrorText(error);
-  return RETRYABLE_D1_ERROR_PARTS.some((part) => text.includes(part));
-}
-
-export async function runD1Write<T>(
-  signal: AbortSignal | undefined,
-  operation: () => Promise<T>,
-): Promise<T> {
-  if (signal?.aborted) throw signal.reason;
-  for (let attempt = 0; attempt < D1_WRITE_ATTEMPTS; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      if (attempt + 1 >= D1_WRITE_ATTEMPTS || !isRetryableD1Error(error)) throw error;
-    }
-  }
-  return fail('D1 write retry failed.');
-}
 
 function addressInsert(db: D1Database, address: D1ProfileAddress): D1PreparedStatement {
   return db.prepare(`INSERT INTO profile_addresses (
@@ -139,26 +78,10 @@ export async function loadD1ProfileAddress(
   return row ? parseD1ProfileAddress(row) : null;
 }
 
-export async function saveD1ProfileAddress(
+export function saveD1ProfileAddress(
   db: D1Database,
   address: D1ProfileAddress,
   signal?: AbortSignal,
 ): Promise<ProfileAddress> {
-  await runD1Write(signal, () => db.batch([
-    profileUpsert(db, {
-      wallet: address.wallet,
-      ...(address.email ? { email: address.email } : {}),
-      createdAtMs: address.createdAtMs,
-      updatedAtMs: address.updatedAtMs,
-    }),
-    addressInsert(db, address),
-  ]));
-  return {
-    id: address.id,
-    country: address.country,
-    ...(address.countryCode ? { countryCode: address.countryCode } : {}),
-    hint: address.hint,
-    encrypted: address.encrypted,
-    ...(address.email ? { email: address.email } : {}),
-  };
+  return saveProfileAddress(db, address, { profileTable: 'profiles', insertAddress: addressInsert }, signal);
 }

@@ -2,7 +2,7 @@ import type { RequestAuthContext } from '../requestIdentity.js';
 import type { WorkerDependencies, WorkerRequestMetrics } from '../publicRouteSupport.js';
 import type { DeferredWork } from '../deferredWork.js';
 
-type WorkerRouteCorsPolicy =
+export type WorkerRouteCorsPolicy =
   | 'none'
   | 'public'
   | 'rpc'

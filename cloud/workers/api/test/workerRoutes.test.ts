@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyWorkerRouteCors,
   unexpectedWorkerRouteResponse,
+  workerRoutePreflightResponse,
   workerRouteRegistry,
 } from '../src/workerRoutes.ts';
 import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY, STRIPE_CHECKOUT_RETRY_HEADER, STRIPE_CHECKOUT_RETRY_SAME_OPERATION } from '../../../../shared/contracts.ts';
@@ -156,6 +158,95 @@ test('unexpected Mi Note errors retain the verification CORS policy', () => {
     assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
     assert.match(response.headers.get('Access-Control-Allow-Headers') || '', /X-Mi-Note-Session/);
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  }
+});
+
+test('route CORS policies preserve preflight, response, and error headers across origins', async () => {
+  const profileHeaders = 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request';
+  const cases = [
+    { path: '/profile/state', methods: 'POST, OPTIONS', headers: profileHeaders, partner: false },
+    { path: '/staff/auth/challenge', methods: 'POST, OPTIONS', headers: profileHeaders, partner: false },
+    { path: '/mi-note-cards', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mi-Note-Session`, partner: false },
+    { path: '/ethereum/111k/config', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
+    { path: '/ethereum/111k/checkout/status', methods: 'GET, OPTIONS', headers: 'Accept, Content-Type', partner: true },
+    { path: '/ethereum/111k/reveal/tokens', methods: 'POST, OPTIONS', headers: 'Accept, Content-Type, X-Mons-CSRF', partner: true },
+  ];
+  for (const entry of cases) {
+    const route = workerRouteRegistry.resolve(entry.path);
+    for (const origin of ['https://mons.shop', 'https://vvv.so', 'https://evil.example', undefined]) {
+      const headers = origin ? { Origin: origin } : undefined;
+      const request = new Request(`https://api.mons.shop${entry.path}`, { headers });
+      const preflight = workerRoutePreflightResponse(route, new Request(request, { method: 'OPTIONS' }));
+      const response = applyWorkerRouteCors(route, request, new Response('ok', { status: 201 }));
+      const error = unexpectedWorkerRouteResponse(route, request);
+      const label = `${entry.path} ${origin ?? 'no origin'}`;
+      assert.ok(preflight, label);
+      if (origin === 'https://mons.shop' || (entry.partner && origin === 'https://vvv.so')) {
+        assert.equal(preflight.status, 204, label);
+        assert.equal(response.status, 201, label);
+        assert.equal(error.status, 503, label);
+        for (const result of [preflight, response, error]) {
+          assert.equal(result.headers.get('Access-Control-Allow-Origin'), origin, label);
+          assert.equal(result.headers.get('Access-Control-Allow-Methods'), entry.methods, label);
+          assert.equal(result.headers.get('Access-Control-Allow-Headers'), entry.headers, label);
+          assert.equal(result.headers.get('Access-Control-Expose-Headers'), entry.partner ? 'Retry-After' : STRIPE_CHECKOUT_RETRY_HEADER, label);
+          assert.equal(result.headers.get('Vary'), 'Origin', label);
+        }
+        assert.equal(await response.text(), 'ok', label);
+      } else if (origin) {
+        for (const result of [preflight, response, error]) {
+          assert.equal(result.status, 403, label);
+          assert.equal(result.headers.get('Access-Control-Allow-Origin'), null, label);
+          assert.deepEqual(await result.json(), {
+            ok: false, error: { code: 'permission-denied', message: 'Origin is not allowed.' },
+          }, label);
+        }
+      } else {
+        assert.equal(preflight.status, entry.partner ? 204 : 403, label);
+        assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), null, label);
+        assert.equal(response.status, 201, label);
+        assert.equal(response.headers.get('Access-Control-Allow-Origin'), null, label);
+        assert.equal(error.status, 503, label);
+        assert.equal(error.headers.get('Access-Control-Allow-Origin'), entry.partner ? null : '*', label);
+      }
+      assert.equal(workerRoutePreflightResponse(route, request), undefined, label);
+    }
+  }
+});
+
+test('public, RPC, pack-status, and internal routes retain their existing response ownership', () => {
+  for (const [path, methods, errorStatus, errorOrigin] of [
+    ['/inventory', 'POST, OPTIONS', 503, 'https://mons.shop'],
+    ['/rpc/mainnet-beta', 'POST, OPTIONS', 500, 'https://mons.shop'],
+    ['/pack-status/card_nft_2', 'GET, POST, OPTIONS', 503, '*'],
+    ['/health', null, 500, null],
+    ['/pack-status/not-a-drop', null, 503, '*'],
+  ] as const) {
+    const route = workerRouteRegistry.resolve(path);
+    const request = new Request(`https://api.mons.shop${path}`, { headers: { Origin: 'https://mons.shop' } });
+    const response = new Response('already decorated', { headers: { 'X-Test': 'preserved' } });
+    assert.equal(applyWorkerRouteCors(route, request, response), response, path);
+    const preflight = workerRoutePreflightResponse(route, new Request(request, { method: 'OPTIONS' }));
+    assert.equal(preflight?.status, methods ? 204 : undefined, path);
+    assert.equal(preflight?.headers.get('Access-Control-Allow-Methods'), methods ?? undefined, path);
+    const error = unexpectedWorkerRouteResponse(route, request);
+    assert.equal(error.status, errorStatus, path);
+    assert.equal(error.headers.get('Access-Control-Allow-Origin'), errorOrigin, path);
+  }
+});
+
+test('staff preflight retains stricter origins than response decoration', () => {
+  const route = workerRouteRegistry.resolve('/staff/auth/challenge');
+  for (const [origin, preflightStatus] of [
+    ['https://candidate-mons-shop.lil-org.workers.dev', 204],
+    ['https://deadbeef-mons-shop.lil-org.workers.dev', 403],
+  ] as const) {
+    const request = new Request('https://api.mons.shop/staff/auth/challenge', { headers: { Origin: origin } });
+    assert.equal(workerRoutePreflightResponse(route, new Request(request, { method: 'OPTIONS' }))?.status, preflightStatus);
+    for (const response of [
+      applyWorkerRouteCors(route, request, new Response('ok')),
+      unexpectedWorkerRouteResponse(route, request),
+    ]) assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
   }
 });
 

@@ -18,6 +18,8 @@ import {
   loadD1ProfileAddress,
   saveD1ProfileAddress,
 } from '../src/profileD1.ts';
+import { loadEthereumProfileAddress, saveEthereumProfileAddress } from '../src/ethereumProfileStore.ts';
+import { ProfileAddressConflictError } from '../src/profilePersistence.ts';
 import { loadProfileEmail } from '../src/profileReadSupport.ts';
 import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.ts';
 import {
@@ -46,6 +48,33 @@ const REVEAL_BOX_ASSET_ID = 'So11111111111111111111111111111111111111112';
 const REVEAL_OWNER = PROFILE_WALLET;
 const REVEAL_SIGNATURE = '2'.repeat(88);
 const REVEAL_BLOCKHASH = '3'.repeat(44);
+
+async function assertEthereumProfilePersistence(db: D1Database): Promise<void> {
+  const wallet = `0x${'11'.repeat(20)}`;
+  const address = {
+    wallet, id: 'ABCDEFGHIJKLMNOPQRST', encrypted: 'ethereum-ciphertext', country: 'United States',
+    countryCode: 'US', hint: 'US', email: 'ethereum@example.com', createdAtMs: 1_000, updatedAtMs: 1_000,
+  };
+  const saved = await saveEthereumProfileAddress(db, address);
+  assert.deepEqual(await saveEthereumProfileAddress(db, { ...address, createdAtMs: 2_000, updatedAtMs: 2_000 }), saved);
+  await assert.rejects(saveEthereumProfileAddress(db, {
+    ...address, hint: 'changed', email: 'conflict@example.com', createdAtMs: 3_000, updatedAtMs: 3_000,
+  }), ProfileAddressConflictError);
+  assert.deepEqual(await loadEthereumProfileAddress(db, wallet, address.id), saved);
+  await saveEthereumProfileAddress(db, { ...address, id: 'B'.repeat(20), email: 'older@example.com',
+    createdAtMs: 500, updatedAtMs: 500 });
+  assert.deepEqual(await db.prepare('SELECT email, created_at_ms, updated_at_ms FROM ethereum_profiles WHERE wallet = ?')
+    .bind(wallet).first(), { email: address.email, created_at_ms: 500, updated_at_ms: 2_000 });
+  const competing = await Promise.allSettled([
+    saveEthereumProfileAddress(db, { ...address, id: 'C'.repeat(20), hint: 'first', email: 'first@example.com', updatedAtMs: 4_000 }),
+    saveEthereumProfileAddress(db, { ...address, id: 'C'.repeat(20), hint: 'second', email: 'second@example.com', updatedAtMs: 4_000 }),
+  ]);
+  assert.equal(competing.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(competing.filter((result) => result.status === 'rejected' && result.reason instanceof ProfileAddressConflictError).length, 1);
+  const winner = await loadEthereumProfileAddress(db, wallet, 'C'.repeat(20));
+  assert.equal((await db.prepare('SELECT email FROM ethereum_profiles WHERE wallet = ?').bind(wallet)
+    .first<{ email: string }>())?.email, winner?.email);
+}
 
 function normalizeRuntimeRevealSubmission(
   raw: Record<string, unknown>,
@@ -178,7 +207,9 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       '0007_mi_note_auth.sql',
       '0008_ethereum_profiles.sql',
       '0009_ethereum_reveal_deployments.sql',
+      '0010_ethereum_profile_address_guards.sql',
     ]);
+    await assertEthereumProfilePersistence(env.OPS_DB);
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count
       FROM sqlite_schema
       WHERE name = 'anonymous_auth_sessions_auth_subject'`).first<{ count: number }>())?.count, 0);

@@ -213,6 +213,11 @@ Profiles and append-only encrypted saved addresses live only in the Ops D1
 database. The Ops integrity check validates their schema and current row
 integrity without hard-coded production count floors.
 
+Ethereum address saves use the same atomic profile-write rules as Solana.
+The `0010_ethereum_profile_address_guards.sql` migration preserves existing
+addresses and makes an address conflict roll back its accompanying email update.
+Apply the pending Ops migrations before publishing the updated API Worker.
+
 ## Worker secrets
 
 Cloudflare Worker secrets are the runtime secret system. The required inventory

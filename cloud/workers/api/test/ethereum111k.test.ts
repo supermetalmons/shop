@@ -60,6 +60,7 @@ function fixture(controlActive = true) {
   const ops = new DatabaseSync(':memory:');
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql', 'utf8'));
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
+  ops.exec(readFileSync('cloud/workers/api/ops-migrations/0010_ethereum_profile_address_guards.sql', 'utf8'));
   const registerDeployment = (chainId = 31337, contractAddress = CONTRACT, state: EthereumRevealDeployment['state'] = 'active') => {
     const id = `test-${chainId}-${contractAddress.slice(2, 10)}`;
     ops.prepare(`INSERT INTO ethereum_reveal_deployments
@@ -333,6 +334,22 @@ function pauseRpc(f: ReturnType<typeof fixture>, matches: (payload: Rpc) => bool
   };
   return { paused, resume };
 }
+
+test('Ethereum address conflicts return the existing error contract without changing profile email', async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const authentication = await f.session();
+  await f.saveAddress(authentication.token);
+  await f.saveAddress(authentication.token);
+  const before = f.ops.prepare('SELECT * FROM ethereum_profiles WHERE wallet = ?').get(WALLET);
+  const response = await f.request<{ error: { code: string; message: string } }>(paths.addresses, {
+    id: ADDRESS_ID, encrypted: 'changed-address', country: 'Canada', hint: 'CA', email: 'replacement@example.com',
+  }, authentication.token);
+  assert.equal(response.response.status, 409);
+  assert.equal(response.body.error.code, 'failed-precondition');
+  assert.equal(response.body.error.message, 'This saved address cannot be changed. Save a new address instead.');
+  assert.deepEqual(f.ops.prepare('SELECT * FROM ethereum_profiles WHERE wallet = ?').get(WALLET), before);
+});
 
 function readContext(f: ReturnType<typeof fixture>, providerFetch = f.providerFetch): EthereumContext {
   return { env: f.env, config: ethereumConfig(f.env), signal: AbortSignal.timeout(10_000), nowMs: f.state.now, fetch: providerFetch };

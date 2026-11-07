@@ -39,7 +39,8 @@ function factories() {
 
 function crate(index: number): EthereumInventoryItem {
   return { id: `crate-${index}`, tokenId: String(index), name: `Crate ${index}`, kind: 'crate',
-    owner: `0x${'11'.repeat(20)}`, chainId: 11155111, contractAddress: `0x${'33'.repeat(20)}`, displayId: index };
+    owner: `0x${'11'.repeat(20)}`, chainId: 11155111, contractAddress: `0x${'33'.repeat(20)}`, displayId: index,
+    image: '/111k/crate-reference.webp' };
 }
 
 test('one local image is prepared before result identities exist and shared by every confirmed crate', async () => {

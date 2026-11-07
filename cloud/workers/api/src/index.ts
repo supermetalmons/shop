@@ -1,4 +1,3 @@
-import { applyProfileCors } from './profileReadSupport.js';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
 } from '../../../../shared/contracts.js';
@@ -229,10 +228,10 @@ async function dispatchRequest(
         if (error instanceof StaffAuthError && error.code === 'unauthenticated') {
           reportInfo({ event: 'staff_auth_request_rejected', route: pathname });
           return {
-            response: applyProfileCors(request, publicJsonResponse({
+            response: applyWorkerRouteCors(route, request, publicJsonResponse({
               ok: false,
               error: { code: 'unauthenticated', message: 'Authentication is required.' },
-            }, 401)),
+            }, 401), 'profile'),
             logFields: { profileAuthOutcome: 'rejected' },
           };
         }
@@ -242,14 +241,14 @@ async function dispatchRequest(
           error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
         });
         return {
-          response: applyProfileCors(request, publicJsonResponse({
+          response: applyWorkerRouteCors(route, request, publicJsonResponse({
             ok: false,
             error: {
               code: 'unavailable',
               message: 'Staff authentication is temporarily unavailable.',
               ...finalizationRecovery(pathname),
             },
-          }, 503, receiptClaimRetryHeaders(pathname))),
+          }, 503, receiptClaimRetryHeaders(pathname)), 'profile'),
           logFields: { profileAuthOutcome: 'provider-failure' },
         };
       }
@@ -258,10 +257,10 @@ async function dispatchRequest(
 
   if (request.method !== 'OPTIONS' && route.staff === 'required' && !authContext.verifiedStaffIdentity) {
     return {
-      response: applyProfileCors(request, publicJsonResponse({
+      response: applyWorkerRouteCors(route, request, publicJsonResponse({
         ok: false,
         error: { code: 'unauthenticated', message: 'Staff wallet authentication is required.' },
-      }, 401)),
+      }, 401), 'profile'),
       logFields: { profileAuthOutcome: 'rejected' },
     };
   }
@@ -273,10 +272,10 @@ async function dispatchRequest(
     );
     if (authority.state === 'paused') {
       return {
-        response: applyProfileCors(request, publicJsonResponse({
+        response: applyWorkerRouteCors(route, request, publicJsonResponse({
           ok: false,
           error: 'commerce-maintenance',
-        }, 503, { 'Retry-After': '60' })),
+        }, 503, { 'Retry-After': '60' }), 'profile'),
       };
     }
   }

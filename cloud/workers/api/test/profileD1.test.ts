@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   loadD1Profile,
-  runD1Write,
 } from '../src/profileD1.ts';
+import { runD1Write } from '../src/profilePersistence.ts';
 
 const WALLET = '11111111111111111111111111111111';
 

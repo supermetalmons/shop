@@ -553,3 +553,29 @@ test('the outer cancellation bounds a pending page read and reports prior outcom
     assert.equal(summaries[0].hasMore, null);
   }
 });
+
+test('a paged pass inherits a prior phase budget and skips loading when already exhausted', async () => {
+  for (const elapsedBeforePass of [19_000, 20_000]) {
+    let elapsedMs = elapsedBeforePass;
+    let loaded = 0;
+    let processed = 0;
+    let probed = false;
+    const result = await drainReconciliationCandidates<number>({
+      signal: new AbortController().signal,
+      failureMessage: 'reconciliation failed',
+      paging: {
+        monotonicNowMs: () => elapsedMs,
+        budgetStartedAtMs: 0,
+        loadPage: async () => { loaded += 1; return [1, 2]; },
+        candidateKey: String,
+        probeBacklog: async () => { probed = true; return { hasMore: true, oldestDueAgeMs: 500 }; },
+      },
+      processCandidate: async () => { processed += 1; elapsedMs += 2000; return 'completed'; },
+    });
+    assert.equal(loaded, elapsedBeforePass === 19_000 ? 1 : 0);
+    assert.equal(processed, loaded);
+    assert.equal(probed, true);
+    assert.equal(result.stopReason, 'time-limit');
+    assert.equal(result.hasMore, true);
+  }
+});

@@ -69,6 +69,23 @@ function addressId(value: unknown): string {
   return value;
 }
 
+export function parseProfileAddress(value: unknown): ProfileAddress {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fail('Profile address is invalid.');
+  const fields = value as Record<string, unknown>;
+  const countryCode = fields.countryCode === undefined
+    ? undefined : boundedString(fields.countryCode, 32, 'Profile address country code');
+  const email = fields.email === undefined
+    ? undefined : boundedString(fields.email, 254, 'Profile address email', false);
+  return {
+    id: addressId(fields.id),
+    encrypted: boundedString(fields.encrypted, 4096, 'Profile address ciphertext'),
+    country: boundedString(fields.country, 64, 'Profile address country'),
+    ...(countryCode === undefined ? {} : { countryCode }),
+    hint: boundedString(fields.hint, 256, 'Profile address hint'),
+    ...(email === undefined ? {} : { email }),
+  };
+}
+
 export function parseD1Profile(row: Record<string, unknown>): D1Profile {
   const createdAtMs = timestamp(row.created_at_ms, 'Profile created timestamp');
   const updatedAtMs = timestamp(row.updated_at_ms, 'Profile updated timestamp');
@@ -91,12 +108,14 @@ export function parseD1ProfileAddress(row: Record<string, unknown>): D1ProfileAd
   const label = nullableBoundedString(row.label, 256, 'Profile address label');
   return {
     wallet: wallet(row.wallet),
-    id: addressId(row.address_id),
-    encrypted: boundedString(row.encrypted, 4096, 'Profile address ciphertext'),
-    country: boundedString(row.country, 64, 'Profile address country'),
-    ...(countryCode ? { countryCode } : {}),
-    hint: boundedString(row.hint, 256, 'Profile address hint'),
-    ...(email ? { email } : {}),
+    ...parseProfileAddress({
+      id: row.address_id,
+      encrypted: row.encrypted,
+      country: row.country,
+      countryCode,
+      hint: row.hint,
+      email,
+    }),
     ...(label ? { label } : {}),
     createdAtMs,
     updatedAtMs,

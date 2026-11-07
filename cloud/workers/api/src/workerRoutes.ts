@@ -1,9 +1,5 @@
 import { handleRpcInternalError, handleRpcMethodNotAllowed, handleRpcPreflight } from './rpcProxy.js';
-import {
-  applyProfileCors,
-  handleProfileCorsPreflight,
-  isProfileRequestOriginAllowed,
-} from './profileReadSupport.js';
+import { isProfileRequestOriginAllowed } from './profileReadSupport.js';
 import {
   STRIPE_RECEIPT_CLAIM_START_PATH,
   STRIPE_RECEIPT_CLAIM_STATUS_PATH,
@@ -15,10 +11,8 @@ import {
   STRIPE_CHECKOUT_RETRY_HEADER,
   STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
 } from '../../../../shared/contracts.js';
-import { isAllowedStaffAuthOrigin } from './staffWalletAuth.js';
 import { isStaffOnlyApiPath } from './requestIdentity.js';
 import {
-  CORS_HEADERS,
   handlePublicMethodNotAllowed,
   handlePublicPreflight,
   publicJsonResponse,
@@ -26,7 +20,6 @@ import {
 } from './publicRouteSupport.js';
 import { applyPublicCors, publicRequestOrigin } from './publicRequestPolicy.js';
 import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
-import { MI_NOTE_SESSION_HEADER } from '../../../../shared/miNoteAuth.js';
 import {
   type WorkerRouteResult,
   type MatchedWorkerRoute,
@@ -41,11 +34,10 @@ import { profileRoutes } from './workerRoutes/profile.js';
 import { staffRoutes } from './workerRoutes/staff.js';
 import { ethereumRoutes } from './ethereumRoutes.js';
 import { pre111kRoutes } from './pre111kRoutes.js';
-import { ETHEREUM_SESSION_HEADER } from '../../../../shared/ethereum/api.js';
-import { applyEthereumCheckoutStatusCors } from './ethereumCheckoutOrigin.js';
-import { applyEthereumRevealCors } from './ethereumReveal.js';
+import { applyWorkerRouteCors, applyWorkerRouteProfileErrorCors } from './workerRoutes/cors.js';
 
 export type { MatchedWorkerRoute, WorkerRouteResult } from './workerRoutes/support.js';
+export { applyWorkerRouteCors, workerRoutePreflightResponse } from './workerRoutes/cors.js';
 
 async function dispatchNotFound(): Promise<WorkerRouteResult> {
   return { response: publicJsonResponse({ ok: false, error: 'not-found' }, 404) };
@@ -123,54 +115,12 @@ export function strictPublicOriginDeniedResponse(
     : handlePublicMethodNotAllowed(request, route.publicMethods);
 }
 
-export function workerRoutePreflightResponse(
-  route: MatchedWorkerRoute,
-  request: Request,
-): Response | undefined {
-  if (request.method !== 'OPTIONS') return undefined;
-  if (route.cors === 'ethereum-reveal') return applyEthereumRevealCors(request, new Response(null, { status: 204 }));
-  if (route.cors === 'ethereum-checkout-status') return applyEthereumCheckoutStatusCors(request, new Response(null, { status: 204 }));
-  if (route.cors === 'mi-note') return handleProfileCorsPreflight(request, undefined, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
-  if (route.cors === 'ethereum') return handleProfileCorsPreflight(request, undefined, 'GET, POST, OPTIONS', ETHEREUM_SESSION_HEADER);
-  if (route.cors === 'profile') return handleProfileCorsPreflight(request);
-  if (route.cors === 'staff-auth') {
-    return handleProfileCorsPreflight(request, isAllowedStaffAuthOrigin);
-  }
-  if (route.cors === 'public') return handlePublicPreflight(request, route.publicMethods);
-  if (route.cors === 'rpc') return handleRpcPreflight(request);
-  if (route.cors === 'pack-status' && route.packStatusDropId !== null) {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        ...CORS_HEADERS,
-        'Cache-Control': 'no-store',
-        'Timing-Allow-Origin': '*',
-      },
-    });
-  }
-  return undefined;
-}
-
 export function workerRouteOriginDeniedResponse(
   route: MatchedWorkerRoute,
   request: Request,
 ): Response | undefined {
   if (!route.profileOriginGate || isProfileRequestOriginAllowed(request)) return undefined;
-  return applyProfileCors(request, new Response(null));
-}
-
-export function applyWorkerRouteCors(
-  route: MatchedWorkerRoute,
-  request: Request,
-  response: Response,
-): Response {
-  if (route.cors === 'ethereum-reveal') return applyEthereumRevealCors(request, response);
-  if (route.cors === 'ethereum-checkout-status') return applyEthereumCheckoutStatusCors(request, response);
-  if (route.cors === 'mi-note') return applyProfileCors(request, response, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
-  if (route.cors === 'ethereum') return applyProfileCors(request, response, 'GET, POST, OPTIONS', ETHEREUM_SESSION_HEADER);
-  return route.cors === 'profile' || route.cors === 'staff-auth'
-    ? applyProfileCors(request, response)
-    : response;
+  return applyWorkerRouteCors(route, request, new Response(null), 'profile');
 }
 
 export function unexpectedWorkerRouteResponse(
@@ -195,22 +145,21 @@ export function unexpectedWorkerRouteResponse(
     }, 500);
   }
   if (route.unexpectedError === 'profile') {
-    if (route.cors === 'ethereum-reveal') return applyEthereumRevealCors(request,
-      sharedJsonResponse({ ok: false, error: { code: 'unavailable', message: 'Reveal is temporarily unavailable.' } }, 503));
-    if (route.cors === 'ethereum-checkout-status') return applyEthereumCheckoutStatusCors(request,
-      sharedJsonResponse({ ok: false, error: { code: 'unavailable', message: 'Service is temporarily unavailable.' } }, 503));
-    return applyProfileCors(request, publicJsonResponse({
-      ok: false,
-      error: {
-        code: 'unavailable',
-        message: 'Service is temporarily unavailable.',
-        ...(isAdminIrlRedeemFinalizeRoute(route.logRoute)
-          ? { recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY }
-          : {}),
-      },
-    }, 503, receiptClaimRetryHeaders(route.logRoute)),
-    route.cors === 'mi-note' || route.cors === 'ethereum' ? 'GET, POST, OPTIONS' : undefined,
-    route.cors === 'mi-note' ? MI_NOTE_SESSION_HEADER : route.cors === 'ethereum' ? ETHEREUM_SESSION_HEADER : undefined);
+    const response = route.cors === 'ethereum-reveal'
+      ? sharedJsonResponse({ ok: false, error: { code: 'unavailable', message: 'Reveal is temporarily unavailable.' } }, 503)
+      : route.cors === 'ethereum-checkout-status'
+        ? sharedJsonResponse({ ok: false, error: { code: 'unavailable', message: 'Service is temporarily unavailable.' } }, 503)
+        : publicJsonResponse({
+          ok: false,
+          error: {
+            code: 'unavailable',
+            message: 'Service is temporarily unavailable.',
+            ...(isAdminIrlRedeemFinalizeRoute(route.logRoute)
+              ? { recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY }
+              : {}),
+          },
+        }, 503, receiptClaimRetryHeaders(route.logRoute));
+    return applyWorkerRouteProfileErrorCors(route, request, response);
   }
   return sharedJsonResponse({ ok: false, error: 'internal' }, 500);
 }

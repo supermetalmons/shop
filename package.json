@@ -30,6 +30,8 @@
     "render:eggs": "node scripts/egg-render/render.mjs",
     "render:knives": "python3 scripts/video-frames/acrylic/run.py --collection knives",
     "render:video-frames": "python3 scripts/video-frames/acrylic/run.py",
+    "generate:crate-sounds": "node scripts/generate-crate-sounds.mjs",
+    "generate:warehouse-sounds": "node scripts/generate-warehouse-sounds.mjs",
     "test:mi-note-videos": "node scripts/mi-note-video/test.mjs",
     "build": "vite build",
     "validate:browser-bundle": "node --env-file-if-exists=cloud/workers/frontend/.env.bundle-scan --experimental-strip-types scripts/validate-browser-bundle.ts",

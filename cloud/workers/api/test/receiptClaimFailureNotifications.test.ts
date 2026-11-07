@@ -3,10 +3,8 @@ import test, { type TestContext } from 'node:test';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { parseReceiptClaimFailureOutboxRow } from '../../../../shared/receiptClaimFailureOutbox.ts';
 import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
-import {
-  receiptClaimFailureDiscoveryQuery,
-  reconcileReceiptClaimFailureNotifications,
-} from '../src/receiptClaimFailureNotifications.ts';
+import { reconcileReceiptClaimFailureNotifications } from '../src/receiptClaimFailureNotifications.ts';
+import { receiptClaimFailureDiscoveryQuery, ReceiptClaimFailureOutboxStore } from '../src/receiptClaimFailureOutboxStore.ts';
 import { createCommerceD1Harness, seedCommerceDocument, type CommerceD1CallObservation } from './commerceD1Harness.ts';
 
 const NOW = 1_800_000_000_000;
@@ -40,6 +38,7 @@ function fixture(t: TestContext) {
   t.after(() => harness.database.close());
   const jobs: NotificationEmailJobV1[] = [];
   const logs: Record<string, unknown>[] = [];
+  const summaries: Array<Awaited<ReturnType<typeof reconcileReceiptClaimFailureNotifications>>> = [];
   let send: ((jobs: NotificationEmailJobV1[]) => Promise<void>) | undefined;
   const env = {
     COMMERCE_DB: harness.db,
@@ -55,14 +54,16 @@ function fixture(t: TestContext) {
   const seed = (data: CommerceDocumentData, code = CODE, version = 1) => seedCommerceDocument(harness, {
     key: commerceKeys.claimCode(code), data: { ...data, code }, version,
   });
-  const run = (now = NOW, signal = new AbortController().signal) => reconcileReceiptClaimFailureNotifications(env, signal, {
-    nowMs: () => now, log: (entry) => logs.push(entry),
+  const run = (now = NOW, signal = new AbortController().signal,
+    options: Parameters<typeof reconcileReceiptClaimFailureNotifications>[2] = {}) => reconcileReceiptClaimFailureNotifications(env, signal, {
+    nowMs: () => now, monotonicNowMs: () => 0, log: (entry) => logs.push(entry),
+    onResult: (result) => { summaries.push(result); }, ...options,
   });
   const records = () => harness.database.prepare('SELECT * FROM commerce_receipt_claim_failure_outbox ORDER BY event_id')
     .all().map(parseReceiptClaimFailureOutboxRow);
   const document = () => String(harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
     .get(commerceKeys.claimCode(CODE).path)?.document_json);
-  return { ...harness, jobs, logs, seed, run, records, document,
+  return { ...harness, jobs, logs, summaries, seed, run, records, document,
     observe: (callback: typeof observe) => { observe = callback; },
     onSend: (callback: typeof send) => { send = callback; } };
 }
@@ -331,4 +332,174 @@ test('a malformed outbox row is isolated and quarantined while the next valid no
   assert.equal(JSON.stringify(f.logs).includes('claimCodes/'), false);
   await f.run();
   assert.equal(f.jobs.length, 1);
+});
+
+function seedTerminalBacklog(f: ReturnType<typeof fixture>, count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    f.seed(legacy({ deliveryId: 20 + index, receiptClaimWorkflowV1: workflow('failed', {
+      operationId: `src-v1-${String(index).padStart(8, '0')}-1111-4111-8111-111111111111`,
+    }) }), `ABCDEF-${String(index).padStart(10, '0')}`);
+  }
+  f.database.prepare(`UPDATE commerce_receipt_claim_failure_outbox
+    SET next_attempt_at_ms = ?, revision = revision + 1`).run(NOW - 500);
+}
+
+function leafErrors(error: unknown): unknown[] {
+  return error instanceof AggregateError ? error.errors.flatMap(leafErrors) : [error];
+}
+
+test('publication pages equal due timestamps, caps inspections, and reports the remaining backlog', async (t) => {
+  const f = fixture(t);
+  seedTerminalBacklog(f, 33);
+  const first = await f.run();
+  assert.deepEqual(first, {
+    attempted: 32, completed: 32, deferred: 0, skipped: 0, failed: 0,
+    inspected: 32, pages: 4, stopReason: 'item-limit', hasMore: true, oldestDueAgeMs: 500,
+  });
+  assert.deepEqual(f.jobs.map((job) => job.context.deliveryId), Array.from({ length: 32 }, (_, index) => 20 + index));
+  assert.deepEqual(f.summaries, [first]);
+  const second = await f.run();
+  assert.equal(second.completed, 1);
+  assert.equal(second.hasMore, false);
+  assert.equal(second.oldestDueAgeMs, null);
+  assert.equal(f.summaries.length, 2);
+  assert.equal(new Set(f.jobs.map((job) => job.idempotencyKey)).size, 33);
+});
+
+test('publication advances past a failed oldest row and probes backlog behind its cursor', async (t) => {
+  const f = fixture(t);
+  seedTerminalBacklog(f, 10);
+  const failure = new Error('oldest claim unavailable');
+  let failed = false;
+  f.observe((entry) => {
+    if ('sql' in entry && entry.sql.includes('SET revision = revision + 1, attempt_count = ?') && !failed) {
+      failed = true;
+      throw failure;
+    }
+  });
+  await assert.rejects(f.run(), (error) => leafErrors(error).includes(failure));
+  assert.deepEqual(f.jobs.map((job) => job.context.deliveryId), Array.from({ length: 9 }, (_, index) => 21 + index));
+  assert.equal(f.summaries.length, 1);
+  assert.deepEqual(f.summaries[0], {
+    attempted: 10, completed: 9, deferred: 0, skipped: 0, failed: 1,
+    inspected: 10, pages: 2, stopReason: 'failed', hasMore: true, oldestDueAgeMs: 500,
+  });
+});
+
+test('discovery and publication share one soft budget and finish the active publication', async (t) => {
+  const f = fixture(t);
+  seedTerminalBacklog(f, 10);
+  let elapsedMs = 0;
+  f.observe((entry) => {
+    if ('sql' in entry && entry.sql.includes('AS claim_path')) elapsedMs = 19_000;
+  });
+  f.onSend(async () => { elapsedMs = 21_000; });
+  const result = await f.run(NOW, undefined, { monotonicNowMs: () => elapsedMs });
+  assert.equal(result.completed, 1);
+  assert.equal(result.stopReason, 'time-limit');
+  assert.equal(result.hasMore, true);
+  assert.equal(f.records()[0].state, 'queued');
+  assert.equal(f.jobs.length, 1);
+  assert.deepEqual(f.summaries, [result]);
+});
+
+test('discovery can exhaust the budget before any publication page while still reporting backlog', async (t) => {
+  const f = fixture(t);
+  seedTerminalBacklog(f, 2);
+  let elapsedMs = 0;
+  let dueQueries = 0;
+  f.observe((entry) => {
+    if (!('sql' in entry)) return;
+    if (entry.sql.includes('AS claim_path')) elapsedMs = 20_000;
+    if (entry.sql.includes('SELECT *') && entry.sql.includes('commerce_receipt_claim_failure_outbox_due')) {
+      dueQueries += 1;
+    }
+  });
+  const result = await f.run(NOW, undefined, { monotonicNowMs: () => elapsedMs });
+  assert.equal(result.attempted, 0);
+  assert.equal(result.pages, 0);
+  assert.equal(result.stopReason, 'time-limit');
+  assert.equal(result.hasMore, true);
+  assert.equal(result.oldestDueAgeMs, 500);
+  assert.equal(dueQueries, 1);
+  assert.equal(f.jobs.length, 0);
+});
+
+test('discovery and publication errors are retained together and report one final result', async (t) => {
+  const f = fixture(t);
+  f.seed(legacy());
+  f.seed(legacy({ deliveryId: 8 }), 'ABCDEF-1234567891');
+  const discoveryFailure = new Error('discovery insertion unavailable');
+  const publicationFailure = new Error('queue unavailable');
+  let failed = false;
+  f.observe((entry) => {
+    if ('sql' in entry && entry.sql.startsWith('INSERT INTO commerce_receipt_claim_failure_outbox') && !failed) {
+      failed = true;
+      throw discoveryFailure;
+    }
+  });
+  f.onSend(async () => { throw publicationFailure; });
+  await assert.rejects(f.run(), (error) => {
+    assert.deepEqual(leafErrors(error), [discoveryFailure, publicationFailure]);
+    return true;
+  });
+  assert.equal(f.summaries.length, 1);
+  assert.equal(f.summaries[0].failed, 1);
+  assert.equal(f.summaries[0].stopReason, 'failed');
+  assert.equal(f.jobs.length, 1);
+});
+
+test('a failed quarantine retains its parse error and does not prevent later publication pages', async (t) => {
+  const f = fixture(t);
+  f.seed(legacy({ receiptClaimWorkflowV1: workflow('failed', {
+    operationId: 'src-v1-' + '0'.repeat(36),
+  }) }));
+  seedTerminalBacklog(f, 10);
+  const failure = new Error('quarantine unavailable');
+  f.observe((entry) => {
+    if ('sql' in entry && entry.sql.includes("last_error_code = 'invalid-notification-data'")) throw failure;
+  });
+  await assert.rejects(f.run(), (error) => {
+    const errors = leafErrors(error);
+    assert.equal(errors.length, 2);
+    assert.match(String(errors[0]), /Invalid receipt claim failure snapshot/);
+    assert.equal(errors[1], failure);
+    return true;
+  });
+  assert.equal(f.jobs.length, 10);
+  assert.equal(f.summaries.length, 1);
+  assert.equal(f.summaries[0].failed, 1);
+  assert.equal(f.summaries[0].hasMore, true);
+});
+
+test('backlog probe failures leave publication successful with unknown backlog', async (t) => {
+  const f = fixture(t);
+  f.seed(legacy());
+  f.observe((entry) => {
+    if ('sql' in entry && entry.sql.includes('commerce_receipt_claim_failure_outbox_due') && f.jobs.length > 0) {
+      throw new Error('backlog unavailable');
+    }
+  });
+  const result = await f.run();
+  assert.equal(result.completed, 1);
+  assert.equal(result.stopReason, 'drained');
+  assert.equal(result.hasMore, null);
+  assert.equal(result.oldestDueAgeMs, null);
+  assert.deepEqual(f.summaries, [result]);
+});
+
+test('due cursor queries use the partial index without a temporary sort', async (t) => {
+  const f = fixture(t);
+  const store = new ReceiptClaimFailureOutboxStore(f.db);
+  let checked = false;
+  f.observe((entry) => {
+    if (!('sql' in entry) || !entry.sql.includes('(next_attempt_at_ms, event_id) >')) return;
+    const details = f.database.prepare(`EXPLAIN QUERY PLAN ${entry.sql}`).all(NOW, NOW - 500, 'previous', 8)
+      .map((row) => String(row.detail)).join('\n');
+    assert.match(details, /commerce_receipt_claim_failure_outbox_due/);
+    assert.doesNotMatch(details, /USE TEMP B-TREE/);
+    checked = true;
+  });
+  await store.queryDue({ dueAtMs: NOW, limit: 8, startAfter: { nextAttemptAtMs: NOW - 500, eventId: 'previous' } });
+  assert.equal(checked, true);
 });

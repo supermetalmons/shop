@@ -5,7 +5,7 @@ import type { OverlayRect } from '../../shop/reveal/types';
 import { ethereumRevealTiles } from '../revealLayout';
 import type { CratePreviewAssets } from './crateAssets';
 import { crateOpeningDuration, sampleCrateOpening } from './crateFlow';
-import { createCrateModel, CRATE_BOUNDS, CRATE_CAMERA } from './crateModel';
+import { createCrateModel, CRATE_BOUNDS, CRATE_CAMERA, CRATE_IMAGE_ASPECT } from './crateModel';
 
 export type CrateSceneProps = {
   assets: CratePreviewAssets | null;
@@ -33,7 +33,7 @@ export function crateRenderDensity(width: number, height: number, deviceRatio: n
 function createScene(host: HTMLDivElement, props: () => CrateSceneProps) {
   const scene = new THREE.Scene();
   const modelRequest = new AbortController();
-  const camera = new THREE.PerspectiveCamera(CRATE_CAMERA.fov, 1218 / 833, 0.01, 100);
+  const camera = new THREE.PerspectiveCamera(CRATE_CAMERA.fov, CRATE_IMAGE_ASPECT, 0.01, 100);
   camera.position.fromArray(CRATE_CAMERA.position);
   camera.lookAt(...CRATE_CAMERA.target);
   camera.updateMatrixWorld();

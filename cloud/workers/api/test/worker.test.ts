@@ -319,6 +319,47 @@ test('commerce maintenance blocks HTTP mutations and skips commerce cron work', 
   assert.deepEqual(calls, ['ops', 'ethereumReveal']);
 });
 
+test('early maintenance and staff responses retain the profile CORS override', async () => {
+  const token = `mons_staff_v1.123e4567-e89b-42d3-a456-426614174000.${'A'.repeat(43)}`;
+  for (const [path, staff] of [
+    ['/preorders/prepare', false],
+    ['/ethereum/111k/delivery/prepare', false],
+    ['/webhooks/stripe', false],
+    ['/mi-note-cards', true],
+    ['/admin/future', true],
+  ] as const) {
+    for (const origin of ['https://mons.shop', 'https://evil.example', undefined]) {
+      const response = await handleRequest(new Request(`https://api.mons.shop${path}`, {
+        method: 'POST',
+        headers: {
+          ...(origin ? { Origin: origin } : {}),
+          ...(staff ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }), env({
+        commerceState: 'paused',
+        opsDb: d1Database(function prepare() {
+          return { bind() { return this; }, first: async () => null } as D1PreparedStatement;
+        }),
+      }), quietDependencies(async () => { throw new Error('Unexpected provider call'); }));
+      const label = `${path} ${origin ?? 'no origin'}`;
+      assert.equal(response.status, origin === 'https://evil.example' ? 403 : staff ? 401 : 503, label);
+      if (origin === 'https://evil.example') {
+        assert.equal(response.headers.get('Access-Control-Allow-Origin'), null, label);
+        assert.equal((await response.json() as { error: { code: string } }).error.code, 'permission-denied', label);
+      } else {
+        assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin ?? '*', label);
+        assert.equal(response.headers.get('Access-Control-Allow-Methods'), origin ? 'POST, OPTIONS' : 'GET, POST, OPTIONS', label);
+        const allowedHeaders = response.headers.get('Access-Control-Allow-Headers') || '';
+        assert.equal(/X-Mi-Note-Session|X-Mons-Ethereum-Session/.test(allowedHeaders), false, label);
+        assert.equal(response.headers.get('Retry-After'), staff ? null : '60', label);
+        assert.deepEqual(await response.json(), staff
+          ? { ok: false, error: { code: 'unauthenticated', message: 'Authentication is required.' } }
+          : { ok: false, error: 'commerce-maintenance' }, label);
+      }
+    }
+  }
+});
+
 test('request boundary distinguishes staff rejection from authentication infrastructure failure', async () => {
   const token = `mons_staff_v1.123e4567-e89b-42d3-a456-426614174000.${'A'.repeat(43)}`;
   const requestFor = () => request('/admin/profile', { wallet: OWNER }, {

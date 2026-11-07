@@ -1,7 +1,7 @@
 import type { EthereumInventoryItem } from '../../../shared/ethereum/protocol';
 import type { CratePreviewAssets } from '../crate/crateAssets';
 
-export const WAREHOUSE_CRATE_IMAGE_SRC = '/111k/crate-reference.webp';
+const WAREHOUSE_CRATE_IMAGE_SRC = '/111k/crate-reference.webp';
 
 export type WarehouseCrateImage = {
   image: HTMLCanvasElement;

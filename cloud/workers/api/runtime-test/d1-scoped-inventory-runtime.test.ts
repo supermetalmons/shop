@@ -4,7 +4,9 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { assignCommerceDudes } from '../src/commerceDudeAssignments.ts';
-import { D1CommerceRepository } from '../src/commerceRepository.ts';
+import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.ts';
+import type { DropInventoryManifest } from '../../../../shared/dropInventoryManifest.ts';
 
 const LEASE = '00000000-0000-4000-8000-000000000036';
 const GENERATION = '00000000-0000-4000-8000-000000001036';
@@ -25,14 +27,20 @@ function runtimeServer() {
   return createTestHarness({ root: resolve('.'), workers: [{ config }] });
 }
 
-function initialization(db: D1Database, revision: number, token = LEASE) {
+function initialization(
+  db: D1Database,
+  revision: number,
+  token = LEASE,
+  manifest: DropInventoryManifest = { sha256: 'a'.repeat(64), cardIds: [2, 3, 1401, 1430] },
+) {
   return db.prepare(`INSERT INTO commerce_inventory_initializations (
     drop_id, generation, lease_token, authority_revision, manifest_sha256, catalog_sha256, preorder_snapshot_sha256,
     source_preorder_id, source_cluster, source_collection, drop_family, items_per_box, pack_count, max_dude_id,
     excluded_card_ids_json, eligible_card_ids_json, created_at_ms, completed_at_ms
   ) VALUES (?, ?, ?, ?, ?, ?, ?, 'mi_note_cards_devnet', 'devnet',
-    '65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv', 'mi_note_cards', 2, 2, 1430, '[]', '[2,3,1401,1430]', ${NOW}, NULL)`)
-    .bind(NEW_DROP, GENERATION, token, revision, 'a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64));
+    '65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv', 'mi_note_cards', 2, ?, 1430, '[]', ?, ${NOW}, NULL)`)
+    .bind(NEW_DROP, GENERATION, token, revision, manifest.sha256, 'b'.repeat(64), 'c'.repeat(64),
+      manifest.cardIds.length / 2, JSON.stringify(manifest.cardIds));
 }
 
 test('D1 atomically initializes new sparse inventory while another drop keeps assigning cards', async () => {
@@ -87,6 +95,25 @@ test('D1 atomically initializes new sparse inventory while another drop keeps as
 
     const args = { ...common, dropId: NEW_DROP, dropFamily: 'mi_note_cards', itemsPerBox: 2, maxDudeId: 1430,
       inventoryManifest: { sha256: 'a'.repeat(64), cardIds: [2, 3, 1401, 1430] } };
+    let snapshotBatches = 0;
+    let snapshotRows = 0;
+    const observedDb = new Proxy(db, {
+      get(target, property) {
+        if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+          const results = await target.batch<Record<string, unknown>>(statements);
+          snapshotBatches++;
+          assert.deepEqual(results.map(result => result.results.length), [1, 1, 4, 1, 0]);
+          assert.deepEqual(results[2].results, [2, 3, 1401, 1430].map((dude_id, pool_position) => ({ dude_id, pool_position })));
+          snapshotRows += results.reduce((sum, result) => sum + result.results.length, 0);
+          return results;
+        };
+        return Reflect.get(target, property, target);
+      },
+    });
+    const snapshot = await new D1CommerceRepository(observedDb).getDudeInventory(args);
+    assert.deepEqual(snapshot, { generation: GENERATION, pool: [2, 3, 1401, 1430] });
+    assert.equal(snapshotBatches, 1);
+    assert.equal(snapshotRows, 7);
     const first = await assignCommerceDudes({ ...args, boxAssetId: 'devnet-box-1' });
     const second = await assignCommerceDudes({ ...args, boxAssetId: 'devnet-box-2' });
     assert.deepEqual([...first.dudeIds, ...second.dudeIds], [2, 3, 1401, 1430]);
@@ -95,6 +122,69 @@ test('D1 atomically initializes new sparse inventory while another drop keeps as
     assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM commerce_available_dudes WHERE drop_id = ?')
       .bind(NEW_DROP).first<{ count: number }>())!.count, 0);
     assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM commerce_preorder_orders').first<{ count: number }>())!.count, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('native D1 validates a full sparse manifest with one read per available or assigned card', async (t) => {
+  const server = runtimeServer();
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const { COMMERCE_DB: db } = await worker.getEnv();
+    await db.batch([
+      db.prepare(`INSERT INTO commerce_authority_control_lease VALUES (1, ?, ${NOW}, ${NOW} + 60000)`).bind(LEASE),
+      db.prepare(`UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
+        paused_at_ms = NULL, updated_at_ms = ${NOW} WHERE authority_state = 'd1'`),
+      db.prepare(`UPDATE commerce_authority_control SET paused_at_ms = ${NOW}, updated_at_ms = ${NOW} WHERE paused_at_ms IS NULL`),
+      db.prepare("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows'"),
+      db.prepare(`UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
+        paused_at_ms = NULL, updated_at_ms = ${NOW}`),
+    ]);
+    const authority = await db.prepare('SELECT revision FROM commerce_authority_control')
+      .first<{ revision: number }>();
+    const manifest = DEPLOYMENT_DROPS.mi_note_cards_devnet.inventoryManifest!;
+    assert.equal(manifest.cardIds.length, 1408);
+    await initialization(db, authority!.revision, LEASE, manifest).run();
+    const config = { dropId: NEW_DROP, dropFamily: 'mi_note_cards', itemsPerBox: 2, maxDudeId: 1430,
+      inventoryManifest: manifest };
+    let assigned = 0;
+    for (const assignedTarget of [0, manifest.cardIds.length / 2, manifest.cardIds.length - 2, manifest.cardIds.length]) {
+      for (let first = assigned; first < assignedTarget; first += 100) {
+        await db.batch(manifest.cardIds.slice(first, Math.min(first + 100, assignedTarget)).map(id => db.prepare(`
+          INSERT INTO commerce_documents (
+            document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
+          ) VALUES (?, 'dude_assignment', ?, ?, ?, 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`)
+          .bind(commerceKeys.dudeAssignment(NEW_DROP, String(id)).path, NEW_DROP, String(id),
+            JSON.stringify({ dudeId: id, boxAssetId: `box-${id}`, inventoryGeneration: GENERATION }))));
+      }
+      assigned = assignedTarget;
+      const batches: { rowsRead: number; bytes: number; rowCounts: number[] }[] = [];
+      const observedDb = new Proxy(db, {
+        get(target, property) {
+          if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+            const results = await target.batch<Record<string, unknown>>(statements);
+            batches.push({
+              rowsRead: results.reduce((sum, result) => sum + result.meta.rows_read, 0),
+              bytes: new TextEncoder().encode(JSON.stringify(results.map(result => result.results))).length,
+              rowCounts: results.map(result => result.results.length),
+            });
+            return results;
+          };
+          return Reflect.get(target, property, target);
+        },
+      });
+      const snapshot = await new D1CommerceRepository(observedDb).getDudeInventory(config);
+      assert.deepEqual(snapshot, { generation: GENERATION, pool: manifest.cardIds.slice(assigned) });
+      assert.equal(batches.length, 1);
+      const [{ rowsRead, bytes, rowCounts }] = batches;
+      assert.deepEqual(rowCounts, [1, 1, manifest.cardIds.length - assigned, 1, assigned]);
+      assert.ok(rowsRead >= manifest.cardIds.length && rowsRead <= manifest.cardIds.length + 5,
+        `${assigned} assigned cards read ${rowsRead} rows for a ${manifest.cardIds.length}-card manifest.`);
+      t.diagnostic(`${assigned} assigned and ${snapshot.pool.length} available cards read ${rowsRead} D1 rows and transferred ${bytes} bytes in one batch.`);
+    }
   } finally {
     await server.close();
   }

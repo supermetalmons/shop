@@ -44,5 +44,5 @@ and mobile landscape. The scene's DOM data attributes expose draw calls,
 triangle count, texture count, readiness, and animation activity for browser QA.
 
 Original wooden audio samples are generated reproducibly with
-`node scripts/generate-crate-sounds.mjs` and played through the shared sound
+`npm run generate:crate-sounds` and played through the shared sound
 player. Audio is never part of the opening readiness gate.
