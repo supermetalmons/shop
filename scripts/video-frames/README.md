@@ -20,6 +20,14 @@ npm run render:video-frames -- --input /path/to/clip.mp4 --output /path/to/expor
 npm run render:knives -- --input /path/to/knife.glb --output /path/to/export
 ```
 
+For standalone knife animations, use `npm run render:knives -- --frameless --ids 904,6`.
+This approved frameless option renders at 3840 × 2160 with 4× MSAA, downsamples
+to 1920 × 1080 with Lanczos, and encodes silent H.264 MP4s at CRF 12 using the
+slow preset. It preserves the graphite background, lighting and five-second,
+60 fps motion. Files are named `<id>.mp4` in `output/video-frames/knives/frameless/`
+by default. See the [knife model guide](knives/README.md) for local inputs and samples.
+Framed rendering remains the default.
+
 Both presets render by default. `--background white` is accepted for existing
 commands. Category-local 111k IDs use the raw source cache when available.
 Local inputs require an explicit output directory. With no selection, videos

@@ -158,7 +158,7 @@ def run_worker(jobs, work):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Render 111k media in a 16:9 acrylic frame.")
+    parser = argparse.ArgumentParser(description="Render framed 111k media or standalone 16:9 knife animations.")
     parser.add_argument("--collection", choices=["videos", "animated", "knives", "3d"])
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--samples", action="store_true", help="render the five selected videos and five selected knives")
@@ -166,10 +166,16 @@ def main():
     selection.add_argument("--input", action="append", type=Path, default=[], help="local MP4, or a GLB for knives")
     selection.add_argument("--verify", action="store_true", help="check both saved acrylic presets against their approved hashes")
     parser.add_argument("--variant", choices=VARIANTS, help="render just one setup (default: both)")
+    parser.add_argument("--frameless", action="store_true", help="knives only: render at 4K, downsample to 1080p, encode at CRF 12")
     parser.add_argument("--background", choices=["white"], help="the approved white background (default)")
     parser.add_argument("--output", type=Path, help="destination directory")
     args = parser.parse_args()
     collection = "3d" if args.collection == "knives" else args.collection
+    if args.frameless:
+        if collection != "3d":
+            parser.error("--frameless requires --collection knives or 3d")
+        if args.variant or args.background or args.verify:
+            parser.error("--frameless cannot be combined with --variant, --background or --verify")
     if args.verify:
         if args.output or args.variant:
             parser.error("--verify checks both saved presets and takes no output directory or variant")
@@ -190,15 +196,18 @@ def main():
     variants = [args.variant] if args.variant else VARIANTS
     selections = {key: source_ids(key, args.ids, args.samples) for key in collections}
     finalists = OUTPUT / "acrylic" / "finalists"
-    output = args.output or (finalists if args.samples else OUTPUT / "acrylic" / collections[0])
+    default_output = OUTPUT / "knives" / "frameless" if args.frameless else (
+        finalists if args.samples else OUTPUT / "acrylic" / collections[0])
+    output = args.output or default_output
     resolved = output.resolve()
     reserved = finalists.resolve()
     canonical = same_location(resolved, reserved)
-    if any(same_location(p, reserved) for p in resolved.parents) or (not args.samples and canonical):
+    if any(same_location(p, reserved) for p in resolved.parents) or ((not args.samples or args.frameless) and canonical):
         parser.error("The finalists directory is reserved for --samples. Choose another --output directory")
     if canonical:
         check_finalist_directory(output)
-    verify_presets(PRESETS, variants)
+    if not args.frameless:
+        verify_presets(PRESETS, variants)
     with tempfile.TemporaryDirectory(prefix="acrylic-") as temporary:
         work = Path(temporary).absolute()
         inputs = snapshot_inputs(args.input, work / "inputs") if args.input else []
@@ -206,7 +215,9 @@ def main():
         for category, ids in selections.items():
             media = prepare_media(category, ids, inputs)
             for index, source in enumerate(media):
-                if args.samples:
+                if args.frameless and not inputs:
+                    prefix = source.stem
+                elif args.samples:
                     prefix = sample_prefix(category, source.stem)
                 elif inputs:
                     prefix = local_prefix(category, inputs[index])
@@ -216,8 +227,11 @@ def main():
                     raise ValueError(f"Duplicate export name for {source}")
                 sources[prefix] = source
         stage = work / "export"
-        jobs = [(str(source), str(PRESETS / variant), str(stage / movie_filename(prefix, variant)))
-                for prefix, source in sources.items() for variant in variants]
+        if args.frameless:
+            jobs = [(str(source), None, str(stage / f"{prefix}.mp4")) for prefix, source in sources.items()]
+        else:
+            jobs = [(str(source), str(PRESETS / variant), str(stage / movie_filename(prefix, variant)))
+                    for prefix, source in sources.items() for variant in variants]
         run_worker(jobs, work)
         files = [Path(output_name).relative_to(stage) for _, _, output_name in jobs]
         if canonical:

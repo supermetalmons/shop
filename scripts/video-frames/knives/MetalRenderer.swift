@@ -343,10 +343,14 @@ func orbit(frame: Int) -> simd_float4x4 {
 
 func run() throws {
     let args = CommandLine.arguments
-    guard args.count == 3 || args.count == 4 else { throw RenderError("Usage: MetalRenderer MODEL.glb SHADER.metal [AXIS_RADIANS]") }
-    let knownAxis = args.count == 4 ? Float(args[3]) : nil
-    guard args.count == 3 || knownAxis?.isFinite == true else { throw RenderError("Invalid alignment angle") }
-    let width = 1920, height = 1080
+    guard (3...5).contains(args.count) else { throw RenderError("Usage: MetalRenderer MODEL.glb SHADER.metal [AXIS_RADIANS] [--high-resolution]") }
+    let options = args.dropFirst(3)
+    let highResolution = options.contains("--high-resolution")
+    let angles = options.filter { $0 != "--high-resolution" }
+    guard angles.count <= 1, options.count - angles.count <= 1 else { throw RenderError("Expected one alignment angle and at most one --high-resolution flag") }
+    let knownAxis = angles.first.flatMap(Float.init)
+    guard angles.isEmpty || knownAxis?.isFinite == true else { throw RenderError("Invalid alignment angle") }
+    let width = highResolution ? 3840 : 1920, height = highResolution ? 2160 : 1080
     let aspect = Float(width) / Float(height)
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw RenderError("Metal unavailable") }
     let model = try Model(url: URL(fileURLWithPath: args[1]), device: device, knownAxis: knownAxis)

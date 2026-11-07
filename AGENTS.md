@@ -21,3 +21,10 @@ moving images and keep the full widescreen knife orbit in view.
 Use `--verify` to check the approved assets and `--variant` to choose a single
 preset. Generate comparison samples only when requested. See
 `scripts/video-frames/README.md` for commands and output naming.
+
+When standalone frameless knife videos are requested, use
+`npm run render:knives -- --frameless` with the requested IDs or local models.
+This approved option renders at 4K with 4× MSAA, downsamples to 1080p with
+Lanczos, and encodes H.264 at CRF 12 with the slow preset. Preserve its 16:9
+graphite background, lighting, complete-object framing and five-second 60 fps
+idle motion. Framed rendering remains the default.
