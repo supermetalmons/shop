@@ -134,6 +134,23 @@ test('local deployment rejects current-address payees and deploys one collection
     const manifest = JSON.parse(result.stdout);
     assert.deepEqual(manifest, JSON.parse(readFileSync(join(project, '.local/deployment.json'), 'utf8')));
     assert.equal(manifest.protocolVersion, 15);
+    const mintRecipients = (proceeds.mintRecipients as string[]).map(recipient => recipient.toLowerCase());
+    assert.equal(mintRecipients.length, 14);
+    assert.deepEqual(manifest.mintRecipients, mintRecipients);
+    assert.deepEqual(manifest.mintSharesBps, proceeds.mintSharesBps);
+    const encodedRecipientCount = await rpc<string>('eth_call', [{ to: manifest.contractAddress,
+      data: encodeCall('mintRecipientCount()', [], []) }, 'latest']);
+    assert.deepEqual(decodeReturn(['uint256'], encodedRecipientCount), [14n]);
+    await Promise.all(mintRecipients.map(async (recipient, index) => {
+      const [encodedRecipient, encodedShare] = await Promise.all([
+        rpc<string>('eth_call', [{ to: manifest.contractAddress,
+          data: encodeCall('mintRecipients(uint256)', ['uint256'], [index]) }, 'latest']),
+        rpc<string>('eth_call', [{ to: manifest.contractAddress,
+          data: encodeCall('mintSharesBps(address)', ['address'], [recipient]) }, 'latest']),
+      ]);
+      assert.deepEqual(decodeReturn(['address'], encodedRecipient), [recipient]);
+      assert.deepEqual(decodeReturn(['uint256'], encodedShare), [BigInt(proceeds.mintSharesBps[index])]);
+    }));
     assert.equal(manifest.maxDiscountedMints, 5555);
     assert.equal(manifest.initialDeliveryReceiver, deliveryRouting.initialReceiver.toLowerCase());
     assert.equal(manifest.deliveryConfigId, 1);

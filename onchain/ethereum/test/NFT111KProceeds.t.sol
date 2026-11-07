@@ -308,6 +308,58 @@ contract NFT111KProceedsTest is TestSupport {
         }
     }
 
+    function testConfiguredMintSplitPaysExactBasisPointAmounts() public {
+        (address[] memory recipients, uint256[] memory shares) = _deployConfiguredSplit();
+        _buyAt(10_000);
+        vm.prank(address(0xCA11));
+        token.releaseAllMint();
+        for (uint256 i; i < recipients.length; ++i) {
+            assertEq(recipients[i].balance, shares[i]);
+            assertEq(token.mintReleased(recipients[i]), shares[i]);
+            assertEq(token.releasableMint(recipients[i]), 0);
+        }
+        assertEq(token.totalMintReceived(), 10_000);
+        assertEq(token.totalMintReleased(), 10_000);
+        assertEq(address(token).balance, 0);
+        vm.recordLogs();
+        _releaseAll();
+        token.releaseAllMint();
+        assertEq(vm.getRecordedLogs().length, 0);
+        assertEq(token.totalMintReleased(), 10_000);
+    }
+
+    function testConfiguredMintSplitPreservesCumulativeRoundingAcrossReleaseOrder() public {
+        (address[] memory recipients, uint256[] memory shares) = _deployConfiguredSplit();
+        uint256[8] memory payments = [uint256(1), 1, 15, 83, 1, 9899, 1, 9999];
+        uint256 received;
+        for (uint256 round; round < payments.length; ++round) {
+            received += payments[round];
+            _buyAt(payments[round]);
+            for (uint256 i; i < recipients.length; ++i) {
+                uint256 index = round % 2 == 0 ? i : recipients.length - 1 - i;
+                vm.prank(address(0xCA11));
+                token.releaseMint(recipients[index]);
+            }
+            vm.recordLogs();
+            token.releaseAllMint();
+            assertEq(vm.getRecordedLogs().length, 0);
+            uint256 released;
+            for (uint256 i; i < recipients.length; ++i) {
+                uint256 entitlement = received * shares[i] / 10_000;
+                assertEq(recipients[i].balance, entitlement);
+                assertEq(token.mintReleased(recipients[i]), entitlement);
+                assertEq(token.releasableMint(recipients[i]), 0);
+                released += entitlement;
+            }
+            assertEq(token.totalMintReceived(), received);
+            assertEq(token.totalMintReleased(), released);
+            assertEq(address(token).balance, received - released);
+            assertTrue(address(token).balance <= 13);
+        }
+        assertEq(token.totalMintReleased(), 20_000);
+        assertEq(address(token).balance, 0);
+    }
+
     function testUnderfundedBatchRevertsAllAccountingAndCanBeRetried() public {
         _buyAt(100);
         vm.expectRevert(NFT111K.InsufficientMintPayoutGas.selector);
@@ -795,6 +847,18 @@ contract NFT111KProceedsTest is TestSupport {
             recipients[i] = address(uint160(0xC00001 + i));
             shares[i] = i + 1 == count ? 10_000 - (10_000 / count) * i : 10_000 / count;
         }
+    }
+
+    function _deployConfiguredSplit() private returns (address[] memory recipients, uint256[] memory shares) {
+        string memory proceeds = vm.readFile("config/proceeds.json");
+        recipients = vm.parseJsonAddressArray(proceeds, ".mintRecipients");
+        shares = vm.parseJsonUintArray(proceeds, ".mintSharesBps");
+        assertEq(recipients.length, 14);
+        for (uint256 i; i < recipients.length; ++i) {
+            vm.deal(recipients[i], 0);
+        }
+        token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
     }
 
     function _deploy(address[] memory recipients, uint256[] memory shares, address payable delivery)

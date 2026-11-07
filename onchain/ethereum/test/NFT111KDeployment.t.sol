@@ -471,14 +471,31 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(version, "2");
         assertEq(domainChainId, chainId);
         assertEq(collection, address(token));
-        string memory proceeds = vm.readFile("config/proceeds.json");
-        address[] memory recipients = vm.parseJsonAddressArray(proceeds, ".mintRecipients");
-        uint256[] memory shares = vm.parseJsonUintArray(proceeds, ".mintSharesBps");
+        address[14] memory recipients = [
+            0x51Ec8729331E284c4B5e8EcA8e0D184FeD18632F,
+            0x8B573abc736c82216D738Af3024F3a45fC3b18E3,
+            0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9,
+            0x1B591f88d9bFcF7d057DF2c5a50b59Da2cBa349f,
+            0x07d2d89b4A6E3fdA8858Da3510b76e2219eE6969,
+            0x603C39B3D0E0f33772d79695A4F6819FCc987113,
+            0xa07E7932f5C981aA769A1Cf9400B5c94AdB944c4,
+            0x2236Fb6C35f78A092F0DdA655f3b49d0e8Bf6581,
+            0x71d0318BB33d961f323C81a7a4Ca095b549F7E6E,
+            0xc4275E6D4109e0288cDc9b064E32F3f54bcDA61F,
+            0x72D0c5623A05033F9eE4495D408BC6c05DF8367d,
+            0x0AdF7B78c952E038d4eA4B5bF84B9d3D22C60Ce9,
+            0xB0B4EC16bE55af47109947F0dC84C4561A020A4B,
+            0xd9488d6687d656a55B3F1a36998d149f9b1bE2Cc
+        ];
+        uint256[14] memory shares = [uint256(2750), 2600, 500, 500, 500, 500, 100, 100, 100, 100, 500, 583, 583, 584];
         assertEq(token.mintRecipientCount(), recipients.length);
+        uint256 totalShares;
         for (uint256 i; i < recipients.length; ++i) {
             assertEq(token.mintRecipients(i), recipients[i]);
             assertEq(token.mintSharesBps(recipients[i]), shares[i]);
+            totalShares += shares[i];
         }
+        assertEq(totalShares, 10_000);
     }
 
     function _assertClosedUntilOwnerOpens(NFT111K token, bool allocate) private {

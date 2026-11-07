@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { parseInitialDeliveryReceiver, parseProceedsConfig } from './proceeds-config.mjs';
 
@@ -6,6 +7,35 @@ const address = value => `0x${value.toString(16).padStart(40, '0')}`;
 const configuration = count => ({
   mintRecipients: Array.from({ length: count }, (_, index) => address(0xabc000 + index)),
   mintSharesBps: Array.from({ length: count }, (_, index) => Math.floor(10_000 / count) + (index < 10_000 % count ? 1 : 0)),
+});
+
+test('committed mint split fixes all 14 receivers and allows repeated two-letter labels', () => {
+  const input = JSON.parse(readFileSync(new URL('../config/proceeds.json', import.meta.url), 'utf8'));
+  const expected = [
+    ['bi', '0x51Ec8729331E284c4B5e8EcA8e0D184FeD18632F', 2750],
+    ['Pa', '0x8B573abc736c82216D738Af3024F3a45fC3b18E3', 2600],
+    ['Me', '0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9', 500],
+    ['Tu', '0x1B591f88d9bFcF7d057DF2c5a50b59Da2cBa349f', 500],
+    ['Gr', '0x07d2d89b4A6E3fdA8858Da3510b76e2219eE6969', 500],
+    ['To', '0x603C39B3D0E0f33772d79695A4F6819FCc987113', 500],
+    ['na', '0xa07E7932f5C981aA769A1Cf9400B5c94AdB944c4', 100],
+    ['di', '0x2236Fb6C35f78A092F0DdA655f3b49d0e8Bf6581', 100],
+    ['Lu', '0x71d0318BB33d961f323C81a7a4Ca095b549F7E6E', 100],
+    ['ch', '0xc4275E6D4109e0288cDc9b064E32F3f54bcDA61F', 100],
+    ['mo', '0x72D0c5623A05033F9eE4495D408BC6c05DF8367d', 500],
+    ['vv', '0x0AdF7B78c952E038d4eA4B5bF84B9d3D22C60Ce9', 583],
+    ['vv', '0xB0B4EC16bE55af47109947F0dC84C4561A020A4B', 583],
+    ['vv', '0xd9488d6687d656a55B3F1a36998d149f9b1bE2Cc', 584],
+  ];
+  assert.deepEqual(input.mintRecipientLabels, expected.map(([label]) => label));
+  assert.deepEqual(input.mintRecipients, expected.map(([, recipient]) => recipient));
+  assert.deepEqual(input.mintSharesBps, expected.map(([, , share]) => share));
+  assert.equal(input.mintSharesBps.reduce((total, share) => total + share, 0), 10_000);
+  for (const label of input.mintRecipientLabels) assert.match(label, /^[A-Za-z]{2}$/);
+  assert.deepEqual(parseProceedsConfig(input), {
+    mintRecipients: expected.map(([, recipient]) => recipient.toLowerCase()),
+    mintSharesBps: expected.map(([, , share]) => share),
+  });
 });
 
 test('accepts all supported recipient counts with exact total shares', () => {
