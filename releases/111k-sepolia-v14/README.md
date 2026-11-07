@@ -1,6 +1,6 @@
 # 111K Sepolia v14 — animated artworks
 
-**Live and open.** The [111K testnet page](https://mons.shop/111k_devnet) uses v14, with sales and relic claims enabled.
+**Superseded by [v15](../111k-sepolia-v15/README.md).** V14 sales, redemptions, and reveal admission are paused. The records below describe its original launch; its NFTs, metadata, and reveal ledger remain preserved.
 
 | Item | Value |
 | --- | --- |

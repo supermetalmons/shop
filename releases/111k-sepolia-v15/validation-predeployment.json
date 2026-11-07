@@ -1,0 +1,79 @@
+{
+  "phase": "predeployment",
+  "checks": {
+    "frontend": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/check-frontend.log",
+      "logSha256": "b517317fd156923ccbf8048a408873a7a4e28789fad2ecdae9b41a8bcee6f4e5",
+      "nodeTestCounts": [
+        4,
+        29,
+        1,
+        4991
+      ]
+    },
+    "api": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/check-api.log",
+      "logSha256": "b6ffe1550a99e04f58b27d7fb0c8289eb13f0a56ad72b41380a5e50b3ad3af88",
+      "nodeTestCounts": [
+        3076,
+        58
+      ]
+    },
+    "contracts": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/check-contracts.log",
+      "logSha256": "5a44cb93fd62f91e4f42c7c6f0a9be0190cef55590ca9d53de4e1796cf80c3ee",
+      "nodeTestCounts": [
+        33,
+        27,
+        10,
+        6,
+        10,
+        8,
+        10,
+        11
+      ],
+      "solidity": {
+        "passed": 266,
+        "failed": 0,
+        "skipped": 4
+      }
+    },
+    "runner": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/runner-tests.log",
+      "logSha256": "600e40ee0036d7504fc049363871c1a09956067b9fc544377bcc3cfc8fef20f0",
+      "nodeTestCounts": [
+        27
+      ]
+    },
+    "defaults": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/defaults-tests.log",
+      "logSha256": "6b76fce97360db066eb049de0563c6566964b7e9f4d80bbc95f68990886558ac",
+      "nodeTestCounts": [
+        13
+      ]
+    },
+    "tools": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/typecheck-tools.log",
+      "logSha256": "70d6d696e83e6b05146bb20c710947dfcc17dcc8ed45df60dce9bae0299950c0",
+      "nodeTestCounts": []
+    },
+    "deadCode": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/dead-code.log",
+      "logSha256": "920b5222b4cae2fd57e1646a45b9d63be6ee0853a5c256e9345b24fd4dfe20d3",
+      "nodeTestCounts": []
+    },
+    "localLifecycle": {
+      "passed": true,
+      "log": ".cache/111k-v15-release/e2e.log",
+      "logSha256": "2d39d6e85a33bc3fb7d4584a9aaf3fb4cb7bca149ab5e1e0e651b064be67dbc9",
+      "nodeTestCounts": []
+    }
+  }
+}

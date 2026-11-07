@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-11-07T20:17:03.774Z",
+  "readOnly": true,
+  "chainId": 11155111,
+  "deploymentId": "v15",
+  "predictedContract": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "authorizationSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "nonceLatest": "71",
+  "noncePending": "71",
+  "balanceWei": "5564924474579570546",
+  "gasPrice": "19",
+  "gasEstimate": "44406805",
+  "gasLimit": "57778847",
+  "maximumFeeWei": "57778847000",
+  "liveBlockGasLimit": "200000000",
+  "checkedAtBlock": 12085976,
+  "checkedAtBlockHash": "0x824d8a1aafde04323db5f0f946b3a8c67ba09f7f8968081d41e48be39acb06e7"
+}

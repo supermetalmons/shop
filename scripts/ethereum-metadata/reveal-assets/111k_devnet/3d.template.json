@@ -1,12 +1,18 @@
 {
   "name": "{{tokenId}}",
   "description": "",
-  "image": "https://wip.lil.org/111k/3d/{{assetId}}.webp",
-  "animation_url": "https://wip.lil.org/111k/3d/{{assetId}}.glb",
-  "aspectRatio": { "width": 1, "height": 1 },
+  "image": "https://cdn.lil.org/nft/111k/3d/{{assetId}}.png",
   "attributes": [
-    { "trait_type": "type", "value": "3d" }
+    {
+      "trait_type": "type",
+      "value": "3d"
+    }
   ],
+  "aspectRatio": {
+    "width": 1,
+    "height": 1
+  },
   "category": "3d",
-  "revealStatus": "revealed"
+  "revealStatus": "revealed",
+  "animation_url": "https://cdn.lil.org/nft/111k/3d/{{assetId}}.glb"
 }

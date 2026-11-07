@@ -1,0 +1,307 @@
+{
+  "stage": "qa",
+  "checkedAt": "2026-11-07T21:12:12.851Z",
+  "chainId": 11155111,
+  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "deploymentId": "v15",
+  "catalogVersion": "111k-v4",
+  "config": {
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "chainName": "Sepolia",
+    "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v15/",
+    "deploymentBlock": 12085980,
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "enabled": true,
+    "testnet": true,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "deliveryFeeWei": "100000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15,
+    "maxDeliveryItems": 50
+  },
+  "stats": {
+    "chainId": 11155111,
+    "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+    "owner": null,
+    "allocatedCrates": 1999,
+    "warehousesMinted": 0,
+    "artworksMinted": 20,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": true,
+    "remainingCrates": 3556,
+    "remainingWarehouses": 323,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "maxDiscountedMints": 5555,
+    "totalDiscountedMints": 0,
+    "relicsAllocated": 18,
+    "relicsMinted": 0,
+    "remainingRelics": 18
+  },
+  "transactionHash": "0x8f1faa77f950bc1708642dbd7e45df6510b8d037f2ea28db78fc074f2e7916f5",
+  "crateTokenId": "113110",
+  "tokenIds": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "20"
+  ],
+  "artworkCount": 20,
+  "publicMetadataVerified": true,
+  "inventoryVerified": true,
+  "mediaChecks": [
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/23108.png",
+      "contentType": "image/png",
+      "bytes": 369779,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/23866.png",
+      "contentType": "image/png",
+      "bytes": 590669,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/20557.png",
+      "contentType": "image/png",
+      "bytes": 341497,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/34708.png",
+      "contentType": "image/png",
+      "bytes": 367195,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/18787.png",
+      "contentType": "image/png",
+      "bytes": 347373,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/15450.png",
+      "contentType": "image/png",
+      "bytes": 1339527,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/11860.png",
+      "contentType": "image/png",
+      "bytes": 418669,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/6668.png",
+      "contentType": "image/png",
+      "bytes": 6446713,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/17915.png",
+      "contentType": "image/png",
+      "bytes": 1352719,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/60214.png",
+      "contentType": "image/png",
+      "bytes": 317869,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/3d/1693.png",
+      "contentType": "image/png",
+      "bytes": 1219989,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/3d/1693.glb",
+      "contentType": "model/gltf-binary",
+      "bytes": 4622096,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/68465.png",
+      "contentType": "image/png",
+      "bytes": 345363,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/5008.png",
+      "contentType": "image/png",
+      "bytes": 3386272,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/19669.png",
+      "contentType": "image/png",
+      "bytes": 381428,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/16703.png",
+      "contentType": "image/png",
+      "bytes": 1449017,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/66280.png",
+      "contentType": "image/png",
+      "bytes": 474357,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/60903.png",
+      "contentType": "image/png",
+      "bytes": 435256,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/21604.png",
+      "contentType": "image/png",
+      "bytes": 1492078,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/17567.png",
+      "contentType": "image/png",
+      "bytes": 1701473,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/eggs/19334.png",
+      "contentType": "image/png",
+      "bytes": 361842,
+      "cors": "*"
+    }
+  ],
+  "artworks": [
+    {
+      "tokenId": "1",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/23108.png"
+    },
+    {
+      "tokenId": "2",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/23866.png"
+    },
+    {
+      "tokenId": "3",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/20557.png"
+    },
+    {
+      "tokenId": "4",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/34708.png"
+    },
+    {
+      "tokenId": "5",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/18787.png"
+    },
+    {
+      "tokenId": "6",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/15450.png"
+    },
+    {
+      "tokenId": "7",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/11860.png"
+    },
+    {
+      "tokenId": "8",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/6668.png"
+    },
+    {
+      "tokenId": "9",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/17915.png"
+    },
+    {
+      "tokenId": "10",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/60214.png"
+    },
+    {
+      "tokenId": "11",
+      "category": "3d",
+      "image": "https://cdn.lil.org/nft/111k/3d/1693.png",
+      "animation_url": "https://cdn.lil.org/nft/111k/3d/1693.glb"
+    },
+    {
+      "tokenId": "12",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/68465.png"
+    },
+    {
+      "tokenId": "13",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/5008.png"
+    },
+    {
+      "tokenId": "14",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/19669.png"
+    },
+    {
+      "tokenId": "15",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/16703.png"
+    },
+    {
+      "tokenId": "16",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/66280.png"
+    },
+    {
+      "tokenId": "17",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/60903.png"
+    },
+    {
+      "tokenId": "18",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/21604.png"
+    },
+    {
+      "tokenId": "19",
+      "category": "painting",
+      "image": "https://cdn.lil.org/nft/111k/paintings/17567.png"
+    },
+    {
+      "tokenId": "20",
+      "category": "egg",
+      "image": "https://cdn.lil.org/nft/111k/eggs/19334.png"
+    }
+  ]
+}

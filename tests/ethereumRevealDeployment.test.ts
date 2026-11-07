@@ -23,7 +23,7 @@ const scope = { chainId: 11155111, contractAddress: `0x${'ab'.repeat(20)}` };
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }] });
 const registration = { deploymentId: 'sepolia-test-2', dropId: '111k_devnet', ...scope,
   metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/sepolia-test-2/', deploymentBlock: 12005467,
-  catalogVersion: '111k-v3', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
+  catalogVersion: '111k-v4', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
 
 async function fixture(t: TestContext) {
   const database = new DatabaseSync(':memory:');
@@ -75,7 +75,7 @@ test('registry lookup is scoped to chain and normalized contract', async t => {
   assert.equal(await readEthereumRevealDeployment(db, { ...scope, chainId: 1 }), null);
 });
 
-for (const catalogVersion of ['111k-v1', '111k-v2']) test(`${catalogVersion} records remain inspectable and pausable but cannot register or activate`, async t => {
+for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`${catalogVersion} records remain inspectable and pausable but cannot register or activate`, async t => {
   const { database, query } = await fixture(t);
   const legacy = { ...registration, catalogVersion };
   query(buildEthereumRevealRegistration(legacy));

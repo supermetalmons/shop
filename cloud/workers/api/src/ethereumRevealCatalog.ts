@@ -1,9 +1,18 @@
 import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
+import descriptor from '../../../../shared/ethereum/revealCatalog.json';
+import { revealCatalogMedia, validateRevealAssetCatalog, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
 
-export const REVEAL_CATEGORY_COUNTS = { egg: 22_222, painting: 84_454, video: 3_333, '3d': 1_000, animated: 102 } as const;
+export const REVEAL_CATEGORY_COUNTS = {
+  egg: catalog.categories.eggs.count,
+  painting: catalog.categories.paintings.count,
+  video: catalog.categories.videos.count,
+  '3d': catalog.categories['3d'].count,
+  animated: catalog.categories.animated.count,
+} as const;
 export const REVEAL_ARTWORK_COUNT = 111_111;
 export const REVEAL_CATEGORIES = ['egg', 'painting', 'video', '3d', 'animated'] as const;
+let validatedCatalog: RevealAssetCatalog | undefined;
 
 export function revealCrateSize(crateTokenId: string): number {
   const id = Number(crateTokenId);
@@ -14,40 +23,15 @@ export function revealCrateSize(crateTokenId: string): number {
 }
 
 export function validateRevealCatalog(): void {
-  if (catalog.artworkCount !== REVEAL_ARTWORK_COUNT || catalog.baseUrl !== 'https://wip.lil.org/111k/' ||
-    catalog.categories.eggs.count !== REVEAL_CATEGORY_COUNTS.egg ||
-    catalog.categories.paintings.count !== REVEAL_CATEGORY_COUNTS.painting ||
-    catalog.categories.videos.count !== REVEAL_CATEGORY_COUNTS.video ||
-    catalog.categories['3d'].count !== REVEAL_CATEGORY_COUNTS['3d'] ||
-    catalog.categories.animated.count !== REVEAL_CATEGORY_COUNTS.animated ||
-    catalog.categories['3d'].pathTemplate !== '3d/{id}.glb' ||
-    catalog.categories['3d'].imagePathTemplate !== '3d/{id}.webp' ||
-    catalog.categories['3d'].aspectRatio.length !== 2 || catalog.categories['3d'].aspectRatio.some(value => value !== 1) ||
-    catalog.categories.animated.pathTemplate !== 'animated/{id}.mp4' ||
-    catalog.categories.animated.imagePathTemplate !== 'animated/{id}.webp' ||
-    [catalog.categories.paintings, catalog.categories.animated].some(category =>
-      category.aspectRatioIndexById.length !== category.count ||
-      category.aspectRatioIndexById.some(index => !Number.isInteger(index) || index < 0 ||
-        index >= category.aspectRatioPalette.length) ||
-      category.aspectRatioPalette.some(pair => pair.length !== 2 ||
-        pair.some(value => !Number.isSafeInteger(value) || value <= 0)))) throw new Error('Invalid reveal asset catalog.');
+  if (validatedCatalog) return;
+  const value: unknown = catalog;
+  validateRevealAssetCatalog(value, descriptor satisfies RevealAssetCatalogDescriptor);
+  validatedCatalog = value;
 }
 
 function revealAssetMedia(category: EthereumArtworkCategory, assetId: number) {
-  if (!Number.isInteger(assetId) || assetId < 1 || assetId > REVEAL_CATEGORY_COUNTS[category]) throw new Error('Invalid reveal asset.');
-  const pair = category === 'painting'
-    ? catalog.categories.paintings.aspectRatioPalette[catalog.categories.paintings.aspectRatioIndexById[assetId - 1]]
-    : category === 'animated'
-      ? catalog.categories.animated.aspectRatioPalette[catalog.categories.animated.aspectRatioIndexById[assetId - 1]]
-    : category === 'egg' ? catalog.categories.eggs.aspectRatio
-      : category === 'video' ? catalog.categories.videos.aspectRatio : catalog.categories['3d'].aspectRatio;
-  const directory = category === 'egg' ? 'eggs' : category === 'painting' ? 'paintings' : category === 'video' ? 'videos' : category;
-  return {
-    image: `${catalog.baseUrl}${directory}/${assetId}.webp`,
-    ...(category === 'video' || category === 'animated' ? { animation_url: `${catalog.baseUrl}${directory}/${assetId}.mp4` } : {}),
-    ...(category === '3d' ? { animation_url: `${catalog.baseUrl}3d/${assetId}.glb` } : {}),
-    aspectRatio: { width: pair[0], height: pair[1] },
-  };
+  validateRevealCatalog();
+  return revealCatalogMedia(validatedCatalog!, category, assetId);
 }
 
 export function buildRevealedArtwork(input: {

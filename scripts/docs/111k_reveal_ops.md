@@ -4,20 +4,30 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-New deployments use catalog version `111k-v3`: 22,222 eggs, 84,454 paintings,
-3,333 videos, 1,000 3D models, and 102 animated artworks. Animated assets replace
-painting IDs 84,455–84,556, retaining the 111,111-artwork supply. The runtime
-supports this catalog only; v1 and v2 registrations remain historical records.
+New deployments use catalog version `111k-v4`: 76,642 eggs, 30,990 paintings,
+58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
+111,111-artwork supply from 76,700 available eggs after counting all non-egg
+artworks. The runtime supports this catalog only; v1–v3 registrations remain historical records.
 Retired-catalog API requests return `409`, watchdog scans skip them, and their
 alarms stop. Status and pause commands can still inspect or pause those records;
 registration and activation require the current catalog. Do not rewrite an old
-catalog version or migrate an existing allocation pool to v3.
+catalog version or migrate an existing allocation pool to v4.
 
-Animated media uses `animated/{id}.mp4` and matching `animated/{id}.webp` previews.
-The catalog stores a ratio palette and one palette index per asset, initially
-466:503 for all 102 assets (932 × 1006 pixels). Future assets can use other ratios.
-Validate all media and preserve the ratio assigned to each asset before freezing
-the release; confirmed assignments and their metadata do not change afterward.
+The media root is `https://cdn.lil.org/nft/111k/`. Eggs, paintings, 3D previews,
+and animated previews use PNGs. 3D models use GLBs; animated artworks use original
+MP4s; videos use MP4s with WEBP posters. Ratios are per asset, including videos.
+Painting alts are variants, not additional allocation slots. The
+[catalog guide](../ethereum-metadata/reveal-assets/111k_devnet/README.md) documents
+the repeatable importer and source snapshot. Run `npm run check:ethereum-assets`
+before preparing a deployment. Registration and initialization validate the
+manifest and its compact shared descriptor before using the pool.
+
+For each updated complete source JSON, import with a higher catalog version,
+review the generated counts and references, and verify representative public
+GET/HEAD responses, content types, and CORS for category boundaries and media
+companions. Confirm the egg allocation fits the available inventory. Freeze
+the resulting catalog before registration; confirmed assignments and their
+metadata do not change afterward.
 
 Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired collections retain their original prefixes. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
@@ -61,7 +71,7 @@ Create a private local manifest using the deployment ID and prefix chosen above:
   "contractAddress": "<deployed contract address>",
   "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/<new-sepolia-deployment-id>/",
   "deploymentBlock": 0,
-  "catalogVersion": "111k-v3",
+  "catalogVersion": "111k-v4",
   "publicationDirectory": "./published-metadata"
 }
 ```

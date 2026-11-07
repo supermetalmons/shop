@@ -33,7 +33,7 @@ const output = resolve(root, '.cache/111k-e2e');
 const { initialReceiver: initialDeliveryReceiver } = JSON.parse(await readFile(resolve(project, 'config/delivery-routing.json'), 'utf8')) as { initialReceiver: string };
 const build = spawnSync('forge', ['build', '--offline'], { cwd: project, stdio: 'inherit' });
 if (build.status !== 0) throw new Error('Contract compilation failed');
-const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v14/', 31337);
+const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/v15/', 31337);
 const metadataDirectory = process.env.ETHEREUM_111K_E2E_METADATA_DIRECTORY;
 const metadataManifest = metadataDirectory ? await readMetadataManifest(metadataDirectory) : null;
 const metadataFetch: typeof fetch = async (input, init) => {
@@ -793,7 +793,7 @@ try {
     const templateJson = JSON.stringify(JSON.parse(await readFile(resolve(root, 'scripts/ethereum-metadata/templates/artwork.json'), 'utf8')));
     relicDatabase.exec(buildEthereumRevealRegistration({ deploymentId: 'relic-e2e', dropId: '111k_devnet', chainId: 31337,
       contractAddress: relicContract.toLowerCase(), metadataBaseUri: metadataBaseURI,
-      deploymentBlock: Number(BigInt(relicDeployment.blockNumber)), catalogVersion: '111k-v3', templateJson,
+      deploymentBlock: Number(BigInt(relicDeployment.blockNumber)), catalogVersion: '111k-v4', templateJson,
       templateSha256: createHash('sha256').update(templateJson).digest('hex') }));
     const db = d1Database(relicDatabase);
     const api = apiClient(testEnvironment(relicContract, key, db, db));

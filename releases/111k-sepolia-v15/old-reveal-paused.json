@@ -1,0 +1,20 @@
+{
+  "deployment": {
+    "deploymentId": "v14",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v14/",
+    "deploymentBlock": 12054659,
+    "catalogVersion": "111k-v3",
+    "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://wip.lil.org/111k/artwork_placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}]}",
+    "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+    "state": "paused",
+    "revision": 4,
+    "createdAtMs": 1793702066000,
+    "updatedAtMs": 1794083387000,
+    "activatedAtMs": 1793702198000,
+    "provisionedAtMs": 1793702112191,
+    "lastError": null
+  }
+}

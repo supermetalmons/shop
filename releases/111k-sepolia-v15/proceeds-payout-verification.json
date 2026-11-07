@@ -1,0 +1,70 @@
+{
+  "chainId": 11155111,
+  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "transactionHash": "0x9672cf114664b0a24f8c5ac79461ea263c1e1c11a86146cce6a6d424983ef6f1",
+  "caller": "0x3560e8d7a2f9f1022abce233d70330e50c2fa19c",
+  "blockNumber": 12086081,
+  "permissionless": true,
+  "performedByReleaseRunner": false,
+  "totalReleasedWei": "18000000000000000",
+  "allFourteenPayoutsVerified": true,
+  "payouts": [
+    {
+      "recipient": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+      "amountWei": "4950000000000000"
+    },
+    {
+      "recipient": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+      "amountWei": "4680000000000000"
+    },
+    {
+      "recipient": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "amountWei": "900000000000000"
+    },
+    {
+      "recipient": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+      "amountWei": "900000000000000"
+    },
+    {
+      "recipient": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+      "amountWei": "900000000000000"
+    },
+    {
+      "recipient": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+      "amountWei": "900000000000000"
+    },
+    {
+      "recipient": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+      "amountWei": "180000000000000"
+    },
+    {
+      "recipient": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+      "amountWei": "180000000000000"
+    },
+    {
+      "recipient": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+      "amountWei": "180000000000000"
+    },
+    {
+      "recipient": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+      "amountWei": "180000000000000"
+    },
+    {
+      "recipient": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "amountWei": "900000000000000"
+    },
+    {
+      "recipient": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+      "amountWei": "1049400000000000"
+    },
+    {
+      "recipient": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+      "amountWei": "1049400000000000"
+    },
+    {
+      "recipient": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+      "amountWei": "1051200000000000"
+    }
+  ],
+  "checkedAt": "2026-11-07T21:01:17.931Z"
+}

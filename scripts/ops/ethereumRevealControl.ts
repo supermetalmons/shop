@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs, parseEnv } from 'node:util';
 import { verifyRevealDeployment } from '../../cloud/workers/api/src/ethereumRevealChain.ts';
+import { validateRevealCatalog } from '../../cloud/workers/api/src/ethereumRevealCatalog.ts';
 import { ethereumMetadataBaseUri } from '../../shared/ethereum/config.ts';
 import { ETHEREUM_REVEAL_CATALOG_VERSION, ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN,
   ETHEREUM_REVEAL_DEPLOYMENT_ID, ETHEREUM_REVEAL_DEPLOYMENTS_SQL,
@@ -91,6 +92,7 @@ async function loadManifestIdentity(path: string): Promise<{ row: Record<string,
 }
 
 async function loadRegistrationInput(path: string): Promise<{ deployment: Registration; publicationDirectory?: string }> {
+  validateRevealCatalog();
   const { row, identity } = await loadManifestIdentity(path);
   if (identity.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) throw new Error('New reveal registrations require the current catalog version.');
   if (row.publicationDirectory !== undefined && (typeof row.publicationDirectory !== 'string' || !row.publicationDirectory.trim())) {

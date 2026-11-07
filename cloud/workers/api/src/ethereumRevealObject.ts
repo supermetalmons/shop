@@ -33,6 +33,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private configure(deployment: EthereumRevealDeployment): void {
     if (deployment.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION ||
       deployment.chainId === 31337 && this.env.ETHEREUM_111K_CHAIN_ID !== '31337') throw unavailable();
+    validateRevealCatalog();
     this.store.configure(deployment);
   }
 
@@ -55,7 +56,6 @@ export class EthereumRevealObject extends DurableObject<Env> {
 
   async initialize(deployment: EthereumRevealDeployment): Promise<{ ready: boolean; seeded: number }> {
     this.configure(deployment);
-    validateRevealCatalog();
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(deployment.templateJson));
     const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
     if (hash !== deployment.templateSha256) throw new Error('Reveal template checksum mismatch.');

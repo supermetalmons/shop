@@ -53,7 +53,7 @@ function fixture() {
       ...(method === 'GET' ? {} : { body: JSON.stringify(body) }) }), env, path,
     { fetch: async () => assert.fail('Reveal routes must not call the chain provider') });
   };
-  const register = (state: EthereumRevealDeployment['state'] = 'active', catalogVersion = '111k-v3') => database.prepare(`INSERT INTO ethereum_reveal_deployments
+  const register = (state: EthereumRevealDeployment['state'] = 'active', catalogVersion = '111k-v4') => database.prepare(`INSERT INTO ethereum_reveal_deployments
     (deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,deployment_block,catalog_version,template_json,
       template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
     VALUES('test-sepolia','111k_devnet',11155111,?,'https://cdn.mons.shop/111k-sepolia/',100,?,?,?,?,3,1,1,1,1)`)
@@ -125,7 +125,7 @@ for (const method of ['transaction', 'tokens'] as const) {
     : { chainId: 11155111, contractAddress: CONTRACT, tokenIds: ['1', '2', '1'] };
   const responseScope = { deploymentId: 'test-sepolia', dropId: '111k_devnet', chainId: 11155111, contractAddress: CONTRACT };
   const artwork = { tokenId: '1', crateTokenId: '111112', category: 'painting', name: '1',
-    image: 'https://wip.lil.org/111k/paintings/1.webp', aspectRatio: { width: 240, height: 259 },
+    image: 'https://cdn.lil.org/nft/111k/paintings/1.png', aspectRatio: { width: 466, height: 503 },
     observation: { transactionHash: HASH, blockNumber: 101, blockHash: `0x${'bb'.repeat(32)}` } };
   const complete = method === 'transaction'
     ? { ...responseScope, status: 'revealed', artworks: [artwork], retryAfterMs: 0 }
@@ -134,7 +134,7 @@ for (const method of ['transaction', 'tokens'] as const) {
     ? { ...responseScope, status: 'pending', artworks: [], retryAfterMs: 2000 }
     : { ...responseScope, artworks: [], unresolved: [{ tokenId: '1', status: 'recovering' }], retryAfterMs: 2000 };
 
-  for (const catalogVersion of ['111k-v1', '111k-v2']) test(`${method} retired catalog ${catalogVersion} returns 409 without touching the reveal object or admitting work`, async t => {
+  for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`${method} retired catalog ${catalogVersion} returns 409 without touching the reveal object or admitting work`, async t => {
     const f = fixture();
     t.after(() => f.database.close());
     f.register('paused', catalogVersion);

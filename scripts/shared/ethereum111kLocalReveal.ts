@@ -5,6 +5,7 @@ import { normalizeEthereumAddress } from '../../shared/ethereum/protocol.ts';
 import { ETHEREUM_REVEAL_CATALOG_VERSION, parseEthereumRevealDeployment, readEthereumRevealDeployment,
   type EthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
 import { buildEthereumRevealRegistration, buildEthereumRevealTransition } from '../ops/ethereumRevealControl.ts';
+import { validateRevealCatalog } from '../../cloud/workers/api/src/ethereumRevealCatalog.ts';
 
 export function localEthereumRevealBindings() {
   return {
@@ -34,6 +35,7 @@ type LocalEnvironment = {
 export async function initializeLocalEthereumReveal(env: LocalEnvironment, input: {
   contractAddress: string; metadataBaseUri: string; deploymentBlock: number;
 }): Promise<EthereumRevealDeployment> {
+  validateRevealCatalog();
   const address = normalizeEthereumAddress(input.contractAddress);
   const rpc = new URL(env.ETHEREUM_111K_RPC_URL);
   if (env.ETHEREUM_111K_CHAIN_ID !== '31337' || !address || /^0x0{40}$/.test(address) ||

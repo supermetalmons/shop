@@ -38,15 +38,17 @@ export async function runEthereumRevealE2E(input: {
     const env = await worker.getEnv();
     const deployment = await initializeLocalEthereumReveal(env, input);
     const storage = await worker.getDurableObjectStorage('ETHEREUM_REVEAL', { name: `31337:${input.contractAddress}` });
-    await storage.exec(`INSERT INTO crates(crate_token_id) VALUES('111112');
-      DELETE FROM free_slots WHERE category='3d' AND slot=999;
-      UPDATE free_slots SET asset_id=1000 WHERE category='3d' AND slot=0;
-      UPDATE pools SET available=available-1 WHERE category='3d';
-      INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('3d',1,'111112',0);
-      DELETE FROM free_slots WHERE category='animated' AND slot>=100;
-      UPDATE free_slots SET asset_id=101 WHERE category='animated' AND slot=0;
-      UPDATE pools SET available=available-2 WHERE category='animated';
-      INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('animated',1,'111112',1),('animated',102,'111112',2)`);
+    const forcedAssets = [
+      { category: '3d', assetId: 3000, path: '3d/3000.png', animation: '3d/3000.glb', aspectRatio: { width: 1, height: 1 } },
+      { category: 'animated', assetId: 421, path: 'animated/421.png', animation: 'animated/421.mp4', aspectRatio: { width: 466, height: 503 } },
+      { category: 'egg', assetId: 76642, path: 'eggs/76642.png', aspectRatio: { width: 1, height: 1 } },
+      { category: 'painting', assetId: 30990, path: 'paintings/30990.png', aspectRatio: { width: 466, height: 503 } },
+      { category: 'video', assetId: 58, path: 'videos/58.webp', animation: 'videos/58.mp4', aspectRatio: { width: 16, height: 9 } },
+    ];
+    await storage.exec(`INSERT INTO crates(crate_token_id) VALUES('111112');${forcedAssets.map((asset, slot) => `
+      DELETE FROM free_slots WHERE category='${asset.category}' AND slot=${asset.assetId - 1} AND asset_id=${asset.assetId};
+      UPDATE pools SET available=available-1 WHERE category='${asset.category}';
+      INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('${asset.category}',${asset.assetId},'111112',${slot});`).join('')}`);
     const scope = { chainId: 31337, contractAddress: input.contractAddress };
     async function request<T>(path: string, body: object): Promise<T> {
       const response = await worker.fetch(`https://api.mons.shop${path}`, {
@@ -90,18 +92,13 @@ export async function runEthereumRevealE2E(input: {
     }
     assert.equal(revealed?.status, 'revealed');
     assert.equal(revealed.artworks.length, 20);
-    assert.deepEqual({ category: revealed.artworks[0].category, image: revealed.artworks[0].image,
-      animation_url: revealed.artworks[0].animation_url, aspectRatio: revealed.artworks[0].aspectRatio }, {
-      category: '3d', image: 'https://wip.lil.org/111k/3d/1.webp',
-      animation_url: 'https://wip.lil.org/111k/3d/1.glb', aspectRatio: { width: 1, height: 1 },
-    });
-    for (const [index, assetId] of [[1, 1], [2, 102]]) {
+    for (const [index, asset] of forcedAssets.entries()) {
       const artwork: EthereumRevealedArtwork = revealed.artworks[index];
       assert.deepEqual({ category: artwork.category, image: artwork.image,
         animation_url: artwork.animation_url, aspectRatio: artwork.aspectRatio, attributes: artwork.attributes }, {
-        category: 'animated', image: `https://wip.lil.org/111k/animated/${assetId}.webp`,
-        animation_url: `https://wip.lil.org/111k/animated/${assetId}.mp4`, aspectRatio: { width: 466, height: 503 },
-        attributes: [{ trait_type: 'type', value: 'animated' }],
+        category: asset.category, image: `https://cdn.lil.org/nft/111k/${asset.path}`,
+        animation_url: asset.animation ? `https://cdn.lil.org/nft/111k/${asset.animation}` : undefined,
+        aspectRatio: asset.aspectRatio, attributes: [{ trait_type: 'type', value: asset.category }],
       });
     }
     assert.deepEqual(revealed.artworks.map(artwork => artwork.tokenId), Array.from({ length: 20 }, (_, index) => String(index + 1)));
@@ -111,7 +108,7 @@ export async function runEthereumRevealE2E(input: {
     assert.equal(await input.rpc<string>('eth_blockNumber'), receipt.blockNumber);
     assert.ok(revealed.artworks.every(artwork => artwork.observation.blockHash === receipt.blockHash));
     const publishedMetadata = new Map<string, string>();
-    for (const artwork of revealed.artworks.slice(0, 3)) {
+    for (const artwork of revealed.artworks.slice(0, forcedAssets.length)) {
       const key = `${new URL(input.metadataBaseUri).pathname.slice(1)}${artwork.tokenId}.json`;
       let published: string | null = null;
       for (let attempt = 0; attempt < 80; attempt++) {
@@ -130,8 +127,10 @@ export async function runEthereumRevealE2E(input: {
       publishedMetadata.set(key, published);
     }
     assert.equal(await input.rpc('evm_revert', [snapshot]), true);
-    const afterReorg = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1', '2', '3'] });
-    assert.deepEqual(afterReorg.artworks, revealed.artworks.slice(0, 3));
+    const afterReorg = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, {
+      tokenIds: forcedAssets.map((_, index) => String(index + 1)),
+    });
+    assert.deepEqual(afterReorg.artworks, revealed.artworks.slice(0, forcedAssets.length));
     for (const [key, published] of publishedMetadata) assert.equal(await (await env.ETHEREUM_REVEAL_METADATA.get(key))!.text(), published);
     const mint = { from: input.buyer, to: input.contractAddress, value: '0x5af3107a4000',
       data: encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]) };
@@ -151,7 +150,8 @@ export async function runEthereumRevealE2E(input: {
     assert.deepEqual(healed.unresolved, [{ tokenId: '111111', status: 'unminted' }]);
     return { deploymentId: deployment.deploymentId, contractAddress: input.contractAddress, transactionHash, recoveryHash,
       pendingMediaHidden: true, firstConfirmationArtworkCount: revealed.artworks.length, metadataStorage: 'isolated-local-r2',
-      deterministic3dReveal: true, deterministicAnimatedReveal: true, immutableAfterReorg: true, tokenRecovery: true };
+      deterministic3dReveal: true, deterministicAnimatedReveal: true, deterministicFiveCategoryReveal: true,
+      immutableAfterReorg: true, tokenRecovery: true };
   } finally {
     await runtime.close();
     await rm(directory, { recursive: true, force: true });

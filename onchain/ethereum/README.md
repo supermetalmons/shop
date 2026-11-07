@@ -59,6 +59,49 @@ Follow the [local chain, API, and frontend setup](../../scripts/docs/111k_testne
 
 ## Future public network deployments
 
+The checked-in Sepolia release runner uses an encrypted Foundry keystore and a
+private transaction journal. From the repository root, prepare a new, unused
+deployment ID and absolute release directory:
+
+```sh
+deployment_id='<new-deployment-id>'
+release_dir="$PWD/.cache/111k-${deployment_id}-release/contract"
+npm --prefix onchain/ethereum run nft111k:deploy -- prepare --network sepolia \
+  --deployment-id "$deployment_id" --previous-contract OLD_ADDRESS --directory "$release_dir"
+```
+
+Preparation freezes the current contract sources, compiler input/output,
+constructor configuration, nonce, predicted address, and gas allowance. It reads
+the fourteen-recipient split, seven-wallet Sepolia allowance preset, delivery
+routing, and discount configuration. Publish and verify the full baseline at
+the deployment's exact metadata prefix before broadcasting `deploy`.
+
+Use the same directory for `deploy`, `reserve`, `pause-old`, `open`, `mint-qa`,
+and `unpack-qa`, supplying `--keystore PATH --password-file PATH` for signing.
+Passwords must come from private temporary files, never command-line values.
+Each action saves the signed transaction before broadcasting and waits for three
+canonical confirmations. Retry the same action after an uncertain response;
+the journal prevents duplicate deployment, reservation, or QA purchases.
+Retries reject signed actions whose canonical prerequisites have changed.
+New directory locks recover stopped owners safely; a leftover lock file from
+the earlier runner is rejected and must be removed only after confirming its
+process has stopped.
+`reserve` allocates eighteen relics with 0.018 Sepolia ETH. `pause-old` closes
+the frozen previous collection's sale and redemptions. Complete the
+[application cutover](../../scripts/docs/111k_testnet.md#ethereum-maintenance-and-replacement)
+before `open`; `mint-qa` buys one ordinary crate for 0.0001 Sepolia ETH and
+`unpack-qa` uses its purchase event to select the exact crate.
+
+`npm --prefix onchain/ethereum run nft111k:verify -- verify --directory "$release_dir" --stage STAGE`
+checks `closed`, `reserved`, `open`, `mint-qa`, or `unpack-qa` against one canonical
+snapshot, including the complete runtime and constructor immutables. The same
+verification command provides `prepare-sources`, `sourcify-submit`,
+`sourcify-status`, `sourcify-verify`, `etherscan-submit`, `etherscan-status`, and
+`etherscan-verify`. Supply RPC credentials and `ETHERSCAN_API_KEY` through the
+environment. Only sanitized verification reports belong in `releases/`; retain
+the signed-transaction journal in the private directory. These tools support
+Sepolia only. Their tests run the complete lifecycle on a local Anvil instance.
+
 `script/Deploy111K.s.sol` prepares a fresh collection on Ethereum mainnet (chain ID 1) or Sepolia (11155111) using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, `ETHEREUM_111K_INITIAL_DELIVERY_RECEIVER`, `ETHEREUM_111K_DISCOUNT_ROOT`, and `ETHEREUM_111K_METADATA_BASE_URI`. It reads the immutable mint split from `config/proceeds.json`, and initial free allowances from `config/free-mints.json`. `ETHEREUM_111K_FREE_MINT_CONFIG` can select another readable configuration file. Existing contracts are non-upgradeable; deployments that predate free-mint support require a new collection address to add it. Contracts with free-mint support can update allowances through owner-only `setFreeMintAllowances`. Replacing the existing Sepolia collection also uses its scoped commerce-state reset. The first mainnet deployment starts with fresh state.
 
 The lifetime discounted-mint cap is selected from [`config/discount-caps.json`](config/discount-caps.json): mainnet starts at **500**, while Sepolia and local development start at **5,555**. Edit the network value before a future deployment to choose a cap from 0 through 5,555; zero disables discounted mints. `ETHEREUM_111K_DISCOUNT_CAP_CONFIG` selects an alternate readable config for the Foundry script. The local deployment helper reads the `local` value from the committed file and records it as `maxDiscountedMints` in its manifest. The constructor fixes `maxDiscountedMints` for the life of that collection. Existing contracts retain their original behavior and require a fresh deployment to gain this cap. Granular free mint and relic claim allowances are separate and never consume it.

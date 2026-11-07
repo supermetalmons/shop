@@ -136,7 +136,7 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
       templates.set(scope.deploymentId, scopedTemplates);
       const templateJson = JSON.stringify(scopedTemplates.artwork);
       const registered = await env.OPS_DB.prepare(buildEthereumRevealRegistration({ ...scope,
-        dropId: '111k_devnet', deploymentBlock: 100, catalogVersion: '111k-v3', templateJson,
+        dropId: '111k_devnet', deploymentBlock: 100, catalogVersion: '111k-v4', templateJson,
         templateSha256: createHash('sha256').update(templateJson).digest('hex') })).first<Record<string, unknown>>();
       assert.ok(registered);
       let deployment = parseEthereumRevealDeployment(registered);
@@ -165,8 +165,8 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
     for (const value of initialLedgers) {
       assert.equal(value.pools.reduce((total, pool) => total + pool.available, 0), 111111);
       assert.deepEqual(value.pools.map(({ category, total }) => ({ category, total })), [
-        { category: '3d', total: 1000 }, { category: 'animated', total: 102 }, { category: 'egg', total: 22222 },
-        { category: 'painting', total: 84454 }, { category: 'video', total: 3333 },
+        { category: '3d', total: 3000 }, { category: 'animated', total: 421 }, { category: 'egg', total: 76642 },
+        { category: 'painting', total: 30990 }, { category: 'video', total: 58 },
       ]);
       assert.ok(value.pools.every(pool => pool.total === pool.seeded && pool.seeded === pool.available));
       assert.deepEqual(value.assignments, []);

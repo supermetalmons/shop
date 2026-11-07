@@ -1,0 +1,317 @@
+{
+  "stage": "open",
+  "chainId": 11155111,
+  "deploymentId": "v15",
+  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/v15/",
+  "manifestSha256": "cf9ccab16f46cf4c00885db5439201b6c64d2d2c34151ca671a4cfe358ed0427",
+  "checkedAt": "2026-11-07T21:04:34.662Z",
+  "snapshotBlock": 12086212,
+  "snapshotBlockHash": "0x8df1f9c5a91b61ab286050ff4e2d5feeca4e0385f052a3f9fad16ff4b042d9ef",
+  "transactionHash": "0x9c78986a8dd5940be56d70c4b8522b10015ff016174bdf88cf1e7d8c5cd44a38",
+  "deploymentBlock": 12085980,
+  "confirmations": 233,
+  "runtimeBytes": 24555,
+  "runtimeKeccak256": "0xb08a7ab5cf094374ae6916f43db2db6e8532d4e1802a2e812c513892ba4ee1b4",
+  "runtimeAndImmutablesMatch": true,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "quoteSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "initialDeliveryReceiver": "0x5555555555555555555555555555555555555555",
+  "deliveryConfigId": 1,
+  "mintRecipients": [
+    {
+      "address": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+      "shareBps": "2750",
+      "released": "4950000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+      "shareBps": "2600",
+      "released": "4680000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "shareBps": "500",
+      "released": "900000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+      "shareBps": "500",
+      "released": "900000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+      "shareBps": "500",
+      "released": "900000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+      "shareBps": "500",
+      "released": "900000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+      "shareBps": "100",
+      "released": "180000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+      "shareBps": "100",
+      "released": "180000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+      "shareBps": "100",
+      "released": "180000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+      "shareBps": "100",
+      "released": "180000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "shareBps": "500",
+      "released": "900000000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+      "shareBps": "583",
+      "released": "1049400000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+      "shareBps": "583",
+      "released": "1049400000000000",
+      "releasable": "0"
+    },
+    {
+      "address": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+      "shareBps": "584",
+      "released": "1051200000000000",
+      "releasable": "0"
+    }
+  ],
+  "freeMintAllowances": [
+    {
+      "wallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "values": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe4790dd79c334e3f848904975272ec17f9f70366",
+      "values": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "values": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x29f7a2cfe212492ddb343035479d062112284ddf",
+      "values": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x31cd63c73e74808793f134f8146a1e3aa1637b5d",
+      "values": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xf743b8e23d3ffcbde398aba9b9f83a98f56845f4",
+      "values": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x336c8e2add19149bfc934fb2557c6bdeffa8009b",
+      "values": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "0"
+      ]
+    }
+  ],
+  "stats": [
+    "1998",
+    "0",
+    "0",
+    "100000000000000",
+    "1100000000000000",
+    true,
+    "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "50000000000000",
+    "1",
+    "0",
+    "18",
+    "0",
+    "5555",
+    "0"
+  ],
+  "totalSupply": "0",
+  "totalMintReceived": "18000000000000000",
+  "totalMintReleased": "18000000000000000",
+  "contractBalanceWei": "0",
+  "claimedRelicMask": "0",
+  "qa": null,
+  "actions": {
+    "deploy": {
+      "transactionHash": "0x9c78986a8dd5940be56d70c4b8522b10015ff016174bdf88cf1e7d8c5cd44a38",
+      "blockNumber": 12085980,
+      "blockHash": "0xf7bd8f3ecb26d9e43473bb39d10f57fda52090b8cb020f0626057f2f00e1e1a2",
+      "confirmations": 233,
+      "gasUsed": "44055987"
+    },
+    "reserve": {
+      "transactionHash": "0x0c42a1ebce501f72986ebf927b9f7d1ae6bdf10d234d5c27a8e5470b4d5ca7e1",
+      "blockNumber": 12085991,
+      "blockHash": "0xda3d57dc24acca8ec60644540f1377d441e22350a325f4b7ddaa9edbdc9df5fb",
+      "confirmations": 222,
+      "gasUsed": "358272"
+    },
+    "open": {
+      "transactionHash": "0x7deac014d69eb281e7d59ac9eca45060e0a56032173c6a6e9f110f91e1bac538",
+      "blockNumber": 12086206,
+      "blockHash": "0x983c3bd402e30ac01f1ad4b66d26fac0f8df0e3842aee892afe4b80e1a268f48",
+      "confirmations": 7,
+      "gasUsed": "31301"
+    }
+  },
+  "metadataPreviews": [
+    {
+      "kind": 1,
+      "displayId": 1,
+      "tokenId": 1,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/1.json"
+    },
+    {
+      "kind": 1,
+      "displayId": 111111,
+      "tokenId": 111111,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/111111.json"
+    },
+    {
+      "kind": 2,
+      "displayId": 1,
+      "tokenId": 111112,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/111112.json"
+    },
+    {
+      "kind": 2,
+      "displayId": 5555,
+      "tokenId": 116666,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/116666.json"
+    },
+    {
+      "kind": 3,
+      "displayId": 1,
+      "tokenId": 116667,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/116667.json"
+    },
+    {
+      "kind": 3,
+      "displayId": 505,
+      "tokenId": 117171,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/117171.json"
+    },
+    {
+      "kind": 4,
+      "displayId": 1,
+      "tokenId": 1000001,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/1000001.json"
+    },
+    {
+      "kind": 4,
+      "displayId": 222222,
+      "tokenId": 1222222,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/1222222.json"
+    },
+    {
+      "kind": 5,
+      "displayId": 1,
+      "tokenId": 2000001,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/2000001.json"
+    },
+    {
+      "kind": 5,
+      "displayId": 5555,
+      "tokenId": 2005555,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/2005555.json"
+    },
+    {
+      "kind": 6,
+      "displayId": 1,
+      "tokenId": 117172,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/117172.json"
+    },
+    {
+      "kind": 6,
+      "displayId": 18,
+      "tokenId": 117189,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/117189.json"
+    },
+    {
+      "kind": 7,
+      "displayId": 1,
+      "tokenId": 3000001,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/3000001.json"
+    },
+    {
+      "kind": 7,
+      "displayId": 18,
+      "tokenId": 3000018,
+      "uri": "https://cdn.mons.shop/111k-sepolia/v15/3000018.json"
+    }
+  ]
+}

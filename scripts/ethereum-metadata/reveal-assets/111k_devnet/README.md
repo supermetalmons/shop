@@ -1,118 +1,117 @@
-# 111k_devnet reveal asset catalog
+# 111k reveal asset catalog
 
-[manifest.json](manifest.json) preserves the asset counts, CDN path templates, and
-exact aspect ratios for the `/111k_devnet` asset catalog. The unpack reveal service
-uses this catalog as `111k-v3`; see the [reveal guide](../../../docs/111k_reveal.md).
-The 1,000 3D assets replace painting IDs 84,557–85,556, and the 102 animated assets
-replace painting IDs 84,455–84,556, preserving 111,111 artworks.
-Each new deployment initializes a fresh allocation pool. Previous catalog versions
-are retired without changing their saved assignments or published metadata.
+[manifest.json](manifest.json) is the generated `111k-v4` reveal catalog for fresh
+testnet and future mainnet deployments. [source.json](source.json) preserves the
+supplied `111k.json` dimensions map. The catalog uses the media root
+`https://cdn.lil.org/nft/111k/`; metadata JSONs still use the deployment's
+`cdn.mons.shop` prefix. See the [reveal runbook](../../../docs/111k_reveal_ops.md)
+for publication and registration.
 
-## Assets
+## Current allocation
 
-The CDN base URL is `https://wip.lil.org/111k/`. IDs are category-local integers
-from 1 through the category's `count`, inclusive, with no gaps or leading zeros.
+| Category | Allocated | Image | Animation/model | Ratio |
+| --- | ---: | --- | --- | --- |
+| Eggs | 76,642 | `eggs/{id}.png` | — | 1:1 |
+| Paintings | 30,990 | `paintings/{id}.png` | — | Per ID |
+| 3D | 3,000 | `3d/{id}.png` | `3d/{id}.glb` | 1:1 preview |
+| Animated | 421 | `animated/{id}.png` | `animated/{id}.mp4` | Per ID, currently 466:503 |
+| Videos | 58 | `videos/{id}.webp` | `videos/{id}.mp4` | Per ID |
+| **Artwork total** | **111,111** | | | |
 
-| Category | Count | Relative path template | Aspect ratio |
-| --- | ---: | --- | --- |
-| Eggs | 22,222 | `eggs/{id}.webp` | 1:1 |
-| Paintings | 84,454 | `paintings/{id}.webp` | Per ID, using the ratio palette |
-| Videos | 3,333 | `videos/{id}.mp4` | 16:9 |
-| 3D | 1,000 | `3d/{id}.glb` | 1:1 preview |
-| Animated | 102 | `animated/{id}.mp4` | Per ID, currently 466:503 |
-| Receipts | 85,556 | `receipts/{id}.webp` | 1:1 |
+Category-local IDs are continuous integers beginning at 1. They are independent
+of onchain token IDs. There are 76,700 available egg PNGs; the current allocation
+uses IDs 1–76,642 and leaves IDs 76,643–76,700 unused. Every import recalculates
+the egg allocation as `111111 - nonEggArtworkCount` and rejects an insufficient
+egg inventory or more than 111,111 non-egg artworks.
 
-Video posters use `videos/{id}.webp` with the same category-local ID and 16:9 ratio.
-3D previews use `3d/{id}.webp` with the same category-local ID and 1:1 ratio.
-Animated posters use `animated/{id}.webp` with the same category-local ID and
-per-asset ratio as the MP4. The first 102 assets are all 932 × 1006, stored as the
-reduced ratio 466:503.
+All 30,990 paintings also have `paintings/alt/{id}.webp` variants. Their paths
+and exact ratios are preserved separately; they do not add artworks or replace
+the PNG used by metadata. Video MP4/poster pairs also count as one artwork each.
+The source map intentionally omits 3D GLBs and animated MP4s; those companions
+follow the same category-local ID at the media paths above.
 
-`artworkCount` is 111,111: eggs, paintings, videos, 3D, and animated assets combined. Receipts are
-additional assets and are excluded from this total. This catalog defines no
-assignment between category-local asset IDs and on-chain token IDs.
+Videos are not uniformly 16:9: 53 have that ratio, four use 427:240, and one uses
+54:31. Always render the stored per-asset ratio. Ratios describe media proportions,
+not original pixel dimensions or model geometry.
 
-## Format version 1
+The separately cataloged 85,556 receipt WEBPs retain their original
+`https://wip.lil.org/111k/receipts/{id}.webp` URLs and square ratio. They are not
+part of the artwork allocation or a per-category receipt metadata mapping.
+Placeholder, crate, warehouse, relic, and receipt metadata templates retain
+their existing image URLs until replacement assets are supplied.
 
-- `version` identifies this storage format; `dropId` identifies its intended drop.
-- `baseUrl` includes its trailing slash. A future asset URL can be formed by
-  appending the category's `pathTemplate` with `{id}` replaced by its decimal ID.
-- `categories` contains each category's `count`, `pathTemplate`, and ratio data.
-- `imagePathTemplate`, when present, identifies the static preview for a category's
-  media. For 3D assets, `aspectRatio` describes this preview, not the model's geometry.
-- Every ratio is a reduced integer pair `[width, height]`. Original pixel
-  resolutions are not retained; aspect ratios are preserved without rounding.
-- Eggs, videos, and 3D previews use `aspectRatio` for every valid ID.
-- Paintings and animated artworks use `aspectRatioPalette`, sorted by numerator
-  then denominator, and `aspectRatioIndexById`, which contains exactly `count`
-  zero-based palette indexes in ascending asset ID order. The ratio for ID `id` is
-  `aspectRatioPalette[aspectRatioIndexById[id - 1]]`. The index array is wrapped
-  at 100 entries per line for readability; line breaks have no meaning.
-- Paintings have 84,454 indexes. Animated artworks have 102 indexes, initially
-  all zero against the palette `[[466, 503]]`. Future animated assets can use
-  additional palette entries without changing the metadata or API shape.
+## Import an updated dimensions map
 
-For example, painting 1 uses palette index 1, giving `[240, 259]`, and its path is
-`paintings/1.webp`. Egg 22,222 uses `[1, 1]` and `eggs/22222.webp`.
+The importer accepts a complete JSON object mapping relative media paths to
+`[width, height]` integer pairs, in the same format as the preserved source.
+Run it from the shop repository:
 
-## 3D metadata template
-
-[3d.template.json](3d.template.json) documents the metadata shape for a revealed 3D NFT.
-Replace `{{tokenId}}` with the on-chain token ID and `{{assetId}}` with the assigned
-3D asset ID from 1 through 1,000. These IDs do not have to match.
-
-OpenSea's [media and traits specification](https://docs.opensea.io/docs/media-and-traits)
-uses `image` for the static WEBP preview and `animation_url` for the GLB model.
-The `type` attribute identifies the new category. `aspectRatio`, `category`, and
-`revealStatus` follow the shop's revealed-metadata shape; they are not required
-OpenSea display fields. The name and empty description match the existing artwork
-template. This reference file is not a baseline-generation input: the reveal
-runtime combines the registered artwork template with the assigned model's media
-and emits this shape after confirmation.
-
-## Animated metadata template
-
-[animated.template.json](animated.template.json) documents the metadata shape for
-a revealed animated NFT. Replace `{{tokenId}}` with its onchain token ID and
-`{{assetId}}` with the assigned animated ID from 1 through 102. Use the asset's
-catalog ratio; the template shows the current uniform 466:503 ratio.
-
-Animated metadata uses `image` for the WEBP poster, `animation_url` for the MP4,
-and `animated` for both the category and type trait. Names and empty descriptions
-match the registered artwork template. Like the 3D reference, this file is not a
-baseline-generation input. The 102 asset-specific reference JSONs retain a
-`{{tokenId}}` placeholder and do not establish token assignments. The full
-deployment baseline remains unrevealed until confirmed unpacking publishes the
-assigned metadata. Previously frozen ratios remain unchanged when future assets
-are added to a new catalog.
-
-## Provenance
-
-The original `manifest.json` contained 111,111 entries with `w` and `h` pixel
-dimensions for eggs, paintings, and videos. Its SHA-256, also recorded in
-`source.sha256`, is:
-
-```text
-b5bcc136b5a3284180bd7d7397b5ea0b52109598306805c2dbe181ce47fc026a
+```sh
+npm run ethereum:assets -- import --source /path/to/updated/111k.json --catalog-version 111k-v5
+npm run check:ethereum-assets
 ```
 
-The source contained no receipt entries. On October 29, 2026, the user confirmed
-that receipts have IDs 1–85,556 and all have a 1:1 aspect ratio. The CDN base and
-path templates were supplied by the user. These receipt values are not derived
-from the source manifest or a full CDN audit.
+The first imported revision is `111k-v4`. Use a higher explicit catalog version
+whenever the source, allocation settings, or generated manifest changes. An
+identical import at the same version is a no-op; changed content at the same
+or an older version fails before any output is written. Each changed catalog
+requires a fresh contract, metadata namespace, and allocation pool.
 
-On November 3, 2026, the user supplied 1,000 3D assets at
-`https://wip.lil.org/111k/3d/{id}.glb` and matching square WEBP previews, with
-category-local IDs 1–1,000, and requested replacing 1,000 paintings to retain
-111,111 artworks. That v2 catalog retained painting IDs 1–84,556 with their original
-aspect ratios and excluded IDs 84,557–85,556. The 3D assets are not
-part of the original source manifest or its checksum.
+`--source` defaults to the preserved source, and `--catalog-version` defaults
+to the current revision. `--available-eggs` overrides the saved available egg
+count when new egg inventory is supplied; it does not directly set the
+allocated count. The source snapshot and settings are preserved with the
+generated manifest. No command here uploads assets or changes a deployment.
 
-Later on November 3, 2026, the user supplied 102 animated MP4s and matching WEBP
-posters at `https://wip.lil.org/111k/animated/{id}` with category-local IDs 1–102
-and 932 × 1006 dimensions. V3 replaces painting IDs 84,455–84,556 with these
-assets; painting IDs 1–84,454 retain their original ratios. These animated assets
-are not part of the original source manifest or its checksum. Receipt counts
-remain unchanged.
+If an import is interrupted, rerun the same command. Before validating the
+catalog, the importer restores the previous files from its recovery journal
+under `.cache/111k-assets/`, then retries. Keep that directory until recovery
+finishes. Check mode reports pending recovery without changing files.
 
-The archive is self-contained and does not require the original Desktop file.
+```sh
+npm run ethereum:assets -- import --check
+```
+
+Check mode regenerates in memory and compares the source, manifest, compact
+shared descriptor, and five reference JSONs without writing files. The API and
+frontend check commands include this verification. Imports validate supported
+paths, positive safe-integer dimensions, contiguous IDs, matching variants,
+video/poster pairs, and supply before writing generated outputs.
+
+## Manifest and metadata references
+
+Storage format version 2 is distinct from the `111k-v4` catalog revision.
+`source.sha256` hashes the exact source bytes. `importSettings` records the
+available egg inventory and square egg ratio. The compact shared descriptor
+pins the catalog version and SHA-256 of `JSON.stringify(manifest)`; browser
+code imports that descriptor without importing the full dimensions catalog.
+
+Each category records its count and primary `pathTemplate`. Moving media also
+records an `imagePathTemplate`. A category may override the global `baseUrl`,
+as the legacy receipts do. Ratios use either `aspectRatio: [width, height]` or
+a reduced, sorted `aspectRatioPalette` with `aspectRatioIndexById`. Index
+`id - 1` selects that asset's palette entry. Painting alternatives have their
+own ratio data under `variants.alt`.
+
+The importer generates [egg](egg.template.json), [painting](painting.template.json),
+[video](video.template.json), [3D](3d.template.json), and
+[animated](animated.template.json) metadata references through the same media
+resolver used by reveal. `{{tokenId}}` is the onchain ID and `{{assetId}}` is the
+assigned category-local media ID. The references show asset 1's ratio; runtime
+metadata uses the actual assigned asset's ratio. They are examples, not baseline
+metadata or preassigned token identities. All 111,111 artwork baseline objects
+still use the unrevealed artwork template until confirmed reveal.
+
+## Deployment verification
+
+Before publishing a new release, verify public GET/HEAD responses, media content
+types, and anonymous cross-origin access for first and last allocated assets in
+each category, including PNG posters and GLB/MP4 companions. Check egg inventory
+boundaries as well. The v4 preparation checked representative public media paths
+and confirmed that eggs 1 and 76,700 are 1024 × 1024 PNGs.
+
+Generate and validate the complete 344,984-object baseline revision, then follow
+the reveal runbook for fresh-prefix publication, verification, contract
+deployment, registration, provisioning, and activation. Historical release
+records remain evidence for their original deployments; they are not destinations
+for a new import.

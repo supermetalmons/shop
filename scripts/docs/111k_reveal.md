@@ -11,7 +11,7 @@ For the relic selection and claim page, use the [relic claims guide](111k_relic_
 - Allowed VVV origins: `https://vvv.so` and `https://www.vvv.so`. Browsers set `Origin` automatically; backend callers must supply it.
 - No API key, wallet session, or signature is required.
 
-Examples target the newly deployed Sepolia v14 collection; the [release record](../../releases/111k-sepolia-v14/README.md) records its cutover and activation status. Mons supplies the chain ID and contract for other collections. Send only the fields shown.
+Examples target the Sepolia [v15 release](../../releases/111k-sepolia-v15/README.md), using catalog `111k-v4`. The release record tracks activation and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
 
 ## Unrevealed artwork
 
@@ -32,7 +32,7 @@ POST /ethereum/111k/reveal/transaction
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
   "transactionHash": "<wallet-returned 0x-prefixed 64-hex-digit hash>"
 }
 ```
@@ -63,7 +63,7 @@ POST /ethereum/111k/reveal/tokens
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
   "tokenIds": ["1", "21"]
 }
 ```
@@ -98,8 +98,8 @@ Each artwork has this shape (illustrative values):
   "crateTokenId": "111112",
   "category": "video",
   "name": "1",
-  "image": "https://wip.lil.org/111k/videos/1.webp",
-  "animation_url": "https://wip.lil.org/111k/videos/1.mp4",
+  "image": "https://cdn.lil.org/nft/111k/videos/1.webp",
+  "animation_url": "https://cdn.lil.org/nft/111k/videos/1.mp4",
   "aspectRatio": { "width": 16, "height": 9 },
   "observation": {
     "transactionHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
@@ -121,15 +121,15 @@ For a 3D artwork, the media fields are:
 ```json
 {
   "category": "3d",
-  "image": "https://wip.lil.org/111k/3d/1.webp",
-  "animation_url": "https://wip.lil.org/111k/3d/1.glb",
+  "image": "https://cdn.lil.org/nft/111k/3d/1.png",
+  "animation_url": "https://cdn.lil.org/nft/111k/3d/1.glb",
   "aspectRatio": { "width": 1, "height": 1 },
   "attributes": [{ "trait_type": "type", "value": "3d" }]
 }
 ```
 
 This fragment uses the same `tokenId`, `crateTokenId`, `name`, and `observation`
-fields as the complete artwork example. Use the WEBP in grids and as the loading
+fields as the complete artwork example. Use the PNG in grids and as the loading
 or error fallback; load the GLB in an interactive model viewer when opening the
 artwork. The 1:1 ratio describes the preview frame, not the model's geometry.
 Media IDs are local to each category and do not have to match the onchain token ID.
@@ -139,23 +139,25 @@ For an animated artwork, the media fields are:
 ```json
 {
   "category": "animated",
-  "image": "https://wip.lil.org/111k/animated/1.webp",
-  "animation_url": "https://wip.lil.org/111k/animated/1.mp4",
+  "image": "https://cdn.lil.org/nft/111k/animated/1.png",
+  "animation_url": "https://cdn.lil.org/nft/111k/animated/1.mp4",
   "aspectRatio": { "width": 466, "height": 503 },
   "attributes": [{ "trait_type": "type", "value": "animated" }]
 }
 ```
 
-Animated artworks use the same MP4 playback and WEBP fallback as videos, with a
-distinct `animated` category and type trait. IDs 1–102 currently have a 932 × 1006
+Animated artworks use MP4 playback with a PNG poster and a distinct `animated`
+category and type trait. IDs 1–421 currently have a 932 × 1006
 frame, represented by the reduced ratio 466:503. Always use the returned
-`aspectRatio`: animated artworks support per-asset ratios, as paintings do, and
+`aspectRatio`: animated artworks, paintings, and videos support per-asset ratios, and
 future assets may differ. The fragment has the same surrounding artwork fields
 as the complete example above.
 
-The v3 catalog contains 22,222 eggs, 84,454 paintings, 3,333 videos, 1,000 3D
-models, and 102 animated artworks: 111,111 artworks total. Animated assets replace
-painting IDs 84,455–84,556. The token-ID range and request limits are unchanged.
+The v4 catalog contains 76,642 eggs, 30,990 paintings, 58 videos, 3,000 3D
+models, and 421 animated artworks: 111,111 artworks total. The token-ID range
+and request limits are unchanged. Painting alts and video posters are variants
+of those artworks, not extra tokens. Videos include 16:9, 427:240, and 54:31
+ratios; use the returned ratio instead of assuming a fixed widescreen frame.
 
 Cache media by `(chainId, contractAddress, tokenId)`. Revealed artwork stays unchanged through reorgs and remints. Use inventory data for ownership.
 

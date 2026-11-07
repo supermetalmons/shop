@@ -1,7 +1,8 @@
 import { ethereumMetadataBaseUri } from './config.ts';
 import { normalizeEthereumAddress } from './protocol.ts';
+import descriptor from './revealCatalog.json';
 
-export const ETHEREUM_REVEAL_CATALOG_VERSION = '111k-v3';
+export const ETHEREUM_REVEAL_CATALOG_VERSION = descriptor.catalogVersion;
 export const ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN = /^111k-v[1-9]\d{0,8}$/;
 export const ETHEREUM_REVEAL_DEPLOYMENTS_SQL = 'SELECT * FROM ethereum_reveal_deployments';
 export const ETHEREUM_REVEAL_DEPLOYMENT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;

@@ -1,0 +1,35 @@
+{
+  "recordedAt": "2026-11-07T20:54:16.867471+00:00",
+  "chainId": 11155111,
+  "deploymentId": "v15",
+  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "deploymentBlock": 12085980,
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v15/",
+  "catalogVersion": "111k-v4",
+  "api": {
+    "worker": "mons-shop-api",
+    "versionId": "3f901b94-8c2b-420d-91a0-c7b463447d7f",
+    "domain": "api.mons.shop",
+    "command": "npm run deploy:api",
+    "logSha256": "8e0685625b3814f240ef8b01e2b878048f71c1bdf5a6a21b048420d202a82454"
+  },
+  "frontend": {
+    "worker": "mons-shop",
+    "versionId": "f164c794-88fa-4762-a65e-f2d8bb90deb0",
+    "domain": "mons.shop",
+    "command": "npm run deploy",
+    "logSha256": "8368b62c98c9bd482e29d81bf5c4932d43215d74ee18bec9ada9bc7d538cacb5"
+  },
+  "pendingMigrations": 0,
+  "databaseChecks": "passed",
+  "frontendTests": [
+    4,
+    29,
+    1,
+    4991
+  ],
+  "apiTests": [
+    3076,
+    58
+  ]
+}

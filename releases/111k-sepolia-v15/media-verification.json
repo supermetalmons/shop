@@ -1,0 +1,176 @@
+{
+  "catalogVersion": "111k-v4",
+  "checkedAt": "2026-11-07T18:50:05.905182+00:00",
+  "baseUrl": "https://cdn.lil.org/nft/111k/",
+  "assets": [
+    {
+      "path": "eggs/1.png",
+      "contentType": "image/png",
+      "contentLength": 393558,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        1024,
+        1024
+      ]
+    },
+    {
+      "path": "eggs/76642.png",
+      "contentType": "image/png",
+      "contentLength": 416387,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        1024,
+        1024
+      ]
+    },
+    {
+      "path": "eggs/76700.png",
+      "contentType": "image/png",
+      "contentLength": 324612,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        1024,
+        1024
+      ]
+    },
+    {
+      "path": "paintings/1.png",
+      "contentType": "image/png",
+      "contentLength": 4960271,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        1864,
+        2012
+      ]
+    },
+    {
+      "path": "paintings/30990.png",
+      "contentType": "image/png",
+      "contentLength": 5175,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        932,
+        1006
+      ]
+    },
+    {
+      "path": "3d/1.png",
+      "contentType": "image/png",
+      "contentLength": 919467,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "path": "3d/1.glb",
+      "contentType": "model/gltf-binary",
+      "contentLength": 1770988,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "3d/3000.png",
+      "contentType": "image/png",
+      "contentLength": 2227098,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "path": "3d/3000.glb",
+      "contentType": "model/gltf-binary",
+      "contentLength": 2281716,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "animated/1.png",
+      "contentType": "image/png",
+      "contentLength": 1085431,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        932,
+        1006
+      ]
+    },
+    {
+      "path": "animated/1.mp4",
+      "contentType": "video/mp4",
+      "contentLength": 12005253,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "animated/421.png",
+      "contentType": "image/png",
+      "contentLength": 617359,
+      "cors": "*",
+      "rangeGetBytes": 32,
+      "dimensions": [
+        932,
+        1006
+      ]
+    },
+    {
+      "path": "animated/421.mp4",
+      "contentType": "video/mp4",
+      "contentLength": 5722273,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "videos/1.webp",
+      "contentType": "image/webp",
+      "contentLength": 71376,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "videos/1.mp4",
+      "contentType": "video/mp4",
+      "contentLength": 5340563,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "videos/58.webp",
+      "contentType": "image/webp",
+      "contentLength": 37786,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "videos/58.mp4",
+      "contentType": "video/mp4",
+      "contentLength": 8764182,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "paintings/alt/1.webp",
+      "contentType": "image/webp",
+      "contentLength": 237210,
+      "cors": "*",
+      "rangeGetBytes": 32
+    },
+    {
+      "path": "paintings/alt/30990.webp",
+      "contentType": "image/webp",
+      "contentLength": 27616,
+      "cors": "*",
+      "rangeGetBytes": 32
+    }
+  ]
+}

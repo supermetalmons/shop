@@ -1,0 +1,18 @@
+{
+  "name": "{{tokenId}}",
+  "description": "",
+  "image": "https://cdn.lil.org/nft/111k/videos/{{assetId}}.webp",
+  "attributes": [
+    {
+      "trait_type": "type",
+      "value": "video"
+    }
+  ],
+  "aspectRatio": {
+    "width": 16,
+    "height": 9
+  },
+  "category": "video",
+  "revealStatus": "revealed",
+  "animation_url": "https://cdn.lil.org/nft/111k/videos/{{assetId}}.mp4"
+}

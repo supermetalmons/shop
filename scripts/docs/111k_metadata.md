@@ -1,6 +1,6 @@
 # 111K offchain metadata
 
-The [v14 release](../../releases/111k-sepolia-v14/README.md) publishes the complete relic collection at `https://cdn.mons.shop/111k-sepolia/v14/`: 344984 metadata objects, including relic tokens `117172.json`–`117189.json` and relic receipts `3000001.json`–`3000018.json`. Relic IDs 1–18 use `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. The [v13 release](../../releases/111k-sepolia-v13/README.md), [v12 release](../../releases/111k-sepolia-v12/README.md), [v11 release](../../releases/111k-sepolia-v11/README.md), [v10 release](../../releases/111k-sepolia-v10/README.md), and earlier releases preserve their original metadata and registered prefixes; the replacement does not republish those namespaces.
+The [v15 release](../../releases/111k-sepolia-v15/README.md) publishes the complete relic collection at `https://cdn.mons.shop/111k-sepolia/v15/`: 344984 metadata objects, including relic tokens `117172.json`–`117189.json` and relic receipts `3000001.json`–`3000018.json`. Relic IDs 1–18 use `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. The [v14 release](../../releases/111k-sepolia-v14/README.md), [v13 release](../../releases/111k-sepolia-v13/README.md), [v12 release](../../releases/111k-sepolia-v12/README.md), [v11 release](../../releases/111k-sepolia-v11/README.md), [v10 release](../../releases/111k-sepolia-v10/README.md), and earlier releases preserve their original metadata and registered prefixes; the replacement does not republish those namespaces.
 
 Deployment IDs are globally unique across networks. Later replacements must choose an unused ID. A future mainnet deployment can use a distinct ID such as `mainnet-relics-v1`, with the same ID in its prefix suffix. Publish and verify the complete collection at each new prefix before deployment and registration. Existing reveal-managed prefixes remain associated with their original deployments.
 
@@ -33,7 +33,9 @@ The JSON objects on `cdn.mons.shop` are the authoritative runtime metadata. Loca
 
 The relic-ready generator produces 344984 JSON objects per deployment, including 18 relics and 18 relic receipts. Both networks use the same generated JSON contents; the network determines only the destination prefix. Historical publications retain their original identities and artwork assignments. The `cdn-mons-shop` bucket remains in Eastern North America (`enam`). Historical release manifests describe their own publications and remain unchanged.
 
-The [111k_devnet asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) preserves counts, CDN path templates, and exact aspect ratios. Catalog version `111k-v3` contains 22,222 eggs, 84,454 paintings, 3,333 videos, 1,000 3D models, and 102 animated artworks. Animated assets replace painting IDs 84,455–84,556, retaining 111,111 artworks. The [unpack reveal service](111k_reveal.md) uses this catalog for private reservations and permanent, confirmation-gated artwork publication. A 3D reveal publishes the square WEBP preview as `image` and the GLB model as `animation_url`, with a `3d` type/category and a 1:1 `aspectRatio`. Animated reveals use matching WEBP/MP4 media and the `animated` type/category. Their per-asset ratio palette initially contains 466:503, exactly representing 932 × 1006. The baseline metadata object count and onchain token identities remain unchanged; v3 requires a fresh contract and reveal pool.
+The [111k asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) now prepares fresh deployments with `111k-v4`: 76,642 eggs, 30,990 paintings, 58 videos, 3,000 3D models, and 421 animated artworks, totaling 111,111. Its reproducible importer reads the supplied path-to-dimensions JSON, preserves a source snapshot, and fills the remaining allocation from 76,700 available eggs. Use `npm run ethereum:assets -- import --source /path/to/111k.json --catalog-version 111k-v5` for the next changed catalog and `npm run check:ethereum-assets` to verify generated files.
+
+Revealed media uses `https://cdn.lil.org/nft/111k/`. Eggs and paintings use PNGs; 3D and animated artworks use PNG previews with GLB and original MP4 companions respectively. Videos use WEBP posters and MP4s. Every ratio comes from the catalog, including video ratios other than 16:9. Painting alternate WEBPs are recorded as variants and do not add artworks. The [unpack reveal service](111k_reveal.md) uses the catalog for private reservations and permanent, confirmation-gated artwork publication. V4 requires a fresh contract and reveal pool. The baseline metadata count, onchain identities, and existing placeholder/container/receipt image URLs are unchanged. V14 and earlier release records describe their original publications. The v15 release record tracks its cutover and acceptance.
 
 ## Templates
 
@@ -49,12 +51,12 @@ Each template contains `name`, `description`, `image`, and `attributes`. The ini
 | `artwork_receipt.json` | `Receipt #{{displayId}}` | `artwork_placeholder_receipt.webp` | `receipt` |
 | `relic_receipt.json` | `Relic Receipt #{{displayId}}` | `receipt_background.webp` | `relic receipt` |
 
-The [animated reference template](../ethereum-metadata/reveal-assets/111k_devnet/animated.template.json)
-documents revealed animated metadata. Asset-specific reference JSONs retain
-`{{tokenId}}` until an onchain token is assigned; they are not baseline objects or
-preassigned token metadata. The complete baseline still uses `artwork.json` for
-all 111,111 artwork tokens. The reveal runtime combines that registered template
-with the assigned asset's media and ratio after confirmation.
+The generated [reveal references](../ethereum-metadata/reveal-assets/111k_devnet/README.md#manifest-and-metadata-references)
+cover all five artwork categories. They retain `{{tokenId}}` and `{{assetId}}`
+and show asset 1's ratio; they are not baseline objects or preassigned token
+metadata. The complete baseline still uses `artwork.json` for all 111,111 artwork
+tokens. The reveal runtime combines that registered template with the assigned
+asset's media and exact ratio after confirmation.
 
 New relic publications use the `relics/` image path. Historical publications retain their recorded image URLs. The image filenames above are rooted at `https://wip.lil.org/111k/`. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
 
