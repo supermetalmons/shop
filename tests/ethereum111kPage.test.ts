@@ -647,6 +647,44 @@ test('external claims clear selected IDs, reorgs restore availability, and exhau
   assert.match(view.container.querySelector('.mint-panel__availability')!.textContent!, /Sold out/);
 });
 
+test('activating the selected relic tile clears selection and disables Claim', async t => {
+  t.mock.method(ethereumApi, 'relics', async () => relicStatus(owner, { claimedMask: 1 << 3, relicsMinted: 1, remainingRelics: 11 }));
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('radio', { name: 'Relic' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
+  const first = view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement;
+  const second = view.getByRole('radio', { name: 'Relic #17' }) as HTMLInputElement;
+  await waitFor(() => assert.equal(first.disabled, false));
+  const claimed = view.getByRole('radio', { name: 'Relic #4, claimed' }) as HTMLInputElement;
+  const grid = view.getByRole('radiogroup', { name: 'Choose a relic' });
+  const button = view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement;
+  const tile = (input: HTMLInputElement) => input.closest('label')!.querySelector('.ethereum111k__relic-image')!;
+
+  fireEvent.click(tile(first));
+  assert.equal(first.checked, true);
+  assert.equal(button.disabled, false);
+  fireEvent.click(tile(first));
+  assert.equal(grid.querySelectorAll('input:checked').length, 0);
+  assert.equal(button.disabled, true);
+
+  fireEvent.click(tile(first));
+  assert.equal(first.checked, true);
+  assert.equal(button.disabled, false);
+  fireEvent.click(tile(second));
+  assert.equal(first.checked, false);
+  assert.equal(second.checked, true);
+  assert.equal(grid.querySelectorAll('input:checked').length, 1);
+  fireEvent.click(tile(claimed));
+  assert.equal(claimed.checked, false);
+  assert.equal(second.checked, true);
+
+  view.rerenderPage({ externalBusy: true });
+  assert.equal(second.disabled, true);
+  fireEvent.click(tile(second));
+  assert.equal(second.checked, true);
+  assert.equal(button.disabled, true);
+});
+
 for (const [label, state, expected] of [
   ['ineligible', { relicLimit: 0, remainingAllowance: 0 }, 'Not eligible'],
   ['exhausted', { relicsUsed: 3, remainingAllowance: 0 }, '0 claims left'],

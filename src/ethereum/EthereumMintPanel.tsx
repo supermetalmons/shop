@@ -28,7 +28,7 @@ type EthereumMintPanelProps = {
   claimedRelicMask?: number;
   selectedRelicId?: number | null;
   relicSelectionDisabled?: boolean;
-  onRelicSelect?: (id: number) => void;
+  onRelicSelect?: (id: number | null) => void;
 };
 
 const containerPreviews = {

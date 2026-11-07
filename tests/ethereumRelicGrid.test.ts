@@ -34,8 +34,8 @@ for (const [width, height, viewport] of [[288, 188, 320], [343, 240, 375], [900,
 }
 
 test('claimed images remain in the grid and only available radio inputs can select an ID', () => {
-  const ids: number[] = [];
-  const props = { claimedMask: 1 << 3, selectedId: 18, disabled: false, onSelect: (id: number) => ids.push(id) };
+  const ids: (number | null)[] = [];
+  const props = { claimedMask: 1 << 3, selectedId: 18, disabled: false, onSelect: (id: number | null) => ids.push(id) };
   const view = render(createElement(RelicClaimGrid, props));
   const claimed = view.getByRole('radio', { name: 'Relic #4, claimed' }) as HTMLInputElement;
   assert.equal(claimed.disabled, true);

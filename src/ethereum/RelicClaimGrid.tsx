@@ -7,7 +7,7 @@ type RelicClaimGridProps = {
   claimedMask: number;
   selectedId: number | null;
   disabled: boolean;
-  onSelect: (id: number) => void;
+  onSelect: (id: number | null) => void;
 };
 
 function layout(width: number, height: number, gap: number) {
@@ -54,12 +54,12 @@ export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, on
         return <label key={id} className="ethereum111k__relic" data-claimed={claimed} data-disabled={disabled || claimed}>
           <input type="radio" name="ethereum-relic" value={id} checked={selectedId === id}
             disabled={disabled || claimed} aria-label={`Relic #${id}${claimed ? ', claimed' : ''}`}
+            onClick={() => { if (selectedId === id) onSelect(null); }}
             onChange={() => onSelect(id)} />
           <span className="ethereum111k__relic-image">
             <MediaWithFallback imageSources={image ? [image] : []} showPlaceholderWhileLoading
               imageProps={{ alt: '', draggable: false, loading: 'eager', decoding: 'async', onDragStart: event => event.preventDefault() }}
               renderPlaceholder={hidden => <span hidden={hidden} className="ethereum111k__relic-placeholder" aria-hidden="true" />} />
-            <span className="ethereum111k__relic-number" aria-hidden="true">{id}</span>
           </span>
         </label>;
       })}

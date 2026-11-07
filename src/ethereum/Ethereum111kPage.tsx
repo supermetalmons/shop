@@ -198,7 +198,7 @@ export default function Ethereum111kPage({
         statusText={relicMode ? relicStatus : mintStatus} disabled={Boolean(relicMode ? relicDisabled : mintDisabled)} busy={panelActionPending}
         relicMetadata={model.relicMetadata.data} claimedRelicMask={claimedRelicMask} selectedRelicId={selectedRelicId}
         relicSelectionDisabled={kindDisabled || !relicReadFresh || relicData?.remainingRelics === 0}
-        onRelicSelect={id => { relicAction.clearError(); model.clearError(); setRelicSelection({ deployment: deploymentKey, owner: model.owner, id }); }}
+        onRelicSelect={id => { relicAction.clearError(); model.clearError(); setRelicSelection(id === null ? null : { deployment: deploymentKey, owner: model.owner, id }); }}
         onQuantityChange={setQuantity} onMint={() => { model.clearError(); (relicMode ? relicAction.claim : mintAction.mint)(); }} />
     </div>
     <section className="app-section inventory-section" aria-label="Combined inventory">
