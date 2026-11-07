@@ -110,6 +110,7 @@ Release evidence describes the recorded verification time, not live service stat
 | Ethereum relic reservations and withdrawals | [pre111k](scripts/docs/pre111k.md) |
 | Ethereum checkout | [111K checkout](scripts/docs/111k_checkout.md) |
 | Ethereum metadata and CDN | [111K metadata](scripts/docs/111k_metadata.md) |
+| 111K web images and companion URLs | [111K Web Assets](scripts/docs/111k_web_assets.md) |
 | Ethereum unpack reveals and VVV integration | [111K reveals](scripts/docs/111k_reveal.md) |
 | Ethereum reveal registration and operations | [111K reveal operations](scripts/docs/111k_reveal_ops.md) |
 | Metadata fields | [Drop metadata](scripts/docs/drop_metadata.md) |

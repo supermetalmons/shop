@@ -37,6 +37,9 @@ The [111k asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.m
 
 Revealed media uses `https://cdn.lil.org/nft/111k/`. Eggs and paintings use PNGs; 3D and animated artworks use PNG previews with GLB and original MP4 companions respectively. Videos use WEBP posters and MP4s. Every ratio comes from the catalog, including video ratios other than 16:9. Painting alternate WEBPs are recorded as variants and do not add artworks. The [unpack reveal service](111k_reveal.md) uses the catalog for private reservations and permanent, confirmation-gated artwork publication. V4 requires a fresh contract and reveal pool. The baseline metadata count, onchain identities, and existing placeholder/container/receipt image URLs are unchanged. V14 and earlier release records describe their original publications. The v15 release record tracks its cutover and acceptance.
 
+See [111K Web Assets](111k_web_assets.md) to derive published thumbnails, mid images,
+painting alternatives and playable media from `metadata.image`.
+
 ## Templates
 
 Each template contains `name`, `description`, `image`, and `attributes`. The initial minimal format uses an empty description and one lowercase `type` trait:
