@@ -64,6 +64,36 @@ test('concurrent mapping cancels siblings, drains work, and preserves its first 
   await rejected;
 });
 
+test('fail-fast mapping rejects before sibling cleanup and observes late failures', async () => {
+  const parent = new AbortController();
+  const failure = new Error('first failure');
+  const cleanup = Promise.withResolvers<void>();
+  const finished = Promise.withResolvers<void>();
+  const started: number[] = [];
+  let cancellation: unknown;
+  let settled = false;
+  try {
+    const result = mapWithConcurrency([0, 1, 2, 3], 2, async (value, _index, signal) => {
+      started.push(value);
+      if (value === 0) throw failure;
+      signal.addEventListener('abort', () => { cancellation = signal.reason; }, { once: true });
+      try {
+        await cleanup.promise;
+        throw new Error('late sibling failure');
+      } finally { finished.resolve(); }
+    }, { signal: parent.signal, failureMode: 'fail-fast' });
+    const rejected = assert.rejects(result, error => error === failure).then(() => { settled = true; });
+    await new Promise(setImmediate);
+    assert.equal(settled, true);
+    assert.equal(cancellation, failure);
+    assert.equal(parent.signal.aborted, false);
+    assert.deepEqual(started, [0, 1]);
+    cleanup.resolve();
+    await finished.promise;
+    await rejected;
+  } finally { cleanup.resolve(); }
+});
+
 test('concurrent mapping preserves an undefined rejection', async () => {
   await assert.rejects(mapWithConcurrency([0, 1], 1, async () => {
     throw undefined;

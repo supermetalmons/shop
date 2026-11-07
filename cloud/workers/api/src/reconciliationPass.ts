@@ -23,6 +23,7 @@ type ReconciliationPaging<T> = {
 
 type ReconciliationPassArgs<T> = {
   signal: AbortSignal;
+  paging: ReconciliationPaging<T>;
   checkAbortedBeforeLoad?: boolean;
   cancellationMode?: 'aggregate' | 'throw';
   processCandidate: (candidate: T) => Promise<ReconciliationOutcome | 'stop'>;
@@ -30,43 +31,10 @@ type ReconciliationPassArgs<T> = {
   onFailure?: (candidate: T, error: unknown) => void;
 } & ReconciliationOptions;
 
-export async function drainReconciliationCandidates<T>(args: ReconciliationPassArgs<T> & (
-  | { loadCandidates: () => Promise<readonly T[]>; paging?: never }
-  | { loadCandidates?: never; paging: ReconciliationPaging<T> }
-)): Promise<ReconciliationResult> {
-  if (args.paging) return drainPagedReconciliationCandidates(args, args.paging);
-  const result = emptyReconciliationResult();
-  try {
-    if (args.checkAbortedBeforeLoad !== false) args.signal.throwIfAborted();
-    const candidates = await args.loadCandidates();
-    const failures: unknown[] = [];
-    for (const candidate of candidates) {
-      if (args.signal.aborted) {
-        if (args.cancellationMode === 'throw') throw args.signal.reason;
-        failures.push(args.signal.reason);
-        break;
-      }
-      try {
-        const outcome = await args.processCandidate(candidate);
-        if (outcome === 'stop') break;
-        recordReconciliationOutcome(result, outcome);
-      } catch (error) {
-        recordReconciliationOutcome(result, 'failed');
-        try { args.onFailure?.(candidate, error); } catch {}
-        failures.push(error);
-      }
-    }
-    if (failures.length) throw new AggregateError(failures, args.failureMessage);
-    return result;
-  } finally {
-    reportReconciliationResult(result, args.onResult);
-  }
-}
-
-async function drainPagedReconciliationCandidates<T>(
+export async function drainReconciliationCandidates<T>(
   args: ReconciliationPassArgs<T>,
-  paging: ReconciliationPaging<T>,
 ): Promise<ReconciliationResult> {
+  const { paging } = args;
   const result = {
     ...emptyReconciliationResult(), inspected: 0, pages: 0,
     stopReason: 'drained' as NonNullable<ReconciliationResult['stopReason']>,

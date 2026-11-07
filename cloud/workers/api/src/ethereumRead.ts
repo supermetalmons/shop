@@ -10,6 +10,7 @@ import {
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
 import { EthereumApiError } from './ethereumError.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 import {
   ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
   verifyEthereumBlockSnapshot, ethereumRelicInterfaceAvailable, type EthereumContext,
@@ -133,32 +134,16 @@ export async function ethereumInventoryItems(context: EthereumContext, infos: Et
       throw new EthereumApiError('unavailable', 'Invalid Ethereum token information.');
     }
   }
-  const items = new Array<EthereumInventoryItem>(infos.length);
-  const cancellation = new AbortController();
-  const metadataContext = { ...context, signal: AbortSignal.any([context.signal, cancellation.signal]) };
   const pending = new Map<string, Promise<EthereumMetadata>>();
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(infos.length, 8) }, async () => {
-    try {
-      while (next < infos.length) {
-        metadataContext.signal.throwIfAborted();
-        const index = next++;
-        const info = infos[index];
-        let metadata = pending.get(info.tokenId);
-        if (!metadata) {
-          metadata = readMetadata(metadataContext, info.tokenId);
-          pending.set(info.tokenId, metadata);
-        }
-        items[index] = { ...info, ...await metadata, id: ethereumAssetId(context.config.chainId, contractAddress, info.tokenId),
-          chainId: context.config.chainId, contractAddress };
-      }
-    } catch (error) {
-      cancellation.abort(error);
-      throw error;
+  return mapWithConcurrency(infos, 8, async (info, _index, signal) => {
+    let metadata = pending.get(info.tokenId);
+    if (!metadata) {
+      metadata = readMetadata({ ...context, signal }, info.tokenId);
+      pending.set(info.tokenId, metadata);
     }
-  }));
-  context.signal.throwIfAborted();
-  return items;
+    return { ...info, ...await metadata, id: ethereumAssetId(context.config.chainId, contractAddress, info.tokenId),
+      chainId: context.config.chainId, contractAddress };
+  }, { signal: context.signal, failureMode: 'fail-fast' });
 }
 
 async function alchemyOwnerIds(context: EthereumContext, wallet: string, cursor: string | null): Promise<{ ids: string[]; nextCursor: string | null }> {

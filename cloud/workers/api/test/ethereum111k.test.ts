@@ -3511,6 +3511,18 @@ test('contract read batches preserve duplicate positions and omit absent token t
   } finally { f.close(); }
 });
 
+test('empty Ethereum batches and inventory retain their cancellation behavior', async () => {
+  const f = fixture();
+  try {
+    const reason = new Error('cancelled before reading');
+    const context = { ...readContext(f), signal: AbortSignal.abort(reason) };
+    assert.deepEqual(await ethereumCallBatch(context, []), []);
+    await assert.rejects(ethereumInventoryItems(context, []), error => error === reason);
+    assert.equal(f.state.calls.length, 0);
+    assert.equal(f.state.metadataRequests.length, 0);
+  } finally { f.close(); }
+});
+
 test('offchain metadata fetches current JSON over HTTP without storing previous responses', async () => {
   const f = fixture();
   try {
@@ -3676,6 +3688,41 @@ test('an offchain metadata failure cancels pending reads and returns no partial 
   } finally { f.close(); }
 });
 
+test('an offchain metadata failure rejects before cancelled sibling cleanup finishes', { timeout: 5000 }, async () => {
+  const f = fixture();
+  const cleanup = Promise.withResolvers<void>();
+  const finished = Promise.withResolvers<void>();
+  try {
+    let reads = 0;
+    let cancellation: unknown;
+    let rejected = false;
+    f.metadata.fetch = async (_input, init) => {
+      if (++reads !== 1) return new Response(null, { status: 503 });
+      init!.signal!.addEventListener('abort', () => { cancellation = init!.signal!.reason; }, { once: true });
+      try {
+        await cleanup.promise;
+        throw new Error('late sibling failure');
+      } finally { finished.resolve(); }
+    };
+    const context = readContext(f);
+    const infos = Array.from({ length: 20 }, (_, index) => ({ tokenId: String(index + 1), kind: 'artwork' as const,
+      displayId: index + 1, owner: WALLET }));
+    const result = assert.rejects(ethereumInventoryItems(context, infos), error => {
+      assert.equal(error, cancellation);
+      rejected = true;
+      return true;
+    });
+    await new Promise(setImmediate);
+    assert.equal(rejected, true);
+    assert.ok(cancellation instanceof Error);
+    assert.equal(context.signal.aborted, false);
+    assert.equal(reads, 8);
+    cleanup.resolve();
+    await finished.promise;
+    await result;
+  } finally { cleanup.resolve(); f.close(); }
+});
+
 test('offchain metadata HTTP reads stop when the request deadline expires', { timeout: 5000 }, async () => {
   const f = fixture();
   const controller = new AbortController();
@@ -3765,6 +3812,43 @@ test('contract read envelopes stay bounded and preserve order when concurrent re
       calls.map((_call, index) => `${f.env.ETHEREUM_111K_METADATA_BASE_URI}${index + 1}.json`));
     assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === '0x64'));
   } finally { release(); f.close(); }
+});
+
+test('contract batch failure rejects before cancelled sibling cleanup finishes', { timeout: 5000 }, async () => {
+  const f = fixture();
+  const cleanup = Promise.withResolvers<void>();
+  const finished = Promise.withResolvers<void>();
+  try {
+    const failure = new Error('contract batch failed');
+    let envelopes = 0;
+    let cancellation: unknown;
+    let rejected = false;
+    const providerFetch: typeof fetch = async (input, init) => {
+      const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+      if (!Array.isArray(payload)) return f.providerFetch(input, init);
+      if (++envelopes !== 1) throw failure;
+      init!.signal!.addEventListener('abort', () => { cancellation = init!.signal!.reason; }, { once: true });
+      try {
+        await cleanup.promise;
+        throw new Error('late sibling failure');
+      } finally { finished.resolve(); }
+    };
+    const context = readContext(f, providerFetch);
+    const calls = Array.from({ length: 13 }, (_, index) => encodeCall('previewTokenURI(uint8,uint256)', ['uint8', 'uint256'], [1, index + 1]));
+    const result = assert.rejects(ethereumCallBatch(context, calls), error => {
+      assert.equal(error, failure);
+      rejected = true;
+      return true;
+    });
+    await new Promise(setImmediate);
+    assert.equal(rejected, true);
+    assert.equal(cancellation, failure);
+    assert.equal(context.signal.aborted, false);
+    assert.equal(envelopes, 2);
+    cleanup.resolve();
+    await finished.promise;
+    await result;
+  } finally { cleanup.resolve(); f.close(); }
 });
 
 for (const failure of ['missing-response', 'duplicate-id', 'unknown-id', 'rpc-error', 'invalid-result', 'oversized-response'] as const) {

@@ -2,7 +2,7 @@ export async function mapWithConcurrency<T, R>(
   values: readonly T[],
   concurrency: number,
   mapper: (value: T, index: number, signal: AbortSignal) => Promise<R>,
-  options: { signal: AbortSignal },
+  options: { signal: AbortSignal; failureMode?: 'drain' | 'fail-fast' },
 ): Promise<R[]> {
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new RangeError('concurrency must be a positive integer');
@@ -26,6 +26,7 @@ export async function mapWithConcurrency<T, R>(
           failure = error;
           cancellation.abort(error);
         }
+        if (options.failureMode === 'fail-fast') throw failure;
       }
     }
   }));

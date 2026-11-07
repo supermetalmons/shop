@@ -2,17 +2,29 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { drainReconciliationCandidates } from '../src/reconciliationPass.ts';
 
+function singlePage(load: () => Promise<readonly number[]>) {
+  return {
+    loadPage: async () => ({ candidates: await load(), hasMore: false }),
+    candidateKey: String,
+    probeBacklog: async () => ({ hasMore: false, oldestDueAgeMs: null }),
+    monotonicNowMs: () => 0,
+  };
+}
+
 test('an aborted pass never queries and preserves the original cancellation', async () => {
   const cancellation = new Error('cancelled');
   const summaries: unknown[] = [];
   await assert.rejects(drainReconciliationCandidates({
     signal: AbortSignal.abort(cancellation),
-    loadCandidates: async () => assert.fail('cancelled pass must not query'),
+    paging: singlePage(async () => assert.fail('cancelled pass must not query')),
     processCandidate: async () => assert.fail('cancelled pass must not publish'),
     failureMessage: 'reconciliation failed',
     onResult: (result) => { summaries.push(result); },
   }), (error: unknown) => error === cancellation);
-  assert.deepEqual(summaries, [{ attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 }]);
+  assert.deepEqual(summaries, [{
+    attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0,
+    inspected: 0, pages: 0, stopReason: 'cancelled', hasMore: null, oldestDueAgeMs: null,
+  }]);
 });
 
 test('candidate query failures propagate without being wrapped', async () => {
@@ -20,25 +32,31 @@ test('candidate query failures propagate without being wrapped', async () => {
   const summaries: unknown[] = [];
   await assert.rejects(drainReconciliationCandidates({
     signal: new AbortController().signal,
-    loadCandidates: async () => { throw failure; },
+    paging: singlePage(async () => { throw failure; }),
     processCandidate: async () => assert.fail('failed query must not publish'),
     failureMessage: 'reconciliation failed',
     onResult: (result) => { summaries.push(result); throw new Error('reporter unavailable'); },
   }), (error: unknown) => error === failure);
-  assert.deepEqual(summaries, [{ attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 }]);
+  assert.deepEqual(summaries, [{
+    attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0,
+    inspected: 0, pages: 1, stopReason: 'failed', hasMore: false, oldestDueAgeMs: null,
+  }]);
 });
 
 test('a bounded pass counts candidate outcomes and preserves the stop boundary', async () => {
   const visited: number[] = [];
   assert.deepEqual(await drainReconciliationCandidates({
     signal: new AbortController().signal,
-    loadCandidates: async () => [2, 0, 3, -1, 4],
+    paging: singlePage(async () => [2, 0, 3, -1, 4]),
     processCandidate: async (candidate) => {
       visited.push(candidate);
       return candidate < 0 ? 'stop' : candidate === 0 ? 'skipped' : 'completed';
     },
     failureMessage: 'reconciliation failed',
-  }), { attempted: 3, completed: 2, deferred: 0, skipped: 1, failed: 0 });
+  }), {
+    attempted: 3, completed: 2, deferred: 0, skipped: 1, failed: 0,
+    inspected: 4, pages: 1, stopReason: 'stopped', hasMore: false, oldestDueAgeMs: null,
+  });
   assert.deepEqual(visited, [2, 0, 3, -1]);
 });
 
@@ -51,7 +69,7 @@ test('a failed candidate does not block later work and cancellation retains prio
   const summaries: unknown[] = [];
   await assert.rejects(drainReconciliationCandidates({
     signal: controller.signal,
-    loadCandidates: async () => [1, 2, 3],
+    paging: singlePage(async () => [1, 2, 3]),
     processCandidate: async (candidate) => {
       visited.push(candidate);
       if (candidate === 1) throw failure;
@@ -69,21 +87,27 @@ test('a failed candidate does not block later work and cancellation retains prio
   });
   assert.deepEqual(visited, [1, 2]);
   assert.deepEqual(failures, [{ candidate: 1, error: failure }]);
-  assert.deepEqual(summaries, [{ attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 }]);
+  assert.deepEqual(summaries, [{
+    attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1,
+    inspected: 2, pages: 1, stopReason: 'cancelled', hasMore: null, oldestDueAgeMs: null,
+  }]);
 });
 
 test('cancellation during the final successful publication does not discard its result', async () => {
   const controller = new AbortController();
   assert.deepEqual(await drainReconciliationCandidates({
     signal: controller.signal,
-    loadCandidates: async () => [1],
+    paging: singlePage(async () => [1]),
     processCandidate: async () => {
       controller.abort(new Error('cancelled after enqueue'));
       return 'completed';
     },
     failureMessage: 'reconciliation failed',
     onResult: () => { throw new Error('reporter unavailable'); },
-  }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+  }), {
+    attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0,
+    inspected: 1, pages: 1, stopReason: 'drained', hasMore: null, oldestDueAgeMs: null,
+  });
 });
 
 test('failure logging cannot stop the next candidate or replace its original error', async () => {
@@ -92,7 +116,7 @@ test('failure logging cannot stop the next candidate or replace its original err
   const summaries: unknown[] = [];
   await assert.rejects(drainReconciliationCandidates({
     signal: new AbortController().signal,
-    loadCandidates: async () => [1, 2],
+    paging: singlePage(async () => [1, 2]),
     processCandidate: async (candidate) => {
       visited.push(candidate);
       if (candidate === 1) throw failure;
@@ -103,7 +127,10 @@ test('failure logging cannot stop the next candidate or replace its original err
     failureMessage: 'reconciliation failed',
   }), (error: unknown) => error instanceof AggregateError && error.errors[0] === failure);
   assert.deepEqual(visited, [1, 2]);
-  assert.deepEqual(summaries, [{ attempted: 2, completed: 0, deferred: 1, skipped: 0, failed: 1 }]);
+  assert.deepEqual(summaries, [{
+    attempted: 2, completed: 0, deferred: 1, skipped: 0, failed: 1,
+    inspected: 2, pages: 1, stopReason: 'failed', hasMore: false, oldestDueAgeMs: null,
+  }]);
 });
 
 test('throw cancellation mode preserves the original reason and earlier outcome counts', async () => {
@@ -115,7 +142,7 @@ test('throw cancellation mode preserves the original reason and earlier outcome 
   await assert.rejects(drainReconciliationCandidates({
     signal: controller.signal,
     cancellationMode: 'throw',
-    loadCandidates: async () => [1, 2, 3],
+    paging: singlePage(async () => [1, 2, 3]),
     processCandidate: async (candidate) => {
       visited.push(candidate);
       if (candidate === 1) throw failure;
@@ -126,7 +153,10 @@ test('throw cancellation mode preserves the original reason and earlier outcome 
     onResult: (result) => { summaries.push(result); },
   }), (error: unknown) => error === cancellation);
   assert.deepEqual(visited, [1, 2]);
-  assert.deepEqual(summaries, [{ attempted: 2, completed: 0, deferred: 1, skipped: 0, failed: 1 }]);
+  assert.deepEqual(summaries, [{
+    attempted: 2, completed: 0, deferred: 1, skipped: 0, failed: 1,
+    inspected: 2, pages: 1, stopReason: 'cancelled', hasMore: null, oldestDueAgeMs: null,
+  }]);
 });
 
 test('disabled pre-load cancellation still loads candidates and checks before processing', async () => {
@@ -138,15 +168,21 @@ test('disabled pre-load cancellation still loads candidates and checks before pr
       signal: AbortSignal.abort(cancellation),
       checkAbortedBeforeLoad: false,
       cancellationMode: 'throw',
-      loadCandidates: async () => { loaded = true; return candidates; },
+      paging: singlePage(async () => { loaded = true; return candidates; }),
       processCandidate: async () => assert.fail('cancelled pass must not process candidates'),
       failureMessage: 'reconciliation failed',
       onResult: (result) => { summaries.push(result); },
     });
     if (candidates.length) await assert.rejects(pass, (error: unknown) => error === cancellation);
-    else assert.deepEqual(await pass, { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 });
+    else assert.deepEqual(await pass, {
+      attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0,
+      inspected: 0, pages: 1, stopReason: 'drained', hasMore: null, oldestDueAgeMs: null,
+    });
     assert.equal(loaded, true);
-    assert.deepEqual(summaries, [{ attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 }]);
+    assert.deepEqual(summaries, [{
+      attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0,
+      inspected: 0, pages: 1, stopReason: candidates.length ? 'cancelled' : 'drained', hasMore: null, oldestDueAgeMs: null,
+    }]);
   }
 });
 
@@ -156,11 +192,14 @@ test('failed outcomes resolve but thrown failures reject after later candidates 
     assert.deepEqual(await drainReconciliationCandidates({
       signal: new AbortController().signal,
       cancellationMode,
-      loadCandidates: async () => [1, 2],
+      paging: singlePage(async () => [1, 2]),
       processCandidate: async (candidate) => candidate === 1 ? 'failed' : 'completed',
       onFailure: (_candidate, error) => { observedFailures.push(error); },
       failureMessage: 'reconciliation failed',
-    }), { attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 });
+    }), {
+      attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1,
+      inspected: 2, pages: 1, stopReason: 'drained', hasMore: false, oldestDueAgeMs: null,
+    });
     assert.deepEqual(observedFailures, []);
 
     const failure = new Error('processing failed');
@@ -169,7 +208,7 @@ test('failed outcomes resolve but thrown failures reject after later candidates 
     await assert.rejects(drainReconciliationCandidates({
       signal: new AbortController().signal,
       cancellationMode,
-      loadCandidates: async () => [1, 2],
+      paging: singlePage(async () => [1, 2]),
       processCandidate: async (candidate) => {
         visited.push(candidate);
         if (candidate === 1) throw failure;
@@ -180,7 +219,10 @@ test('failed outcomes resolve but thrown failures reject after later candidates 
     }), (error: unknown) => error instanceof AggregateError && error.message === 'reconciliation failed' &&
       error.errors.length === 1 && error.errors[0] === failure);
     assert.deepEqual(visited, [1, 2]);
-    assert.deepEqual(summaries, [{ attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 }]);
+    assert.deepEqual(summaries, [{
+      attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1,
+      inspected: 2, pages: 1, stopReason: 'failed', hasMore: false, oldestDueAgeMs: null,
+    }]);
   }
 });
 
@@ -192,7 +234,7 @@ test('final-candidate cancellation never replaces a completed outcome or thrown 
       const pass = drainReconciliationCandidates({
         signal: controller.signal,
         cancellationMode,
-        loadCandidates: async () => [1],
+        paging: singlePage(async () => [1]),
         processCandidate: async () => {
           controller.abort(new Error('cancelled'));
           if (fails) throw failure;
@@ -204,7 +246,10 @@ test('final-candidate cancellation never replaces a completed outcome or thrown 
         await assert.rejects(pass, (error: unknown) => error instanceof AggregateError &&
           error.errors.length === 1 && error.errors[0] === failure);
       } else {
-        assert.deepEqual(await pass, { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+        assert.deepEqual(await pass, {
+          attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0,
+          inspected: 1, pages: 1, stopReason: 'drained', hasMore: null, oldestDueAgeMs: null,
+        });
       }
     }
   }

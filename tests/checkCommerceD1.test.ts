@@ -897,7 +897,7 @@ test('Commerce D1 checker rejects legacy inventory for inspection and deployment
   } finally { database.close(); }
 });
 
-test('Commerce D1 deployment audit validates committed sparse manifests and a single inventory snapshot', () => {
+test('Commerce D1 deployment audit validates committed sparse manifests during concurrent allocation', () => {
   const dropId = 'mi_note_sparse_audit_fixture';
   DEPLOYMENT_DROPS[dropId] = {
     ...miNoteDropFixture(), dropId, maxSupply: 2,
@@ -912,14 +912,20 @@ test('Commerce D1 deployment audit validates committed sparse manifests and a si
       (row: Record<string, unknown>) => { row.initialization_generation = 'wrong'; },
       (row: Record<string, unknown>) => { row.completed_at_ms = null; },
       (row: Record<string, unknown>) => { row.eligible_card_ids_json = '[1,3,1401,1430]'; },
-      (row: Record<string, unknown>) => { row.manifest_available_json = '[{"dudeId":2,"poolPosition":0}]'; },
-      (row: Record<string, unknown>) => { row.manifest_available_json = '[{"dudeId":1,"poolPosition":0},{"dudeId":3,"poolPosition":1},{"dudeId":1401,"poolPosition":2},{"dudeId":1430,"poolPosition":3}]'; },
+      (row: Record<string, unknown>) => { row.invalid_manifest_available_count = 1; },
     ]) {
       assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => {
         if (sql.startsWith('SELECT inventory.*') && row.drop_id === dropId) mutate(row);
         return row;
       })), /inventory manifest|exactly match/);
     }
+    const insertGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_available_dude_insert_guard'")[0].sql);
+    database.exec('DROP TRIGGER commerce_available_dude_insert_guard');
+    database.prepare('INSERT INTO commerce_available_dudes VALUES (?, 1, 4)').run(dropId);
+    database.exec(insertGuard);
+    assert.throws(() => checkCommerceD1(query), /exactly match the inventory manifest/);
+    pauseDatabase(database);
+    database.prepare('DELETE FROM commerce_available_dudes WHERE drop_id = ? AND dude_id = 1').run(dropId);
     resumeDatabase(database);
     let assignedAfterSnapshot = false;
     const result = checkCommerceD1((sql) => {
@@ -945,6 +951,31 @@ test('Commerce D1 deployment audit validates committed sparse manifests and a si
     database.close();
     delete DEPLOYMENT_DROPS[dropId];
   }
+});
+
+test('Commerce D1 checker rejects duplicate marker owners that hide an inconsistent box assignment', () => {
+  const database = currentDatabase(false);
+  try {
+    resumeDatabase(database);
+    const config = inventoryDropConfigs().find((value) => value.inventoryManifest)!;
+    const [orphan, ...assigned] = config.inventoryManifest!.cardIds.slice(0, config.itemsPerBox + 1);
+    const insert = database.prepare(`INSERT INTO commerce_documents (
+      document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
+    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`);
+    database.exec('BEGIN');
+    for (const id of [orphan, ...assigned]) {
+      const json = id === orphan
+        ? `{"dudeId":${id},"boxAssetId":"missing","boxAssetId":"box","inventoryGeneration":"${FIXTURE_GENERATION}"}`
+        : JSON.stringify({ dudeId: id, boxAssetId: 'box', inventoryGeneration: FIXTURE_GENERATION });
+      insert.run(`drops/${config.dropId}/dudeAssignments/${id}`, 'dude_assignment', config.dropId, String(id),
+        json, FIXTURE_TIME, FIXTURE_TIME);
+    }
+    insert.run(`drops/${config.dropId}/boxAssignments/box`, 'box_assignment', config.dropId, 'box',
+      JSON.stringify({ dudeIds: assigned }), FIXTURE_TIME, FIXTURE_TIME);
+    database.exec(`UPDATE commerce_authority_control SET documents_revision = documents_revision + 1,
+      updated_at_ms = updated_at_ms + 1; COMMIT`);
+    assert.throws(() => checkCommerceD1(localQuery(database)), /invalid figure marker/);
+  } finally { database.close(); }
 });
 
 test('Commerce D1 checker rejects native mode with missing or unready inventory', () => {
@@ -1467,6 +1498,7 @@ test('Commerce D1 batches small checks and preserves paged payload validation in
     for (const forDeployment of [false, true]) {
       let commands = 0;
       let batches = 0;
+      let inventoryPages = 0;
       const pages = new Map<string, number[]>();
       const runner = createD1MaintenanceRunner('commerce', (_file, args, options) => {
         commands += 1;
@@ -1476,16 +1508,22 @@ test('Commerce D1 batches small checks and preserves paged payload validation in
         return JSON.stringify(statements.map((statement) => {
           const results = query(statement);
           if (statement.startsWith('SELECT ') && statement.endsWith('LIMIT 100')) {
-            const table = /FROM (\w+) AS/.exec(statement)![1];
             assert.ok(results.length <= 100);
-            pages.set(table, [...(pages.get(table) ?? []), results.length]);
+            if (statement.startsWith('SELECT expected.value AS manifest_id')) inventoryPages += 1;
+            else {
+              const table = /FROM (\w+) AS/.exec(statement)![1];
+              pages.set(table, [...(pages.get(table) ?? []), results.length]);
+            }
           }
           return { success: true, results };
         }));
       });
       assert.deepEqual(checkCommerceD1(runner.query, { queryBatch: runner.queryBatch, forDeployment }), expected);
       assert.equal(batches, 5);
-      assert.ok(commands < 40, String(commands));
+      const manifestConfigs = inventoryDropConfigs().filter((config) => config.inventoryManifest);
+      assert.equal(inventoryPages, manifestConfigs.reduce((count, config) =>
+        count + Math.ceil(config.inventoryManifest!.cardIds.length / 100), 0));
+      assert.ok(commands < 40 + inventoryPages + 3 * manifestConfigs.length, String(commands));
       assert.deepEqual(Object.fromEntries(pages), {
         stripe_order_disputes: [100, 100, 1],
         commerce_documents: [100, 100, 100, 100, 100, 13],
@@ -1586,6 +1624,29 @@ test('Commerce D1 audit defers appended keys and tolerates deletion of its high-
     assert.equal(rows.length, 199);
     assert.ok(rows.some((row) => row.id === 0));
     assert.ok(rows.every((row) => Number(row.id) < 200 && row.id !== 150));
+  } finally { database.close(); }
+});
+
+test('Commerce D1 scoped audit applies the same predicate to its high-water key and pages', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('CREATE TABLE audit_rows (id TEXT PRIMARY KEY, scope TEXT) STRICT');
+    for (let index = 0; index < 101; index += 1) {
+      database.prepare('INSERT INTO audit_rows VALUES (?, ?)').run(`key-${String(index).padStart(3, '0')}`, 'selected');
+    }
+    database.exec("INSERT INTO audit_rows VALUES ('zzzz', 'other')");
+    let pages = 0;
+    const rows = [...commerceD1AuditRows((sql) => {
+      assert.match(sql, /item\.scope = 'selected'/);
+      if (sql.endsWith('LIMIT 100')) pages += 1;
+      return localQuery(database)(sql);
+    }, { table: 'audit_rows', alias: 'item', keys: ['id'], where: "item.scope = 'selected'" })];
+    assert.equal(pages, 2);
+    assert.equal(rows.length, 101);
+    assert.ok(rows.every((row) => row.scope === 'selected'));
+    assert.deepEqual([...commerceD1AuditRows(localQuery(database), {
+      table: 'audit_rows', alias: 'item', keys: ['id'], where: "item.scope = 'missing'",
+    })], []);
   } finally { database.close(); }
 });
 

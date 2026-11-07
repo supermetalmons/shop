@@ -18,7 +18,8 @@ import {
 import { commerceD1AuditRows, sequentialD1QueryBatch } from '../shared/commerceD1Audit.ts';
 import type { D1MaintenanceQueryBatch } from '../shared/d1MaintenanceRunner.ts';
 import { checkCurrentCommerceSchema } from '../shared/currentCommerceSchema.ts';
-import { inventoryDropConfigs, validateInventoryOwnership, validateManifestInventory } from '../shared/dudeInventoryMaintenance.ts';
+import { inventoryDropConfigs } from '../shared/dudeInventoryMaintenance.ts';
+import { auditManifestInventory } from '../shared/commerceInventoryAudit.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 import { isStripeChargebackSessionId, isStripeDisputeId } from '../../shared/stripeChargebacks.ts';
 import {
@@ -142,16 +143,11 @@ function readCommerceD1Checks(queryBatch: D1MaintenanceQueryBatch) {
       initialization.generation AS initialization_generation,
       initialization.manifest_sha256, initialization.eligible_card_ids_json, initialization.completed_at_ms,
       CASE WHEN initialization.drop_id IS NOT NULL THEN (
-        SELECT COALESCE(json_group_array(json_object('dudeId', dude_id, 'poolPosition', pool_position)), '[]')
-        FROM commerce_available_dudes WHERE drop_id = inventory.drop_id
-      ) END AS manifest_available_json,
-      CASE WHEN initialization.drop_id IS NOT NULL THEN (
-        SELECT COALESCE(json_group_array(json_object(
-          'document_path', document_path, 'document_kind', document_kind, 'drop_id', drop_id, 'document_id', document_id,
-          'document_json', document_json, 'version', version, 'create_time', create_time, 'update_time', update_time
-        )), '[]') FROM commerce_documents
-        WHERE drop_id = inventory.drop_id AND document_kind IN ('dude_pool', 'dude_assignment', 'box_assignment')
-      ) END AS manifest_documents_json
+        (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = inventory.drop_id) -
+        (SELECT COUNT(*) FROM json_each(initialization.eligible_card_ids_json) AS expected
+          JOIN commerce_available_dudes AS available ON available.drop_id = inventory.drop_id
+            AND available.dude_id = expected.value AND available.pool_position = expected.key)
+      ) END AS invalid_manifest_available_count
     FROM commerce_inventory_drops AS inventory
     LEFT JOIN commerce_inventory_initializations AS initialization ON initialization.drop_id = inventory.drop_id
     ORDER BY inventory.drop_id`,
@@ -306,15 +302,14 @@ export function checkCommerceD1(
     safeInteger(row.initialized_at_ms, 'Commerce inventory initialization timestamp');
     if (config.inventoryManifest) {
       if (row.initialization_generation !== row.generation || row.manifest_sha256 !== config.inventoryManifest.sha256 ||
-        row.eligible_card_ids_json !== JSON.stringify(config.inventoryManifest.cardIds) || row.completed_at_ms == null ||
-        typeof row.manifest_available_json !== 'string' || typeof row.manifest_documents_json !== 'string') {
+        row.eligible_card_ids_json !== JSON.stringify(config.inventoryManifest.cardIds) || row.completed_at_ms == null) {
         fail(`Commerce D1 committed inventory manifest is invalid for ${config.dropId}.`);
       }
       safeInteger(row.completed_at_ms, 'Commerce inventory completion timestamp');
-      const available = JSON.parse(row.manifest_available_json);
-      const documents = JSON.parse(row.manifest_documents_json).map(parseCommerceD1DocumentRow);
-      const ownership = validateInventoryOwnership(config, documents);
-      validateManifestInventory(config, available, ownership.assignedIds);
+      if (safeInteger(row.invalid_manifest_available_count, 'Invalid manifest availability count') !== 0) {
+        fail(`Available and assigned cards do not exactly match the inventory manifest for ${config.dropId}.`);
+      }
+      auditManifestInventory(queryRemoteCommerceD1, config);
     } else if (row.manifest_sha256 != null) {
       fail(`Commerce D1 has an unconfigured inventory manifest for ${config.dropId}.`);
     }

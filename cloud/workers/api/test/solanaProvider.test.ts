@@ -4,7 +4,9 @@ import {
   createSolanaProvider,
   parseSolanaRpcAccount,
   SolanaProviderError,
+  type SolanaProviderAttemptEvent,
   type SolanaProviderOptions,
+  type SolanaRpcCallOptions,
   type SolanaRetryPolicy,
 } from '../src/solanaProvider.ts';
 
@@ -285,4 +287,195 @@ test('Solana provider preserves cancellation reasons that resemble provider fail
   await reading;
   controller.abort(reason);
   await assert.rejects(pending, (error: unknown) => error === reason);
+});
+
+type RetryTransport = 'rpc' | 'rest';
+
+function retryTransport(
+  transport: RetryTransport,
+  providerFetch: typeof fetch,
+  overrides: Partial<SolanaProviderOptions> = {},
+) {
+  const method = transport === 'rpc' ? 'getAssetProof' : 'getAssetProofRest';
+  const retry = overrides.retry || RETRY_HTTP;
+  const provider = createSolanaProvider({
+    ...providerOptions(async (input, init) => {
+      if (transport === 'rest' && init?.body !== undefined) {
+        const request = JSON.parse(String(init.body)) as { id: string };
+        return Response.json({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'unsupported' } });
+      }
+      return providerFetch(input, init);
+    }),
+    ...overrides,
+    retry: transport === 'rpc' ? retry : { attempts: 1, delayMs: () => 0, shouldRetry: () => false },
+    onAttempt: event => { if (event.method === method) overrides.onAttempt?.(event); },
+  });
+  return {
+    method,
+    run: (options: SolanaRpcCallOptions = {}) => transport === 'rpc'
+      ? provider.rpc('getAssetProof', { id: 'asset' }, options)
+      : provider.getAssetProof('asset', { restRetry: retry }),
+  };
+}
+
+function retryResponse(transport: RetryTransport, init?: RequestInit): Response {
+  const result = { root: 'proof' };
+  if (transport === 'rest') return Response.json(result);
+  const request = JSON.parse(String(init?.body)) as { id: string };
+  return Response.json({ jsonrpc: '2.0', id: request.id, result });
+}
+
+for (const transport of ['rpc', 'rest'] as const) {
+  test(`${transport} retries preserve event ordering, failure identity, and callback arguments`, async () => {
+    const events: SolanaProviderAttemptEvent[] = [];
+    const retryCalls: Array<{ callback: string; failure: SolanaProviderError; attemptNumber: number }> = [];
+    const requestIds: string[] = [];
+    let calls = 0;
+    const provider = retryTransport(transport, async (_input, init) => {
+      if (init?.body) requestIds.push((JSON.parse(String(init.body)) as { id: string }).id);
+      return ++calls === 1 ? new Response(null, { status: 503 }) : retryResponse(transport, init);
+    }, {
+      onAttempt: event => events.push(event),
+      requestId: (method, attemptNumber) => `${method}-${attemptNumber}`,
+      retry: {
+        attempts: 2,
+        shouldRetry: (failure, attemptNumber) => {
+          retryCalls.push({ callback: 'shouldRetry', failure, attemptNumber });
+          return true;
+        },
+        delayMs: (failure, attemptNumber) => {
+          retryCalls.push({ callback: 'delayMs', failure, attemptNumber });
+          return 0;
+        },
+      },
+    });
+    assert.deepEqual(await provider.run(), { root: 'proof' });
+    assert.deepEqual(events.map(({ phase, attemptNumber, method }) => [phase, attemptNumber, method]), [
+      ['start', 1, provider.method], ['failure', 1, provider.method],
+      ['start', 2, provider.method], ['success', 2, provider.method],
+    ]);
+    const failure = events[1].failure!;
+    assert.equal(failure.kind, 'http');
+    assert.equal(failure.status, 503);
+    assert.equal(failure.method, provider.method);
+    assert.deepEqual(retryCalls.map(({ callback, attemptNumber }) => [callback, attemptNumber]), [
+      ['shouldRetry', 1], ['delayMs', 1],
+    ]);
+    assert.ok(retryCalls.every(call => call.failure === failure));
+    if (transport === 'rpc') assert.deepEqual(requestIds, ['getAssetProof-1', 'getAssetProof-2']);
+  });
+
+  test(`${transport} attempt timeouts retry and successful scopes are disposed`, async context => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const started = Promise.withResolvers<void>();
+    const signals: AbortSignal[] = [];
+    const events: SolanaProviderAttemptEvent[] = [];
+    const provider = retryTransport(transport, async (_input, init) => {
+      signals.push(init!.signal!);
+      if (signals.length > 1) return retryResponse(transport, init);
+      started.resolve();
+      return new Promise<Response>(() => undefined);
+    }, {
+      onAttempt: event => events.push(event),
+      retry: { ...RETRY_HTTP, delayMs: () => 10 },
+    });
+    const result = provider.run();
+    await started.promise;
+    context.mock.timers.tick(20);
+    await new Promise(setImmediate);
+    assert.equal(events[1].failure?.kind, 'timeout');
+    assert.equal(events[1].failure?.method, provider.method);
+    assert.equal(events[1].failure?.cause, signals[0].reason);
+    context.mock.timers.tick(10);
+    assert.deepEqual(await result, { root: 'proof' });
+    assert.equal(signals[0].aborted, true);
+    assert.equal(signals[1].aborted, false);
+    context.mock.timers.tick(100);
+    assert.equal(signals[1].aborted, false);
+    assert.deepEqual(events.map(event => event.phase), ['start', 'failure', 'start', 'success']);
+  });
+
+  test(`${transport} null attempt timeout remains cancellable by its parent`, async context => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const started = Promise.withResolvers<void>();
+    const parent = new AbortController();
+    const reason = new SolanaProviderError('invalid-response', 'cancelled by parent');
+    const events: SolanaProviderAttemptEvent[] = [];
+    let signal: AbortSignal | undefined;
+    const provider = retryTransport(transport, async (_input, init) => {
+      signal = init?.signal ?? undefined;
+      started.resolve();
+      return new Promise<Response>(() => undefined);
+    }, {
+      attemptTimeoutMs: null,
+      signal: parent.signal,
+      onAttempt: event => events.push(event),
+      retry: { attempts: 2, delayMs: () => assert.fail('unexpected delay'), shouldRetry: () => assert.fail('unexpected retry') },
+    });
+    const rejected = assert.rejects(provider.run(), error => error === reason);
+    await started.promise;
+    context.mock.timers.tick(1000);
+    assert.equal(signal, parent.signal);
+    assert.equal(signal?.aborted, false);
+    parent.abort(reason);
+    await rejected;
+    assert.deepEqual(events.map(event => event.phase), ['start']);
+  });
+
+  test(`${transport} parent cancellation during backoff prevents another attempt`, async context => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const parent = new AbortController();
+    const reason = new Error('cancelled during backoff');
+    const events: SolanaProviderAttemptEvent[] = [];
+    let calls = 0;
+    let signal: AbortSignal | undefined;
+    const provider = retryTransport(transport, async (_input, init) => {
+      calls++;
+      signal = init?.signal ?? undefined;
+      return new Response(null, { status: 503 });
+    }, {
+      signal: parent.signal,
+      onAttempt: event => events.push(event),
+      retry: { ...RETRY_HTTP, delayMs: () => 100 },
+    });
+    const rejected = assert.rejects(provider.run(), error => error === reason);
+    await new Promise(setImmediate);
+    context.mock.timers.tick(20);
+    assert.equal(signal?.aborted, false);
+    parent.abort(reason);
+    await rejected;
+    context.mock.timers.tick(100);
+    assert.equal(calls, 1);
+    assert.equal(signal?.aborted, false);
+    assert.deepEqual(events.map(event => event.phase), ['start', 'failure']);
+  });
+}
+
+test('RPC timeout overrides distinguish inheritance, replacement, and disabling', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const attemptTimeoutMs of [undefined, 5, null]) {
+    const pending = Promise.withResolvers<Response>();
+    let signal: AbortSignal | undefined;
+    let init: RequestInit | undefined;
+    const provider = retryTransport('rpc', async (_input, options) => {
+      init = options;
+      signal = options?.signal ?? undefined;
+      return pending.promise;
+    }, { retry: { attempts: 1, delayMs: () => 0, shouldRetry: () => false } });
+    const result = provider.run({ attemptTimeoutMs });
+    if (attemptTimeoutMs === null) {
+      context.mock.timers.tick(100);
+      assert.equal(signal?.aborted, false);
+      pending.resolve(retryResponse('rpc', init));
+      assert.deepEqual(await result, { root: 'proof' });
+    } else {
+      const rejected = assert.rejects(result, error => error instanceof SolanaProviderError && error.kind === 'timeout');
+      const timeout = attemptTimeoutMs ?? 20;
+      context.mock.timers.tick(timeout - 1);
+      assert.equal(signal?.aborted, false);
+      context.mock.timers.tick(1);
+      await rejected;
+      assert.equal(signal?.aborted, true);
+    }
+  }
 });

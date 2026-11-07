@@ -26,8 +26,9 @@ export function* commerceD1AuditRows(query: Query, options: {
   columns?: string;
   alias?: string;
   joins?: string;
+  where?: string;
 }): Generator<CommerceD1Row> {
-  const { table, keys, alias = table, columns = `${alias}.*`, joins = '' } = options;
+  const { table, keys, alias = table, columns = `${alias}.*`, joins = '', where } = options;
   const byteColumns = (prefix = '') => keys.map((key, index) =>
     `hex(CAST(${prefix}${key} AS BLOB)) AS __audit_key_bytes_${index}`).join(', ');
   const invalid = (): never => { throw new Error(`Commerce D1 audit page is invalid for ${table}.`); };
@@ -45,8 +46,9 @@ export function* commerceD1AuditRows(query: Query, options: {
       row[`__audit_key_bytes_${index}`] !== Buffer.from(value, 'utf8').toString('hex').toUpperCase()) invalid();
     return value as string | number;
   });
-  const upperRows = readRows(`SELECT ${keys.join(', ')}, ${byteColumns()} FROM ${table}
-    ORDER BY ${keys.map((key) => `${key} DESC`).join(', ')} LIMIT 1`, 1);
+  const upperRows = readRows(`SELECT ${keys.map((key) => `${alias}.${key}`).join(', ')}, ${byteColumns(`${alias}.`)} FROM ${table} AS ${alias}
+    ${where ? `WHERE ${where}` : ''}
+    ORDER BY ${keys.map((key) => `${alias}.${key} DESC`).join(', ')} LIMIT 1`, 1);
   if (upperRows.length === 0) return;
   const upper = cursor(upperRows[0]);
   const literal = (values: Cursor) => `(${values.map((value) =>
@@ -56,7 +58,7 @@ export function* commerceD1AuditRows(query: Query, options: {
   for (;;) {
     const rows = readRows(`SELECT ${columns}, ${byteColumns(`${alias}.`)}
       FROM ${table} AS ${alias} ${joins}
-      WHERE ${after ? `${keySql} > ${literal(after)} AND ` : ''}${keySql} <= ${literal(upper)}
+      WHERE ${where ? `(${where}) AND ` : ''}${after ? `${keySql} > ${literal(after)} AND ` : ''}${keySql} <= ${literal(upper)}
       ORDER BY ${keys.map((key) => `${alias}.${key}`).join(', ')} LIMIT 100`, 100);
     for (const row of rows) {
       const next = cursor(row);

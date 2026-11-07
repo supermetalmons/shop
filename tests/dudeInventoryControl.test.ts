@@ -35,6 +35,15 @@ test('ownership validation preserves assignment consistency and orphan reservati
     [{ ...marker, data: { dudeId: 2, boxAssetId: 'box' } }]), /invalid figure marker/);
 });
 
+test('ownership validators preserve dense numeric coercion and sparse numeric requirements', () => {
+  const marker = parseCommerceD1DocumentRow(ownershipRow('drop', 'dude_assignment', { dudeId: '1', boxAssetId: 'box' }));
+  const box = parseCommerceD1DocumentRow(ownershipRow('drop', 'box_assignment', { dudeIds: ['1.9'] }));
+  assert.equal(validateInventoryOwnership(commerceTestConfig, [marker, box]).assignedCount, 1);
+  const sparse = { ...commerceTestConfig, inventoryManifest: { sha256: 'a'.repeat(64), cardIds: [1] } };
+  assert.throws(() => validateInventoryOwnership(sparse, [marker]), /invalid figure marker/);
+  assert.throws(() => validateInventoryOwnership(sparse, [box]), /invalid box assignment/);
+});
+
 test('status is read-only and reports ready stock and missing new configurations', async (t) => {
   const database = createCurrentCommerceDatabase(t);
   await bootstrapTestCommerce(database);

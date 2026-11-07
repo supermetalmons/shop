@@ -26,30 +26,25 @@ export function inventoryDropConfigs(): InventoryDropConfig[] {
   }).sort((left, right) => left.dropId.localeCompare(right.dropId));
 }
 
-export function validateInventoryOwnership(
-  config: InventoryDropConfig,
-  documents: readonly CommerceD1Document[],
-) {
-  const rows = documents.filter((document) => document.dropId === config.dropId);
-  const assignments = new Map<number, string>();
-  const boxes = new Map<string, number[]>();
+export function inventoryOwnershipValidators(config: InventoryDropConfig) {
   const eligible = config.inventoryManifest ? new Set(config.inventoryManifest.cardIds) : undefined;
   const invalid = (detail: string): never => {
     throw new Error(`Inventory ownership conflict for ${config.dropId}: ${detail}`);
   };
-  for (const document of rows) {
-    if (document.kind === 'dude_assignment') {
+  return {
+    invalid,
+    marker(document: CommerceD1Document): { id: number; box: string } {
       const id = Number(document.documentId);
       const box = document.data.boxAssetId;
       if (!Number.isSafeInteger(id) || id < 1 || id > config.maxDudeId || eligible && !eligible.has(id) ||
         String(id) !== document.documentId || Number(document.data.dudeId) !== id ||
         eligible && typeof document.data.dudeId !== 'number' ||
-        typeof box !== 'string' || !box.trim() || assignments.has(id)) {
+        typeof box !== 'string' || !box.trim()) {
         invalid(`invalid figure marker ${document.path}.`);
       }
-      assignments.set(id, box as string);
-    }
-    if (document.kind === 'box_assignment') {
+      return { id, box: box as string };
+    },
+    box(document: CommerceD1Document): number[] {
       if (eligible && (!Array.isArray(document.data.dudeIds) ||
         document.data.dudeIds.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id)))) {
         invalid(`invalid box assignment ${document.path}.`);
@@ -61,7 +56,28 @@ export function validateInventoryOwnership(
         ids.some((id) => !Number.isSafeInteger(id) || id < 1 || id > config.maxDudeId || eligible && !eligible.has(id))) {
         invalid(`invalid box assignment ${document.path}.`);
       }
-      boxes.set(document.documentId, ids);
+      return ids;
+    },
+  };
+}
+
+export function validateInventoryOwnership(
+  config: InventoryDropConfig,
+  documents: readonly CommerceD1Document[],
+) {
+  const rows = documents.filter((document) => document.dropId === config.dropId);
+  const assignments = new Map<number, string>();
+  const boxes = new Map<string, number[]>();
+  const validators = inventoryOwnershipValidators(config);
+  const { invalid } = validators;
+  for (const document of rows) {
+    if (document.kind === 'dude_assignment') {
+      const { id, box } = validators.marker(document);
+      if (assignments.has(id)) invalid(`invalid figure marker ${document.path}.`);
+      assignments.set(id, box);
+    }
+    if (document.kind === 'box_assignment') {
+      boxes.set(document.documentId, validators.box(document));
     }
   }
   for (const [box, ids] of boxes) {

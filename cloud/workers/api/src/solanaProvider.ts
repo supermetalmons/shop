@@ -339,28 +339,28 @@ function networkFailure(error: unknown, method: string): SolanaProviderError {
     : new SolanaProviderError('network', 'Solana provider request failed', { cause: error, method });
 }
 
-async function runRpc(
-  provider: SolanaProviderOptions,
-  method: string,
-  params: unknown,
-  overrides: SolanaRpcCallOptions = {},
-): Promise<unknown> {
-  const retry = overrides.retry || provider.retry;
-  const onAttempt = overrides.onAttempt || provider.onAttempt;
+async function runProviderAttempts<T>(
+  options: Readonly<{
+    signal: AbortSignal;
+    attemptTimeoutMs: number | null;
+    method: string;
+    retry: SolanaRetryPolicy;
+    onAttempt?: (event: SolanaProviderAttemptEvent) => void;
+  }>,
+  attempt: (context: { attemptNumber: number; signal: AbortSignal }) => Promise<T>,
+): Promise<T> {
+  const { method, retry, onAttempt } = options;
   const attempts = validAttempts(retry.attempts);
   for (let index = 0; index < attempts; index += 1) {
-    if (provider.signal.aborted) throw provider.signal.reason;
+    if (options.signal.aborted) throw options.signal.reason;
     const attemptNumber = index + 1;
-    const timeoutMs = overrides.attemptTimeoutMs === undefined
-      ? provider.attemptTimeoutMs
-      : overrides.attemptTimeoutMs;
-    const scope = timeoutMs === null
+    const scope = options.attemptTimeoutMs === null
       ? null
-      : createTimedAbortScope(provider.signal, {
-          timeoutMs,
+      : createTimedAbortScope(options.signal, {
+          timeoutMs: options.attemptTimeoutMs,
           timeoutMessage: 'Solana provider request timed out',
         });
-    const signal = scope?.signal || provider.signal;
+    const signal = scope?.signal || options.signal;
     if (signal.aborted) {
       scope?.dispose();
       throw signal.reason;
@@ -368,24 +368,11 @@ async function runRpc(
     emitAttempt(onAttempt, { attemptNumber, method, phase: 'start' });
     let failure: SolanaProviderError | undefined;
     try {
-      const result = await requestSolanaRpc({
-        accept: overrides.accept,
-        envelope: overrides.envelope || provider.envelope || 'basic',
-        errorMode: overrides.errorMode || 'record',
-        fetch: provider.fetch,
-        id: (overrides.requestId || provider.requestId)(method, attemptNumber),
-        maxResponseBytes: provider.maxResponseBytes,
-        method,
-        params,
-        redirect: overrides.redirect || 'manual',
-        signal,
-        url: heliusRpcUrl(provider.cluster, provider.apiKey),
-      });
-      if (result.kind !== 'result') throw transportFailure(result, method);
+      const result = await attempt({ attemptNumber, signal });
       emitAttempt(onAttempt, { attemptNumber, method, phase: 'success' });
-      return result.value;
+      return result;
     } catch (error) {
-      if (isSignalCancellationError(provider.signal, error)) throw provider.signal.reason;
+      if (isSignalCancellationError(options.signal, error)) throw options.signal.reason;
       failure = scope?.timedOut()
         ? new SolanaProviderError('timeout', 'Solana provider request timed out', { cause: error, method })
         : networkFailure(error, method);
@@ -393,11 +380,42 @@ async function runRpc(
     } finally {
       scope?.dispose();
     }
-    if (provider.signal.aborted) throw failure;
+    if (options.signal.aborted) throw failure;
     if (attemptNumber >= attempts || !retry.shouldRetry(failure, attemptNumber)) throw failure;
-    await sleepWithSignal(retry.delayMs(failure, attemptNumber), provider.signal);
+    await sleepWithSignal(retry.delayMs(failure, attemptNumber), options.signal);
   }
   throw new SolanaProviderError('network', 'Solana provider request failed', { method });
+}
+
+async function runRpc(
+  provider: SolanaProviderOptions,
+  method: string,
+  params: unknown,
+  overrides: SolanaRpcCallOptions = {},
+): Promise<unknown> {
+  return runProviderAttempts({
+    signal: provider.signal,
+    attemptTimeoutMs: overrides.attemptTimeoutMs === undefined ? provider.attemptTimeoutMs : overrides.attemptTimeoutMs,
+    method,
+    retry: overrides.retry || provider.retry,
+    onAttempt: overrides.onAttempt || provider.onAttempt,
+  }, async ({ attemptNumber, signal }) => {
+    const result = await requestSolanaRpc({
+      accept: overrides.accept,
+      envelope: overrides.envelope || provider.envelope || 'basic',
+      errorMode: overrides.errorMode || 'record',
+      fetch: provider.fetch,
+      id: (overrides.requestId || provider.requestId)(method, attemptNumber),
+      maxResponseBytes: provider.maxResponseBytes,
+      method,
+      params,
+      redirect: overrides.redirect || 'manual',
+      signal,
+      url: heliusRpcUrl(provider.cluster, provider.apiKey),
+    });
+    if (result.kind !== 'result') throw transportFailure(result, method);
+    return result.value;
+  });
 }
 
 async function requestRestJson(
@@ -406,59 +424,33 @@ async function requestRestJson(
   method: string,
   retry: SolanaRetryPolicy,
 ): Promise<unknown> {
-  const attempts = validAttempts(retry.attempts);
-  for (let index = 0; index < attempts; index += 1) {
-    if (provider.signal.aborted) throw provider.signal.reason;
-    const attemptNumber = index + 1;
-    const scope = provider.attemptTimeoutMs === null
-      ? null
-      : createTimedAbortScope(provider.signal, {
-          timeoutMs: provider.attemptTimeoutMs,
-          timeoutMessage: 'Solana provider request timed out',
-        });
-    const signal = scope?.signal || provider.signal;
-    if (signal.aborted) {
-      scope?.dispose();
-      throw signal.reason;
+  return runProviderAttempts({
+    signal: provider.signal,
+    attemptTimeoutMs: provider.attemptTimeoutMs,
+    method,
+    retry,
+    onAttempt: provider.onAttempt,
+  }, async ({ signal }) => {
+    const response = await raceWithSignal(provider.fetch(url, {
+      headers: { Accept: 'application/json' },
+      redirect: 'manual',
+      signal,
+    }), signal);
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      throw new SolanaProviderError(
+        response.status === 404 ? 'not-found' : 'http',
+        'Solana provider request failed',
+        { method, status: response.status },
+      );
     }
-    emitAttempt(provider.onAttempt, { attemptNumber, method, phase: 'start' });
-    let failure: SolanaProviderError | undefined;
-    try {
-      const response = await raceWithSignal(provider.fetch(url, {
-        headers: { Accept: 'application/json' },
-        redirect: 'manual',
-        signal,
-      }), signal);
-      if (!response.ok) {
-        await cancelResponseBody(response);
-        throw new SolanaProviderError(
-          response.status === 404 ? 'not-found' : 'http',
-          'Solana provider request failed',
-          { method, status: response.status },
-        );
-      }
-      const value = await readBoundedResponseJson(response, {
-        maxBytes: provider.maxResponseBytes,
-        signal,
-        contentType: 'require-json',
-        createError: (failure, cause) => providerBodyError(failure, cause, method),
-      });
-      emitAttempt(provider.onAttempt, { attemptNumber, method, phase: 'success' });
-      return value;
-    } catch (error) {
-      if (isSignalCancellationError(provider.signal, error)) throw provider.signal.reason;
-      failure = scope?.timedOut()
-        ? new SolanaProviderError('timeout', 'Solana provider request timed out', { cause: error, method })
-        : networkFailure(error, method);
-      emitAttempt(provider.onAttempt, { attemptNumber, failure, method, phase: 'failure' });
-    } finally {
-      scope?.dispose();
-    }
-    if (provider.signal.aborted) throw failure;
-    if (attemptNumber >= attempts || !retry.shouldRetry(failure, attemptNumber)) throw failure;
-    await sleepWithSignal(retry.delayMs(failure, attemptNumber), provider.signal);
-  }
-  throw new SolanaProviderError('network', 'Solana provider request failed', { method });
+    return readBoundedResponseJson(response, {
+      maxBytes: provider.maxResponseBytes,
+      signal,
+      contentType: 'require-json',
+      createError: (failure, cause) => providerBodyError(failure, cause, method),
+    });
+  });
 }
 
 function restClusterQuery(cluster: SolanaCluster): string {
