@@ -34,7 +34,9 @@ export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, on
       const width = element.clientWidth - padding(style.paddingLeft) - padding(style.paddingRight);
       const height = element.clientHeight - padding(style.paddingTop) - padding(style.paddingBottom);
       if (width <= 0 || height <= 0) return;
-      const next = layout(width, height, window.innerWidth <= 860 ? 4 : 8);
+      const gap = window.innerWidth <= 860 ? 12 : 24;
+      const preferred = layout(width, height, gap);
+      const next = preferred.size >= 44 ? preferred : layout(width, height, gap / 3);
       setGeometry(previous => previous.size === next.size && previous.columns === next.columns && previous.gap === next.gap ? previous : next);
     };
     update();

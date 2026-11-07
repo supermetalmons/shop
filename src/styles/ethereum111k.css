@@ -95,9 +95,9 @@
 }
 .ethereum111k__relic-image > img {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: 4px;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
   object-fit: contain;
   border-radius: inherit;
   transition: opacity 150ms ease;
