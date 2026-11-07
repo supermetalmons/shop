@@ -19,11 +19,7 @@ import {
   type ApiDropConfig,
 } from './dropConfig.js';
 import { dropDeliveryOrderPath } from './dropPaths.js';
-import {
-  BoxMinterConfigCodecError,
-  decodeBoxMinterConfigData,
-  type DecodedBoxMinterConfigData,
-} from '../../../../shared/boxMinterConfigCodec.js';
+import { readBoxMinterConfig } from './boxMinterConfigRead.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   isBoxMinterDiscountMintsPerWallet,
@@ -124,8 +120,6 @@ const SERVER_INVALID_DELIVERY_UNITS_POLICY = 'arithmetic' as const;
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const ATTEMPT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
-const MPL_CORE_COLLECTION_V1_DISCRIMINATOR = 5;
-const MPL_CORE_COLLECTION_V1_MIN_BYTES = 49;
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 
@@ -394,49 +388,28 @@ async function loadOnchainState(
   context: ProviderContext,
   runtime: DeliveryRuntime,
 ): Promise<OnchainState> {
-  const result = await rpcCall(context, runtime, 'getMultipleAccounts', [
-    [runtime.collectionMint.toBase58(), runtime.boxMinterConfigPda.toBase58()],
-    { commitment: 'confirmed', encoding: 'base64' },
-  ]);
-  if (!isRecord(result) || !Array.isArray(result.value) || result.value.length !== 2) {
-    throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid account response.');
-  }
-  if (!result.value[0]) {
-    throw new DeliveryPrepareError('failed-precondition', 'Configured collection was not found on-chain.', {
-      collection: runtime.collectionMint.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  if (!result.value[1]) {
-    throw new DeliveryPrepareError('failed-precondition', 'Box minter config PDA not found.', {
-      configPda: runtime.boxMinterConfigPda.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  const collection = parseRpcAccount(result.value[0], 'COLLECTION_MINT');
-  const configAccount = parseRpcAccount(result.value[1], 'BOX_MINTER_CONFIG_PDA');
-  if (
-    !collection.owner.equals(MPL_CORE_PROGRAM_ID) ||
-    collection.data.length < MPL_CORE_COLLECTION_V1_MIN_BYTES ||
-    collection.data[0] !== MPL_CORE_COLLECTION_V1_DISCRIMINATOR
-  ) {
-    throw new DeliveryPrepareError('failed-precondition', 'Configured collection is not an MPL Core collection.');
-  }
-  if (!configAccount.owner.equals(runtime.boxMinterProgramId)) {
-    throw new DeliveryPrepareError('failed-precondition', 'Box minter config PDA has an unexpected owner.');
-  }
-  let decoded: DecodedBoxMinterConfigData;
-  try {
-    decoded = decodeBoxMinterConfigData(configAccount.data, {
-      validateDiscriminator: true,
-      decodeExtensions: true,
-    });
-  } catch (error) {
-    if (error instanceof BoxMinterConfigCodecError) {
-      throw new DeliveryPrepareError('failed-precondition', error.message, error.details);
-    }
-    throw error;
-  }
+  const decoded = await readBoxMinterConfig({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    collectionMint: runtime.collectionMint,
+    configPda: runtime.boxMinterConfigPda,
+    programId: runtime.boxMinterProgramId,
+    parseAccount: parseRpcAccount,
+    collectionPolicy: 'collection-v1',
+    errors: {
+      invalidResponse: () => new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid account response.'),
+      missingCollection: () => new DeliveryPrepareError('failed-precondition', 'Configured collection was not found on-chain.', {
+        collection: runtime.collectionMint.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      missingConfig: () => new DeliveryPrepareError('failed-precondition', 'Box minter config PDA not found.', {
+        configPda: runtime.boxMinterConfigPda.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      invalidCollection: () => new DeliveryPrepareError('failed-precondition', 'Configured collection is not an MPL Core collection.'),
+      invalidConfigOwner: () => new DeliveryPrepareError('failed-precondition', 'Box minter config PDA has an unexpected owner.'),
+      invalidConfig: (error) => new DeliveryPrepareError('failed-precondition', error.message, error.details),
+    },
+  });
   const admin = new PublicKey(decoded.admin);
   const treasury = new PublicKey(decoded.treasury);
   const coreCollection = new PublicKey(decoded.coreCollection);

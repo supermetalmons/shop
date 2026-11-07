@@ -16,6 +16,7 @@ import type { EthereumSubmission } from './state';
 import { matchesEthereumOperationEvent } from './recovery';
 import { ethereumMetadataBaseUri } from '../../shared/ethereum/config';
 import { hasValidEthereumMedia } from './artworkMedia';
+import { isShipmentHistoryCursor, type ShipmentPageRequest } from '../../shared/shipmentHistory';
 
 export class EthereumApiError extends Error {
   constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null) { super(message); }
@@ -185,10 +186,17 @@ export const ethereumApi = {
     if (!record(value) || !record(value.address) || typeof value.address.id !== 'string') return invalid();
     return value as EthereumSaveAddressResponse;
   },
-  async shipments(session: EthereumSession, signal?: AbortSignal): Promise<EthereumShipmentsResponse> {
-    const value = await request(ETHEREUM_API_PATHS.shipments, { session, signal });
+  async shipments(session: EthereumSession, signal?: AbortSignal, page: ShipmentPageRequest = {}): Promise<EthereumShipmentsResponse> {
+    const params = new URLSearchParams();
+    if (page.limit !== undefined) params.set('limit', String(page.limit));
+    if (page.cursor) params.set('cursor', JSON.stringify(page.cursor));
+    const value = await request(`${ETHEREUM_API_PATHS.shipments}${params.size ? `?${params}` : ''}`, { session, signal });
     if (!record(value) || !Array.isArray(value.orders)) return invalid();
-    return value as EthereumShipmentsResponse;
+    const nextCursor = value.nextCursor === undefined ? null : value.nextCursor;
+    if (nextCursor === null) return { orders: value.orders, nextCursor: null };
+    if (!isShipmentHistoryCursor(nextCursor, session.address) ||
+      nextCursor.documentPath.split('/')[1] !== session.dropId) return invalid();
+    return { orders: value.orders, nextCursor };
   },
   async prepareDelivery(tokenIds: string[], addressId: string, requestId: string, session: EthereumSession, signal?: AbortSignal): Promise<EthereumDeliveryPrepareResponse> {
     const value = await request(ETHEREUM_API_PATHS.deliveryPrepare, { body: { tokenIds, addressId, requestId } satisfies EthereumDeliveryPrepareRequest, session, signal });

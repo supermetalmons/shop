@@ -8,7 +8,7 @@ import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.j
 import { stripeCheckoutStateSelectColumns } from './stripeCheckoutStateStore.js';
 import { DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH } from '../../../../shared/deliveryRecoveryPagination.js';
 import { PACK_STATUS_OUTBOX_FIELD_COLUMNS } from '../../../../shared/packStatusOutbox.js';
-import type { NotificationDueCursor } from './commerceDiscoveryCandidates.js';
+import type { NotificationDueCursor, StripeCheckoutRequeueCursor } from './commerceDiscoveryCandidates.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -112,17 +112,21 @@ export function stripeChargebackMatchedDocumentsQuery(sessionId: string): Commer
 export function shipmentHistoryPageQuery(args: {
   owner: string;
   limit: number;
+  dropId?: string;
+  allowPaused?: boolean;
   startAfter?: ShipmentHistoryCursor;
 }): CommerceSqlQuery {
   return {
     sql: `SELECT ${SHIPMENT_COLUMNS}, shipment_sort_at_ms
       FROM commerce_documents INDEXED BY commerce_delivery_orders_shipment_cursor
       WHERE ${SHIPMENT_PREDICATE} AND owner = ?
+        ${args.dropId === undefined ? '' : 'AND drop_id = ?'}
         AND length(CAST(document_path AS BLOB)) <= 512
-        AND EXISTS (SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1')
+        AND EXISTS (SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state ${args.allowPaused ? "IN ('d1', 'paused')" : "= 'd1'"})
         ${args.startAfter ? 'AND (shipment_sort_at_ms, document_path) < (?, ?)' : ''}
       ORDER BY shipment_sort_at_ms DESC, document_path DESC LIMIT ?`,
-    bindings: [args.owner, ...(args.startAfter ? [args.startAfter.sortAtMs, args.startAfter.documentPath] : []), args.limit],
+    bindings: [args.owner, ...(args.dropId === undefined ? [] : [args.dropId]),
+      ...(args.startAfter ? [args.startAfter.sortAtMs, args.startAfter.documentPath] : []), args.limit],
   };
 }
 
@@ -389,7 +393,11 @@ export function packStatusOutboxDueQuery(args: { dropId: string; dueAtMs: number
   };
 }
 
-export function staleStripeFulfillmentsQuery(cutoffMs: number): CommerceSqlQuery {
+export function staleStripeFulfillmentsQuery(
+  cutoffMs: number,
+  limit = 100,
+  startAfter?: StripeCheckoutRequeueCursor,
+): CommerceSqlQuery {
   const fields = ['fulfillmentProcessor', 'lastStripeWebhookEventId', 'lastStripeWebhookEventType'];
   const columns = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_json'
     ? `json_object(${fields.map((field) => `'${field}', document.document_json -> '$.${field}'`).join(', ')}) AS document_json`
@@ -408,9 +416,10 @@ export function staleStripeFulfillmentsQuery(cutoffMs: number): CommerceSqlQuery
         checkout_state.status IN ('${STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING}', '${STRIPE_CHECKOUT_STATUS.PROCESSING}') AND
         json_type(document.document_json, '$.lastStripeWebhookEventId') = 'text' AND
         checkout_state.updated_at_ms <= ?
+        ${startAfter ? 'AND (checkout_state.updated_at_ms, checkout_state.document_path) > (?, ?)' : ''}
       ORDER BY checkout_state.updated_at_ms ASC, checkout_state.document_path ASC
-      LIMIT 100`,
-    bindings: [cutoffMs],
+      LIMIT ?`,
+    bindings: [cutoffMs, ...(startAfter ? [startAfter.updatedAtMs, startAfter.checkoutPath] : []), limit],
   };
 }
 

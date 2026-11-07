@@ -21,6 +21,40 @@ const shipmentEndpoints = [
   { path: ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, body: {}, owner: ANONYMOUS, offset: 1000 },
 ] as const;
 
+test('drop-scoped shipment pages preserve tied ordering and leave owner-wide reads unchanged', async context => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.deliveryOrder('first', '1'), data: { owner: OWNER, status: 'processing', createdAt: 10 } },
+    { key: commerceKeys.deliveryOrder('first', '2'), data: { owner: OWNER, status: 'ready_to_ship', processedAt: 10 } },
+    { key: commerceKeys.deliveryOrder('second', '3'), data: { owner: OWNER, status: 'ready_to_ship', createdAt: 20 } },
+    { key: commerceKeys.deliveryOrder('first', '4'), data: { owner: OTHER, status: 'ready_to_ship', createdAt: 30 } },
+  ]);
+  const repository = new D1CommerceRepository(harness.db);
+  const first = await repository.queryShipmentHistoryPage({ owner: OWNER, dropId: 'first', limit: 1 });
+  assert.deepEqual(first.orders.map(order => order.deliveryId), [2]);
+  assert.ok(first.nextCursor);
+  const tail = await repository.queryShipmentHistoryPage({ owner: OWNER, dropId: 'first', limit: 1, startAfter: first.nextCursor });
+  assert.deepEqual(tail.orders.map(order => order.deliveryId), [1]);
+  assert.equal(tail.nextCursor, null);
+  assert.deepEqual((await repository.queryShipmentHistoryPage({ owner: OWNER, limit: 100 })).orders
+    .map(order => order.deliveryId), [3, 2, 1]);
+});
+
+test('shipment repositories reject invalid drop filters and cross-drop cursors before reading D1', async context => {
+  let calls = 0;
+  const harness = createCommerceD1Harness({ observeCall: () => { calls++; } });
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  for (const dropId of ['', '../other', 'other/drop']) {
+    await assert.rejects(repository.queryShipmentHistoryPage({ owner: OWNER, dropId, limit: 100 }), { code: 'invalid-argument' });
+  }
+  await assert.rejects(repository.queryShipmentHistoryPage({ owner: OWNER, dropId: 'first', limit: 100,
+    startAfter: { version: 1, owner: OWNER, sortAtMs: 10, documentPath: 'drops/second/deliveryOrders/1' },
+  }), { code: 'invalid-argument' });
+  assert.equal(calls, 0);
+});
+
 function seed(harness: CommerceD1Harness, rows: Array<{ id: number; data?: CommerceDocumentData }>): void {
   seedCommerceDocuments(harness, rows.map(({ id, data }) => ({
     key: commerceKeys.deliveryOrder('card_nft_2', String(id)),

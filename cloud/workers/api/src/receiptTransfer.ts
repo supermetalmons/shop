@@ -25,11 +25,7 @@ import {
   normalizeDropSalesMode,
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
-import {
-  BoxMinterConfigCodecError,
-  decodeBoxMinterConfigData,
-  type DecodedBoxMinterConfigData,
-} from '../../../../shared/boxMinterConfigCodec.js';
+import { readBoxMinterConfig } from './boxMinterConfigRead.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   isConfiguredBoxMinterItemsPerBox,
@@ -365,55 +361,38 @@ async function loadOnchainState(
   context: ProviderContext,
   runtime: ReceiptTransferRuntime,
 ): Promise<OnchainState> {
-  const result = await rpcCall(context, runtime, 'getMultipleAccounts', [
-    [runtime.collectionMint.toBase58(), runtime.boxMinterConfigPda.toBase58()],
-    { commitment: 'confirmed', encoding: 'base64' },
-  ]);
-  if (!isRecord(result) || !Array.isArray(result.value) || result.value.length !== 2) {
-    throw new ReceiptTransferError('unavailable', 'Receipt transfer provider returned an invalid account response.');
-  }
-  if (!result.value[0]) {
-    throw new ReceiptTransferError('failed-precondition', 'Configured receipt collection was not found on-chain.', {
-      collection: runtime.collectionMint.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  if (!result.value[1]) {
-    throw new ReceiptTransferError('failed-precondition', 'Box minter config PDA not found.', {
-      configPda: runtime.boxMinterConfigPda.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  const collection = parseRpcAccount(result.value[0], 'COLLECTION_MINT');
-  const config = parseRpcAccount(result.value[1], 'BOX_MINTER_CONFIG_PDA');
-  if (!collection.owner.equals(MPL_CORE_PROGRAM_ID)) {
-    throw new ReceiptTransferError('failed-precondition', 'Configured receipt collection is not an MPL Core collection.', {
-      collection: runtime.collectionMint.toBase58(),
-      expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
-      actualOwner: collection.owner.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  if (!config.owner.equals(runtime.boxMinterProgramId)) {
-    throw new ReceiptTransferError('failed-precondition', 'Box minter config PDA has an unexpected owner.', {
-      configPda: runtime.boxMinterConfigPda.toBase58(),
-      expectedOwner: runtime.boxMinterProgramId.toBase58(),
-      actualOwner: config.owner.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  let decoded: DecodedBoxMinterConfigData;
-  try {
-    decoded = decodeBoxMinterConfigData(config.data, {
-      validateDiscriminator: true,
-      decodeExtensions: true,
-    });
-  } catch (error) {
-    if (error instanceof BoxMinterConfigCodecError) {
-      throw new ReceiptTransferError('failed-precondition', error.message, error.details);
-    }
-    throw error;
-  }
+  const decoded = await readBoxMinterConfig({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    collectionMint: runtime.collectionMint,
+    configPda: runtime.boxMinterConfigPda,
+    programId: runtime.boxMinterProgramId,
+    parseAccount: parseRpcAccount,
+    collectionPolicy: 'owner-only',
+    errors: {
+      invalidResponse: () => new ReceiptTransferError('unavailable', 'Receipt transfer provider returned an invalid account response.'),
+      missingCollection: () => new ReceiptTransferError('failed-precondition', 'Configured receipt collection was not found on-chain.', {
+        collection: runtime.collectionMint.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      missingConfig: () => new ReceiptTransferError('failed-precondition', 'Box minter config PDA not found.', {
+        configPda: runtime.boxMinterConfigPda.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      invalidCollection: (actualOwner) => new ReceiptTransferError('failed-precondition', 'Configured receipt collection is not an MPL Core collection.', {
+        collection: runtime.collectionMint.toBase58(),
+        expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
+        actualOwner: actualOwner.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      invalidConfigOwner: (actualOwner) => new ReceiptTransferError('failed-precondition', 'Box minter config PDA has an unexpected owner.', {
+        configPda: runtime.boxMinterConfigPda.toBase58(),
+        expectedOwner: runtime.boxMinterProgramId.toBase58(),
+        actualOwner: actualOwner.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      invalidConfig: (error) => new ReceiptTransferError('failed-precondition', error.message, error.details),
+    },
+  });
   const coreCollection = new PublicKey(decoded.coreCollection);
   if (runtime.config.operationsConfig && !matchesCommittedDropConfig(decoded, runtime.config, 'operations')) {
     throw new ReceiptTransferError('failed-precondition', 'Committed operations configuration does not match the on-chain config.');

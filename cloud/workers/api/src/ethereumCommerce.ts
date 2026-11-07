@@ -21,32 +21,22 @@ import { matchesSha256Hex, sha256Hex } from './sessionSecrets.js';
 import { D1CommerceRepository, commerceFieldValue, commerceKeys } from './commerceRepository.js';
 import { blockingEthereumCheckout, inspectEthereumCheckoutFailures, requireResolvedEthereumCheckoutFailures } from './ethereumCheckoutAttempts.js';
 import { requireEthereumDeliveryConfigId, resolveEthereumDeliveryConfig } from './ethereumDeliveryConfig.js';
-
-export type EthereumDeliveryRow = {
-  chain_id: number; contract_address: string; order_id: number; request_id: string; wallet: string;
-  address_id: string; address_json: string; token_ids_json: string; items_json: string; fee_wei: string;
-  deadline: number; status: 'prepared' | 'pending' | 'confirmed'; transaction_hash: string | null;
-  block_number: number | null; block_hash: string | null; created_at_ms: number; updated_at_ms: number;
-  published_at_ms: number | null; verified_at_block: number | null;
-  checkout_id?: string | null;
-  config_id: number;
-};
-
-export type EthereumClaimRow = {
-  chain_id: number; contract_address: string; receipt_id: string; crate_id: number; order_id: number;
-  code_hash: string; code: string; claim_id: string; status: 'available' | 'pending' | 'claimed';
-  transaction_hash: string | null; block_number: number | null; block_hash: string | null; updated_at_ms: number;
-  verified_at_block: number | null;
-};
+import {
+  acknowledgeEthereumClaim, acknowledgePublishedEthereumDelivery, acknowledgeRetiredEthereumDelivery,
+  deleteRetiredEthereumClaims, findEthereumCheckoutQuote, findEthereumClaim, findEthereumDelivery,
+  findEthereumDeliveryRequest, findEthereumOrderClaims, findEthereumReceiptClaim, findEthereumReceiptClaims,
+  insertEthereumClaims, insertEthereumDeliveryQuote, matchesEthereumClaimState, recordEthereumClaimConfirmation,
+  recordEthereumDeliveryConfirmation, renewEthereumDeliveryQuote, retireEthereumDeliveryState,
+  type EthereumClaimInput, type EthereumClaimRow, type EthereumDeliveryRow,
+} from './ethereumCommerceStore.js';
+import { hasExpiredEthereumCheckout, isEthereumCheckoutAvailable } from './ethereumCheckoutStore.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const decimalId = z.string().regex(/^[1-9][0-9]{0,77}$/);
 const hash = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 
 export async function loadEthereumDelivery(context: EthereumContext, orderId: number): Promise<EthereumDeliveryRow> {
-  const row = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes
-    WHERE chain_id = ? AND contract_address = ? AND order_id = ?`)
-    .bind(context.config.chainId, requireEthereumContract(context), orderId).first<EthereumDeliveryRow>();
+  const row = await findEthereumDelivery(context.env.COMMERCE_DB, context.config.chainId, requireEthereumContract(context), orderId);
   if (!row) throw new EthereumApiError('not-found', 'Delivery order not found.');
   return row;
 }
@@ -54,23 +44,12 @@ export async function loadEthereumDelivery(context: EthereumContext, orderId: nu
 export async function retireEthereumDelivery(context: EthereumContext, row: EthereumDeliveryRow): Promise<boolean> {
   const [used] = decodeReturn(['bool'], await ethereumCall(context, encodeCall('usedDeliveryOrders(uint256)', ['uint256'], [row.order_id])));
   const status = used ? 'pending' : 'prepared';
-  const snapshot = [row.chain_id, row.contract_address, row.order_id, row.status, row.transaction_hash, row.block_hash, row.updated_at_ms];
-  const matches = `chain_id = ? AND contract_address = ? AND order_id = ? AND status = ?
-    AND transaction_hash IS ? AND block_hash IS ? AND updated_at_ms = ?`;
-  const result = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET status = ?,
-    published_at_ms = NULL, verified_at_block = NULL, updated_at_ms = MAX(updated_at_ms + 1, ?)
-    WHERE ${matches}`).bind(status, context.nowMs, ...snapshot).run();
-  if (result.meta.changes !== 1) return false;
+  if (!await retireEthereumDeliveryState(context.env.COMMERCE_DB, row, status, context.nowMs)) return false;
   const retiredAtMs = Math.max(context.nowMs, row.updated_at_ms + 1);
   const projected = await projectPendingEthereumDelivery(context, { ...row, status,
     published_at_ms: null, updated_at_ms: retiredAtMs });
   if (!projected || used) return false;
-  const acknowledged = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET transaction_hash = NULL,
-    block_number = NULL, block_hash = NULL WHERE chain_id = ? AND contract_address = ? AND order_id = ?
-      AND status = 'prepared' AND transaction_hash IS ? AND block_number IS ? AND block_hash IS ?
-      AND updated_at_ms = ? AND published_at_ms IS NULL`)
-    .bind(row.chain_id, row.contract_address, row.order_id, row.transaction_hash, row.block_number, row.block_hash, retiredAtMs).run();
-  return acknowledged.meta.changes === 1;
+  return acknowledgeRetiredEthereumDelivery(context.env.COMMERCE_DB, row, retiredAtMs);
 }
 
 async function projectPendingEthereumDelivery(context: EthereumContext, row: EthereumDeliveryRow): Promise<boolean> {
@@ -151,11 +130,8 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   const contractAddress = requireEthereumContract(context);
   const secret = await signerSecret(context);
   const loadPrepared = () => checkout
-    ? context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes WHERE checkout_id = ?`)
-      .bind(checkout.checkoutId).first<EthereumDeliveryRow>()
-    : context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes
-      WHERE chain_id = ? AND contract_address = ? AND wallet = ? AND request_id = ?`)
-      .bind(context.config.chainId, contractAddress, wallet, body.requestId).first<EthereumDeliveryRow>();
+    ? findEthereumCheckoutQuote(context.env.COMMERCE_DB, checkout.checkoutId)
+    : findEthereumDeliveryRequest(context.env.COMMERCE_DB, context.config.chainId, contractAddress, wallet, body.requestId);
   let row = await loadPrepared();
   if (row && (row.wallet !== wallet || row.chain_id !== context.config.chainId || row.contract_address !== contractAddress)) {
     throw new EthereumApiError('permission-denied', 'This checkout belongs to a different wallet or collection.');
@@ -164,12 +140,8 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
   const failures = await inspectEthereumCheckoutFailures(context, { wallet, tokenIdsJson: JSON.stringify(tokenIds) });
   requireResolvedEthereumCheckoutFailures(failures);
   const assertCheckoutAvailable = async (prepared: EthereumDeliveryRow | null) => {
-    if (!await context.env.COMMERCE_DB.prepare(`SELECT 1 WHERE ${failures.sql}
-      AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts
-        WHERE checkout_id = ? AND status IN ('started', 'submitted', 'expired'))`)
-      .bind(...failures.values, prepared?.checkout_id ?? null).first()) {
-      const expired = prepared?.checkout_id && await context.env.COMMERCE_DB.prepare(`SELECT 1 FROM ethereum_delivery_checkout_attempts
-        WHERE checkout_id = ? AND status = 'expired' LIMIT 1`).bind(prepared.checkout_id).first();
+    if (!await isEthereumCheckoutAvailable(context.env.COMMERCE_DB, prepared?.checkout_id ?? null, failures)) {
+      const expired = prepared?.checkout_id && await hasExpiredEthereumCheckout(context.env.COMMERCE_DB, prepared.checkout_id);
       const blockingCheckoutId = expired ? null : await blockingEthereumCheckout(context, { wallet, tokenIdsJson: JSON.stringify(tokenIds) });
       throw new EthereumApiError('failed-precondition', blockingCheckoutId
         ? 'Some selected items already have a pending redemption. Return to that checkout to track or recover it.'
@@ -200,30 +172,23 @@ export async function prepareEthereumDeliveryQuote(context: EthereumContext, wal
       const orderId = (crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fff_ffff) || 1;
       const existing = await new D1CommerceRepository(context.env.COMMERCE_DB).get(commerceKeys.deliveryOrder(context.config.dropId, String(orderId)));
       if (existing) continue;
-      const result = await context.env.COMMERCE_DB.prepare(`INSERT OR IGNORE INTO ethereum_delivery_quotes
-        (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json, items_json,
-         fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id, config_id)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ? WHERE ${failures.sql}`)
-        .bind(context.config.chainId, contractAddress, orderId, body.requestId, wallet, body.addressId,
-          JSON.stringify(address), JSON.stringify(tokenIds), JSON.stringify(items), context.config.deliveryFeeWei,
-          deadline, context.nowMs, context.nowMs, checkout?.checkoutId ?? null,
-          configId, ...failures.values).run();
+      const inserted = await insertEthereumDeliveryQuote(context.env.COMMERCE_DB, {
+        chain_id: context.config.chainId, contract_address: contractAddress, order_id: orderId, request_id: body.requestId,
+        wallet, address_id: body.addressId, address_json: JSON.stringify(address), token_ids_json: JSON.stringify(tokenIds),
+        items_json: JSON.stringify(items), fee_wei: context.config.deliveryFeeWei, deadline,
+        created_at_ms: context.nowMs, updated_at_ms: context.nowMs, checkout_id: checkout?.checkoutId ?? null, config_id: configId,
+      }, failures);
       row = await loadPrepared();
       if (row) break;
       await assertCheckoutAvailable(row);
-      if (result.meta.changes === 1) throw new EthereumApiError('unavailable', 'Delivery preparation is temporarily unavailable.');
+      if (inserted) throw new EthereumApiError('unavailable', 'Delivery preparation is temporarily unavailable.');
     }
     if (!row) throw new EthereumApiError('unavailable', 'Delivery preparation is temporarily unavailable.');
     if (row.wallet !== wallet || row.address_id !== body.addressId || row.token_ids_json !== JSON.stringify(tokenIds)) {
       throw new EthereumApiError('failed-precondition', 'This delivery request was already used for a different selection.');
     }
   } else if (row.deadline <= Math.floor(context.nowMs / 1000)) {
-    await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET deadline = ?, updated_at_ms = MAX(updated_at_ms + 1, ?)
-      WHERE chain_id = ? AND contract_address = ? AND order_id = ? AND deadline = ? AND status != 'confirmed'
-        AND (checkout_id IS NULL OR NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts AS attempt
-          WHERE attempt.checkout_id = ethereum_delivery_quotes.checkout_id AND attempt.status IN ('started', 'submitted', 'expired')))
-        AND ${failures.sql}`)
-      .bind(deadline, context.nowMs, context.config.chainId, contractAddress, row.order_id, row.deadline, ...failures.values).run();
+    await renewEthereumDeliveryQuote(context.env.COMMERCE_DB, row, deadline, context.nowMs, failures);
     row = await loadEthereumDelivery(context, row.order_id);
   }
   const storedItems = deliveryItems(row);
@@ -255,10 +220,8 @@ async function ensureCrateClaims(context: EthereumContext, row: EthereumDelivery
   if (!crates.length) return [];
   const receiptIds = crates.map((item) => ethereumReceiptTokenId('crate', item.displayId));
   const loadClaims = async () => {
-    const result = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_crate_claims
-      WHERE chain_id = ? AND contract_address = ? AND receipt_id IN (${receiptIds.map(() => '?').join(',')})`)
-      .bind(row.chain_id, row.contract_address, ...receiptIds).all<EthereumClaimRow>();
-    return new Map(result.results.map((claim) => [claim.receipt_id, claim]));
+    const claims = await findEthereumReceiptClaims(context.env.COMMERCE_DB, row.chain_id, row.contract_address, receiptIds);
+    return new Map(claims.map((claim) => [claim.receipt_id, claim]));
   };
   let claims = await loadClaims();
   const conflictingOrders = new Set([...claims.values()].filter((claim) => claim.order_id !== row.order_id).map((claim) => claim.order_id));
@@ -266,35 +229,20 @@ async function ensureCrateClaims(context: EthereumContext, row: EthereumDelivery
     const previous = await loadEthereumDelivery(context, orderId);
     if (!await retireEthereumDelivery(context, previous)) continue;
     const conflicts = [...claims.values()].filter((claim) => claim.order_id === orderId);
-    const deleted = await context.env.COMMERCE_DB.batch(conflicts.map((claim) =>
-      context.env.COMMERCE_DB.prepare(`DELETE FROM ethereum_crate_claims
-        WHERE chain_id = ? AND contract_address = ? AND receipt_id = ? AND order_id = ? AND claim_id = ? AND updated_at_ms = ?
-          AND EXISTS (SELECT 1 FROM ethereum_delivery_quotes WHERE chain_id = ? AND contract_address = ? AND order_id = ?
-            AND status = 'prepared' AND transaction_hash IS NULL AND updated_at_ms = ?)
-          AND EXISTS (SELECT 1 FROM ethereum_delivery_quotes WHERE chain_id = ? AND contract_address = ? AND order_id = ?
-            AND status = 'confirmed' AND transaction_hash = ? AND block_hash = ?)`)
-        .bind(claim.chain_id, claim.contract_address, claim.receipt_id, claim.order_id, claim.claim_id, claim.updated_at_ms,
-          previous.chain_id, previous.contract_address, previous.order_id, Math.max(context.nowMs, previous.updated_at_ms + 1),
-          row.chain_id, row.contract_address, row.order_id, row.transaction_hash, row.block_hash)));
-    deleted.forEach((result, index) => { if (result.meta.changes === 1) claims.delete(conflicts[index].receipt_id); });
+    const deleted = await deleteRetiredEthereumClaims(context.env.COMMERCE_DB, conflicts, previous, row,
+      Math.max(context.nowMs, previous.updated_at_ms + 1));
+    deleted.forEach((changed, index) => { if (changed) claims.delete(conflicts[index].receipt_id); });
   }
-  const inserts: D1PreparedStatement[] = [];
+  const inserts: EthereumClaimInput[] = [];
   for (const item of crates) {
     const receiptId = ethereumReceiptTokenId('crate', item.displayId);
     if (claims.has(receiptId)) continue;
     const code = randomClaimCode();
     const claimId = `0x${await sha256Hex(crypto.randomUUID())}`;
-    inserts.push(context.env.COMMERCE_DB.prepare(`INSERT OR IGNORE INTO ethereum_crate_claims
-      (chain_id, contract_address, receipt_id, crate_id, order_id, code_hash, code, claim_id, status, updated_at_ms)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'available', ? WHERE EXISTS (
-        SELECT 1 FROM ethereum_delivery_quotes WHERE chain_id = ? AND contract_address = ? AND order_id = ?
-          AND status = 'confirmed' AND transaction_hash = ? AND block_hash = ?)`)
-      .bind(row.chain_id, row.contract_address, receiptId, item.displayId, row.order_id,
-        await sha256Hex(code), code, claimId, context.nowMs, row.chain_id, row.contract_address, row.order_id,
-        row.transaction_hash, row.block_hash));
+    inserts.push({ receiptId, crateId: item.displayId, codeHash: await sha256Hex(code), code, claimId });
   }
   if (inserts.length) {
-    await context.env.COMMERCE_DB.batch(inserts);
+    await insertEthereumClaims(context.env.COMMERCE_DB, row, inserts, context.nowMs);
     claims = await loadClaims();
   }
   return crates.map((item, index) => {
@@ -317,17 +265,15 @@ async function publishEthereumOrder(context: EthereumContext, row: EthereumDeliv
       current.block_hash !== row.block_hash || current.updated_at_ms !== row.updated_at_ms) {
       throw new EthereumApiError('unavailable', 'The delivery confirmation changed. Try again.');
     }
-    const currentClaims = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_crate_claims
-      WHERE chain_id = ? AND contract_address = ? AND order_id = ? ORDER BY receipt_id`)
-      .bind(row.chain_id, row.contract_address, row.order_id).all<EthereumClaimRow>();
-    if (currentClaims.results.length !== claims.length) throw new EthereumApiError('unavailable', 'The delivery claims changed. Try again.');
-    const irlClaims = currentClaims.results.map((claim) => ({ code: claim.code, boxId: claim.crate_id,
+    const currentClaims = await findEthereumOrderClaims(context.env.COMMERCE_DB, row);
+    if (currentClaims.length !== claims.length) throw new EthereumApiError('unavailable', 'The delivery claims changed. Try again.');
+    const irlClaims = currentClaims.map((claim) => ({ code: claim.code, boxId: claim.crate_id,
       boxAssetId: ethereumAssetId(row.chain_id, row.contract_address, String(111111 + claim.crate_id)),
       receiptTokenId: claim.receipt_id, dudeIds: physicalCrateArtworkIds(claim.crate_id), status: claim.status }));
     unit.expectEthereumState({ kind: 'delivery', chainId: row.chain_id, contractAddress: row.contract_address,
       id: String(row.order_id), status: row.status, transactionHash: row.transaction_hash,
       blockNumber: row.block_number, blockHash: row.block_hash, updatedAtMs: row.updated_at_ms });
-    for (const claim of currentClaims.results) {
+    for (const claim of currentClaims) {
       unit.expectEthereumState({ kind: 'claim', chainId: claim.chain_id, contractAddress: claim.contract_address,
         id: claim.receipt_id, orderId: claim.order_id, claimId: claim.claim_id, status: claim.status,
         transactionHash: claim.transaction_hash, blockNumber: claim.block_number, blockHash: claim.block_hash,
@@ -382,24 +328,17 @@ export async function confirmEthereumDelivery(context: EthereumContext, orderId:
   const ready = confirmations >= context.config.confirmationBlocks;
   const blockNumber = rpcInteger(receipt.blockNumber);
   const updatedAtMs = Math.max(context.nowMs, row.updated_at_ms + 1);
-  const result = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET status = ?, transaction_hash = ?,
-    block_number = ?, block_hash = ?, verified_at_block = NULL, published_at_ms = NULL, updated_at_ms = ?
-    WHERE chain_id = ? AND contract_address = ? AND order_id = ? AND status = ?
-      AND transaction_hash IS ? AND block_hash IS ? AND updated_at_ms = ?`)
-    .bind(ready ? 'confirmed' : 'pending', transactionHash, blockNumber, receipt.blockHash, updatedAtMs,
-      row.chain_id, row.contract_address, row.order_id, row.status, row.transaction_hash, row.block_hash, row.updated_at_ms).run();
-  if (result.meta.changes !== 1) return { status: 'pending', confirmations: 0, orderId };
   const current: EthereumDeliveryRow = { ...row, status: ready ? 'confirmed' : 'pending', transaction_hash: transactionHash,
     block_number: blockNumber, block_hash: receipt.blockHash, verified_at_block: null,
     published_at_ms: null, updated_at_ms: updatedAtMs };
+  if (!await recordEthereumDeliveryConfirmation(context.env.COMMERCE_DB, row, current)) {
+    return { status: 'pending', confirmations: 0, orderId };
+  }
   if (ready) {
     await publishEthereumOrder(context, current, await ensureCrateClaims(context, current), event.receiptIds);
-    const acknowledged = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET published_at_ms = ?, verified_at_block = ?
-      WHERE chain_id = ? AND contract_address = ? AND order_id = ? AND status = 'confirmed'
-        AND transaction_hash = ? AND block_hash = ? AND updated_at_ms = ?`)
-      .bind(context.nowMs, blockNumber + confirmations - 1, row.chain_id, row.contract_address, row.order_id,
-        transactionHash, receipt.blockHash, updatedAtMs).run();
-    if (acknowledged.meta.changes !== 1) return { status: 'pending', confirmations: 0, orderId };
+    const acknowledged = await acknowledgePublishedEthereumDelivery(context.env.COMMERCE_DB, current,
+      context.nowMs, blockNumber + confirmations - 1);
+    if (!acknowledged) return { status: 'pending', confirmations: 0, orderId };
   } else if (!await projectPendingEthereumDelivery(context, current)) return { status: 'pending', confirmations: 0, orderId };
   return { status: ready ? 'confirmed' : 'pending', confirmations, orderId };
 }
@@ -410,8 +349,7 @@ async function prepareEthereumClaim(request: Request, context: EthereumContext):
   const body = await readEthereumBody(request, context.signal, z.object({ code: z.string().min(1).max(64), receiptId: decimalId }).strict());
   requireRedemptionSigning(context);
   const contractAddress = requireEthereumContract(context);
-  const claim = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_crate_claims WHERE chain_id = ? AND contract_address = ? AND receipt_id = ?`)
-    .bind(context.config.chainId, contractAddress, body.receiptId).first<EthereumClaimRow>();
+  const claim = await findEthereumReceiptClaim(context.env.COMMERCE_DB, context.config.chainId, contractAddress, body.receiptId);
   const code = body.code.replace(/[\s-]/g, '').toUpperCase();
   if (!claim || !await matchesSha256Hex(code, claim.code_hash)) throw new EthereumApiError('invalid-argument', 'This code does not match the selected crate receipt.');
   if (claim.status === 'claimed') throw new EthereumApiError('failed-precondition', 'This crate receipt has already been claimed.');
@@ -437,8 +375,7 @@ async function prepareEthereumClaim(request: Request, context: EthereumContext):
 export async function confirmEthereumClaim(context: EthereumContext, claimId: string, transactionHash: string,
   verified?: Awaited<ReturnType<typeof ethereumReceipt>> & { row: EthereumClaimRow }): Promise<{ status: 'pending' | 'confirmed'; confirmations: number }> {
   const contract = requireEthereumContract(context);
-  let row = verified?.row ?? await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_crate_claims WHERE chain_id = ? AND contract_address = ? AND claim_id = ?`)
-    .bind(context.config.chainId, contract, claimId).first<EthereumClaimRow>();
+  let row = verified?.row ?? await findEthereumClaim(context.env.COMMERCE_DB, context.config.chainId, contract, claimId);
   const { receipt, confirmations } = verified ?? await ethereumReceipt(context, transactionHash);
   if (!receipt) {
     if (!row) throw new EthereumApiError('not-found', 'Crate claim not found.');
@@ -449,35 +386,27 @@ export async function confirmEthereumClaim(context: EthereumContext, claimId: st
   if (events.length !== 1 || event.name !== 'CrateReceiptClaimed') {
     throw new EthereumApiError('permission-denied', 'The transaction does not match this crate claim.');
   }
-  row ??= await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_crate_claims
-    WHERE chain_id = ? AND contract_address = ? AND receipt_id = ?`)
-    .bind(context.config.chainId, contract, event.receiptId).first<EthereumClaimRow>();
+  row ??= await findEthereumReceiptClaim(context.env.COMMERCE_DB, context.config.chainId, contract, event.receiptId);
   if (!row) throw new EthereumApiError('not-found', 'Crate claim not found.');
   const expectedIds = physicalCrateArtworkIds(row.crate_id).map((id) => ethereumMetadataTokenId('artwork_receipt', id));
   if (event.receiptId !== row.receipt_id ||
     JSON.stringify(event.receiptIds) !== JSON.stringify(expectedIds)) throw new EthereumApiError('permission-denied', 'The transaction does not match this crate claim.');
   const ready = confirmations >= context.config.confirmationBlocks;
   const blockNumber = rpcInteger(receipt.blockNumber);
-  const result = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_crate_claims SET status = ?, transaction_hash = ?,
-    block_number = ?, block_hash = ?, verified_at_block = NULL, claim_id = ?, updated_at_ms = MAX(updated_at_ms + 1, ?)
-    WHERE chain_id = ? AND contract_address = ? AND claim_id = ? AND order_id = ? AND status = ?
-      AND transaction_hash IS ? AND block_hash IS ? AND updated_at_ms = ?`)
-    .bind(ready ? 'claimed' : 'pending', transactionHash, blockNumber, receipt.blockHash, claimId, context.nowMs,
-      row.chain_id, contract, row.claim_id, row.order_id, row.status, row.transaction_hash, row.block_hash, row.updated_at_ms).run();
-  if (result.meta.changes !== 1) return { status: 'pending', confirmations: 0 };
   const status = ready ? 'claimed' : 'pending';
+  const updatedAtMs = Math.max(context.nowMs, row.updated_at_ms + 1);
+  const currentClaim: EthereumClaimRow = { ...row, contract_address: contract, claim_id: claimId, status,
+    transaction_hash: transactionHash, block_number: blockNumber, block_hash: receipt.blockHash,
+    verified_at_block: null, updated_at_ms: updatedAtMs };
+  if (!await recordEthereumClaimConfirmation(context.env.COMMERCE_DB, row, currentClaim, context.nowMs)) {
+    return { status: 'pending', confirmations: 0 };
+  }
   const repository = new D1CommerceRepository(context.env.COMMERCE_DB);
   const key = commerceKeys.deliveryOrder(context.config.dropId, String(row.order_id));
-  const updatedAtMs = Math.max(context.nowMs, row.updated_at_ms + 1);
   const projected = await repository.run(context.nowMs, async (unit) => {
     const order = await unit.get(key);
     if (!order) return false;
-    const current = await context.env.COMMERCE_DB.prepare(`SELECT 1 FROM ethereum_crate_claims
-      WHERE chain_id = ? AND contract_address = ? AND claim_id = ? AND order_id = ? AND status = ?
-        AND transaction_hash = ? AND block_hash = ? AND updated_at_ms = ?`)
-      .bind(row.chain_id, contract, claimId, row.order_id, status, transactionHash, receipt.blockHash,
-        updatedAtMs).first();
-    if (!current) return false;
+    if (!await matchesEthereumClaimState(context.env.COMMERCE_DB, currentClaim)) return false;
     unit.expectEthereumState({ kind: 'claim', chainId: row.chain_id, contractAddress: contract,
       id: row.receipt_id, orderId: row.order_id, claimId, status, transactionHash,
       blockNumber, blockHash: receipt.blockHash, updatedAtMs });
@@ -489,12 +418,8 @@ export async function confirmEthereumClaim(context: EthereumContext, claimId: st
   });
   if (!projected) return { status: 'pending', confirmations: 0 };
   if (ready) {
-    const acknowledged = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_crate_claims SET verified_at_block = ?
-      WHERE chain_id = ? AND contract_address = ? AND receipt_id = ? AND order_id = ? AND claim_id = ?
-        AND status = 'claimed' AND transaction_hash = ? AND block_number = ? AND block_hash = ? AND updated_at_ms = ?`)
-      .bind(blockNumber + confirmations - 1, row.chain_id, contract, row.receipt_id, row.order_id, claimId,
-        transactionHash, blockNumber, receipt.blockHash, updatedAtMs).run();
-    if (acknowledged.meta.changes !== 1) return { status: 'pending', confirmations: 0 };
+    const acknowledged = await acknowledgeEthereumClaim(context.env.COMMERCE_DB, currentClaim, blockNumber + confirmations - 1);
+    if (!acknowledged) return { status: 'pending', confirmations: 0 };
   }
   return { status: ready ? 'confirmed' : 'pending', confirmations };
 }

@@ -35,8 +35,8 @@ import {
 import { commerceKeys, isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
 import {
   parseReadyNotificationCandidate, parseStripeCheckoutRequeueCandidate, parseStripeTerminalNotificationCandidate,
-  validateNotificationDueCursor, type NotificationDueCursor,
-  type ReadyNotificationCandidate, type StripeCheckoutRequeueCandidate, type StripeTerminalNotificationCandidate,
+  validateNotificationDueCursor, validateStripeCheckoutRequeueCursor, type NotificationDueCursor,
+  type ReadyNotificationCandidate, type StripeCheckoutRequeueCandidate, type StripeCheckoutRequeueCursor, type StripeTerminalNotificationCandidate,
 } from './commerceDiscoveryCandidates.js';
 import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
 import type { WalletDeliveryRecoveryState } from '../../../../shared/contracts.js';
@@ -131,14 +131,19 @@ export class D1CommerceRepository {
     return document ? publicRecord(document) : null;
   }
 
-  async queryShipmentHistoryPage(args: { owner: string; limit: number; startAfter?: ShipmentHistoryCursor }): Promise<ShipmentHistoryPage> {
+  async queryShipmentHistoryPage(args: {
+    owner: string; limit: number; dropId?: string; allowPaused?: boolean; startAfter?: ShipmentHistoryCursor;
+  }): Promise<ShipmentHistoryPage> {
     const owner = deliveryOwner(args.owner);
     const limit = positiveQueryLimit(args.limit);
-    if (limit > MAX_SHIPMENT_PAGE_LIMIT || (args.startAfter && !isShipmentHistoryCursor(args.startAfter, owner))) {
+    if (limit > MAX_SHIPMENT_PAGE_LIMIT ||
+      (args.dropId !== undefined && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(args.dropId)) ||
+      (args.startAfter !== undefined && (!isShipmentHistoryCursor(args.startAfter, owner) ||
+        (args.dropId !== undefined && args.startAfter.documentPath.split('/')[1] !== args.dropId)))) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid shipment pagination.');
     }
     const query = shipmentHistoryPageQuery({ ...args, owner, limit: limit + 1 });
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(query.sql).bind(...query.bindings));
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(query.sql).bind(...query.bindings), args.allowPaused);
     const page = result.results.slice(0, limit);
     const documents = page.map(parseRow);
     const last = page.at(-1);
@@ -303,21 +308,32 @@ export class D1CommerceRepository {
     return result.results.map(parseReadyNotificationCandidate);
   }
 
-  async queryStaleStripeFulfillments(cutoffMs: number): Promise<StripeCheckoutRequeueCandidate[]> {
+  async queryStaleStripeFulfillments(
+    cutoffMs: number,
+    limit = 100,
+    startAfter?: StripeCheckoutRequeueCursor,
+  ): Promise<ReconciliationPage<StripeCheckoutRequeueCandidate>> {
+    positiveQueryLimit(limit);
+    if (limit > 100) throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation query limit.');
+    validateStripeCheckoutRequeueCursor(startAfter);
     if (!Number.isSafeInteger(cutoffMs) || cutoffMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation cutoff.');
     }
-    const query = staleStripeFulfillmentsQuery(cutoffMs);
+    const query = staleStripeFulfillmentsQuery(cutoffMs, limit + 1, startAfter);
     const result = await this.readBatchWithAuthority(
       () => this.db.prepare(query.sql).bind(...query.bindings),
       false,
       true,
     );
     reportInefficientQuery('stale-stripe-fulfillments', 'stripe_checkout', result, result.results.length);
-    return result.results.flatMap((row) => {
-      const candidate = parseStripeCheckoutRequeueCandidate(row, cutoffMs);
-      return candidate ? [candidate] : [];
-    });
+    return {
+      candidates: result.results.slice(0, limit).map((row) => {
+        const candidate = parseStripeCheckoutRequeueCandidate(row, cutoffMs);
+        if (!candidate) throw unavailableCommerceData();
+        return candidate;
+      }),
+      hasMore: result.results.length > limit,
+    };
   }
 
   async queryDueStripeTerminalNotifications(

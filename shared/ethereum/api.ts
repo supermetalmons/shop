@@ -1,4 +1,5 @@
-import type { DeliveryOrderSummary, ProfileAddress, SaveProfileAddressRequest } from '../contracts.ts';
+import type { ProfileAddress, SaveProfileAddressRequest } from '../contracts.ts';
+import type { ShipmentHistoryPage } from '../shipmentHistory.ts';
 import type { Ethereum111kConfig } from './config.ts';
 import type { EthereumDeliveryQuote, EthereumInventoryItem } from './protocol.ts';
 
@@ -32,7 +33,7 @@ export type EthereumPreparedTransaction = { to: string; data: string; value: str
 export type EthereumProfileResponse = { wallet: string; email?: string; addresses: ProfileAddress[] };
 export type EthereumSaveAddressRequest = SaveProfileAddressRequest;
 export type EthereumSaveAddressResponse = { address: ProfileAddress };
-export type EthereumShipmentsResponse = { orders: DeliveryOrderSummary[] };
+export type EthereumShipmentsResponse = ShipmentHistoryPage;
 export type EthereumDeliveryPrepareRequest = { tokenIds: string[]; addressId: string; requestId: string };
 export type EthereumDeliveryPrepareResponse = {
   orderId: number; expiresAtMs: number; quote: EthereumDeliveryQuote; signature: string; transaction: EthereumPreparedTransaction;

@@ -3,8 +3,8 @@ import {
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { D1CommerceRepository } from './commerceRepository.js';
 import { markStripeCheckoutReenqueued, recordStripeCheckoutReconciliationFailure } from './stripeCheckout/sessionStore.js';
-import type { StripeCheckoutRequeueCandidate } from './commerceDiscoveryCandidates.js';
-import { drainReconciliationCandidates } from './reconciliationPass.js';
+import type { StripeCheckoutRequeueCandidate, StripeCheckoutRequeueCursor } from './commerceDiscoveryCandidates.js';
+import { drainReconciliationCandidates, type ReconciliationPage } from './reconciliationPass.js';
 import {
   emptyReconciliationResult, reportReconciliationFailure,
   reportReconciliationResult, reconciliationLogger, reconciliationErrorSummary, type ReconciliationOptions, type ReconciliationResult,
@@ -19,7 +19,9 @@ type ReconciliationEnv = Pick<Env,
 
 type ReconciliationDependencies = ReconciliationOptions & {
   error?: (entry: Record<string, unknown>) => void;
-  loadCandidates?: (cutoffMs: number, signal: AbortSignal) => Promise<RequeueCandidate[]>;
+  loadPage?: (args: { cutoffMs: number; limit: number; startAfter?: StripeCheckoutRequeueCursor },
+    signal: AbortSignal) => Promise<ReconciliationPage<RequeueCandidate>>;
+  probeBacklog?: (cutoffMs: number, signal: AbortSignal) => Promise<{ hasMore: boolean; oldestDueAgeMs: number | null }>;
   log?: (entry: Record<string, unknown>) => void;
   markEnqueued?: (candidate: RequeueCandidate) => Promise<void>;
   markInvalid?: (candidate: RequeueCandidate, error: unknown) => Promise<void>;
@@ -33,18 +35,6 @@ function reconciliationError(error: unknown): { name: string; message?: string }
     : { name: 'UnknownError' };
 }
 
-async function loadCandidates(
-  env: ReconciliationEnv,
-  cutoffMs: number,
-  signal: AbortSignal,
-): Promise<RequeueCandidate[]> {
-  signal.throwIfAborted();
-  const repository = new D1CommerceRepository(env.COMMERCE_DB);
-  const value = await repository.queryStaleStripeFulfillments(cutoffMs);
-  signal.throwIfAborted();
-  return value;
-}
-
 export async function reconcileStaleStripeFulfillments(
   env: ReconciliationEnv,
   signal: AbortSignal,
@@ -52,14 +42,21 @@ export async function reconcileStaleStripeFulfillments(
 ): Promise<ReconciliationResult> {
   let summary: ReconciliationResult = emptyReconciliationResult();
   try {
-    const nowMs = Math.floor(overrides.nowMs?.() ?? Date.now());
+    const clock = overrides.nowMs || Date.now;
+    const nowMs = Math.floor(clock());
+    const cutoffMs = nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS;
     const log = reconciliationLogger(overrides.log || ((entry) => console.log(entry)));
     const errorLog = reconciliationLogger(overrides.error || ((entry) => console.error(entry)));
-    const candidates = await (overrides.loadCandidates
-      ? overrides.loadCandidates(nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal)
-      : loadCandidates(env, nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal));
+    const repository = new D1CommerceRepository(env.COMMERCE_DB);
+    const loadPage = async (startAfter: StripeCheckoutRequeueCursor | undefined, limit: number) => {
+      if (overrides.loadPage) return overrides.loadPage({ cutoffMs, limit, startAfter }, signal);
+      signal.throwIfAborted();
+      const page = await repository.queryStaleStripeFulfillments(cutoffMs, limit, startAfter);
+      signal.throwIfAborted();
+      return page;
+    };
     const commerce = {
-      repository: new D1CommerceRepository(env.COMMERCE_DB),
+      repository,
       nowMs: () => Date.now(),
       signal,
     };
@@ -67,11 +64,23 @@ export async function reconcileStaleStripeFulfillments(
       markStripeCheckoutReenqueued(commerce, candidate));
     const markInvalid = overrides.markInvalid || ((candidate: RequeueCandidate, error: unknown) =>
       recordStripeCheckoutReconciliationFailure(commerce, candidate, reconciliationError(error)));
-    await drainReconciliationCandidates({
+    await drainReconciliationCandidates<RequeueCandidate>({
       signal,
       checkAbortedBeforeLoad: false,
       cancellationMode: 'throw',
-      loadCandidates: async () => candidates,
+      paging: {
+        inspectionLimit: 100,
+        budgetMs: null,
+        loadPage,
+        candidateKey: (candidate) => candidate.checkoutPath,
+        probeBacklog: overrides.probeBacklog
+          ? () => overrides.probeBacklog!(cutoffMs, signal)
+          : async () => {
+            const { candidates: [oldest] } = await loadPage(undefined, 1);
+            return { hasMore: Boolean(oldest),
+              oldestDueAgeMs: oldest ? Math.max(0, clock() - oldest.updatedAtMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS) : null };
+          },
+      },
       onResult: (result) => { summary = result; },
       failureMessage: 'Stripe fulfillment reconciliation failed',
       processCandidate: async (candidate) => {
@@ -124,7 +133,7 @@ export async function reconcileStaleStripeFulfillments(
     });
     log({
       event: 'stripe_fulfillment_reconciliation_completed',
-      candidates: candidates.length,
+      candidates: summary.inspected,
       enqueued: summary.completed,
       failed: summary.failed,
     });

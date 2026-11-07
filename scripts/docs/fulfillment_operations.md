@@ -65,8 +65,11 @@ Ready and shipped reconciliation each page through eight due rows at a time,
 stopping before new work after 32 inspected rows or 20 seconds per family.
 Each run uses a fixed due cutoff and reports inspected rows, pages, stop reason,
 remaining due work, and its oldest due age. In-flight publication and finalization
-finish under the scheduled handler's existing deadline. Stripe limits remain
-unchanged. Publication keeps ten-minute
+finish under the scheduled handler's existing deadline. Stripe fulfillment also
+uses eight-row pages, preserving its 100-item cap, fifteen-minute stale cutoff,
+and scheduled deadline. Its oldest due age excludes the fifteen-minute waiting
+period; remaining due work includes failed enqueue or acknowledgement attempts.
+Publication keeps ten-minute
 claims, four attempts, six-hour retry windows, and stable job IDs/idempotency keys.
 Rendered payloads are persisted before sending and reused exactly across retries;
 Queue acceptance or cancellation removes payloads. Failed entries remain available

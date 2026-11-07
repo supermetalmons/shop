@@ -2,15 +2,10 @@ import {
   type AddressLookupTableAccount,
   PublicKey,
 } from '@solana/web3.js';
-import {
-  BoxMinterConfigCodecError,
-  decodeBoxMinterConfigData,
-  type DecodedBoxMinterConfigData,
-} from '../../../../shared/boxMinterConfigCodec.js';
+import { readBoxMinterConfig } from './boxMinterConfigRead.js';
 import { BOX_MINTER_PENDING_OPEN_SEED } from '../../../../shared/boxMinterProtocol.js';
 import type { DasAsset } from '../../../../shared/dasAsset.js';
 import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../shared/heliusDas.js';
-import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.js';
 import { AdminIrlRedeemPrepareError } from './adminIrlRedeemErrors.js';
 import type { AdminIrlRedeemRuntime } from './adminIrlRedeemRuntime.js';
 import { isSignalCancellationError } from './boundedRequest.js';
@@ -34,7 +29,6 @@ export { buildRuntime } from './adminIrlRedeemRuntime.js';
 const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
-const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 
 export type ProviderContext = {
   apiKey: string;
@@ -181,50 +175,33 @@ export async function loadOnchainState(
   context: ProviderContext,
   runtime: AdminIrlRedeemRuntime,
 ): Promise<OnchainState> {
-  const result = await rpcCall(context, runtime, 'getMultipleAccounts', [
-    [runtime.collectionMint.toBase58(), runtime.boxMinterConfigPda.toBase58()],
-    { commitment: 'confirmed', encoding: 'base64' },
-  ]);
-  if (!isRecord(result) || !Array.isArray(result.value) || result.value.length !== 2) {
-    throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid account response.');
-  }
-  if (!result.value[0]) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Configured collection was not found on-chain.', {
-      collection: runtime.collectionMint.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  if (!result.value[1]) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Box minter config PDA not found.', {
-      configPda: runtime.boxMinterConfigPda.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  const collection = parseRpcAccount(result.value[0], 'COLLECTION_MINT');
-  const config = parseRpcAccount(result.value[1], 'BOX_MINTER_CONFIG_PDA');
-  if (!collection.owner.equals(MPL_CORE_PROGRAM_ID)) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Configured collection is not an MPL Core collection.');
-  }
-  if (!config.owner.equals(runtime.boxMinterProgramId)) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Box minter config PDA has an unexpected owner.', {
-      configPda: runtime.boxMinterConfigPda.toBase58(),
-      expectedOwner: runtime.boxMinterProgramId.toBase58(),
-      actualOwner: config.owner.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  let decoded: DecodedBoxMinterConfigData;
-  try {
-    decoded = decodeBoxMinterConfigData(config.data, {
-      validateDiscriminator: true,
-      decodeExtensions: true,
-    });
-  } catch (error) {
-    if (error instanceof BoxMinterConfigCodecError) {
-      throw new AdminIrlRedeemPrepareError('failed-precondition', error.message, error.details);
-    }
-    throw error;
-  }
+  const decoded = await readBoxMinterConfig({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    collectionMint: runtime.collectionMint,
+    configPda: runtime.boxMinterConfigPda,
+    programId: runtime.boxMinterProgramId,
+    parseAccount: parseRpcAccount,
+    collectionPolicy: 'owner-only',
+    errors: {
+      invalidResponse: () => new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid account response.'),
+      missingCollection: () => new AdminIrlRedeemPrepareError('failed-precondition', 'Configured collection was not found on-chain.', {
+        collection: runtime.collectionMint.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      missingConfig: () => new AdminIrlRedeemPrepareError('failed-precondition', 'Box minter config PDA not found.', {
+        configPda: runtime.boxMinterConfigPda.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      invalidCollection: () => new AdminIrlRedeemPrepareError('failed-precondition', 'Configured collection is not an MPL Core collection.'),
+      invalidConfigOwner: (actualOwner) => new AdminIrlRedeemPrepareError('failed-precondition', 'Box minter config PDA has an unexpected owner.', {
+        configPda: runtime.boxMinterConfigPda.toBase58(),
+        expectedOwner: runtime.boxMinterProgramId.toBase58(),
+        actualOwner: actualOwner.toBase58(),
+        dropId: runtime.dropId,
+      }),
+      invalidConfig: (error) => new AdminIrlRedeemPrepareError('failed-precondition', error.message, error.details),
+    },
+  });
   const coreCollection = new PublicKey(decoded.coreCollection);
   if (runtime.config.operationsConfig && !matchesCommittedDropConfig(decoded, runtime.config, 'operations')) {
     throw new AdminIrlRedeemPrepareError('failed-precondition', 'Committed operations configuration does not match the on-chain config.');

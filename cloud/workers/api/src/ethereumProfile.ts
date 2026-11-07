@@ -2,12 +2,13 @@ import { z } from 'zod';
 import type { ProfileAddress } from '../../../../shared/contracts.js';
 import { createProfileAddressId, PROFILE_ADDRESS_ID_PATTERN } from '../../../../shared/profileD1.js';
 import { normalizeCountryCode } from '../../../../shared/countryNormalization.js';
-import { parseDeliveryOrderSummary } from '../../../../shared/deliveryOrderSummary.js';
+import { isShipmentHistoryCursor, MAX_SHIPMENT_PAGE_LIMIT, type ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.js';
 import { EthereumApiError, readEthereumBody } from './ethereumError.js';
 import type { EthereumContext } from './ethereumRuntime.js';
 import { verifyEthereumSession } from './ethereumAuth.js';
 import { loadEthereumProfile, loadEthereumProfileAddress, saveEthereumProfileAddress } from './ethereumProfileStore.js';
 import { ProfileAddressConflictError } from './profilePersistence.js';
+import { D1CommerceRepository } from './commerceRepository.js';
 
 const addressSchema = z.object({
   id: z.string().regex(PROFILE_ADDRESS_ID_PATTERN).optional(),
@@ -15,6 +16,23 @@ const addressSchema = z.object({
   countryCode: z.string().max(32).optional(), hint: z.string().max(256),
   email: z.string().email().max(254).optional(),
 }).strict();
+
+function shipmentPage(request: Request, wallet: string, dropId: string): { limit: number; startAfter?: ShipmentHistoryCursor } {
+  const params = new URL(request.url).searchParams;
+  const invalid = () => new EthereumApiError('invalid-argument', 'Invalid shipment pagination.');
+  if ([...params.keys()].some((key) => key !== 'limit' && key !== 'cursor') ||
+    params.getAll('limit').length > 1 || params.getAll('cursor').length > 1) throw invalid();
+  const rawLimit = params.get('limit');
+  const limit = rawLimit === null ? MAX_SHIPMENT_PAGE_LIMIT : Number(rawLimit);
+  if ((rawLimit !== null && !/^[1-9][0-9]{0,2}$/.test(rawLimit)) || limit > MAX_SHIPMENT_PAGE_LIMIT) throw invalid();
+  const rawCursor = params.get('cursor');
+  if (rawCursor === null) return { limit };
+  if (rawCursor.length > 2048) throw invalid();
+  let cursor: unknown;
+  try { cursor = JSON.parse(rawCursor); } catch { throw invalid(); }
+  if (!isShipmentHistoryCursor(cursor, wallet) || cursor.documentPath.split('/')[1] !== dropId) throw invalid();
+  return { limit, startAfter: cursor };
+}
 
 export async function loadEthereumAddress(context: EthereumContext, wallet: string, id: string): Promise<ProfileAddress> {
   const address = await loadEthereumProfileAddress(context.env.OPS_DB, wallet, id, context.signal);
@@ -41,15 +59,10 @@ export async function ethereumProfile(request: Request, context: EthereumContext
     }
   }
   if (path.endsWith('/shipments')) {
-    const result = await context.env.COMMERCE_DB.prepare(`SELECT document_id, document_json FROM commerce_documents
-      WHERE document_kind = 'delivery_order' AND drop_id = ? AND owner = ?
-      ORDER BY processed_at_seconds DESC, document_id DESC LIMIT 100`)
-      .bind(context.config.dropId, session.wallet).all<{ document_id: string; document_json: string }>();
-    const orders = result.results.flatMap((row) => {
-      const summary = parseDeliveryOrderSummary({ ...JSON.parse(row.document_json), deliveryId: Number(row.document_id), dropId: context.config.dropId });
-      return summary ? [summary] : [];
+    return new D1CommerceRepository(context.env.COMMERCE_DB).queryShipmentHistoryPage({
+      ...shipmentPage(request, session.wallet, context.config.dropId),
+      owner: session.wallet, dropId: context.config.dropId, allowPaused: true,
     });
-    return { orders };
   }
   return loadEthereumProfile(context.env.OPS_DB, session.wallet, context.signal);
 }

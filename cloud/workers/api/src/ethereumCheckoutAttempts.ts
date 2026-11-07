@@ -1,4 +1,4 @@
-import type { EthereumCheckoutAttemptRow } from './ethereumCheckout.js';
+import type { EthereumCheckoutAttemptRow } from './ethereumCheckoutStore.js';
 import { EthereumApiError } from './ethereumError.js';
 import { ethereumReceipt } from './ethereumRead.js';
 import type { EthereumContext } from './ethereumRuntime.js';

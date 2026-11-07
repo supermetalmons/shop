@@ -1,15 +1,17 @@
 import { decodeEventLogs, decodeReturn, encodeCall, ETHEREUM_EVENT_TOPICS, type EthereumDecodedEvent } from '../../../../shared/ethereum/abi.js';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
 import {
-  confirmEthereumClaim, confirmEthereumDelivery, retireEthereumDelivery, type EthereumClaimRow, type EthereumDeliveryRow,
+  confirmEthereumClaim, confirmEthereumDelivery, retireEthereumDelivery,
 } from './ethereumCommerce.js';
+import type { EthereumClaimRow, EthereumDeliveryRow } from './ethereumCommerceStore.js';
 import {
   ethereumCall, ethereumConfig, ethereumRpc, rpcInteger,
   type EthereumContext, type EthereumEnvironment,
 } from './ethereumRuntime.js';
 import { ethereumReceipt, ethereumTokenInfos, parseEthereumLog } from './ethereumRead.js';
 import { EthereumApiError } from './ethereumError.js';
-import { reconcileEthereumCheckoutAttempt, type EthereumCheckoutAttemptRow } from './ethereumCheckout.js';
+import { reconcileEthereumCheckoutAttempt } from './ethereumCheckout.js';
+import type { EthereumCheckoutAttemptRow } from './ethereumCheckoutStore.js';
 import { cleanupExpiredEthereumCheckouts } from './ethereumCheckoutCleanup.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys } from './commerceRepository.js';

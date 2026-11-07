@@ -11,7 +11,8 @@ import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumItemKind, ethereu
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import { cleanupEthereumAuth } from '../src/ethereumAuth.ts';
-import { reconcileEthereumCheckoutAttempt, type EthereumCheckoutAttemptRow } from '../src/ethereumCheckout.ts';
+import { reconcileEthereumCheckoutAttempt } from '../src/ethereumCheckout.ts';
+import type { EthereumCheckoutAttemptRow } from '../src/ethereumCheckoutStore.ts';
 import { ethereumCallBatch, ethereumConfig, ethereumRelicInterfaceAvailable, type EthereumContext, type EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { ethereumInventoryItems, ethereumTokenInfos, type EthereumLog, type EthereumReceipt } from '../src/ethereumRead.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';

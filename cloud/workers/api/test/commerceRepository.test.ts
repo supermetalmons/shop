@@ -549,10 +549,11 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
   const due = await repository.packStatusOutbox.queryDue({ dropId: 'drop', dueAtMs: 25, limit: 4 });
   assert.deepEqual(due.map((record) => record.parentPath), ['drops/drop/deliveryOrders/2', 'drops/drop/deliveryOrders/3']);
   const stale = await repository.queryStaleStripeFulfillments(20);
-  assert.deepEqual(stale, [{
+  assert.deepEqual(stale, { candidates: [{
     checkoutPath: commerceKeys.stripeCheckout('drop', 'old').path,
+    updatedAtMs: 5,
     dropId: 'drop', sessionId: 'old', stripeEventId: 'evt_old', stripeEventType: 'checkout.session.completed',
-  }]);
+  }], hasMore: false });
 });
 
 test('ready-notification recovery selects unclaimed and expired leases in due order', async (context) => {
@@ -2107,7 +2108,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   );
   assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryStaleStripeFulfillments(1)),
-    [],
+    { candidates: [], hasMore: false },
   );
   const staleCall = calls.at(-1);
   assert.equal(staleCall?.method, 'batch');

@@ -12,15 +12,23 @@ import { isAllowedProfileOrigin } from './profileReadSupport.js';
 import { requireEthereum111kWrites } from './ethereumControl.js';
 import {
   confirmEthereumDelivery, loadEthereumDelivery, prepareEthereumDeliveryQuote, requireMatchingDelivery,
-  retireEthereumDelivery, type EthereumDeliveryRow,
+  retireEthereumDelivery,
 } from './ethereumCommerce.js';
+import { findEthereumCheckoutQuote, matchesPublishedEthereumDelivery, type EthereumDeliveryRow } from './ethereumCommerceStore.js';
+import {
+  expireEthereumCheckoutAttempt, findEthereumCheckout, findEthereumCheckoutAttempt, findEthereumCheckoutRequest,
+  findLatestEthereumCheckoutAttempt, hasExpiredEthereumCheckout, insertEthereumCheckout, insertEthereumCheckoutAttempt,
+  matchesEthereumCheckoutFailure, recordEthereumCheckoutFailure, rejectEthereumCheckoutAttempt,
+  replaceEthereumCheckoutAttempt, reportEthereumCheckoutAttempt, restoreSubmittedEthereumCheckoutAttempt,
+  saveEthereumCheckoutProof, type EthereumCheckoutAttemptRow, type EthereumCheckoutRow,
+} from './ethereumCheckoutStore.js';
 import {
   ethereumBlockSnapshot, ethereumCall, ethereumRpc, ethereumTransactionHash, requireEthereumContract,
   rpcInteger, verifyEthereumBlockSnapshot, type EthereumContext,
 } from './ethereumRuntime.js';
 import { ethereumInventoryItems, ethereumReceipt, ethereumTokenInfos, parseEthereumLog } from './ethereumRead.js';
 import { isAllowedEthereumCheckoutStatusOrigin } from './ethereumCheckoutOrigin.js';
-import { verifyCheckoutTransaction, type CheckoutTransaction } from './ethereumCheckoutTransaction.js';
+import { verifyCheckoutTransaction } from './ethereumCheckoutTransaction.js';
 import { blockingEthereumCheckout, inspectEthereumCheckoutFailures, requireResolvedEthereumCheckoutFailures } from './ethereumCheckoutAttempts.js';
 
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -29,46 +37,16 @@ const idSchema = z.string().regex(ETHEREUM_CHECKOUT_ID);
 const hashSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 type CheckoutReceiptReader = (hash: string) => ReturnType<typeof ethereumReceipt>;
 
-export type EthereumCheckoutRow = {
-  checkout_id: string; request_id: string; origin: string; drop_id: typeof ETHEREUM_111K_DROP_ID;
-  chain_id: number; contract_address: string; token_ids_json: string; items_json: string;
-  callback_url: string; callback_state: string | null; created_block: number; created_at_ms: number; expires_at_ms: number;
-};
-
-export type EthereumCheckoutAttemptRow = {
-  attempt_id: string; checkout_id: string; order_id: number; wallet: string;
-  status: 'started' | 'submitted' | 'rejected' | 'reverted' | 'failed' | 'superseded' | 'expired';
-  transaction_hash: string | null; quote_deadline: number; expected_nonce: string | null;
-  transaction_nonce: string | null; transaction_sender: string | null;
-  block_number: number | null; block_hash: string | null; verified_at_block: number | null; checked_at_ms: number;
-  created_at_ms: number; updated_at_ms: number;
-};
-
 async function loadCheckout(context: EthereumContext, checkoutId: string): Promise<EthereumCheckoutRow> {
-  const checkout = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_checkouts
-    WHERE checkout_id = ? AND chain_id = ? AND contract_address = ?`)
-    .bind(checkoutId, context.config.chainId, context.config.contractAddress).first<EthereumCheckoutRow>();
+  const checkout = await findEthereumCheckout(context.env.COMMERCE_DB, checkoutId, context.config.chainId, context.config.contractAddress);
   if (!checkout) throw new EthereumApiError('not-found', 'Checkout not found.');
   return checkout;
 }
 
-async function checkoutQuote(context: EthereumContext, checkoutId: string): Promise<EthereumDeliveryRow | null> {
-  return context.env.COMMERCE_DB.prepare('SELECT * FROM ethereum_delivery_quotes WHERE checkout_id = ?')
-    .bind(checkoutId).first<EthereumDeliveryRow>();
-}
-
 async function latestCheckoutAttempt(context: EthereumContext, checkoutId: string): Promise<EthereumCheckoutAttemptRow | null> {
-  const latest = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_checkout_attempts
-    WHERE checkout_id = ? ORDER BY CASE WHEN status = 'expired' THEN 0
-      WHEN status IN ('started', 'submitted') THEN 1 ELSE 2 END, rowid DESC LIMIT 1`)
-    .bind(checkoutId).first<EthereumCheckoutAttemptRow>();
+  const latest = await findLatestEthereumCheckoutAttempt(context.env.COMMERCE_DB, checkoutId);
   if (!latest || ['expired', 'started', 'submitted'].includes(latest.status)) return latest;
   return (await inspectEthereumCheckoutFailures(context, { checkoutId })).unresolved ?? latest;
-}
-
-async function checkoutAttempt(context: EthereumContext, attemptId: string): Promise<EthereumCheckoutAttemptRow | null> {
-  return context.env.COMMERCE_DB.prepare('SELECT * FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
-    .bind(attemptId).first<EthereumCheckoutAttemptRow>();
 }
 
 function checkoutItems(checkout: EthereumCheckoutRow): EthereumInventoryItem[] {
@@ -82,7 +60,7 @@ function checkoutError(error: unknown): never {
 async function checkoutStatus(context: EthereumContext, checkout: EthereumCheckoutRow, includeReturn: boolean,
   readOwnership = true, readReceipt: CheckoutReceiptReader = hash => ethereumReceipt(context, hash, true)): Promise<EthereumCheckoutStatusResponse> {
   const [quote, attempt] = await Promise.all([
-    checkoutQuote(context, checkout.checkout_id), latestCheckoutAttempt(context, checkout.checkout_id),
+    findEthereumCheckoutQuote(context.env.COMMERCE_DB, checkout.checkout_id), latestCheckoutAttempt(context, checkout.checkout_id),
   ]);
   const transactionHash = quote?.transaction_hash ?? attempt?.transaction_hash ?? null;
   let confirmations = 0;
@@ -98,27 +76,12 @@ async function checkoutStatus(context: EthereumContext, checkout: EthereumChecko
     failureCanonical = Boolean(attempt && (attempt.status === 'failed' || attempt.status === 'reverted') &&
       verified.receipt?.transactionHash === attempt.transaction_hash && verified.receipt.blockHash === attempt.block_hash &&
       verified.confirmations >= context.config.confirmationBlocks &&
-      await context.env.COMMERCE_DB.prepare(`SELECT 1 FROM ethereum_delivery_checkout_attempts AS saved
-        JOIN ethereum_delivery_quotes AS quote ON quote.order_id = saved.order_id
-        WHERE saved.attempt_id = ? AND saved.checkout_id = ? AND saved.status = ?
-          AND saved.transaction_hash IS ? AND saved.block_number IS ? AND saved.block_hash IS ? AND saved.updated_at_ms = ?
-          AND quote.status = ? AND quote.transaction_hash IS ? AND quote.block_number IS ? AND quote.block_hash IS ?
-          AND quote.updated_at_ms = ? AND quote.published_at_ms IS ?
-          AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts AS other
-            WHERE other.checkout_id = saved.checkout_id
-              AND (other.rowid > saved.rowid OR other.status IN ('started', 'submitted', 'expired')))`)
-        .bind(attempt.attempt_id, attempt.checkout_id, attempt.status, attempt.transaction_hash,
-          attempt.block_number, attempt.block_hash, attempt.updated_at_ms,
-          quote.status, quote.transaction_hash, quote.block_number, quote.block_hash, quote.updated_at_ms, quote.published_at_ms).first());
+      await matchesEthereumCheckoutFailure(context.env.COMMERCE_DB, attempt, quote));
   }
   const success = Boolean(quote && quote.status === 'confirmed' && quote.published_at_ms !== null &&
     verified?.receipt?.transactionHash === quote.transaction_hash && verified.receipt.blockHash === quote.block_hash &&
     rpcInteger(verified.receipt.blockNumber) === quote.block_number && confirmations >= context.config.confirmationBlocks &&
-    await context.env.COMMERCE_DB.prepare(`SELECT 1 FROM ethereum_delivery_quotes
-      WHERE chain_id = ? AND contract_address = ? AND order_id = ? AND status = 'confirmed'
-        AND transaction_hash = ? AND block_hash = ? AND block_number = ? AND updated_at_ms = ? AND published_at_ms = ?`)
-      .bind(quote.chain_id, quote.contract_address, quote.order_id, quote.transaction_hash, quote.block_hash,
-        quote.block_number, quote.updated_at_ms, quote.published_at_ms).first());
+    await matchesPublishedEthereumDelivery(context.env.COMMERCE_DB, quote));
   const pending = quote?.status === 'pending' || quote?.status === 'confirmed' || attempt?.status === 'submitted' ||
     attempt && (attempt.status === 'failed' || attempt.status === 'reverted') && !failureCanonical;
   const submitting = attempt?.status === 'started';
@@ -164,8 +127,7 @@ async function createCheckout(request: Request, context: EthereumContext): Promi
   const matches = (row: EthereumCheckoutRow) => row.origin === origin && row.drop_id === body.dropId &&
     row.chain_id === context.config.chainId && row.contract_address === context.config.contractAddress &&
     row.token_ids_json === JSON.stringify(tokenIds) && row.callback_url === callbackUrl && row.callback_state === (state ?? null);
-  const load = () => context.env.COMMERCE_DB.prepare('SELECT * FROM ethereum_delivery_checkouts WHERE request_id = ?')
-    .bind(body.requestId).first<EthereumCheckoutRow>();
+  const load = () => findEthereumCheckoutRequest(context.env.COMMERCE_DB, body.requestId);
   let checkout = await load();
   if (checkout) {
     if (!matches(checkout)) throw new EthereumApiError('failed-precondition', 'This checkout request was already used for different details.');
@@ -177,11 +139,12 @@ async function createCheckout(request: Request, context: EthereumContext): Promi
   await verifyEthereumBlockSnapshot(context, snapshot);
   const itemsJson = JSON.stringify(items);
   if (new TextEncoder().encode(itemsJson).length > MAX_PREVIEW_BYTES) throw new EthereumApiError('invalid-argument', 'This selection is too large to preview. Choose fewer items.');
-  await context.env.COMMERCE_DB.prepare(`INSERT OR IGNORE INTO ethereum_delivery_checkouts
-    (checkout_id, request_id, origin, drop_id, chain_id, contract_address, token_ids_json, items_json,
-      callback_url, callback_state, created_block, created_at_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(crypto.randomUUID(), body.requestId, origin, body.dropId, context.config.chainId, requireEthereumContract(context),
-      JSON.stringify(tokenIds), itemsJson, callbackUrl, state ?? null, snapshot.blockNumber, context.nowMs, context.nowMs + DRAFT_TTL_MS).run();
+  await insertEthereumCheckout(context.env.COMMERCE_DB, {
+    checkout_id: crypto.randomUUID(), request_id: body.requestId, origin, drop_id: body.dropId,
+    chain_id: context.config.chainId, contract_address: requireEthereumContract(context), token_ids_json: JSON.stringify(tokenIds),
+    items_json: itemsJson, callback_url: callbackUrl, callback_state: state ?? null, created_block: snapshot.blockNumber,
+    created_at_ms: context.nowMs, expires_at_ms: context.nowMs + DRAFT_TTL_MS,
+  });
   checkout = await load();
   if (!checkout || !matches(checkout)) throw new EthereumApiError('failed-precondition', 'This checkout request was already used for different details.');
   return checkoutStatus(context, checkout, true, false);
@@ -194,7 +157,7 @@ async function prepareCheckout(request: Request, context: EthereumContext) {
   const body = await readEthereumBody(request, context.signal, z.object({ checkoutId: idSchema,
     addressId: z.string().regex(/^[A-Za-z0-9]{20}$/).optional() }).strict());
   const checkout = await loadCheckout(context, body.checkoutId);
-  const [existing, attempt] = await Promise.all([checkoutQuote(context, checkout.checkout_id), latestCheckoutAttempt(context, checkout.checkout_id)]);
+  const [existing, attempt] = await Promise.all([findEthereumCheckoutQuote(context.env.COMMERCE_DB, checkout.checkout_id), latestCheckoutAttempt(context, checkout.checkout_id)]);
   if (!existing && checkout.expires_at_ms <= context.nowMs) throw new EthereumApiError('failed-precondition', 'This checkout expired. Start a new checkout.');
   if (existing && existing.wallet !== authentication.wallet) throw new EthereumApiError('permission-denied', 'Connect the wallet that started this checkout.');
   if (attempt?.status === 'expired') throw new EthereumApiError('failed-precondition', 'This checkout expired without a redemption. Start a new checkout.');
@@ -210,7 +173,7 @@ async function assertCheckoutOwner(request: Request, context: EthereumContext, c
   const authentication = await verifyEthereumSession(request, context);
   await limitEthereumRequest(request, context, `checkout-submission:${authentication.wallet}`, context.env.STAFF_AUTH_SESSION_RATE_LIMITER);
   const checkout = await loadCheckout(context, checkoutId);
-  const quote = await checkoutQuote(context, checkoutId);
+  const quote = await findEthereumCheckoutQuote(context.env.COMMERCE_DB, checkoutId);
   if (!quote) throw new EthereumApiError('failed-precondition', 'Prepare this checkout before submitting a transaction.');
   if (quote.wallet !== authentication.wallet) throw new EthereumApiError('permission-denied', 'This checkout belongs to a different wallet.');
   return { checkout, quote };
@@ -225,7 +188,7 @@ async function submissionCheckout(request: Request, context: EthereumContext): P
     z.object({ checkoutId: idSchema, attemptId: idSchema, action: z.literal('recover'), transactionHash: hashSchema }).strict(),
   ]));
   const { checkout, quote } = await assertCheckoutOwner(request, context, body.checkoutId);
-  const existing = await checkoutAttempt(context, body.attemptId);
+  const existing = await findEthereumCheckoutAttempt(context.env.COMMERCE_DB, body.attemptId);
   if (existing && (existing.checkout_id !== checkout.checkout_id || existing.wallet !== quote.wallet || existing.order_id !== quote.order_id)) {
     throw new EthereumApiError('failed-precondition', 'This transaction attempt belongs to another checkout.');
   }
@@ -250,19 +213,12 @@ async function submissionCheckout(request: Request, context: EthereumContext): P
       }
       const nonce = await ethereumRpc(context, 'eth_getTransactionCount', [quote.wallet, 'pending']);
       if (typeof nonce !== 'string' || !/^0x[0-9a-fA-F]+$/.test(nonce)) throw new EthereumApiError('unavailable', 'The transaction nonce is unavailable. Try again.');
-      const inserted = await context.env.COMMERCE_DB.prepare(`INSERT OR IGNORE INTO ethereum_delivery_checkout_attempts
-        (attempt_id, checkout_id, order_id, wallet, status, quote_deadline, expected_nonce, created_at_ms, updated_at_ms)
-        SELECT ?, ?, quote.order_id, quote.wallet, 'started', quote.deadline, ?, ?, ? FROM ethereum_delivery_quotes AS quote
-        WHERE quote.checkout_id = ? AND quote.order_id = ? AND quote.wallet = ? AND quote.status = 'prepared' AND quote.deadline = ?
-          AND quote.updated_at_ms = ? AND quote.transaction_hash IS NULL
-          AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts AS terminal
-            WHERE terminal.checkout_id = quote.checkout_id AND terminal.status = 'expired')
-          AND ${failures.sql}`)
-        .bind(body.attemptId, checkout.checkout_id, `0x${BigInt(nonce).toString(16)}`, context.nowMs, context.nowMs,
-          checkout.checkout_id, quote.order_id, quote.wallet, body.quoteDeadline, quote.updated_at_ms, ...failures.values).run();
-      canSend = inserted.meta.changes === 1;
+      canSend = await insertEthereumCheckoutAttempt(context.env.COMMERCE_DB, quote, {
+        attemptId: body.attemptId, checkoutId: checkout.checkout_id, quoteDeadline: body.quoteDeadline,
+        expectedNonce: `0x${BigInt(nonce).toString(16)}`, nowMs: context.nowMs,
+      }, failures);
       if (!canSend) {
-        const concurrent = await checkoutAttempt(context, body.attemptId);
+        const concurrent = await findEthereumCheckoutAttempt(context.env.COMMERCE_DB, body.attemptId);
         if (concurrent?.checkout_id !== checkout.checkout_id || concurrent.quote_deadline !== body.quoteDeadline) {
           const blockingCheckoutId = await blockingEthereumCheckout(context, { wallet: quote.wallet, tokenIdsJson: quote.token_ids_json });
           throw new EthereumApiError('failed-precondition', blockingCheckoutId
@@ -275,18 +231,14 @@ async function submissionCheckout(request: Request, context: EthereumContext): P
   } else if (body.action === 'reject') {
     if (!existing) throw new EthereumApiError('not-found', 'Transaction attempt not found.');
     if (existing.transaction_hash) throw new EthereumApiError('failed-precondition', 'A submitted transaction cannot be canceled here.');
-    await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts SET status = 'rejected',
-      updated_at_ms = MAX(updated_at_ms + 1, ?) WHERE attempt_id = ? AND status = 'started' AND transaction_hash IS NULL`)
-      .bind(context.nowMs, existing.attempt_id).run();
+    await rejectEthereumCheckoutAttempt(context.env.COMMERCE_DB, existing.attempt_id, context.nowMs);
   } else if (body.action === 'report') {
     if (!existing) throw new EthereumApiError('not-found', 'Transaction attempt not found.');
     const hash = ethereumTransactionHash(body.transactionHash);
     if (existing.transaction_hash && existing.transaction_hash !== hash) throw new EthereumApiError('failed-precondition', 'This attempt already has a transaction. Recover a replacement instead.');
     if (existing.status === 'rejected' || existing.status === 'superseded' || existing.status === 'expired') throw new EthereumApiError('failed-precondition', 'This transaction attempt is no longer active. Recover its hash instead.');
-    await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts SET status = 'submitted', transaction_hash = ?,
-      updated_at_ms = MAX(updated_at_ms + 1, ?) WHERE attempt_id = ? AND status = 'started' AND transaction_hash IS NULL`)
-      .bind(hash, context.nowMs, existing.attempt_id).run();
-    const reported = await checkoutAttempt(context, body.attemptId);
+    await reportEthereumCheckoutAttempt(context.env.COMMERCE_DB, existing.attempt_id, hash, context.nowMs);
+    const reported = await findEthereumCheckoutAttempt(context.env.COMMERCE_DB, body.attemptId);
     if (reported?.transaction_hash !== hash) throw new EthereumApiError('failed-precondition', 'The attempt changed before its hash was saved. Recover this transaction hash.');
   } else {
     await recoverCheckoutAttempt(context, checkout, quote, body.attemptId, ethereumTransactionHash(body.transactionHash), existing);
@@ -306,31 +258,17 @@ async function recoverCheckoutAttempt(context: EthereumContext, checkout: Ethere
   const proof = await verifyCheckoutTransaction(context, quote, previous, hash, true);
   const updatedAtMs = Math.max(context.nowMs, previous.updated_at_ms + 1);
   try {
-    await context.env.COMMERCE_DB.batch([
-      context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts SET status = 'superseded', updated_at_ms = ?
-        WHERE attempt_id = ? AND updated_at_ms = ? AND status = ? AND transaction_hash IS ?`)
-        .bind(updatedAtMs, previous.attempt_id, previous.updated_at_ms, previous.status, previous.transaction_hash),
-      context.env.COMMERCE_DB.prepare(`INSERT INTO ethereum_delivery_checkout_attempts
-        (attempt_id, checkout_id, order_id, wallet, status, transaction_hash, quote_deadline, expected_nonce,
-          transaction_nonce, transaction_sender, created_at_ms, updated_at_ms)
-        SELECT ?, checkout_id, order_id, wallet, 'submitted', ?, quote_deadline, expected_nonce, ?, ?, ?, ?
-        FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ? AND status = 'superseded' AND updated_at_ms = ?`)
-        .bind(attemptId, hash, proof.nonce, proof.from, context.nowMs, updatedAtMs, previous.attempt_id, updatedAtMs),
-    ]);
+    await replaceEthereumCheckoutAttempt(context.env.COMMERCE_DB, previous, {
+      attemptId, transactionHash: hash, nonce: proof.nonce, from: proof.from, nowMs: context.nowMs, updatedAtMs,
+    });
   } catch (error) {
-    const concurrent = await checkoutAttempt(context, attemptId);
+    const concurrent = await findEthereumCheckoutAttempt(context.env.COMMERCE_DB, attemptId);
     if (!concurrent || concurrent.checkout_id !== checkout.checkout_id || concurrent.transaction_hash !== hash) throw error;
   }
-  const recovered = await checkoutAttempt(context, attemptId);
+  const recovered = await findEthereumCheckoutAttempt(context.env.COMMERCE_DB, attemptId);
   if (!recovered || recovered.checkout_id !== checkout.checkout_id || recovered.transaction_hash !== hash) {
     throw new EthereumApiError('failed-precondition', 'The transaction changed while recovering it. Refresh this checkout.');
   }
-}
-
-async function saveAttemptProof(context: EthereumContext, attempt: EthereumCheckoutAttemptRow, proof: CheckoutTransaction): Promise<void> {
-  await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts
-    SET transaction_nonce = ?, transaction_sender = ? WHERE attempt_id = ? AND transaction_hash = ? AND status = 'submitted'`)
-    .bind(proof.nonce, proof.from, attempt.attempt_id, attempt.transaction_hash).run();
 }
 
 async function expireUnusedCheckoutAttempt(context: EthereumContext, quote: EthereumDeliveryRow, attempt: EthereumCheckoutAttemptRow): Promise<void> {
@@ -352,21 +290,12 @@ async function expireUnusedCheckoutAttempt(context: EthereumContext, quote: Ethe
     context.signal.throwIfAborted();
     return;
   }
-  await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts SET status = 'expired',
-    block_number = ?, block_hash = ?, verified_at_block = ?, updated_at_ms = MAX(updated_at_ms + 1, ?)
-    WHERE attempt_id = ? AND status = ? AND transaction_hash IS ? AND updated_at_ms = ?
-      AND EXISTS (SELECT 1 FROM ethereum_delivery_quotes WHERE order_id = ? AND checkout_id = ?
-        AND chain_id = ? AND contract_address = ? AND status = 'prepared' AND transaction_hash IS NULL
-        AND deadline = ? AND updated_at_ms = ?)`)
-    .bind(snapshot.blockNumber, snapshot.blockHash, snapshot.blockNumber, context.nowMs,
-      attempt.attempt_id, attempt.status, attempt.transaction_hash, attempt.updated_at_ms,
-      quote.order_id, attempt.checkout_id, quote.chain_id, quote.contract_address, quote.deadline, quote.updated_at_ms).run();
+  await expireEthereumCheckoutAttempt(context.env.COMMERCE_DB, quote, attempt, snapshot, context.nowMs);
 }
 
 export async function reconcileEthereumCheckoutAttempt(context: EthereumContext, attempt: EthereumCheckoutAttemptRow,
   readReceipt: CheckoutReceiptReader = hash => ethereumReceipt(context, hash, true)): Promise<boolean> {
-  if (await context.env.COMMERCE_DB.prepare(`SELECT 1 FROM ethereum_delivery_checkout_attempts
-    WHERE checkout_id = ? AND status = 'expired' LIMIT 1`).bind(attempt.checkout_id).first()) return false;
+  if (await hasExpiredEthereumCheckout(context.env.COMMERCE_DB, attempt.checkout_id)) return false;
   const quote = await loadEthereumDelivery(context, attempt.order_id);
   if (!attempt.transaction_hash) {
     await expireUnusedCheckoutAttempt(context, quote, attempt);
@@ -384,15 +313,13 @@ export async function reconcileEthereumCheckoutAttempt(context: EthereumContext,
   }
   if (!verified.receipt) {
     if (attempt.status === 'reverted' || attempt.status === 'failed') {
-      await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts SET status = 'submitted',
-        block_number = NULL, block_hash = NULL, verified_at_block = NULL, updated_at_ms = MAX(updated_at_ms + 1, ?)
-        WHERE attempt_id = ? AND status = ? AND transaction_hash = ? AND updated_at_ms = ?
-          AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts AS active
-            WHERE active.checkout_id = ? AND active.status IN ('started', 'submitted', 'expired'))`)
-        .bind(context.nowMs, attempt.attempt_id, attempt.status, attempt.transaction_hash, attempt.updated_at_ms, attempt.checkout_id).run();
+      await restoreSubmittedEthereumCheckoutAttempt(context.env.COMMERCE_DB, attempt, context.nowMs);
     }
     if (attempt.status === 'submitted') {
-      try { await saveAttemptProof(context, attempt, await verifyCheckoutTransaction(context, quote, attempt, attempt.transaction_hash, false)); }
+      try {
+        await saveEthereumCheckoutProof(context.env.COMMERCE_DB, attempt,
+          await verifyCheckoutTransaction(context, quote, attempt, attempt.transaction_hash, false));
+      }
       catch (error) { if (!(error instanceof EthereumApiError && error.code === 'failed-precondition')) throw error; }
       await expireUnusedCheckoutAttempt(context, quote, attempt);
     }
@@ -406,11 +333,10 @@ export async function reconcileEthereumCheckoutAttempt(context: EthereumContext,
     return false;
   }
   const blockNumber = rpcInteger(verified.receipt.blockNumber);
-  await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts SET status = ?, block_number = ?, block_hash = ?,
-    verified_at_block = ?, updated_at_ms = MAX(updated_at_ms + 1, ?) WHERE attempt_id = ? AND transaction_hash = ?
-      AND status IN ('submitted', 'reverted', 'failed')`)
-    .bind(verified.receipt.status === '0x0' ? 'reverted' : 'failed', blockNumber, verified.receipt.blockHash,
-      blockNumber + verified.confirmations - 1, context.nowMs, attempt.attempt_id, attempt.transaction_hash).run();
+  await recordEthereumCheckoutFailure(context.env.COMMERCE_DB, attempt, {
+    status: verified.receipt.status === '0x0' ? 'reverted' : 'failed', blockNumber, blockHash: verified.receipt.blockHash,
+    verifiedAtBlock: blockNumber + verified.confirmations - 1, nowMs: context.nowMs,
+  });
   return false;
 }
 
@@ -441,7 +367,7 @@ async function discoverCheckoutDelivery(context: EthereumContext, checkout: Ethe
 async function refreshCheckout(request: Request, context: EthereumContext): Promise<EthereumCheckoutStatusResponse> {
   const body = await readEthereumBody(request, context.signal, z.object({ checkoutId: idSchema }).strict());
   const checkout = await loadCheckout(context, body.checkoutId);
-  const quote = await checkoutQuote(context, checkout.checkout_id);
+  const quote = await findEthereumCheckoutQuote(context.env.COMMERCE_DB, checkout.checkout_id);
   const receipts = new Map<string, ReturnType<typeof ethereumReceipt>>();
   const readReceipt: CheckoutReceiptReader = hash => {
     if (!receipts.has(hash)) receipts.set(hash, ethereumReceipt(context, hash, true));

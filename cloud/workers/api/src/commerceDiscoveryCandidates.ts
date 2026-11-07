@@ -10,8 +10,12 @@ export type StripeTerminalNotificationCandidate = Readonly<{
   nextAttemptAtMs: number;
 }>;
 
-export type StripeCheckoutRequeueCandidate = Readonly<{
+export type StripeCheckoutRequeueCursor = Readonly<{
   checkoutPath: string;
+  updatedAtMs: number;
+}>;
+
+export type StripeCheckoutRequeueCandidate = StripeCheckoutRequeueCursor & Readonly<{
   dropId: string;
   sessionId: string;
   stripeEventId: string;
@@ -39,6 +43,16 @@ export function validateNotificationDueCursor(value: NotificationDueCursor | und
     parseNotificationOutboxCandidate({ parent_path: value.parentPath, family: value.family, next_attempt_at_ms: value.nextAttemptAtMs });
   } catch {
     throw new CommerceRepositoryError('invalid-argument', 'Invalid notification due cursor.');
+  }
+}
+
+export function validateStripeCheckoutRequeueCursor(value: StripeCheckoutRequeueCursor | undefined): void {
+  if (value === undefined) return;
+  try {
+    if (!isObject(value) || !Number.isSafeInteger(value.updatedAtMs) || value.updatedAtMs < 0 ||
+      keyFromPath(value.checkoutPath).kind !== 'stripe_checkout') throw new Error();
+  } catch {
+    throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation cursor.');
   }
 }
 
@@ -116,6 +130,7 @@ export function parseStripeCheckoutRequeueCandidate(
   ) return null;
   return {
     checkoutPath: document.key.path,
+    updatedAtMs: fields.updatedAt,
     dropId: document.key.dropId,
     sessionId: document.key.documentId,
     stripeEventId: fields.lastStripeWebhookEventId,

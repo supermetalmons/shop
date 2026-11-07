@@ -571,11 +571,15 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const shipmentTail = await repository.queryShipmentHistoryPage({ owner: shipmentOwner, limit: 2, startAfter: shipmentPage.nextCursor });
     assert.deepEqual(shipmentTail.orders.map((order) => order.deliveryId), [1]);
     assert.equal(shipmentTail.nextCursor, null);
+    assert.deepEqual(await repository.queryShipmentHistoryPage({ owner: shipmentOwner, dropId: 'shipment-runtime', limit: 2 }), shipmentPage);
+    assert.deepEqual(await repository.queryShipmentHistoryPage({ owner: shipmentOwner, dropId: 'other', limit: 2 }), { orders: [], nextCursor: null });
     assert.deepEqual(await repository.queryShipmentPresence({ owner: shipmentOwner,
       stripeSessionIds: ['cs_shipment_1'], deliveries: [{ dropId: 'shipment-runtime', deliveryId: 1 }],
     }), { stripeSessionIds: ['cs_shipment_1'], deliveries: [{ dropId: 'shipment-runtime', deliveryId: 1 }] });
     for (const query of [
       shipmentHistoryPageQuery({ owner: shipmentOwner, limit: 2, startAfter: shipmentPage.nextCursor }),
+      shipmentHistoryPageQuery({ owner: shipmentOwner, dropId: 'shipment-runtime', allowPaused: true, limit: 2 }),
+      shipmentHistoryPageQuery({ owner: shipmentOwner, dropId: 'shipment-runtime', allowPaused: true, limit: 2, startAfter: shipmentPage.nextCursor }),
       shipmentPresenceQuery({ owner: shipmentOwner, stripeSessionIds: ['cs_shipment_1'] }),
     ]) {
       const plan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).bind(...query.bindings).all<{ detail: string }>();
@@ -671,10 +675,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
       startAfter: { parentPath: firstReadyPage[0].key.path, family: 'ready', nextAttemptAtMs: firstReadyPage[0].nextAttemptAtMs },
     }), [{ key: commerceKeys.deliveryOrder('runtime', 'notification-10'),
       identityFields: { deliveryId: null, dropId: 'runtime' }, nextAttemptAtMs: 10 }]);
-    assert.deepEqual(await repository.queryStaleStripeFulfillments(10), [{
+    assert.deepEqual(await repository.queryStaleStripeFulfillments(10), { candidates: [{
       checkoutPath: checkoutKey.path, dropId: 'runtime', sessionId: 'cs_runtime',
+      updatedAtMs: 10,
       stripeEventId: 'evt_runtime', stripeEventType: 'checkout.session.completed',
-    }]);
+    }], hasMore: false });
     const staleStripeQuery = staleStripeFulfillmentsQuery(10);
     const staleStripeRows = await env.COMMERCE_DB.prepare(staleStripeQuery.sql).bind(...staleStripeQuery.bindings)
       .all<{ document_json: string }>();
@@ -710,6 +715,25 @@ test('commerce repository reads and transaction guards run through the real D1 r
     ]);
     assert.equal(await env.COMMERCE_DB.prepare(`SELECT documents_revision
       FROM commerce_authority_control WHERE singleton = 1`).first<number>('documents_revision'), 2);
+
+    const pagingCheckoutKey = commerceKeys.stripeCheckout('runtime', 'cs_paging');
+    await batchDocuments(env.COMMERCE_DB, [insertDocument(env.COMMERCE_DB, pagingCheckoutKey, {
+      fulfillmentProcessor: 'cloudflare_queue_v1', lastStripeWebhookEventId: 'evt_paging',
+      status: 'fulfillment_pending', updatedAt: 10,
+    })]);
+    const firstStripePage = await repository.queryStaleStripeFulfillments(10, 1);
+    assert.deepEqual(firstStripePage.candidates.map((value) => value.checkoutPath), [pagingCheckoutKey.path]);
+    assert.equal(firstStripePage.hasMore, true);
+    const secondStripePage = await repository.queryStaleStripeFulfillments(10, 1, firstStripePage.candidates[0]);
+    assert.deepEqual(secondStripePage.candidates.map((value) => value.checkoutPath), [checkoutKey.path]);
+    assert.equal(secondStripePage.hasMore, false);
+    const nextStripeQuery = staleStripeFulfillmentsQuery(10, 1, firstStripePage.candidates[0]);
+    const nextStripePlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${nextStripeQuery.sql}`)
+      .bind(...nextStripeQuery.bindings).all<{ detail: string }>();
+    const nextStripePlanDetails = nextStripePlan.results.map((row) => row.detail).join('\n');
+    assert.match(nextStripePlanDetails, /commerce_stripe_checkout_state_reconciliation_due/);
+    assert.doesNotMatch(nextStripePlanDetails, /USE TEMP B-TREE/);
+    await repository.run(Date.parse('2026-01-01T00:00:00.001Z'), (unit) => unit.delete(pagingCheckoutKey, { mustExist: true }));
 
     const firstUnrelatedUnit = await repository.begin(Date.parse('2026-01-01T00:00:02.000Z'));
     const secondUnrelatedUnit = await repository.begin(Date.parse('2026-01-01T00:00:03.000Z'));

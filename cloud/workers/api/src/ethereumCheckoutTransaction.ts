@@ -4,8 +4,9 @@ import { ethereumReceiptTokenId, isEthereumDeliveryKind } from '../../../../shar
 import { EthereumApiError } from './ethereumError.js';
 import { ethereumAddress, ethereumRpc, rpcInteger, type EthereumContext } from './ethereumRuntime.js';
 import { ethereumReceipt, type EthereumTokenInfo } from './ethereumRead.js';
-import { requireMatchingDelivery, type EthereumDeliveryRow } from './ethereumCommerce.js';
-import type { EthereumCheckoutAttemptRow } from './ethereumCheckout.js';
+import { requireMatchingDelivery } from './ethereumCommerce.js';
+import type { EthereumDeliveryRow } from './ethereumCommerceStore.js';
+import type { EthereumCheckoutAttemptRow } from './ethereumCheckoutStore.js';
 
 export type CheckoutTransaction = { hash: string; from: string; to: string; data: string; value: string; nonce: string };
 

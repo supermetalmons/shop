@@ -26,11 +26,8 @@ import {
   ReceiptProofDecodeError,
   type DecodedReceiptProof,
 } from './receiptProof.js';
-import {
-  BoxMinterConfigCodecError,
-  decodeBoxMinterConfigData,
-  type DecodedBoxMinterConfigData,
-} from '../../../../shared/boxMinterConfigCodec.js';
+import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterConfigCodec.js';
+import { readBoxMinterConfig } from './boxMinterConfigRead.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
@@ -440,40 +437,26 @@ async function loadOnchainState(
   context: ProviderContext,
   runtime: IrlClaimRuntime,
 ): Promise<OnchainState> {
-  const result = await rpcCall(context, runtime, 'getMultipleAccounts', [
-    [runtime.collectionMint.toBase58(), runtime.boxMinterConfigPda.toBase58()],
-    { commitment: 'confirmed', encoding: 'base64' },
-  ]);
-  if (!isRecord(result) || !Array.isArray(result.value) || result.value.length !== 2) {
-    throw new IrlClaimError('unavailable', 'Claim provider returned an invalid account response.');
-  }
-  if (!result.value[0] || !result.value[1]) {
-    throw new IrlClaimError('failed-precondition', 'On-chain mint configuration is missing.', {
-      dropId: runtime.dropId,
-    });
-  }
-  const collection = parseRpcAccount(result.value[0], 'COLLECTION_MINT');
-  const config = parseRpcAccount(result.value[1], 'BOX_MINTER_CONFIG_PDA');
-  if (!collection.owner.equals(MPL_CORE_PROGRAM_ID)) {
-    throw new IrlClaimError('failed-precondition', 'COLLECTION_MINT is not an MPL Core collection account.');
-  }
-  if (!config.owner.equals(runtime.boxMinterProgramId)) {
-    throw new IrlClaimError('failed-precondition', 'BOX_MINTER_CONFIG_PDA has an unexpected owner.');
-  }
-  let decoded: DecodedBoxMinterConfigData;
-  try {
-    decoded = decodeBoxMinterConfigData(config.data, {
-      validateDiscriminator: true,
-      validateItemsPerBox: true,
-      normalizeDiscountMintsPerWallet: true,
-      decodeExtensions: true,
-    });
-  } catch (error) {
-    if (error instanceof BoxMinterConfigCodecError) {
-      throw new IrlClaimError('failed-precondition', error.message, error.details);
-    }
-    throw error;
-  }
+  const missingConfiguration = () => new IrlClaimError('failed-precondition', 'On-chain mint configuration is missing.', {
+    dropId: runtime.dropId,
+  });
+  const decoded = await readBoxMinterConfig({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    collectionMint: runtime.collectionMint,
+    configPda: runtime.boxMinterConfigPda,
+    programId: runtime.boxMinterProgramId,
+    parseAccount: parseRpcAccount,
+    collectionPolicy: 'owner-only',
+    decodeOptions: { validateItemsPerBox: true, normalizeDiscountMintsPerWallet: true },
+    errors: {
+      invalidResponse: () => new IrlClaimError('unavailable', 'Claim provider returned an invalid account response.'),
+      missingCollection: missingConfiguration,
+      missingConfig: missingConfiguration,
+      invalidCollection: () => new IrlClaimError('failed-precondition', 'COLLECTION_MINT is not an MPL Core collection account.'),
+      invalidConfigOwner: () => new IrlClaimError('failed-precondition', 'BOX_MINTER_CONFIG_PDA has an unexpected owner.'),
+      invalidConfig: (error) => new IrlClaimError('failed-precondition', error.message, error.details),
+    },
+  });
   return { config: decoded, coreCollection: validateOnchainConfig(runtime, decoded) };
 }
 
