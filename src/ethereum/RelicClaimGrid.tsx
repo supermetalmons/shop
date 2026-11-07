@@ -7,6 +7,8 @@ type RelicClaimGridProps = {
   claimedMask: number;
   selectedId: number | null;
   disabled: boolean;
+  attentionToken?: number;
+  onAttentionEnd?: (token: number) => void;
   onSelect: (id: number | null) => void;
 };
 
@@ -22,7 +24,7 @@ function layout(width: number, height: number, gap: number) {
   return best;
 }
 
-export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, onSelect }: RelicClaimGridProps) {
+export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, attentionToken = 0, onAttentionEnd, onSelect }: RelicClaimGridProps) {
   const preview = useRef<HTMLDivElement>(null);
   const [geometry, setGeometry] = useState({ size: 44, columns: 6, gap: 4 });
   useLayoutEffect(() => {
@@ -59,6 +61,8 @@ export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, on
             onClick={() => { if (selectedId === id) onSelect(null); }}
             onChange={() => onSelect(id)} />
           <span className="ethereum111k__relic-image">
+            {attentionToken > 0 && selectedId === null && !disabled && !claimed && <span key={attentionToken}
+              className="ethereum111k__relic-attention" aria-hidden="true" onAnimationEnd={() => onAttentionEnd?.(attentionToken)} />}
             <MediaWithFallback imageSources={image ? [image] : []} showPlaceholderWhileLoading
               imageProps={{ alt: '', draggable: false, loading: 'eager', decoding: 'async', onDragStart: event => event.preventDefault() }}
               renderPlaceholder={hidden => <span hidden={hidden} className="ethereum111k__relic-placeholder" aria-hidden="true" />} />
@@ -66,5 +70,8 @@ export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, on
         </label>;
       })}
     </div>
+    <span className="ethereum111k__relic-feedback" role="status" aria-atomic="true">
+      {attentionToken > 0 && selectedId === null && !disabled ? 'Choose an available relic.' : ''}
+    </span>
   </div>;
 }

@@ -45,10 +45,10 @@ export default function Ethereum111kPage({
   const model = useEthereum111k(wallet, kind, suspended);
   const relicMode = kind === 'relic';
   const publicKind = relicMode ? 'crate' : kind;
-  const deploymentKey = `${model.config.chainId}:${model.config.contractAddress}`;
-  const [relicSelection, setRelicSelection] = useState<{ deployment: string; owner: string | null; id: number } | null>(null);
+  const deploymentKey = model.configQuery.data ? `${model.config.chainId}:${model.config.contractAddress}` : null;
+  const [relicSelection, setRelicSelection] = useState<{ deployment: string | null; owner: string | null; id: number } | null>(null);
   const previousRelicWallet = useRef({ deployment: deploymentKey, owner: model.owner, provider: wallet.provider });
-  const selectedRelicId = relicSelection?.deployment === deploymentKey &&
+  const selectedRelicId = relicSelection && (relicSelection.deployment === null || relicSelection.deployment === deploymentKey) &&
     (relicSelection.owner === null || relicSelection.owner === model.owner) ? relicSelection.id : null;
   const relicData = model.relics.data?.chainId === model.config.chainId && model.relics.data.contractAddress === model.config.contractAddress &&
     model.relics.data.owner === model.owner ? model.relics.data : undefined;
@@ -65,10 +65,11 @@ export default function Ethereum111kPage({
   useLayoutEffect(() => {
     const previous = previousRelicWallet.current;
     previousRelicWallet.current = { deployment: deploymentKey, owner: model.owner, provider: wallet.provider };
-    if (previous.deployment !== deploymentKey || previous.owner && (previous.owner !== model.owner || previous.provider !== wallet.provider)) {
+    if (previous.deployment !== null && previous.deployment !== deploymentKey || previous.owner && (previous.owner !== model.owner || previous.provider !== wallet.provider)) {
       setRelicSelection(null);
-    } else if (model.owner) {
-      setRelicSelection(current => current?.owner === null ? { ...current, owner: model.owner } : current);
+    } else {
+      setRelicSelection(current => current && (current.deployment === null || current.owner === null)
+        ? { ...current, deployment: deploymentKey, owner: model.owner } : current);
     }
   }, [deploymentKey, model.owner, wallet.provider]);
   useEffect(() => {
@@ -110,8 +111,8 @@ export default function Ethereum111kPage({
   const kindDisabled = actionBlocked || panelActionPending || wallet.status === 'connecting' || walletPickerOpen;
   const mintDisabled = kindDisabled || Boolean(mintDataError) || model.configQuery.data?.enabled === false ||
     model.stats.data?.saleActive === false || remaining === 0 || quantity > maxQuantity;
-  const relicDisabled = kindDisabled || !relicReadFresh || selectedRelicId === null || model.configQuery.data?.enabled !== true ||
-    !relicData?.saleActive || relicData.remainingRelics === 0 || Boolean(model.owner && relicData.remainingAllowance === 0);
+  const relicDisabled = kindDisabled || model.configQuery.data?.enabled === false ||
+    relicData?.saleActive === false || relicData?.remainingRelics === 0 || Boolean(model.owner && relicData?.remainingAllowance === 0);
   const actionError = model.error || (relicMode ? relicAction.error : mintAction.error);
   const inventory = useMemo(() => buildEthereumInventoryItems({ items: model.items, pendingMints: model.pendingMints,
     solanaItems: solanaInventoryItems, dropId: model.config.dropId }), [model.items, model.pendingMints, model.config.dropId, solanaInventoryItems]);
@@ -184,8 +185,10 @@ export default function Ethereum111kPage({
   const selectedPending = selectedItems.some(item => model.pendingItemIds.has(item.id));
   const mintStatus = model.configQuery.data?.enabled === false ? 'Mint unavailable' : model.stats.data && !model.stats.data.saleActive ? 'Minting is paused' : undefined;
   const relicStatus = model.configQuery.data?.enabled === false || relicDataError ? 'Unavailable' :
-    !relicReadFresh ? 'Loading…' : !relicData?.saleActive ? 'Paused' : relicData.remainingRelics === 0 ? 'Sold out' :
-    model.owner ? relicData.relicLimit === 0 ? 'Not eligible' : `${relicData.remainingAllowance} claims left` : undefined;
+    relicData?.saleActive === false ? 'Paused' : relicData?.remainingRelics === 0 ? 'Sold out' :
+    model.owner && relicData?.relicLimit === 0 ? 'Not eligible' : undefined;
+  const relicClaimsRemaining = relicReadFresh && relicData
+    ? model.owner ? relicData.remainingAllowance : relicData.remainingRelics : undefined;
   const claimedRelicMask = [...model.pendingRelicIds].reduce((mask, id) => mask | (1 << (id - 1)), relicData?.claimedMask ?? 0);
 
   return <>
@@ -197,7 +200,7 @@ export default function Ethereum111kPage({
         discountPrice={discountPrice} useDiscountMint={Boolean(quote?.discounted)}
         statusText={relicMode ? relicStatus : mintStatus} disabled={Boolean(relicMode ? relicDisabled : mintDisabled)} busy={panelActionPending}
         relicMetadata={model.relicMetadata.data} claimedRelicMask={claimedRelicMask} selectedRelicId={selectedRelicId}
-        relicSelectionDisabled={kindDisabled || !relicReadFresh || relicData?.remainingRelics === 0}
+        relicClaimsRemaining={relicClaimsRemaining} relicSelectionDisabled={kindDisabled || relicData?.remainingRelics === 0}
         onRelicSelect={id => { relicAction.clearError(); model.clearError(); setRelicSelection(id === null ? null : { deployment: deploymentKey, owner: model.owner, id }); }}
         onQuantityChange={setQuantity} onMint={() => { model.clearError(); (relicMode ? relicAction.claim : mintAction.mint)(); }} />
     </div>

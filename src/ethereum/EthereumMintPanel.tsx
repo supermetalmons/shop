@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { type EthereumContainerKind, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle, MintQuantityControl } from '../components/MintPanel';
 import { MintPanelActions } from '../components/MintPanelActions';
@@ -25,6 +26,7 @@ type EthereumMintPanelProps = {
   onQuantityChange: (quantity: number) => void;
   onMint: () => void;
   relicMetadata?: readonly EthereumMetadata[];
+  relicClaimsRemaining?: number;
   claimedRelicMask?: number;
   selectedRelicId?: number | null;
   relicSelectionDisabled?: boolean;
@@ -38,12 +40,16 @@ const containerPreviews = {
 
 export function EthereumMintPanel({
   kind, kindDisabled, quantity, maxQuantity, remaining, total, price, discountPrice, useDiscountMint, statusText, disabled, busy, onKindChange, onQuantityChange, onMint,
-  relicMetadata, claimedRelicMask = 0, selectedRelicId = null, relicSelectionDisabled = true, onRelicSelect,
+  relicMetadata, relicClaimsRemaining, claimedRelicMask = 0, selectedRelicId = null, relicSelectionDisabled = true, onRelicSelect,
 }: EthereumMintPanelProps) {
   const relic = kind === 'relic';
   const quantityLabel = `${quantity} ${quantity === 1 ? kind : ETHEREUM_CONTAINER_MEDIA[kind].pluralLabel.toLowerCase()}`;
   const showQuantitySlider = !relic && maxQuantity > 1;
+  const remainingCount = relic ? relicClaimsRemaining : remaining;
+  const countDigits = String(relic ? relicClaimsRemaining ?? 0 : total).length;
   const formId = 'ethereum-mint-form';
+  const [relicAttentionToken, setRelicAttentionToken] = useState(0);
+  useEffect(() => { setRelicAttentionToken(0); }, [kind, selectedRelicId, disabled]);
 
   return <MintPanelFrame
     ariaLabel="111K mint"
@@ -55,6 +61,8 @@ export function EthereumMintPanel({
     previewPrimaryKey={`111k-${kind}`}
     previewContent={relic ? <RelicClaimGrid metadata={relicMetadata} claimedMask={claimedRelicMask}
       selectedId={selectedRelicId} disabled={relicSelectionDisabled}
+      attentionToken={relicAttentionToken}
+      onAttentionEnd={token => setRelicAttentionToken(current => current === token ? 0 : current)}
       onSelect={id => onRelicSelect?.(id)} /> : undefined}
   >
     <MintPanelPurchaseFooter
@@ -72,19 +80,27 @@ export function EthereumMintPanel({
         </div>
         <div className="mint-panel__remaining mint-panel__availability">
           {statusText ? <span role="status">{statusText}</span> : <>
-            <span className="mint-panel__remaining-count" style={{ minWidth: `${String(total).length}ch` }}>
-              {remaining !== undefined ? formatRemainingCount(remaining, total) : <span role="status" aria-label="Loading availability">
-                {Array.from(String(total), (_, index) => <span key={index} className="mint-panel__digit-placeholder" aria-hidden="true" />)}
+            <span className="mint-panel__remaining-count" style={{ minWidth: `${countDigits}ch` }}>
+              {remainingCount !== undefined ? relic ? remainingCount : formatRemainingCount(remainingCount, total) : <span role="status" aria-label="Loading availability">
+                {Array.from({ length: countDigits }, (_, index) => <span key={index} className="mint-panel__digit-placeholder" aria-hidden="true" />)}
               </span>}
             </span>
-            <span> / {total} left</span>
+            <span>{relic ? ' claims left' : ` / ${total} left`}</span>
           </>}
         </div>
       </>}
       controls={<form
         id={formId}
         className={showQuantitySlider ? 'mint-panel__slider' : 'mint-panel__slider mint-panel__slider--hidden'}
-        onSubmit={event => { event.preventDefault(); onMint(); }}
+        onSubmit={event => {
+          event.preventDefault();
+          if (disabled || busy) return;
+          if (relic && selectedRelicId === null) {
+            setRelicAttentionToken(token => token + 1);
+            return;
+          }
+          onMint();
+        }}
       >
         {showQuantitySlider ? <MintQuantityControl
           quantity={quantity}
