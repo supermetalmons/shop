@@ -24,6 +24,8 @@ function project(t: TestContext) {
   write('onchain/ethereum/fixtures/eip712.json', '{"version":1}');
   write('onchain/ethereum/src/NFT111K.sol', 'original Solidity source');
   write('scripts/ethereum-metadata/lock.ts', 'export const withMetadataLock = async (_path, work) => work();');
+  write('scripts/shared/ethereum111kReleaseLocations.ts', "import { withMetadataLock } from '../ethereum-metadata/lock.ts'; export const probe = () => withMetadataLock('test', () => 'release locations available');");
+  write('onchain/ethereum/scripts/release-location-probe.mjs', "import { probe } from '../../../scripts/shared/ethereum111kReleaseLocations.ts'; process.stdout.write(await probe());");
   write('shared/removed.ts', 'removed after staging');
   write('tests/ethereum/local.test.ts', 'nested test');
   write('tests/ethereumRoot.test.ts', 'root test');
@@ -45,6 +47,8 @@ test('validation copies current source and removes temporary changes after failu
     assert.equal(readFileSync(join(directory, 'shared/new.ts'), 'utf8'), 'current untracked source');
     assert.equal(readFileSync(join(directory, 'scripts/ethereum-metadata/lock.ts'), 'utf8'),
       'export const withMetadataLock = async (_path, work) => work();');
+    assert.equal(execFileSync(process.execPath, [join(directory, 'onchain/ethereum/scripts/release-location-probe.mjs')],
+      { encoding: 'utf8' }), 'release locations available');
     assert.equal(existsSync(join(directory, 'shared/removed.ts')), false);
     writeFileSync(join(directory, 'onchain/ethereum/fixtures/eip712.json'), 'temporary generated fixture');
     throw new Error('test failure');

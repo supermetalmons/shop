@@ -31,7 +31,7 @@ contract MetadataDefaultTest is TestSupport {
     function testLocalDefaultAndOverride() public {
         vm.chainId(31337);
         MetadataHarness harness = new MetadataHarness();
-        assertEq(harness.metadataBaseURI(), "https://cdn.mons.shop/111k-sepolia/v16/");
+        assertEq(harness.metadataBaseURI(), "https://cdn.mons.shop/111k-sepolia/v17/");
         string memory explicitUri = "https://cdn.mons.shop/111k-sepolia/local-override/";
         Environment(address(vm)).setEnv("ETHEREUM_111K_METADATA_BASE_URI", explicitUri);
         assertEq(harness.metadataBaseURI(), explicitUri);
@@ -111,7 +111,7 @@ test('local deployment rejects current-address payees and deploys one collection
     const deliveryRouting = JSON.parse(readFileSync(deliveryRoutingPath, 'utf8'));
     const fixture = JSON.parse(readFileSync(join(project, 'fixtures/eip712.json'), 'utf8'));
     const discounts = JSON.parse(readFileSync(join(directory, 'src/ethereum/discounts/111k.json'), 'utf8'));
-    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v16/';
+    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v17/';
     const run = () => spawnSync(process.execPath, ['scripts/deploy-local.mjs'], {
       cwd: project, encoding: 'utf8', timeout: 60_000,
       env: {

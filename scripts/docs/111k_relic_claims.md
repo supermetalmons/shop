@@ -7,10 +7,12 @@ Show **Relic #1–#18** using `https://cdn.lil.org/nft/111k/relics/{id}.webp`. A
 ## Read availability and wallet allowance
 
 ```text
-GET https://api.mons.shop/ethereum/111k/relics?chainId=11155111&contractAddress=0x6d194e6cc762424e408b84907c25d60f0db29d12&owner=0xYOUR_WALLET
+GET https://api.mons.shop/ethereum/111k/relics?chainId=11155111&contractAddress=0xaca342968965ddb20badb1943b99ee6523658619&owner=0xYOUR_WALLET
 ```
 
 `chainId` and `contractAddress` are required. Omit `owner` before connecting. Mainnet uses `chainId=1` and the registered contract supplied by Mons; the example is Sepolia.
+
+The example targets the live [v17 release](../../releases/111k-sepolia-v17/README.md), with seven reserved claims and one unused claim per test wallet at acceptance. Public relic minting remains disabled; always use the returned live state when enabling actions.
 
 Allowed origins: `https://vvv.so`, `https://www.vvv.so`. Browsers set `Origin`; backend callers must supply it. No API key, session, signature, or CSRF header is required.
 

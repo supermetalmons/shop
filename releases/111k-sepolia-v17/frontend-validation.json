@@ -1,0 +1,135 @@
+{
+  "checkedAt": "2026-11-08T20:02:57.772Z",
+  "passed": true,
+  "checkedBuild": true,
+  "artifact": {
+    "checkedAt": "2026-11-08T19:21:38.645Z",
+    "entry": "/assets/index-BV8rdwQe.js",
+    "sha256": "79d2915ccd314595b1eb4eec14b8f4dbaae07a102b87c465e6d49800a2b49868",
+    "matchedCheckedBuild": true
+  },
+  "validation": {
+    "version": 1,
+    "kind": "frontend-cutover-validation",
+    "completedAt": "2026-11-08T19:20:13.199Z",
+    "passed": true,
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "deploymentBlock": 12092412,
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+    "command": "npm run check:frontend",
+    "appTests": 5135,
+    "workerAndClientTests": 34,
+    "build": "passed",
+    "bundleScan": "passed",
+    "log": "validation-frontend-cutover.log",
+    "artifacts": {
+      "dist/index.html": {
+        "bytes": 2764,
+        "sha256": "3229e7aec778faa4818b2e36b9c918036d83844f2bf95298f721f3406f1e9b25"
+      },
+      "dist/assets/ColorSchemeImage-DGYGLtKL.js": {
+        "bytes": 869,
+        "sha256": "45140ec4d5c96131c0a345dc67eff0d4e659aa57f2c9f293eff2b7cceb635556"
+      },
+      "dist/assets/ModalFocusScope-tbifo_U_.js": {
+        "bytes": 1767,
+        "sha256": "0eadc666ef39ab04e10f888be3921d6e71422c93487676c8da735e943512ef12"
+      },
+      "dist/assets/Transport-CL7hAnp_.js": {
+        "bytes": 17270,
+        "sha256": "67971c2d76789f6f7480494a83968c275886569b11e7173b43483368f399c520"
+      },
+      "dist/assets/WalletContext-C__6JtFH.js": {
+        "bytes": 104708,
+        "sha256": "0a5abb27b17b3f1353367347edabd3e7b379e89d728df97c94b54fee428a6212"
+      },
+      "dist/assets/WalletContext-DjNXsENK.css": {
+        "bytes": 4777,
+        "sha256": "f202febc47313a128e794206f2d22b596ef1c5ef84d081f43c8747df12260f04"
+      },
+      "dist/assets/browser-VJeGqe__.js": {
+        "bytes": 23473,
+        "sha256": "4b7c56231f9cf41cc2906c40617e4284a9481fe1a611a0e13e7952e962b2debc"
+      },
+      "dist/assets/deploymentCore-C5QiUkUp.js": {
+        "bytes": 33515,
+        "sha256": "a35de704f5627ff17a6f670a026673b14051b78dba27717cdf58de7342f857af"
+      },
+      "dist/assets/drifCards-BhCh5MGg.js": {
+        "bytes": 5859,
+        "sha256": "00908fd6cd19ccb814ec02789a5ced8a6f7f3e76e8a0e9e6831a1e9d8be2ab08"
+      },
+      "dist/assets/dropContent-jDANJ6Xb.js": {
+        "bytes": 55867,
+        "sha256": "7e3602c07f1c66f964469b1f4a31376cb93a826ce6ea6c554b79114cf5c9678c"
+      },
+      "dist/assets/dropLabels-B-kENt49.js": {
+        "bytes": 7346,
+        "sha256": "b51110a0e61b8e360654fa2a7595e4648ee57173881a92ad10e61feb1cd2a39c"
+      },
+      "dist/assets/dropMediaDefaults-DN__LRNm.js": {
+        "bytes": 1917,
+        "sha256": "e1e96d9f855ac4c9d427814e559e5dd4e4b86945e7bf521f7fbbfbc6afb41494"
+      },
+      "dist/assets/focusTrap-eSUcgXD5.js": {
+        "bytes": 1927,
+        "sha256": "f3f04f4d894415a82db01a72d13b424f99aee7ad516bd7347b5aee3ed9a8e41a"
+      },
+      "dist/assets/index-B6eBouoV.css": {
+        "bytes": 135387,
+        "sha256": "a1aec3c84e49cb15fb7b03173c9a6e968695364d4535c2a110726457870f58d2"
+      },
+      "dist/assets/index-BV8rdwQe.js": {
+        "bytes": 775743,
+        "sha256": "79d2915ccd314595b1eb4eec14b8f4dbaae07a102b87c465e6d49800a2b49868"
+      },
+      "dist/assets/index.browser.esm-6LuSHxqX.js": {
+        "bytes": 286527,
+        "sha256": "e9e88688004a645fc1f42d00622d49b346d33766de2fba1fd24b84ea7fa3009e"
+      },
+      "dist/assets/jsx-runtime-CKeovgl0.js": {
+        "bytes": 7899,
+        "sha256": "247be6e0b1abc68de8a3131437aa26ceb6efd67d1c949fb8360b50de6e105faf"
+      },
+      "dist/assets/metadataImage-BVPS59_v.js": {
+        "bytes": 1768,
+        "sha256": "cc70834cfa11274222ac027952336ca8ee3268d4c01a895fd956460b1dd1144f"
+      },
+      "dist/assets/miNoteCardInput-BnV3fERD.js": {
+        "bytes": 1005,
+        "sha256": "b1abfe03ce51e93fc08902a4b8b23fe0f9e1342a2ae12972f83f1cb8dcc9265f"
+      },
+      "dist/assets/miNoteCards-q9U-jpua.js": {
+        "bytes": 724,
+        "sha256": "a705a70cc4a7b3ceff27229b4029c0d12f9e31a1f93208efeab5cf4e00a29dc5"
+      },
+      "dist/assets/preload-helper-Czpn1I53.js": {
+        "bytes": 1196,
+        "sha256": "aba87f2a53e45ecdc9113fc30387d16e449d1676428cf5f82dd624c1df97d152"
+      },
+      "dist/assets/rolldown-runtime-C0FnF6B9.js": {
+        "bytes": 1291,
+        "sha256": "e0a79ad36c6ca1ffbc796c80aa5661803a9d1bc684e29d1587f48b4ba9a82714"
+      },
+      "dist/assets/shipmentHistory-DR9-TTRG.js": {
+        "bytes": 34534,
+        "sha256": "54b271b20b57a62e8c785f20b6007cceffe51b0be00299a81a9bc76aea92db37"
+      },
+      "dist/assets/useDarkColorScheme-BMFWw038.js": {
+        "bytes": 889,
+        "sha256": "22ca435100513307e42141502b83f69f6f6b38ac8730ea030cf923f2efd5b3b8"
+      },
+      "dist/assets/useShopFeedback-DYr9XI3o.js": {
+        "bytes": 184098,
+        "sha256": "938d468abf6d80e6194393ba8a563ccbed1a358eaa70c5eb802fd4135acf6dbf"
+      }
+    },
+    "initialAttempt": {
+      "failed": "unchanged drifWalletHeader test in the first full run",
+      "isolatedRecheck": "2/2 passed",
+      "fullSequentialRetry": "passed",
+      "productionCodeOrThresholdChanges": false
+    }
+  }
+}

@@ -5,8 +5,10 @@ and completed-operation evidence. Counts, URLs, versions, and state descriptions
 apply to their recorded verification time. Use the [project runbooks](../README.md#operations-and-reference)
 and committed deployment registry for current behavior.
 
-The [111K testnet cleanup](111k-testnet-cleanup-2026-11-08/README.md) tracks
-retirement of deployments preceding [v16](111k-sepolia-v16/README.md). Historical
+The current 111K Sepolia release is [v17](111k-sepolia-v17/README.md), with
+[completed v16 retirement](111k-sepolia-v17/retirement-verification.json).
+The [earlier 111K testnet cleanup](111k-testnet-cleanup-2026-11-08/README.md) tracks
+retirement of deployments preceding [v16](https://github.com/supermetalmons/shop/blob/b488f92ed8347163b2a4e2d58fe80e04b360b4b8/releases/111k-sepolia-v16/README.md). Historical
 links are pinned to the pre-cleanup Git revision; they do not promise continued
 metadata or reveal service for retired testnet NFTs. The cleanup creates no new
 archive. Current publications use the CDN assets documented in the
@@ -18,7 +20,7 @@ archive. Current publications use the CDN assets documented in the
 | Mi Note mainnet launch | [Deployment and launch](mi-note-cards/README.md), [completed preorder conversion](mi-note-cards/preorder-upgrade/README.md) |
 | Mi Note devnet rehearsal | [Deployment, activation, and conversion](mi-note-cards-devnet/README.md) |
 | Mi Note metadata | [Public metadata](mi-note-cards-mainnet/README.md), [1396–1398](mi-note-cards-1396-1398/README.md), [1399–1400](mi-note-cards-1399-1400/README.md), [1409–1413](mi-note-cards-1409-1413/README.md), [1414–1419](mi-note-cards-1414-1419/README.md), [1420–1430](mi-note-cards-1420-1430/README.md) |
-| 111K Sepolia | [v16 container and placeholder media](111k-sepolia-v16/README.md), [testnet retirement](111k-testnet-cleanup-2026-11-08/README.md), [earlier deployments and validation](https://github.com/supermetalmons/shop/tree/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases) |
+| 111K Sepolia | [v17 public relic support and live acceptance](111k-sepolia-v17/README.md), [v16 retirement](111k-sepolia-v17/retirement-verification.json), [historical v16 media](https://github.com/supermetalmons/shop/blob/b488f92ed8347163b2a4e2d58fe80e04b360b4b8/releases/111k-sepolia-v16/README.md), [earlier testnet retirement](111k-testnet-cleanup-2026-11-08/README.md), [earlier deployments and validation](https://github.com/supermetalmons/shop/tree/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases) |
 | 111K metadata hosting | [Public R2 migration](111k-public-r2/README.md), [minimal metadata](111k-minimal-metadata/README.md) |
 | 111K historical reveals and recovery | [Original rollout and recovery evidence](https://github.com/supermetalmons/shop/tree/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases/111k-reveal-2026-10-29), [concurrency measurements](https://github.com/supermetalmons/shop/blob/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases/111k-concurrency-2026-10-30/README.md) |
 | Binder packing replacements | [Completed issuance and current export path](binder-packing-replacements-2026-10-20/README.md) |

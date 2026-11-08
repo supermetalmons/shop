@@ -1,0 +1,136 @@
+{
+  "chainId": 11155111,
+  "deploymentId": "v17",
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "previousContract": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+  "transactions": [
+    {
+      "action": "deploy",
+      "transactionHash": "0xa64760fdefcb0d2bce0bc603a4dfa729507071a343d8879bb62920a4c1a86d3b",
+      "nonce": "85",
+      "to": null,
+      "valueWei": "0",
+      "gasLimit": "57743825",
+      "gasPrice": "1000",
+      "confirmedAt": "2026-11-08T18:54:49.543Z",
+      "receipt": {
+        "transactionHash": "0xa64760fdefcb0d2bce0bc603a4dfa729507071a343d8879bb62920a4c1a86d3b",
+        "blockNumber": 12092412,
+        "blockHash": "0x885d18f596c713c186dca7f166c03e93ec18aa4b50babf7443ab4d1b6d3b2b00",
+        "status": "0x1",
+        "gasUsed": "44029259",
+        "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619"
+      }
+    },
+    {
+      "action": "reserve",
+      "transactionHash": "0x313d57852af76218d468b80bfba50b99f0e5d1d9c504eb2fdf7d5d721c3f39ce",
+      "nonce": "86",
+      "to": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "valueWei": "7000000000000000",
+      "gasLimit": "523468",
+      "gasPrice": "1000",
+      "confirmedAt": "2026-11-08T18:56:50.545Z",
+      "receipt": {
+        "transactionHash": "0x313d57852af76218d468b80bfba50b99f0e5d1d9c504eb2fdf7d5d721c3f39ce",
+        "blockNumber": 12092422,
+        "blockHash": "0xeff8bd81f43f8ea3fb4d5f7ca0fce1dd4823aa03bab288a5acde94403fc0c832",
+        "status": "0x1",
+        "gasUsed": "360180",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "pause-old-sale",
+      "transactionHash": "0xe8a7f8941f81a1c442cd4aad001e818964d7bab108f314a4392a6577333ec16d",
+      "nonce": "87",
+      "to": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "valueWei": "0",
+      "gasLimit": "90843",
+      "gasPrice": "1000",
+      "confirmedAt": "2026-11-08T19:03:50.172Z",
+      "receipt": {
+        "transactionHash": "0xe8a7f8941f81a1c442cd4aad001e818964d7bab108f314a4392a6577333ec16d",
+        "blockNumber": 12092455,
+        "blockHash": "0x258d1ab8433dcea130ff894bb2d421378473e37335a46b9b3837315a75780a28",
+        "status": "0x1",
+        "gasUsed": "31065",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "pause-old-redemptions",
+      "transactionHash": "0x1b30dc5b7c7931530c0c91797aa43c2f775d1e433b157505b4d58676e1c581e0",
+      "nonce": "88",
+      "to": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "valueWei": "0",
+      "gasLimit": "90913",
+      "gasPrice": "1000",
+      "confirmedAt": "2026-11-08T19:04:26.792Z",
+      "receipt": {
+        "transactionHash": "0x1b30dc5b7c7931530c0c91797aa43c2f775d1e433b157505b4d58676e1c581e0",
+        "blockNumber": 12092458,
+        "blockHash": "0xec38038067ca847276bca5d0a7bfbd6686939bbde1fa7081a5cc826f7299d0fb",
+        "status": "0x1",
+        "gasUsed": "31119",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "open",
+      "transactionHash": "0x3bf683e69ceff78bcfd6ce710bc8d5dd972aa877a7498ab85b7cd3cb90e70a10",
+      "nonce": "89",
+      "to": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "valueWei": "0",
+      "gasLimit": "92618",
+      "gasPrice": "1000",
+      "confirmedAt": "2026-11-08T19:26:37.777Z",
+      "receipt": {
+        "transactionHash": "0x3bf683e69ceff78bcfd6ce710bc8d5dd972aa877a7498ab85b7cd3cb90e70a10",
+        "blockNumber": 12092559,
+        "blockHash": "0x1b9764118c63bd0b1cebeb09dd4e174df17d5912615e9714913cd5024d9c9b0f",
+        "status": "0x1",
+        "gasUsed": "31367",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "mint-qa",
+      "transactionHash": "0x1d6c636666f876d498968f4ff83996ef0d2beee425eff25e6820c4ad4f55aed2",
+      "nonce": "90",
+      "to": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "valueWei": "100000000000000",
+      "gasLimit": "430117",
+      "gasPrice": "1000",
+      "confirmedAt": "2026-11-08T19:54:37.696Z",
+      "receipt": {
+        "transactionHash": "0x1d6c636666f876d498968f4ff83996ef0d2beee425eff25e6820c4ad4f55aed2",
+        "blockNumber": 12092689,
+        "blockHash": "0x468386c8a48edf36e6d47f48dc3dae40306dea04801a20eb0a0662a3f3bbecd8",
+        "status": "0x1",
+        "gasUsed": "288937",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "unpack-qa",
+      "transactionHash": "0xcf2b1c10bc48daeee8d5bbf887b34d3c032ed0de600668ce2ea57caa3fba4950",
+      "nonce": "91",
+      "to": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "valueWei": "0",
+      "gasLimit": "343764",
+      "gasPrice": "1000",
+      "confirmedAt": "2026-11-08T19:58:50.180Z",
+      "receipt": {
+        "transactionHash": "0xcf2b1c10bc48daeee8d5bbf887b34d3c032ed0de600668ce2ea57caa3fba4950",
+        "blockNumber": 12092709,
+        "blockHash": "0x38e512da7cff76614b95c9ef47055ee410d966e483d3c2ef01a55090b8a07017",
+        "status": "0x1",
+        "gasUsed": "223035",
+        "contractAddress": null
+      }
+    }
+  ],
+  "recordedAt": "2026-11-08T20:02:57.731Z"
+}

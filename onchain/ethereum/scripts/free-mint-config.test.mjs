@@ -118,16 +118,16 @@ test('Sepolia relic preset requires its exact chain and leaves generic defaults 
   const parsed = parseFreeMintConfig(preset, undefined, 11155111);
   assert.equal(parsed.chainId, 11155111);
   assert.equal(parsed.allocations.length, 7);
-  assert.equal(parsed.allocations.reduce((sum, item) => sum + item.relicLimit, 0), 18);
+  assert.equal(parsed.allocations.reduce((sum, item) => sum + item.relicLimit, 0), 7);
   assert.ok(parsed.allocations.every(item => item.crateLimit === 0 && item.warehouseLimit === 0));
   assert.deepEqual(parsed.allocations.map(item => [item.wallet, item.relicLimit]), [
-    ['0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe', 3],
-    ['0xe4790dd79c334e3f848904975272ec17f9f70366', 3],
-    ['0xe938ebb66b92692ab01f76c99cfac1928482e7b9', 3],
-    ['0x29f7a2cfe212492ddb343035479d062112284ddf', 3],
-    ['0x31cd63c73e74808793f134f8146a1e3aa1637b5d', 2],
-    ['0xf743b8e23d3ffcbde398aba9b9f83a98f56845f4', 2],
-    ['0x336c8e2add19149bfc934fb2557c6bdeffa8009b', 2],
+    ['0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe', 1],
+    ['0xe4790dd79c334e3f848904975272ec17f9f70366', 1],
+    ['0xe938ebb66b92692ab01f76c99cfac1928482e7b9', 1],
+    ['0x29f7a2cfe212492ddb343035479d062112284ddf', 1],
+    ['0x31cd63c73e74808793f134f8146a1e3aa1637b5d', 1],
+    ['0xf743b8e23d3ffcbde398aba9b9f83a98f56845f4', 1],
+    ['0x336c8e2add19149bfc934fb2557c6bdeffa8009b', 1],
   ]);
   for (const invalid of [1, 31337, '11155111', null, true]) {
     assert.throws(() => parseFreeMintConfig({ ...preset, chainId: invalid }, undefined, 11155111), /Sepolia/);

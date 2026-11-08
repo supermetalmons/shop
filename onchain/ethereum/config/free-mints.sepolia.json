@@ -5,7 +5,7 @@
       "name": "Relic claim UI test wallets",
       "crates": 0,
       "warehouses": 0,
-      "relics": 3,
+      "relics": 1,
       "wallets": [
         "0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE",
         "0xE4790DD79c334e3f848904975272ec17f9F70366",
@@ -17,7 +17,7 @@
       "name": "Additional relic test wallets",
       "crates": 0,
       "warehouses": 0,
-      "relics": 2,
+      "relics": 1,
       "wallets": [
         "0x31CD63C73E74808793F134f8146a1E3AA1637B5d",
         "0xf743b8e23d3FFcbdE398ABA9b9F83a98F56845f4",

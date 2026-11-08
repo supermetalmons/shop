@@ -1,0 +1,57 @@
+{
+  "verified": true,
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "deploymentId": "v17",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "transactions": [
+    {
+      "action": "deploy",
+      "hash": "0xa64760fdefcb0d2bce0bc603a4dfa729507071a343d8879bb62920a4c1a86d3b",
+      "blockNumber": 12092412
+    },
+    {
+      "action": "reserve",
+      "hash": "0x313d57852af76218d468b80bfba50b99f0e5d1d9c504eb2fdf7d5d721c3f39ce",
+      "blockNumber": 12092422
+    },
+    {
+      "action": "pause-old-sale",
+      "hash": "0xe8a7f8941f81a1c442cd4aad001e818964d7bab108f314a4392a6577333ec16d",
+      "blockNumber": 12092455
+    },
+    {
+      "action": "pause-old-redemptions",
+      "hash": "0x1b30dc5b7c7931530c0c91797aa43c2f775d1e433b157505b4d58676e1c581e0",
+      "blockNumber": 12092458
+    },
+    {
+      "action": "open",
+      "hash": "0x3bf683e69ceff78bcfd6ce710bc8d5dd972aa877a7498ab85b7cd3cb90e70a10",
+      "blockNumber": 12092559
+    },
+    {
+      "action": "mint-qa",
+      "hash": "0x1d6c636666f876d498968f4ff83996ef0d2beee425eff25e6820c4ad4f55aed2",
+      "blockNumber": 12092689
+    },
+    {
+      "action": "unpack-qa",
+      "hash": "0xcf2b1c10bc48daeee8d5bbf887b34d3c032ed0de600668ce2ea57caa3fba4950",
+      "blockNumber": 12092709
+    }
+  ],
+  "state": {
+    "saleActive": true,
+    "redemptionsPaused": false,
+    "totalSupply": "90",
+    "allocatedCrates": "791",
+    "relicsAllocated": "7",
+    "relicsMinted": "0",
+    "getRelicClaimedMask": "0",
+    "totalMintReceived": "8350000000000000",
+    "totalMintReleased": "0",
+    "artworksMinted": "80",
+    "publicRelicsMinted": "0"
+  }
+}

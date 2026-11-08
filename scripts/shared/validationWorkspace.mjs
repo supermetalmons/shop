@@ -9,7 +9,8 @@ export async function withValidationWorkspace(root, kind, action) {
   const directory = mkdtempSync(join(tmpdir(), `mons-${kind}-validation-`));
   try {
     const scopes = kind === 'ethereum'
-      ? ['package.json', 'onchain/ethereum', 'shared', 'src/ethereum/discounts', 'scripts/ethereum-metadata/lock.ts']
+      ? ['package.json', 'onchain/ethereum', 'shared', 'src/ethereum/discounts', 'scripts/ethereum-metadata/lock.ts',
+        'scripts/shared/ethereum111kReleaseLocations.ts']
       : ['onchain/Anchor.toml', 'onchain/Cargo.toml', 'onchain/Cargo.lock', 'onchain/programs'];
     const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...scopes],
       { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);

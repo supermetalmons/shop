@@ -1,0 +1,133 @@
+{
+  "checkedAt": "2026-11-08T18:39:52.490Z",
+  "complete": true,
+  "count": 21,
+  "objects": [
+    {
+      "url": "https://cdn.lil.org/nft/111k/crate.webp",
+      "bytes": 278364,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+      "bytes": 320838,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "bytes": 68090,
+      "contentType": "image/png",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/1.webp",
+      "bytes": 65606,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/2.webp",
+      "bytes": 49194,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/3.webp",
+      "bytes": 306902,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/4.webp",
+      "bytes": 106690,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/5.webp",
+      "bytes": 142826,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/6.webp",
+      "bytes": 232536,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/7.webp",
+      "bytes": 65606,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/8.webp",
+      "bytes": 65606,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/9.webp",
+      "bytes": 49194,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/10.webp",
+      "bytes": 49194,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/11.webp",
+      "bytes": 306902,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/12.webp",
+      "bytes": 306902,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/13.webp",
+      "bytes": 106690,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/14.webp",
+      "bytes": 106690,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/15.webp",
+      "bytes": 142826,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/16.webp",
+      "bytes": 142826,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/17.webp",
+      "bytes": 232536,
+      "contentType": "image/webp",
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/relics/18.webp",
+      "bytes": 232536,
+      "contentType": "image/webp",
+      "cors": "*"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-11-08T19:52:20.584Z",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "deploymentBlock": 12092412,
+  "api": {
+    "worker": "mons-shop-api",
+    "version": "8220189d-539b-488c-8fe4-42642e621ceb",
+    "trafficPercent": 100
+  },
+  "frontend": {
+    "worker": "mons-shop",
+    "version": "412a9ae1-a8ea-4d33-8563-2422829ba52d",
+    "trafficPercent": 100
+  },
+  "frontendMatchesCheckedBuild": true,
+  "commerceRevision": 49,
+  "revealRevision": 3
+}

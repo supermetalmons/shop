@@ -339,6 +339,12 @@ async function anvilFixture(t) {
 test('the journaled Sepolia lifecycle resumes interruptions and rejects stale unpack retries on Anvil', { timeout: 120_000 }, async t => {
   const f = await anvilFixture(t);
   t.mock.method(console, 'log', () => {});
+  const presetPath = path.join(project, 'config/free-mints.sepolia.json');
+  const fullReservationPreset = json(presetPath);
+  fullReservationPreset.groups.forEach((group, index) => { group.relics = index === 0 ? 3 : 2; });
+  const originalRead = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (filename, ...options) => path.resolve(String(filename)) === presetPath
+    ? JSON.stringify(fullReservationPreset) : originalRead(filename, ...options));
   const proceeds = json(path.join(project, 'config/proceeds.json'));
   const artifact = json(path.join(project, 'out/NFT111K.sol/NFT111K.json'));
   const constructorTypes = ['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]',

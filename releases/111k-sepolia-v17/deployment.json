@@ -1,0 +1,16 @@
+{
+  "chainId": 11155111,
+  "deploymentId": "v17",
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "deploymentBlock": 12092412,
+  "deploymentBlockHash": "0x885d18f596c713c186dca7f166c03e93ec18aa4b50babf7443ab4d1b6d3b2b00",
+  "transactionHash": "0xa64760fdefcb0d2bce0bc603a4dfa729507071a343d8879bb62920a4c1a86d3b",
+  "confirmations": 3,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "quoteSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "manifestSha256": "5b4a7204f19fddc12d6d36f569c8c8c067ae024f86d4624ad99f37790ddabc20",
+  "artifactSha256": "5406f479dfd3b9ae87167b9caf6927e04dc0e7f943cc9258cba687c5253af8a0",
+  "standardInputSha256": "e71ce50b660a44df95dae32ff0a0167f45d5097acec7c7c1dd1bb6fd51b40b1c"
+}

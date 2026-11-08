@@ -1,0 +1,21 @@
+{
+  "checkedAt": "2026-11-08T20:06:13.763Z",
+  "oldMetadataObjects": 0,
+  "oldRevealHttpStatus": 409,
+  "deployments": [
+    {
+      "deployment_id": "v16",
+      "state": "paused",
+      "revision": 5,
+      "retired_at_ms": 1794166322000,
+      "replacement_deployment_id": "v17"
+    },
+    {
+      "deployment_id": "v17",
+      "state": "active",
+      "revision": 3,
+      "retired_at_ms": null,
+      "replacement_deployment_id": null
+    }
+  ]
+}

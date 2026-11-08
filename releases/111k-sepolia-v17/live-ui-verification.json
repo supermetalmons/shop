@@ -1,0 +1,737 @@
+{
+  "startedAt": "2026-11-08T19:28:11.390Z",
+  "checkedAt": "2026-11-08T19:28:24.199Z",
+  "passed": true,
+  "deploymentId": "v17",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "url": "https://mons.shop/111k_devnet",
+  "method": "Fresh headless Chromium contexts against the live page; no API mocks, wallet connections, signatures, or transaction submissions.",
+  "preflight": {
+    "config": {
+      "enabled": true,
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+      "deploymentBlock": 12092412
+    },
+    "stats": {
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "saleActive": true,
+      "allocatedCrates": 777,
+      "remainingCrates": 4778,
+      "relicsAllocated": 7,
+      "relicsMinted": 0,
+      "publicRelicsMinted": 0,
+      "remainingRelics": 7
+    },
+    "relics": {
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "owner": null,
+      "observedBlock": 12092568,
+      "blockHash": "0x0b25d67a0ccfd703d787ac579c17eeb34af3f2dbc73e52ef677638726f0af1b0",
+      "saleActive": true,
+      "relicsAllocated": 7,
+      "relicsMinted": 0,
+      "publicRelicsMinted": 0,
+      "publicSale": {
+        "limit": 0,
+        "minted": 0,
+        "priceWei": "0",
+        "active": false,
+        "mintable": 0,
+        "freeLimit": 0,
+        "freeUsed": 0,
+        "remainingFreeAllowance": 0
+      },
+      "remainingRelics": 7,
+      "claimedMask": 0,
+      "relicLimit": 0,
+      "relicsUsed": 0,
+      "remainingAllowance": 0
+    }
+  },
+  "configurations": [
+    {
+      "layout": "desktop",
+      "enabled": true,
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+      "deploymentBlock": 12092412
+    },
+    {
+      "layout": "mobile",
+      "enabled": true,
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+      "deploymentBlock": 12092412
+    }
+  ],
+  "statistics": [
+    {
+      "layout": "desktop",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "saleActive": true,
+      "allocatedCrates": 777,
+      "remainingCrates": 4778,
+      "relicsAllocated": 7,
+      "relicsMinted": 0,
+      "publicRelicsMinted": 0,
+      "remainingRelics": 7
+    },
+    {
+      "layout": "mobile",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "saleActive": true,
+      "allocatedCrates": 777,
+      "remainingCrates": 4778,
+      "relicsAllocated": 7,
+      "relicsMinted": 0,
+      "publicRelicsMinted": 0,
+      "remainingRelics": 7
+    }
+  ],
+  "relicStatuses": [
+    {
+      "layout": "desktop",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "owner": null,
+      "observedBlock": 12092569,
+      "blockHash": "0x311ac1ceba6cdbb80235896ed45d07467db935e77ed7efd4bb7f237d3a435a12",
+      "saleActive": true,
+      "relicsAllocated": 7,
+      "relicsMinted": 0,
+      "publicRelicsMinted": 0,
+      "publicSale": {
+        "limit": 0,
+        "minted": 0,
+        "priceWei": "0",
+        "active": false,
+        "mintable": 0,
+        "freeLimit": 0,
+        "freeUsed": 0,
+        "remainingFreeAllowance": 0
+      },
+      "remainingRelics": 7,
+      "claimedMask": 0,
+      "relicLimit": 0,
+      "relicsUsed": 0,
+      "remainingAllowance": 0
+    },
+    {
+      "layout": "mobile",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "owner": null,
+      "observedBlock": 12092569,
+      "blockHash": "0x311ac1ceba6cdbb80235896ed45d07467db935e77ed7efd4bb7f237d3a435a12",
+      "saleActive": true,
+      "relicsAllocated": 7,
+      "relicsMinted": 0,
+      "publicRelicsMinted": 0,
+      "publicSale": {
+        "limit": 0,
+        "minted": 0,
+        "priceWei": "0",
+        "active": false,
+        "mintable": 0,
+        "freeLimit": 0,
+        "freeUsed": 0,
+        "remainingFreeAllowance": 0
+      },
+      "remainingRelics": 7,
+      "claimedMask": 0,
+      "relicLimit": 0,
+      "relicsUsed": 0,
+      "remainingAllowance": 0
+    }
+  ],
+  "results": [
+    {
+      "layout": "desktop",
+      "kind": "crate",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 685,
+        "displayHeight": 514,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "desktop",
+      "kind": "crate",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 196,
+        "displayHeight": 147,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "desktop",
+      "kind": "warehouse",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 771,
+        "displayHeight": 514,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "desktop",
+      "kind": "warehouse",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 220,
+        "displayHeight": 147,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "desktop",
+      "kind": "relic",
+      "renderedCount": 18,
+      "selectableIds": 18,
+      "claimsLeft": 7,
+      "selectedId": 18,
+      "images": [
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/1.webp",
+          "width": 398,
+          "height": 825,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/2.webp",
+          "width": 454,
+          "height": 516,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/3.webp",
+          "width": 1269,
+          "height": 1288,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/4.webp",
+          "width": 500,
+          "height": 746,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/5.webp",
+          "width": 781,
+          "height": 1045,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/6.webp",
+          "width": 965,
+          "height": 1231,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/7.webp",
+          "width": 398,
+          "height": 825,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/8.webp",
+          "width": 398,
+          "height": 825,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/9.webp",
+          "width": 454,
+          "height": 516,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/10.webp",
+          "width": 454,
+          "height": 516,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/11.webp",
+          "width": 1269,
+          "height": 1288,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/12.webp",
+          "width": 1269,
+          "height": 1288,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/13.webp",
+          "width": 500,
+          "height": 746,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/14.webp",
+          "width": 500,
+          "height": 746,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/15.webp",
+          "width": 781,
+          "height": 1045,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/16.webp",
+          "width": 781,
+          "height": 1045,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/17.webp",
+          "width": 965,
+          "height": 1231,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/18.webp",
+          "width": 965,
+          "height": 1231,
+          "displayed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "kind": "crate",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 356,
+        "displayHeight": 267,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "kind": "crate",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 110,
+        "displayHeight": 82.99999237060547,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "kind": "warehouse",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 355,
+        "displayHeight": 237,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "kind": "warehouse",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 109,
+        "displayHeight": 73,
+        "objectFit": "contain"
+      },
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "kind": "relic",
+      "renderedCount": 18,
+      "selectableIds": 18,
+      "claimsLeft": 7,
+      "selectedId": 18,
+      "images": [
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/1.webp",
+          "width": 398,
+          "height": 825,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/2.webp",
+          "width": 454,
+          "height": 516,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/3.webp",
+          "width": 1269,
+          "height": 1288,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/4.webp",
+          "width": 500,
+          "height": 746,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/5.webp",
+          "width": 781,
+          "height": 1045,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/6.webp",
+          "width": 965,
+          "height": 1231,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/7.webp",
+          "width": 398,
+          "height": 825,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/8.webp",
+          "width": 398,
+          "height": 825,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/9.webp",
+          "width": 454,
+          "height": 516,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/10.webp",
+          "width": 454,
+          "height": 516,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/11.webp",
+          "width": 1269,
+          "height": 1288,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/12.webp",
+          "width": 1269,
+          "height": 1288,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/13.webp",
+          "width": 500,
+          "height": 746,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/14.webp",
+          "width": 500,
+          "height": 746,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/15.webp",
+          "width": 781,
+          "height": 1045,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/16.webp",
+          "width": 781,
+          "height": 1045,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/17.webp",
+          "width": 965,
+          "height": 1231,
+          "displayed": true
+        },
+        {
+          "url": "https://cdn.lil.org/nft/111k/relics/18.webp",
+          "width": 965,
+          "height": 1231,
+          "displayed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "screenshots": [
+    "live-ui/2026-11-08T19-28-11.390Z/desktop-crate-1.png",
+    "live-ui/2026-11-08T19-28-11.390Z/desktop-crate-15.png",
+    "live-ui/2026-11-08T19-28-11.390Z/desktop-warehouse-1.png",
+    "live-ui/2026-11-08T19-28-11.390Z/desktop-warehouse-15.png",
+    "live-ui/2026-11-08T19-28-11.390Z/desktop-relics.png",
+    "live-ui/2026-11-08T19-28-11.390Z/mobile-crate-1.png",
+    "live-ui/2026-11-08T19-28-11.390Z/mobile-crate-15.png",
+    "live-ui/2026-11-08T19-28-11.390Z/mobile-warehouse-1.png",
+    "live-ui/2026-11-08T19-28-11.390Z/mobile-warehouse-15.png",
+    "live-ui/2026-11-08T19-28-11.390Z/mobile-relics.png"
+  ],
+  "frontendScripts": [
+    "/assets/index-BV8rdwQe.js",
+    "/assets/rolldown-runtime-C0FnF6B9.js",
+    "/assets/jsx-runtime-CKeovgl0.js",
+    "/assets/focusTrap-eSUcgXD5.js",
+    "/assets/shipmentHistory-DR9-TTRG.js",
+    "/assets/index.browser.esm-6LuSHxqX.js",
+    "/assets/dropMediaDefaults-DN__LRNm.js",
+    "/assets/deploymentCore-C5QiUkUp.js",
+    "/assets/dropLabels-B-kENt49.js",
+    "/assets/ModalFocusScope-tbifo_U_.js",
+    "/assets/useShopFeedback-DYr9XI3o.js",
+    "/assets/preload-helper-Czpn1I53.js",
+    "/assets/browser-VJeGqe__.js",
+    "/assets/drifCards-BhCh5MGg.js",
+    "/assets/miNoteCards-q9U-jpua.js",
+    "/assets/dropContent-jDANJ6Xb.js",
+    "/assets/Transport-CL7hAnp_.js",
+    "/assets/WalletContext-C__6JtFH.js",
+    "/assets/useDarkColorScheme-BMFWw038.js",
+    "/assets/ColorSchemeImage-DGYGLtKL.js",
+    "/assets/metadataImage-BVPS59_v.js",
+    "/assets/miNoteCardInput-BnV3fERD.js"
+  ],
+  "assetRequests": [
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/crate.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/warehouse.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/1.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/2.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/3.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/4.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/5.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/6.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/7.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/8.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/9.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/10.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/11.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/12.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/13.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/14.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/15.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/16.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/17.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/relics/18.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/crate.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/warehouse.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/1.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/2.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/3.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/4.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/5.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/6.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/7.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/8.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/9.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/10.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/11.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/12.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/13.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/14.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/15.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/16.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/17.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/relics/18.webp"
+    }
+  ],
+  "obsoleteMetadataRequests": [],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "requestFailures": [],
+  "httpErrors": [],
+  "responseErrors": []
+}

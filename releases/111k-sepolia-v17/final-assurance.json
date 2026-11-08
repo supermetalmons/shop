@@ -1,0 +1,100 @@
+{
+  "completedAt": "2026-11-08T20:09:32.763Z",
+  "complete": true,
+  "deploymentId": "v17",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "chain": {
+    "saleActive": true,
+    "redemptionsPaused": false,
+    "totalSupply": "90",
+    "allocatedCrates": "791",
+    "relicsAllocated": "7",
+    "relicsMinted": "0",
+    "getRelicClaimedMask": "0",
+    "totalMintReceived": "8350000000000000",
+    "totalMintReleased": "0",
+    "artworksMinted": "80",
+    "publicRelicsMinted": "0"
+  },
+  "commerce": {
+    "active": true,
+    "revision": 49,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619"
+  },
+  "reveal": {
+    "active": true,
+    "revision": 3,
+    "catalogVersion": "111k-v5"
+  },
+  "relics": {
+    "reserved": 7,
+    "unusedClaims": 7,
+    "selectableIds": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "publicSale": {
+      "limit": 0,
+      "minted": 0,
+      "priceWei": "0",
+      "active": false,
+      "mintable": 0,
+      "freeLimit": 0,
+      "freeUsed": 0,
+      "remainingFreeAllowance": 0
+    }
+  },
+  "qa": {
+    "passed": true,
+    "crateTokenId": "111902",
+    "tokenIds": [
+      "61",
+      "62",
+      "63",
+      "64",
+      "65",
+      "66",
+      "67",
+      "68",
+      "69",
+      "70",
+      "71",
+      "72",
+      "73",
+      "74",
+      "75",
+      "76",
+      "77",
+      "78",
+      "79",
+      "80"
+    ],
+    "transactionHash": "0xcf2b1c10bc48daeee8d5bbf887b34d3c032ed0de600668ce2ea57caa3fba4950"
+  },
+  "retirement": {
+    "complete": true,
+    "oldDeploymentId": "v16",
+    "oldMetadataObjects": 0,
+    "oldRevealHttpStatus": 409,
+    "oldLocalArtifactsAbsent": true
+  },
+  "frontendAndApiAcceptancePassed": true
+}

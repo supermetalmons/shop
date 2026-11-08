@@ -293,10 +293,10 @@ contract NFT111KDeploymentTest is TestSupport {
             assertEq(allocations[i].wallet, wallets[i]);
             assertEq(allocations[i].crateLimit, 0);
             assertEq(allocations[i].warehouseLimit, 0);
-            assertEq(allocations[i].relicLimit, i < 4 ? 3 : 2);
+            assertEq(allocations[i].relicLimit, 1);
             relics += allocations[i].relicLimit;
         }
-        assertEq(relics, 18);
+        assertEq(relics, 7);
         vm.chainId(1);
         assertEq(harness.freeMints(vm.readFile("config/free-mints.json"), address(0x123)).length, 0);
     }

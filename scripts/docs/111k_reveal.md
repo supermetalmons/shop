@@ -11,7 +11,7 @@ For the relic selection and claim page, use the [relic claims guide](111k_relic_
 - Allowed VVV origins: `https://vvv.so` and `https://www.vvv.so`. Browsers set `Origin` automatically; backend callers must supply it.
 - No API key, wallet session, or signature is required.
 
-Examples target the Sepolia [v16 release](../../releases/111k-sepolia-v16/README.md), using catalog `111k-v5`. The collection is live with sales and reveal enabled, following deployment at block `12087015`; the release record documents activation, opening, and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
+Examples target the Sepolia [v17 release](../../releases/111k-sepolia-v17/README.md), using catalog `111k-v5`. The collection was deployed at block `12092412`; the release record tracks activation, opening, and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
 
 ## Unrevealed artwork
 
@@ -34,7 +34,7 @@ POST /ethereum/111k/reveal/transaction
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
   "transactionHash": "<wallet-returned 0x-prefixed 64-hex-digit hash>"
 }
 ```
@@ -65,7 +65,7 @@ POST /ethereum/111k/reveal/tokens
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
   "tokenIds": ["1", "21"]
 }
 ```

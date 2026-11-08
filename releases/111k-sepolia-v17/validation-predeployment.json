@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "kind": "local-release-validation",
+  "completedAt": "2026-11-08T18:44:16.357Z",
+  "baseCommit": "b488f92ed8347163b2a4e2d58fe80e04b360b4b8",
+  "passed": true,
+  "allowancePresetSha256": "2617cebbb4dc32c01a49deff81c6b276cff09799bf1e87a3163e7470fb801152",
+  "contracts": {
+    "command": "node scripts/check-all.mjs ethereum",
+    "passed": 292,
+    "skippedForkTests": 4,
+    "toolingTests": 154,
+    "gasBenchmarks": 173,
+    "compilerGate": "passed",
+    "abi": "passed",
+    "fixtures": "passed",
+    "log": "validation-contracts.log"
+  },
+  "extendedInvariants": {
+    "passed": 4,
+    "campaigns": 2,
+    "runsPerCampaign": 512,
+    "depth": 128,
+    "callsPerCampaign": 65536,
+    "reverts": 0,
+    "log": "validation-invariants-extended.log"
+  },
+  "api": {
+    "command": "npm run check:api",
+    "unitTests": 3201,
+    "runtimeTests": 60,
+    "typechecks": "passed",
+    "dryRun": "passed",
+    "bundleScan": "passed",
+    "startupProfile": "passed",
+    "log": "validation-api.log"
+  },
+  "frontend": {
+    "command": "npm run check:frontend",
+    "appTests": 5135,
+    "workerAndClientTests": 34,
+    "typechecks": "passed",
+    "build": "passed",
+    "bundleScan": "passed",
+    "log": "validation-frontend.log"
+  },
+  "validationRegression": {
+    "tests": 6,
+    "log": "validation-check-all-regression.log"
+  },
+  "initialAttempts": {
+    "contractPresetExpectations": "updated for seven one-claim wallets",
+    "isolatedWorkspace": "added deployment release-location dependency",
+    "apiAndFrontendTiming": "isolated cases and full sequential reruns passed; no thresholds or production code changed"
+  }
+}

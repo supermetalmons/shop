@@ -1,0 +1,44 @@
+{
+  "completedAt": "2026-11-08T19:51:41.552Z",
+  "complete": true,
+  "oldDeployment": {
+    "deploymentId": "v16",
+    "chainId": 11155111,
+    "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/",
+    "deploymentBlock": 12087015,
+    "catalogVersion": "111k-v5"
+  },
+  "newDeployment": {
+    "deploymentId": "v17",
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+    "deploymentBlock": 12092412,
+    "catalogVersion": "111k-v5"
+  },
+  "retirement": {
+    "deploymentId": "v16",
+    "chainId": 11155111,
+    "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/",
+    "revision": 5,
+    "retiredAtMs": 1794166322000,
+    "replacementDeploymentId": "v17",
+    "replacementRevision": 3,
+    "quiesced": true
+  },
+  "deletedMetadataObjects": 344984,
+  "deletedMetadataBytes": 88597424,
+  "oldMetadataAbsent": true,
+  "oldStorageAndAlarmsPurged": true,
+  "observationMs": 362629,
+  "localArtifacts": {
+    "complete": true,
+    "targets": 7,
+    "files": 345252,
+    "bytes": 238935650
+  },
+  "temporaryResetBackupDeleted": true,
+  "mainnetPre111kSharedMediaAndProfilesPreserved": true
+}

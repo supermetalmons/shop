@@ -1,9 +1,0 @@
-{
-  "chainId": 11155111,
-  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
-  "checkedAt": "2026-11-07T23:48:10.905Z",
-  "frozenSourcesMatch": true,
-  "constructorArgumentsMatch": true,
-  "compilerVersion": "v0.8.38+commit.1835d247",
-  "url": "https://sepolia.etherscan.io/address/0x938b6a488951b2797b29284d6939dd70efe146a0#code"
-}
