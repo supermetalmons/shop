@@ -208,13 +208,14 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
       throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
     }
     const statsData = await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]));
-    if (statsData.length !== 2 + 64 * 12 && statsData.length !== 2 + 64 * 14) {
+    if (![12, 14, 15].some(words => statsData.length === 2 + 64 * words)) {
       throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid statistics.');
     }
-    const capped = statsData.length === 2 + 64 * 14;
+    const publicRelics = statsData.length === 2 + 64 * 15;
+    const capped = publicRelics || statsData.length === 2 + 64 * 14;
     const values = decodeReturn(
       ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256',
-        ...(capped ? ['uint256', 'uint256'] : [])], statsData);
+        ...(capped ? ['uint256', 'uint256'] : []), ...(publicRelics ? ['uint256'] : [])], statsData);
     const maxDiscountedMints = Number(values[12]);
     const totalDiscountedMints = Number(values[13]);
     if (capped && (![maxDiscountedMints, totalDiscountedMints].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 5555) ||
@@ -224,9 +225,11 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
     const allocatedCrates = Number(values[0]);
     const relicsAllocated = Number(values[10]);
     const relicsMinted = Number(values[11]);
+    const publicRelicsMinted = publicRelics ? Number(values[14]) : 0;
     if (!Number.isSafeInteger(relicsAllocated) || relicsAllocated < 0 || relicsAllocated > ETHEREUM_MAX_RELICS ||
       !Number.isSafeInteger(relicsMinted) || relicsMinted < 0 || relicsMinted > relicsAllocated ||
-      allocatedCrates < relicsAllocated * ETHEREUM_CRATES_PER_RELIC) {
+      !Number.isSafeInteger(publicRelicsMinted) || publicRelicsMinted < 0 || relicsAllocated + publicRelicsMinted > ETHEREUM_MAX_RELICS ||
+      allocatedCrates < (relicsAllocated + publicRelicsMinted) * ETHEREUM_CRATES_PER_RELIC) {
       throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic supply.');
     }
     return { chainId: context.config.chainId, contractAddress: requireEthereumContract(context), owner,
@@ -236,7 +239,7 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
       discountMerkleRoot: values[6], discountCratePriceWei: String(values[7]),
       discountAllowance: Number(values[8]), discountUsed: Number(values[9]),
       ...(capped ? { maxDiscountedMints, totalDiscountedMints } : {}),
-      relicsAllocated, relicsMinted, remainingRelics: relicsAllocated - relicsMinted };
+      relicsAllocated, relicsMinted, publicRelicsMinted, remainingRelics: relicsAllocated - relicsMinted };
   }
   if (path.endsWith('/metadata')) {
     const kind = url.searchParams.get('kind') as EthereumItemKind;

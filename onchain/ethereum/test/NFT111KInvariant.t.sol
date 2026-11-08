@@ -24,7 +24,7 @@ contract NFT111KInvariantHandler is TestSupport {
     }
 
     uint256 private constant SIGNER_KEY = 0xA11CE;
-    uint256 private constant MODELED_CRATE_LIMIT = 444;
+    uint256 private constant MODELED_CRATE_LIMIT = 999;
     uint256 private constant MODELED_RELIC_LIMIT = 3;
     uint256 private constant MODELED_DISCOUNT_LIMIT = 4;
     uint256 private constant DELIVERY_FEE = 0.0001 ether;
@@ -44,6 +44,9 @@ contract NFT111KInvariantHandler is TestSupport {
     mapping(address => uint256) private discountedPurchases;
     mapping(address => uint256[3]) private freeLimits;
     mapping(address => uint256[3]) private freeUsed;
+    mapping(address => uint256) private publicFreeLimits;
+    mapping(address => uint256) private publicFreeUsed;
+    mapping(uint256 => bool) private publicRelicIds;
     uint256[] private touched;
     DeliveryAttempt[] private deliveryAttempts;
     ClaimAttempt[] private claimAttempts;
@@ -53,6 +56,10 @@ contract NFT111KInvariantHandler is TestSupport {
     uint256 private totalDiscountedPurchases;
     uint256 private warehouseCount;
     uint256 private relicCount;
+    uint256 private publicRelicCount;
+    uint256 private publicRelicLimit;
+    uint256 private publicRelicPrice;
+    bool private publicRelicActive;
     uint256 private artworkCount;
     uint256 private openedCrates;
     uint256 private claimedCrates;
@@ -101,7 +108,9 @@ contract NFT111KInvariantHandler is TestSupport {
         for (uint256 i; i < actors.length; ++i) {
             vm.deal(actors[i], 100 ether);
             _setFreeLimits(actors[i], [uint256(30), 3, 2]);
+            _setPublicFreeLimit(actors[i], 2);
         }
+        _setPublicSale(4, 137, true);
         uint256 firstPublicCrate = 111112 + allocations;
         uint256 firstPublicReceipt = 2000001 + allocations;
         _purchaseCrates(actors[0], 4);
@@ -125,6 +134,10 @@ contract NFT111KInvariantHandler is TestSupport {
         _deliver(117175);
         _mintFree(actors[0], 0, 2);
         _mintFree(actors[1], 1, 1);
+        _mintPublicRelic(actors[1], 8, false);
+        _deliver(117179);
+        _mintPublicRelic(actors[2], 7, true);
+        _unboxRelic(117178);
     }
 
     function purchaseCrates(uint256 actorSeed, uint256 quantitySeed) external {
@@ -143,6 +156,40 @@ contract NFT111KInvariantHandler is TestSupport {
                 || freeUsed[wallet][2] >= freeLimits[wallet][2]
         ) return;
         _claimRelic(wallet, id);
+    }
+
+    function mintPublicRelic(uint256 actorSeed, uint256 idSeed, bool free) external {
+        address wallet = actors[actorSeed % actors.length];
+        uint256 id = idSeed % 18 + 1;
+        if (
+            !publicRelicActive || publicRelicCount == publicRelicLimit || allocations + 111 > MODELED_CRATE_LIMIT
+                || model[117171 + id].issued || free && publicFreeUsed[wallet] >= publicFreeLimits[wallet]
+        ) return;
+        _mintPublicRelic(wallet, id, free);
+    }
+
+    function configurePublicRelics(uint256 limitSeed, uint256 priceSeed, bool active) external {
+        uint256 limit = publicRelicCount + limitSeed % (19 - MODELED_RELIC_LIMIT - publicRelicCount);
+        _setPublicSale(limit, priceSeed % 1000, active);
+    }
+
+    function configurePublicFreeMints(uint256 actorSeed, uint256 limitSeed) external {
+        _setPublicFreeLimit(actors[actorSeed % actors.length], limitSeed % 19);
+    }
+
+    function rejectPublicRelicReissue(uint256 idSeed, uint256 actorSeed, bool free) external {
+        uint256 id = idSeed % 18 + 1;
+        if (!model[117171 + id].issued) return;
+        vm.prank(actors[actorSeed % actors.length]);
+        bytes memory data = free ? abi.encodeCall(token.mintFreeRelic, (id)) : abi.encodeCall(token.mintRelic, (id));
+        (bool success,) = address(token).call{value: free ? 0 : publicRelicPrice}(data);
+        assertFalse(success);
+    }
+
+    function rejectInvalidPublicRelicLimit(uint256 seed) external {
+        uint256 limit = seed % 2 == 0 && publicRelicCount != 0 ? publicRelicCount - 1 : 19 - MODELED_RELIC_LIMIT;
+        vm.expectRevert(NFT111K.InvalidPublicRelicConfig.selector);
+        token.setPublicRelicSale(limit, publicRelicPrice, publicRelicActive);
     }
 
     function rejectRelicReissue(uint256 idSeed, uint256 actorSeed) external {
@@ -412,6 +459,7 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(token.relicsAllocated(), MODELED_RELIC_LIMIT);
         assertEq(token.relicsMinted(), relicCount);
         assertTrue(relicCount <= MODELED_RELIC_LIMIT);
+        _assertPublicState();
         assertEq(token.remainingCrates(), 5555 - allocations);
         uint256 minted = NFT111KStats(address(token)).stats(address(0)).artworksMinted_;
         assertEq(minted, artworkCount);
@@ -449,17 +497,27 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(address(token).balance + released + deliveryPaid, mintRevenue + deliveryRevenue);
         assertTrue(token.redemptionsPaused() == paused);
         assertTrue(allocations <= MODELED_CRATE_LIMIT);
-        assertTrue(warehouseCount * 11 + MODELED_RELIC_LIMIT * 111 <= allocations);
+        assertTrue(warehouseCount * 11 + (MODELED_RELIC_LIMIT + publicRelicCount) * 111 <= allocations);
         uint256 claimedMask;
         for (uint256 number = 1; number <= 18; ++number) {
             if (model[117171 + number].issued) claimedMask |= 1 << (number - 1);
             assertEq(token.relicFirstCrate(number), relicFirstCrates[number]);
             assertTrue(model[117171 + number].issued == (relicFirstCrates[number] != 0));
             if (relicFirstCrates[number] != 0) {
-                assertTrue(relicFirstCrates[number] <= MODELED_RELIC_LIMIT * 111);
-                assertEq((relicFirstCrates[number] - 1) % 111, 0);
+                if (publicRelicIds[number]) {
+                    assertTrue(relicFirstCrates[number] > MODELED_RELIC_LIMIT * 111);
+                    assertTrue(relicFirstCrates[number] + 110 <= allocations);
+                } else {
+                    assertTrue(relicFirstCrates[number] <= MODELED_RELIC_LIMIT * 111);
+                    assertEq((relicFirstCrates[number] - 1) % 111, 0);
+                }
                 for (uint256 other = number + 1; other <= 18; ++other) {
-                    assertTrue(relicFirstCrates[other] != relicFirstCrates[number]);
+                    if (relicFirstCrates[other] != 0) {
+                        assertTrue(
+                            relicFirstCrates[other] + 110 < relicFirstCrates[number]
+                                || relicFirstCrates[number] + 110 < relicFirstCrates[other]
+                        );
+                    }
                 }
             }
         }
@@ -534,6 +592,65 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(cratesUsed, freeUsed[wallet][0]);
         assertEq(warehousesUsed, freeUsed[wallet][1]);
         assertEq(relicsUsed, freeUsed[wallet][2]);
+    }
+
+    function _assertPublicState() private view {
+        assertTrue(publicRelicCount <= publicRelicLimit);
+        assertTrue(publicRelicLimit + MODELED_RELIC_LIMIT <= 18);
+        assertEq(NFT111KStats(address(token)).stats(address(0)).publicRelicsMinted_, publicRelicCount);
+        for (uint256 i; i < actors.length; ++i) {
+            address wallet = actors[i];
+            (
+                uint256 limit,
+                uint256 minted,
+                uint256 price,
+                bool active,
+                uint256 mintable,
+                uint16 freeLimit,
+                uint16 used
+            ) = token.publicRelicStats(wallet);
+            assertEq(limit, publicRelicLimit);
+            assertEq(minted, publicRelicCount);
+            assertEq(price, publicRelicPrice);
+            assertTrue(active == publicRelicActive);
+            uint256 available = publicRelicLimit - publicRelicCount;
+            uint256 supply = (5555 - allocations) / 111;
+            if (available > supply) available = supply;
+            assertEq(mintable, publicRelicActive ? available : 0);
+            assertEq(freeLimit, publicFreeLimits[wallet]);
+            assertEq(used, publicFreeUsed[wallet]);
+        }
+    }
+
+    function _setPublicSale(uint256 limit, uint256 price, bool active) private {
+        token.setPublicRelicSale(limit, price, active);
+        publicRelicLimit = limit;
+        publicRelicPrice = price;
+        publicRelicActive = active;
+    }
+
+    function _setPublicFreeLimit(address wallet, uint256 limit) private {
+        address[] memory wallets = new address[](1);
+        wallets[0] = wallet;
+        token.setPublicRelicFreeMintAllowances(wallets, uint16(limit));
+        publicFreeLimits[wallet] = limit;
+    }
+
+    function _mintPublicRelic(address wallet, uint256 number, bool free) private {
+        uint256 first = allocations + 1;
+        vm.prank(wallet);
+        if (free) {
+            token.mintFreeRelic(number);
+            ++publicFreeUsed[wallet];
+        } else {
+            token.mintRelic{value: publicRelicPrice}(number);
+            mintRevenue += publicRelicPrice;
+        }
+        ++publicRelicCount;
+        allocations += 111;
+        relicFirstCrates[number] = first;
+        publicRelicIds[number] = true;
+        _issue(117171 + number, 6, number, wallet);
     }
 
     function _setFreeLimits(address wallet, uint256[3] memory limits) private {
@@ -836,7 +953,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](29);
+        bytes4[] memory selectors = new bytes4[](34);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -866,6 +983,11 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[26] = handler.rejectRelicAllocationAfterLaunch.selector;
         selectors[27] = handler.rejectPausedRelicClaim.selector;
         selectors[28] = handler.rejectFreeRelicMint.selector;
+        selectors[29] = handler.mintPublicRelic.selector;
+        selectors[30] = handler.configurePublicRelics.selector;
+        selectors[31] = handler.configurePublicFreeMints.selector;
+        selectors[32] = handler.rejectPublicRelicReissue.selector;
+        selectors[33] = handler.rejectInvalidPublicRelicLimit.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

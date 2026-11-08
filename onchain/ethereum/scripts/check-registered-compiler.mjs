@@ -12,7 +12,9 @@ const repository = resolve(root, '../..');
 const args = process.argv.slice(2);
 if (args.length > 1) throw new Error('Usage: node scripts/check-registered-compiler.mjs [--check|output.json]');
 const checkOnly = args[0] === '--check';
-const defaultOutput = join(root, 'benchmarks/compiler-solc-0.8.38-legacy-500-comparison.json');
+const pipeline = compilerGateSettings.viaIR ? 'ir' : 'legacy';
+const defaultOutput = join(root,
+  `benchmarks/compiler-solc-${compilerGateSettings.solc}-${pipeline}-${compilerGateSettings.candidateRuns}-comparison.json`);
 const output = resolve(checkOnly || !args.length ? defaultOutput : args[0]);
 assert.ok(output === defaultOutput || !output.startsWith(`${repository}/`), 'Custom reports must be outside the repository');
 assert.deepEqual(Object.keys(process.env).filter(name => /^(FOUNDRY_|DAPP_)/.test(name)), [], 'Remove FOUNDRY_/DAPP_ overrides');
@@ -36,7 +38,8 @@ try {
   symlinkSync(join(root, 'node_modules'), join(temporary, 'node_modules'), 'dir');
   const gitDirectory = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
   symlinkSync(gitDirectory, join(temporary, '.git'), 'dir');
-  execFileSync(process.execPath, ['scripts/benchmark-compiler.mjs', 'comparison.json', 'legacy', '200', '500', '--update-baseline'],
+  execFileSync(process.execPath, ['scripts/benchmark-compiler.mjs', 'comparison.json', pipeline,
+    String(compilerGateSettings.candidateRuns), '--update-baseline'],
     { cwd: temporary, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 });
   const comparison = JSON.parse(read(join(temporary, 'comparison.json')));
   const baselinePath = comparison.baselineReference.path;
@@ -45,7 +48,8 @@ try {
   assert.deepEqual(after, before, 'Benchmark inputs changed during compiler comparison');
   const report = createCompilerGateReport(comparison,
     { before, after, scriptSha256: hash(read(fileURLToPath(import.meta.url))) });
-  const candidate = comparison.variants.find(value => value.optimizerRuns === compilerGateSettings.candidateRuns);
+  const candidate = comparison.variants.find(value => value.optimizerRuns === compilerGateSettings.candidateRuns &&
+    value.viaIR === compilerGateSettings.viaIR);
   if (checkOnly) {
     assertCurrentCompilerReport(JSON.parse(read(defaultOutput)), report);
   } else {

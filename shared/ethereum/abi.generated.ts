@@ -895,6 +895,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "mintFreeRelic",
+    "inputs": [
+      {
+        "name": "relicId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "mintRecipientCount",
     "inputs": [],
     "outputs": [
@@ -943,6 +956,19 @@ export const nft111KAbi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "mintRelic",
+    "inputs": [
+      {
+        "name": "relicId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
   },
   {
     "type": "function",
@@ -1078,6 +1104,55 @@ export const nft111KAbi = [
         "name": "uris",
         "type": "string[]",
         "internalType": "string[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "publicRelicStats",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "limit",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minted",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "priceWei",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "active",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "mintable",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "freeLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "freeUsed",
+        "type": "uint16",
+        "internalType": "uint16"
       }
     ],
     "stateMutability": "view"
@@ -1487,6 +1562,47 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "setPublicRelicFreeMintAllowances",
+    "inputs": [
+      {
+        "name": "wallets",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "limit",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setPublicRelicSale",
+    "inputs": [
+      {
+        "name": "limit",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "priceWei",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "active",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setQuoteSigner",
     "inputs": [
       {
@@ -1536,74 +1652,86 @@ export const nft111KAbi = [
     ],
     "outputs": [
       {
-        "name": "allocatedCrates_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "warehousesMinted_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "artworksMinted_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "cratePrice_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "warehousePrice_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "saleActive_",
-        "type": "bool",
-        "internalType": "bool"
-      },
-      {
-        "name": "discountMerkleRoot_",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "discountCratePrice_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "discountAllowance_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "discountUsed_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "relicsAllocated_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "relicsMinted_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "maxDiscountedMints_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "totalDiscountedMints_",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "snapshot",
+        "type": "tuple",
+        "internalType": "struct NFT111K.Stats",
+        "components": [
+          {
+            "name": "allocatedCrates_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "warehousesMinted_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "artworksMinted_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "cratePrice_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "warehousePrice_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "saleActive_",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "discountMerkleRoot_",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "discountCratePrice_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "discountAllowance_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "discountUsed_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "relicsAllocated_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "relicsMinted_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "maxDiscountedMints_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "totalDiscountedMints_",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "publicRelicsMinted_",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "stateMutability": "view"
@@ -2427,6 +2555,87 @@ export const nft111KAbi = [
   },
   {
     "type": "event",
+    "name": "PublicRelicFreeMintAllowanceUpdated",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "limit",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PublicRelicMinted",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "relicId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "paid",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "freeMint",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PublicRelicSaleUpdated",
+    "inputs": [
+      {
+        "name": "limit",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "priceWei",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "active",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "QuoteSignerUpdated",
     "inputs": [
       {
@@ -2761,6 +2970,11 @@ export const nft111KAbi = [
   {
     "type": "error",
     "name": "InvalidMintSplit",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidPublicRelicConfig",
     "inputs": []
   },
   {

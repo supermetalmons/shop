@@ -9,7 +9,7 @@ import {
   type EthereumDeliveryPrepareRequest, type EthereumDeliveryConfirmRequest,
   type EthereumClaimPrepareRequest, type EthereumClaimConfirmRequest,
 } from '../../shared/ethereum/api';
-import { ethereumAssetId, ethereumItemDisplayIdMaximum, ethereumRelicClaimCount, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId, type EthereumMetadata } from '../../shared/ethereum/protocol';
+import { ethereumAssetId, ethereumItemDisplayIdMaximum, ethereumRelicClaimCount, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_CRATES_PER_RELIC, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { requestEthereumJson, type EthereumRequestOptions } from './request';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
@@ -87,17 +87,31 @@ export const ethereumApi = {
     const params = new URLSearchParams({ chainId: String(config.chainId), contractAddress });
     if (address) params.set('owner', address);
     const value = await request(`${ETHEREUM_API_PATHS.relics}?${params}`, { signal });
+    if (record(value)) {
+      if (value.publicRelicsMinted === undefined) value.publicRelicsMinted = 0;
+      if (value.publicSale === undefined) value.publicSale = null;
+    }
     if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== contractAddress ||
       (address === null ? value.owner !== null : normalizeEthereumAddress(value.owner) !== address) ||
       !Number.isSafeInteger(value.observedBlock) || Number(value.observedBlock) < 0 ||
       typeof value.blockHash !== 'string' || !/^0x[0-9a-f]{64}$/.test(value.blockHash) || typeof value.saleActive !== 'boolean' ||
-      !['relicsAllocated', 'relicsMinted', 'remainingRelics', 'relicLimit', 'relicsUsed', 'remainingAllowance']
+      !['relicsAllocated', 'relicsMinted', 'publicRelicsMinted', 'remainingRelics', 'relicLimit', 'relicsUsed', 'remainingAllowance']
         .every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= ETHEREUM_MAX_RELICS) ||
       !Number.isSafeInteger(value.claimedMask) || Number(value.claimedMask) < 0 || Number(value.claimedMask) >= 2 ** ETHEREUM_MAX_RELICS ||
       Number(value.relicsMinted) > Number(value.relicsAllocated) || Number(value.relicsUsed) > Number(value.relicsMinted) ||
-      ethereumRelicClaimCount(Number(value.claimedMask)) !== Number(value.relicsMinted) ||
+      Number(value.relicsAllocated) + Number(value.publicRelicsMinted) > ETHEREUM_MAX_RELICS ||
+      ethereumRelicClaimCount(Number(value.claimedMask)) !== Number(value.relicsMinted) + Number(value.publicRelicsMinted) ||
       Number(value.remainingRelics) !== Number(value.relicsAllocated) - Number(value.relicsMinted) ||
       Number(value.remainingAllowance) !== Math.max(0, Number(value.relicLimit) - Number(value.relicsUsed))) return invalid();
+    const sale = value.publicSale;
+    if (sale !== null && (!record(sale) || !['limit', 'minted', 'mintable', 'freeLimit', 'freeUsed', 'remainingFreeAllowance']
+      .every(key => Number.isSafeInteger(sale[key]) && Number(sale[key]) >= 0 && Number(sale[key]) <= ETHEREUM_MAX_RELICS) ||
+      !amount(sale.priceWei) || typeof sale.active !== 'boolean' || sale.minted !== value.publicRelicsMinted ||
+      Number(sale.minted) > Number(sale.limit) || Number(sale.limit) + Number(value.relicsAllocated) > ETHEREUM_MAX_RELICS ||
+      Number(sale.mintable) > Number(sale.limit) - Number(sale.minted) || Number(sale.freeUsed) > Number(sale.minted) ||
+      (!value.saleActive || !sale.active) && sale.mintable !== 0 ||
+      sale.remainingFreeAllowance !== Math.max(0, Number(sale.freeLimit) - Number(sale.freeUsed)))) return invalid();
+    if (sale === null && value.publicRelicsMinted !== 0) return invalid();
     return value as EthereumRelicStatus;
   },
   async relicMetadata(_config: Ethereum111kConfig, signal?: AbortSignal): Promise<EthereumMetadata[]> {
@@ -123,7 +137,8 @@ export const ethereumApi = {
     const address = owner === null ? null : normalizeEthereumAddress(owner);
     if (owner !== null && (!address || /^0x0{40}$/.test(address))) return invalid();
     const value = await request(`${ETHEREUM_API_PATHS.stats}${address ? `?${new URLSearchParams({ owner: address })}` : ''}`, { signal });
-    if (!record(value) || !['allocatedCrates', 'warehousesMinted', 'artworksMinted', 'remainingCrates', 'remainingWarehouses', 'relicsAllocated', 'relicsMinted', 'remainingRelics'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) ||
+    if (record(value) && value.publicRelicsMinted === undefined) value.publicRelicsMinted = 0;
+    if (!record(value) || !['allocatedCrates', 'warehousesMinted', 'artworksMinted', 'remainingCrates', 'remainingWarehouses', 'relicsAllocated', 'relicsMinted', 'publicRelicsMinted', 'remainingRelics'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) ||
       value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
       (address === null ? value.owner !== null : normalizeEthereumAddress(value.owner) !== address) ||
       !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.discountCratePriceWei) ||
@@ -133,6 +148,8 @@ export const ethereumApi = {
         (!['maxDiscountedMints', 'totalDiscountedMints'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 5555) ||
           Number(value.totalDiscountedMints) > Number(value.maxDiscountedMints)) ||
       Number(value.relicsAllocated) > ETHEREUM_MAX_RELICS || Number(value.relicsMinted) > Number(value.relicsAllocated) ||
+      Number(value.relicsAllocated) + Number(value.publicRelicsMinted) > ETHEREUM_MAX_RELICS ||
+      Number(value.allocatedCrates) < (Number(value.relicsAllocated) + Number(value.publicRelicsMinted)) * ETHEREUM_CRATES_PER_RELIC ||
       Number(value.remainingRelics) !== Number(value.relicsAllocated) - Number(value.relicsMinted) ||
       typeof value.saleActive !== 'boolean') return invalid();
     return value as EthereumStats;

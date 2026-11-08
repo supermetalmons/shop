@@ -2,7 +2,7 @@
 
 The separate [pre111k reservation contract](PRE111K.md) accepts backend-authorized relic preorders and forwards withdrawals to the fixed treasury. It does not change this NFT collection's issuance or claim allowances.
 
-An ERC721A collection with public crate and warehouse sales, allocated preorder relic claims, allowlist crate discounts, per-wallet free mint allowances, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, free mint allowances, sale status, the emergency redemption pause, the authorization signer and metadata base URL, and register immutable delivery configurations. Mint recipients, their shares, and the lifetime discounted-mint cap are fixed at deployment.
+An ERC721A collection with public crate, warehouse and relic sales, allocated preorder relic claims, allowlist crate discounts, per-wallet free mint allowances, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata. Contract logic is non-upgradeable. The owner can change prices, public relic quota, discount eligibility and allowance, free mint allowances, sale status, the emergency redemption pause, the authorization signer and metadata base URL, and register immutable delivery configurations. Mint recipients, their shares, and the lifetime discounted-mint cap are fixed at deployment.
 
 The [v16 release](../../releases/111k-sepolia-v16/README.md) is the supported Sepolia collection: `0x938b6a488951b2797b29284d6939dd70efe146a0`, block `12087015`, catalog `111k-v5`, and metadata under `https://cdn.mons.shop/111k-sepolia/v16/`. It keeps the 111,111-artwork allocation, eighteen reserved relics, and a lifetime discounted-mint cap of 5,555. The [testnet cleanup record](../../releases/111k-testnet-cleanup-2026-11-08/README.md) tracks retirement of superseded testnet metadata and backend state. Prior deployment evidence remains in [Git history](https://github.com/supermetalmons/shop/tree/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases); onchain contracts and transactions remain unchanged. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
@@ -74,10 +74,13 @@ deployment ID and absolute release directory:
 deployment_id='<new-deployment-id>'
 release_dir="$PWD/.cache/111k-${deployment_id}-release/contract"
 npm --prefix onchain/ethereum run nft111k:deploy -- prepare --network sepolia \
-  --deployment-id "$deployment_id" --previous-contract OLD_ADDRESS --directory "$release_dir"
+  --deployment-id "$deployment_id" --previous-contract OLD_ADDRESS --directory "$release_dir" \
+  --reserved-relics RESERVED_QUANTITY --relic-reservation-value-wei DEPOSIT_WEI
 ```
 
-Preparation requires an explicit fresh deployment ID. It derives the predecessor
+Preparation requires an explicit fresh deployment ID, reservation quantity from
+0 through 18, and decimal deposit in wei. Zero reservations require a zero deposit.
+It derives the predecessor
 from matching repository and live Sepolia configuration; an explicit
 `--previous-contract` must match that current predecessor. Paused storefronts are
 accepted. Frozen release resumes keep their original predecessor after cutover.
@@ -87,8 +90,12 @@ PATH` to `prepare` or recovery `finalize`. Use an empty dedicated directory for
 new releases and keep keystores outside it.
 Preparation freezes the current contract sources, compiler input/output,
 constructor configuration, nonce, predicted address, and gas allowance. It reads
-the fourteen-recipient split, seven-wallet Sepolia allowance preset, delivery
-routing, and discount configuration. Publish and verify the full baseline at
+the fourteen-recipient split, Sepolia allowance configuration, delivery
+routing, and discount configuration. The initial relic allowance total must equal
+the requested reservation quantity; configure those wallets before preparation.
+The quantity and deposit are frozen in `manifest.relicReservation`. Legacy frozen
+manifests without that field retain eighteen reservations and the 0.018 ETH deposit.
+Publish and verify the full baseline at
 the deployment's exact metadata prefix before broadcasting `deploy`.
 
 Use the same directory for `deploy`, `reserve`, `pause-old`, `open`, `mint-qa`,
@@ -101,7 +108,11 @@ Retries reject signed actions whose canonical prerequisites have changed.
 New directory locks recover stopped owners safely; a leftover lock file from
 the earlier runner is rejected and must be removed only after confirming its
 process has stopped.
-`reserve` allocates eighteen relics with 0.018 Sepolia ETH. `pause-old` closes
+`reserve` allocates the frozen quantity with its frozen deposit. For zero
+reservations it records canonical proof that no relic supply was reserved
+without signing a transaction or consuming a nonce. Later actions and read-only
+verification recheck that evidence. Public relic issuance starts disabled with
+zero quota. `pause-old` closes
 the frozen previous collection's sale and redemptions. Complete the
 [application cutover](../../scripts/docs/111k_testnet.md#ethereum-maintenance-and-replacement)
 before `open`; `mint-qa` buys one ordinary crate for 0.0001 Sepolia ETH and
@@ -197,7 +208,7 @@ Every eligible wallet initially receives one discounted crate. The owner can cal
 
 `setPrices(cratePrice, warehousePrice, discountCratePrice)` updates all three fixed prices atomically and rejects a discounted price above the public crate price. A public-price change does not automatically change the discounted price. Failed transactions revert payment, allocation, and discount usage.
 
-`stats(address wallet)` preserves the first twelve fields: the existing six global statistics followed by the root, discounted crate price, allowance, queried wallet's used count, allocated relic supply, and lifetime claimed relic count. New deployments append `maxDiscountedMints` and `totalDiscountedMints` as fields 13 and 14; legacy deployments return only the first twelve fields and have no global discount cap. This gives the page one coherent contract read for price and remaining allowance. Passing the zero address returns zero wallet usage while still reporting global discounted usage. The draft holder snapshot and its generated proof fixture are checked independently of the live collection; no source-collection ownership query is required during minting.
+`stats(address wallet)` preserves the first twelve fields: the existing six global statistics followed by the root, discounted crate price, allowance, queried wallet's used count, allocated relic supply, and lifetime claimed relic count. Fields 13 and 14 are `maxDiscountedMints` and `totalDiscountedMints`; public-relic deployments append their public minted count as field 15. Readers continue to support twelve- and fourteen-field deployments. The preorder claimed count remains independent of public relic issuance. Passing the zero address returns zero wallet usage while still reporting global discounted usage. The draft holder snapshot and its generated proof fixture are checked independently of the live collection; no source-collection ownership query is required during minting.
 
 The page uses the same discount button behavior as Solana: if the selected crate quantity exceeds the remaining allowance, the entire selection uses the public mint price. There is no partial discount within a transaction.
 
@@ -208,6 +219,66 @@ Relic supply starts at zero. Before the first `setSaleActive(true)`, the owner m
 The allocation is permanent and cannot be increased, reduced, or repeated. Opening sales permanently closes allocation, even if no token has minted and sales are later paused. Configure the desired reservation before opening the sale. Per-wallet `relicLimit` values can be supplied at deployment or adjusted with `setFreeMintAllowances`; those limits do not reserve additional inventory.
 
 While sales are active, an entitled wallet calls nonpayable `claimRelic(uint256 id)` for any still-unclaimed ID from 1 through 18. Allocating two relics permits any two distinct IDs, such as 18 and 4. Claims happen one at a time and consume one lifetime allowance each. Their 111-crate blocks are assigned in claim order, independently of the chosen ID. A claim does not change `allocatedCrates` or mint proceeds. The contract emits `RelicClaimed(wallet, relicId, tokenId)`. IDs cannot be reused after transfer, unpacking, or delivery. Failed receiver callbacks roll back the claim and allowance usage while retaining the original global reservation and deposit.
+
+## Public relic minting
+
+Public relics share the eighteen permanent IDs and existing unboxing/delivery
+behavior with preorder relics. `setPublicRelicSale(uint256 limit, uint256 priceWei,
+bool active)` sets a cumulative public quota. Increase the limit from 2 to 5 to
+release three additional relics. The limit cannot fall below public issuance or
+exceed `18 - relicsAllocated`; reservation and public configuration enforce this
+bound in either order. Quota changes reserve no crates. A zero-preorder launch
+skips `allocateRelics` and may eventually offer all eighteen public relics.
+
+`mintRelic(uint256 relicId)` purchases one unused ID at the exact current price.
+Both the global and public sale flags must be active. Each successful public mint
+allocates the next 111 available crates and credits its payment to ordinary mint
+proceeds. It fails if fewer than 111 crates remain, even if public quota remains.
+Preorder claims retain their reserved crate ranges and do not consume public
+quota. Transfers, unpacking and delivery never reopen a relic ID or public slot.
+Setting a public price of zero intentionally permits public giveaways.
+
+`setPublicRelicFreeMintAllowances(address[] wallets, uint16 limit)` assigns a
+separate lifetime public-mint allowance to each wallet in a batch of 1–32 distinct
+valid addresses. Limits range from 0 through 18, and changes preserve prior usage.
+`mintFreeRelic(uint256 relicId)` consumes this allowance instead of payment while
+still consuming public quota and 111 crates. It uses both sale gates and does not
+consume the wallet's preorder claim allowance. Public state and allowances start
+at zero, with the public sale disabled.
+
+`publicRelicStats(address wallet)` returns `(limit, minted, priceWei, active,
+mintable, freeLimit, freeUsed)`. `active` is the public configuration flag;
+`mintable` is zero unless both sale flags are active, otherwise the smaller of
+remaining quota and `remainingCrates / 111`. Wallet eligibility is additionally
+bounded by `max(0, freeLimit - freeUsed)`. The issued-ID mask covers both routes.
+`PublicRelicSaleUpdated`, `PublicRelicFreeMintAllowanceUpdated` and
+`PublicRelicMinted` expose owner updates and issuance; the mint event distinguishes
+the free-allowance route from a zero-priced public purchase.
+
+The admin tool validates an explicit JSON file and produces unsigned owner calls:
+
+```json
+{
+  "chainId": 11155111,
+  "sale": { "limit": 2, "priceWei": "1000000000000000", "active": true },
+  "groups": [
+    { "name": "example", "limit": 1, "wallets": ["0x1111111111111111111111111111111111111111"] }
+  ]
+}
+```
+
+```sh
+npm --prefix onchain/ethereum run public-relics:check -- /absolute/path/public-relics.json --chain-id 11155111
+npm --prefix onchain/ethereum run public-relics:calldata -- COLLECTION_ADDRESS /absolute/path/public-relics.json --chain-id 11155111
+```
+
+The values above are illustrative. No sale or recipient preset is activated by
+the tool. `sale` and `groups` may be supplied independently; empty groups emit no
+call, and zero limits emit revocations. The chain ID must match explicitly, prices
+are exact decimal wei strings, and wallet membership must be unique across groups.
+The tool performs no RPC or signing; the contract enforces current supply and
+quota constraints when the owner submits the calls. Existing claim UI remains
+unchanged; no public purchasing interface is included in this contract update.
 
 ## Per-wallet free mints
 
@@ -238,7 +309,7 @@ Both commands accept an optional configuration path after their displayed argume
 
 `mintFree(uint8 kind, uint256 quantity)` accepts crate kind `2` or warehouse kind `3`, and mints 1–15 items to the caller. It requires `saleActive`, rejects ETH payments, and charges no mint price; the wallet still pays gas. A 100-crate allowance needs at least seven transactions. Claiming a warehouse consumes one warehouse allowance and 11 shared crate allocations, without consuming the wallet's free-crate allowance. Relics use `claimRelic(id)` instead, consuming one relic allowance from already reserved supply. Transfers, unpacking, and paid or discounted purchases do not change free usage.
 
-`freeMintAllowances(wallet)` returns `crateLimit`, `warehouseLimit`, `relicLimit`, `cratesUsed`, `warehousesUsed`, and `relicsUsed`. All six counters fit in one storage slot. Remaining entitlement is `max(0, limit - used)` independently for each item. Increasing a limit from 100 to 120 grants 20 additional items; reducing a limit below usage leaves none available, and revocation/re-addition never restores used allowance. Discount accounting remains separate. `relicsAllocated` and `relicsMinted` remain fields 11 and 12 of `stats()` (zero-based indices 10 and 11) in both the legacy 12-field and new 14-field responses. `getRelicClaimedMask()` returns the permanent claimed-ID bitmap: bit `id - 1` is set for each claimed relic. Transfers, opening, and delivery do not clear it. The view derives all eighteen flags from existing reservations without additional claim storage writes.
+`freeMintAllowances(wallet)` returns `crateLimit`, `warehouseLimit`, `relicLimit`, `cratesUsed`, `warehousesUsed`, and `relicsUsed`. All six counters fit in one storage slot. Remaining entitlement is `max(0, limit - used)` independently for each item. Increasing a limit from 100 to 120 grants 20 additional items; reducing a limit below usage leaves none available, and revocation/re-addition never restores used allowance. Discount accounting remains separate. `relicsAllocated` and `relicsMinted` remain fields 11 and 12 of `stats()` (zero-based indices 10 and 11) in the legacy 12/14-field and new 15-field responses. `getRelicClaimedMask()` returns the permanent issued-ID bitmap: bit `id - 1` is set for every reserved claim or public mint. Transfers, opening, and delivery do not clear it. The view derives all eighteen flags from their assigned crate ranges without additional bitmap storage writes.
 
 Configuration emits `FreeMintAllowanceUpdated`; successful claims emit `FreeMintClaimed` and the existing purchase event with payment zero. Claims produce no mint proceeds. Usage and supply are updated before receiver callbacks, and a rejected callback reverts the whole mint. The shop does not expose generic free crate or warehouse mints; use the contract interface for those. The relic icon on `111k_devnet` exposes separate one-at-a-time relic claims.
 
@@ -310,17 +381,29 @@ The owner can change the metadata prefix with `setBaseURI(string)`. The construc
 
 ## Gas comparison
 
-### Solidity 0.8.38 and 500-run build
+### Public relic build: Solidity 0.8.38 and 200 optimizer runs
 
-The active build uses Solidity 0.8.38, 500 optimizer runs, the legacy pipeline (`via_ir = false`), Prague, and no bytecode metadata hash. The earlier compiler-focused source refactors skip zero-value mint revenue writes, calculate the physical claim's first receipt token before its loop, and cache mint payout accounting for explicit restoration after a failed receiver call. Those refactors preserved the public ABI, storage layout, authorization formats, events, and callback ordering. The current source also adds the lifetime discounted-mint cap, extending the constructor, public ABI, and storage accounting.
+The active build uses Solidity 0.8.38, the legacy pipeline (`via_ir = false`), 200 optimizer runs, Prague, and no bytecode metadata hash. The [public relic compiler matrix](benchmarks/public-relic-compiler-comparison.json) measures legacy and IR builds at 200 and 500 runs on identical source. Legacy/500 exceeds the code-size limit; IR/200 and IR/500 fit but fail the write-gas threshold in 34 and 30 cases. The [selected compiler gate](benchmarks/compiler-solc-0.8.38-legacy-200-comparison.json) enforces the strict less-than-1% write-gas threshold, runtime/initcode limits, and a successful deployment under normal Prague Anvil limits. It covers 173 measurements: 150 writes and 23 reads. The selected build is the legacy/200 reference itself, so its optimizer-only deltas are zero; this is separate from a comparison against an earlier feature revision.
 
-The [current compiler comparison](benchmarks/compiler-solc-0.8.38-legacy-500-comparison.json) compares the selected 500-run candidate with the same source compiled at 200 runs. Both use one fixed 200-run harness and receiver. All 139 measured writes must remain below a 1% increase; the 21 read-only cases are reported separately. Normal [gas snapshots](snapshots/NFT111KGasTest.json) instead compile the harness and receiver at the production 500-run setting. Run `npm --prefix onchain/ethereum run gas:compiler-gate -- --check` to reproduce the gate and verify the committed report's stable inputs and measurements without updating it.
+Runtime is **24,537 bytes**, leaving **39 bytes** under EIP-170. Creation bytecode is 28,674 bytes; adding the maximum tested constructor arguments gives 35,362 bytes. The local deployment uses 5,992,687 gas. Future features must repeat the size gate. Shared mint, unboxing, signature and payout helpers, existing ERC721A decimal formatting, bounded token arithmetic and compact metadata tables keep the contract deployable. The inherited reentrancy guard exclusively uses transient slot 1 in this non-proxy contract; no other feature uses transient storage.
 
-The selected runtime is 24,555 bytes, leaving 21 bytes under EIP-170. Creation bytecode plus maximum constructor arguments is 35,373 bytes. The contract's size tests enforce both runtime and initcode limits. Compiler settings affect new builds and deployments; historical deployed collections retain their original bytecode.
+`stats(address)` returns a static fifteen-word struct with the existing fourteen-word prefix intact. Its initialized buffer is returned directly, and tests decode that prefix using the legacy layout. Public relic state and free allowances remain separate from reserved claim accounting. Normal gas snapshots use the selected legacy/200 settings. Reproduce the committed gate without changing its evidence:
 
-The following production snapshots compare the preceding build at commit `4514b4f34af39f18fd465171c9d03b3ff3590450` with the current build. These differences include the refactors, compiler settings, and discounted-mint cap; the compiler comparison above isolates optimizer settings on identical source.
+```sh
+npm --prefix onchain/ethereum run gas:compiler-gate -- --check
+```
 
-| Operation | Previous 0.8.30 / 200 runs | Current 0.8.38 / 500 runs | Change |
+### Historical Solidity 0.8.38 and 500-run build
+
+The preceding build used Solidity 0.8.38, 500 optimizer runs, the legacy pipeline (`via_ir = false`), Prague, and no bytecode metadata hash. The earlier compiler-focused source refactors skip zero-value mint revenue writes, calculate the physical claim's first receipt token before its loop, and cache mint payout accounting for explicit restoration after a failed receiver call. Those refactors preserved the public ABI, storage layout, authorization formats, events, and callback ordering. That revision also added the lifetime discounted-mint cap, extending the constructor, public ABI, and storage accounting.
+
+The [preserved compiler comparison](benchmarks/compiler-solc-0.8.38-legacy-500-comparison.json) compares the selected 500-run candidate with the same source compiled at 200 runs. Both use one fixed 200-run harness and receiver. All 139 measured writes must remain below a 1% increase; the 21 read-only cases are reported separately. That revision compiled its normal gas snapshots and receiver at 500 runs. Reproduce its report from the recorded source revision; the active gate now uses the public relic build above.
+
+That revision's runtime was 24,555 bytes, leaving 21 bytes under EIP-170. Creation bytecode plus maximum constructor arguments is 35,373 bytes. The contract's size tests enforce both runtime and initcode limits. Compiler settings affect new builds and deployments; historical deployed collections retain their original bytecode.
+
+The following historical snapshots compare commit `4514b4f34af39f18fd465171c9d03b3ff3590450` with that 500-run revision. These differences include the refactors, compiler settings, and discounted-mint cap; the compiler comparison above isolates optimizer settings on identical source.
+
+| Operation | Previous 0.8.30 / 200 runs | Historical 0.8.38 / 500 runs | Change |
 | --- | ---: | ---: | ---: |
 | Mint one crate | 143,063 | 143,087 | +24 |
 | Mint 15 crates | 499,993 | 499,149 | -844 |
@@ -376,7 +459,7 @@ Both historical commits must be available in local Git history; the command does
 
 The recorded comparison passed all cases. Maximum increases were **0.0153% / 306 gas** for successful transaction receipts, **0.0228% / 6 gas** for failed URI-update receipts, and **0.214% / 180 gas** for read-call execution. Each build runs the 106 receipt operations twice, producing 424 measured receipts in total. These are measured gas units, independent of the ETH gas price.
 
-Normal gas snapshots compile the harness at the configured 500 runs; the fixed-reference comparison keeps its historical harness unchanged to isolate contract costs. After intentionally updating snapshots with `npm --prefix onchain/ethereum run gas:update`, verify them with `gas:check`. Historical compiler reports remain unchanged. The percentage gate covers measured scenarios under Prague rules, not every possible future input, receiver, or fork.
+That revision's normal gas snapshots compiled the harness at 500 runs; the fixed-reference comparison keeps its historical harness unchanged to isolate contract costs. After intentionally updating snapshots with `npm --prefix onchain/ethereum run gas:update`, verify them with `gas:check`. Historical compiler reports remain unchanged. The percentage gate covers measured scenarios under Prague rules, not every possible future input, receiver, or fork.
 
 ### Mint payout batches (2026-10-31)
 
@@ -455,10 +538,10 @@ The source before relic support had 113 benchmarks and used the single-contract 
 
 ### Compiler benchmark tooling
 
-Current tooling uses the [Solidity 0.8.38 legacy/200 baseline](benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json). Normal runs reject changed provenance or measurements; they never silently replace this baseline. To compare the current 200- and 500-run builds against it, run:
+Current tooling uses the [Solidity 0.8.38 legacy/200 baseline](benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json). Normal runs reject changed provenance or measurements; they never silently replace this baseline. To compare the current legacy and IR builds at 200 and 500 runs against it, run:
 
 ```sh
-node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 500
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json all 200 500
 ```
 
 The full 14-configuration matrix remains available. Omitting pipeline and run arguments tests legacy runs 1, 50, 200, 500, 1000, 1500, 2000, 5000 and 10000, plus IR runs 1, 50, 200, 1000 and 10000:
@@ -472,8 +555,8 @@ After reviewing an intentional source, harness or toolchain change, explicitly r
 
 ```sh
 npm run gas:update
-node scripts/benchmark-compiler.mjs /tmp/111k-compiler-baseline-update.json legacy 200 500 --update-baseline
-node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 500
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-baseline-update.json all 200 500 --update-baseline
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json all 200 500
 npm run gas:compiler-gate
 npm run gas:compiler-gate -- --check
 ```

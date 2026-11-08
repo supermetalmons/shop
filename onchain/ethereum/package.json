@@ -7,7 +7,7 @@
     "build": "forge build --offline",
     "test": "forge test --offline --no-match-contract NFT111KGasTest --gas-snapshot-emit=false",
     "abi": "node scripts/generate-abi.mjs",
-    "check": "npm test && npm run test:pre111k-deployment && npm run test:111k-deployment && npm run test:gas-check && npm run gas:check && npm run test:gas-comparison && npm run test:compiler-benchmark && npm run gas:compiler-gate -- --check && npm run test:proceeds && npm run test:free-mints && npm run free-mints:check && npm run test:discounts && npm run discounts:check && node scripts/check-fixtures.mjs && node scripts/generate-abi.mjs --check",
+    "check": "npm test && npm run test:pre111k-deployment && npm run test:111k-deployment && npm run test:gas-check && npm run gas:check && npm run test:gas-comparison && npm run test:compiler-benchmark && npm run gas:compiler-gate -- --check && npm run test:proceeds && npm run test:free-mints && npm run test:public-relics && npm run free-mints:check && npm run test:discounts && npm run discounts:check && node scripts/check-fixtures.mjs && node scripts/generate-abi.mjs --check",
     "test:pre111k": "forge test --offline --match-contract '^Pre111K' --gas-snapshot-emit=false",
     "test:pre111k-deployment": "node --test scripts/pre111k-deployment.test.mjs scripts/pre111k-sourcify.test.mjs",
     "pre111k:deploy": "node scripts/pre111k-deployment.mjs",
@@ -33,7 +33,10 @@
     "test:discounts": "node --test scripts/generate-discounts.test.mjs scripts/discount-cap-config.test.mjs",
     "test:invariants:extended": "FOUNDRY_INVARIANT_RUNS=512 FOUNDRY_INVARIANT_DEPTH=128 forge test --offline --match-contract '^NFT111K.*InvariantTest$' --gas-snapshot-emit=false",
     "chain:local": "anvil --host 127.0.0.1 --chain-id 31337 --block-time 1",
-    "deploy:local": "node scripts/deploy-local.mjs"
+    "deploy:local": "node scripts/deploy-local.mjs",
+    "test:public-relics": "node --test scripts/public-relic-config.test.mjs scripts/relic-reservation-config.test.mjs",
+    "public-relics:check": "node scripts/public-relics.mjs check",
+    "public-relics:calldata": "node scripts/public-relics.mjs calldata"
   },
   "devDependencies": {
     "@metamask/abi-utils": "2.0.4",

@@ -11,7 +11,7 @@ const baseline = 'benchmarks/compiler-solc-0.8.38-legacy-200-baseline.json';
 const historical = readdirSync(join(root, 'benchmarks')).filter(name => name.endsWith('.json') && `benchmarks/${name}` !== baseline).sort();
 const read = path => readFileSync(path, 'utf8');
 
-test('compiler benchmarks reproduce deployable variants and reject oversized bytecode without changing historical baselines', () => {
+test('compiler benchmarks measure oversized references but deploy only size-compliant variants without changing historical baselines', () => {
   const originalBaseline = read(join(root, baseline));
   const historicalBaselines = historical.map(name => read(join(root, 'benchmarks', name)));
   const directory = mkdtempSync(join(tmpdir(), '111k-compiler-test-'));
@@ -29,7 +29,7 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
     const gitDirectory = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
     symlinkSync(gitDirectory, join(directory, '.git'), 'dir');
     const run = (output, update) => {
-      const result = spawnSync(process.execPath, ['scripts/benchmark-compiler.mjs', output, 'legacy', '200', '500', '1000',
+      const result = spawnSync(process.execPath, ['scripts/benchmark-compiler.mjs', output, 'all', '200', '500',
         ...(update ? ['--update-baseline'] : [])], {
         cwd: directory, encoding: 'utf8', timeout: 180_000, maxBuffer: 16 * 1024 * 1024,
       });
@@ -38,17 +38,17 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
       assert.equal(report.status, 'complete');
       const oversize = variant => variant.artifacts.NFT111K.runtimeBytes > 24576 ||
         variant.artifacts.NFT111K.creationBytes + report.reproduction.maximumCollectionArgumentBytes > 49152;
-      assert.equal(result.status, report.variants.some(oversize) ? 1 : 0, `${result.stdout}\n${result.stderr}`);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       assert.equal(report.reproduction.maximumCollectionArgumentBytes, 6688);
       assert.equal(report.writeBenchmarkCount,
-        Object.keys(report.variants[0].gas).filter(name => /^(allocateRelics|mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name)).length);
+        Object.keys(report.variants[0].gas).filter(name => !/^(get|preview|stats$|publicRelicStats|allocatedCrates$|warehousesMinted$)/.test(name)).length);
       for (const variant of report.variants) {
-        if (oversize(variant)) {
-          assert.equal(variant.status, 'benchmark-failed');
-          assert.equal(variant.deploymentTransactions, undefined);
-          continue;
-        }
         assert.equal(variant.status, 'measured');
+        if (oversize(variant)) {
+          assert.equal(variant.deploymentTransactions, undefined);
+          assert.equal(variant.comparison.withinDeploymentSizeLimits, false);
+          assert.equal(variant.comparison.deploymentDeltas, null);
+        }
         for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'mintCrates1ThirtyTwoRecipients',
           'releaseMint', 'releaseMintEightRecipients', 'releaseAllMintThirtyTwoRecipients',
           'releaseAllMintThirtyTwoGasBurningRecipients', 'mintFreeCrates1', 'mintFreeWarehouses1',
@@ -57,12 +57,15 @@ test('compiler benchmarks reproduce deployable variants and reject oversized byt
           assert.ok(variant.gas[name] > 0, `${variant.label}: missing ${name}`);
         }
         assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);
+        if (oversize(variant)) continue;
         assert.deepEqual(Object.keys(variant.deploymentTransactions), ['collection']);
+        assert.equal(variant.deploymentTransactions.collection.status, '0x1');
         assert.equal(variant.deploymentTransactions.collection.constructorArgumentBytes, 736);
+        assert.equal(variant.deploymentTransactions.collection.runtimeBytes, variant.artifacts.NFT111K.runtimeBytes);
         assert.ok(variant.deploymentTransactions.collection.gasUsed > 0);
         assert.equal(variant.comparison.withinDeploymentSizeLimits, true);
       }
-      assert.deepEqual(report.variants.map(variant => variant.label), ['legacy-200', 'legacy-500', 'legacy-1000']);
+      assert.deepEqual(report.variants.map(variant => variant.label), ['legacy-200', 'legacy-500', 'ir-200', 'ir-500']);
       const [baselineVariant, optimizedVariant] = report.variants;
       assert.notDeepEqual(
         [optimizedVariant.gas.mintCrates1EightRecipients, optimizedVariant.gas.releaseMintEightRecipients],

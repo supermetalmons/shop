@@ -1,5 +1,5 @@
 import { decodeReturn, encodeCall } from '../../../../shared/ethereum/abi.js';
-import type { EthereumRelicStatus } from '../../../../shared/ethereum/api.js';
+import type { EthereumPublicRelicSale, EthereumRelicStatus } from '../../../../shared/ethereum/api.js';
 import { ETHEREUM_CRATES_PER_RELIC, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_RELICS,
   ethereumRelicClaimCount, normalizeEthereumAddress } from '../../../../shared/ethereum/protocol.js';
 import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
@@ -38,28 +38,47 @@ export async function ethereumRelics(request: Request, context: Pick<EthereumCon
     encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]),
     encodeCall(ETHEREUM_FUNCTIONS.freeMintAllowances, ['address'], [owner ?? ZERO_ADDRESS]),
   ], snapshot.blockHash);
-  if (maskData.length !== 66 || (statsData.length !== 2 + 64 * 12 && statsData.length !== 2 + 64 * 14) || allowanceData.length !== 386) {
+  const publicRelics = statsData.length === 2 + 64 * 15;
+  if (maskData.length !== 66 || ![12, 14, 15].some(words => statsData.length === 2 + 64 * words) || allowanceData.length !== 386) {
     throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic availability.');
   }
   const claimedMask = Number(decodeReturn(['uint256'], maskData)[0]);
   const stats = decodeReturn(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
-    'uint256', 'uint256', 'uint256', 'uint256', 'uint256'], statsData);
+    'uint256', 'uint256', 'uint256', 'uint256', 'uint256', ...(publicRelics ? ['uint256', 'uint256', 'uint256'] : [])], statsData);
   const allowance = decodeReturn(['uint16', 'uint16', 'uint16', 'uint16', 'uint16', 'uint16'], allowanceData);
   const allocatedCrates = Number(stats[0]);
   const relicsAllocated = Number(stats[10]);
   const relicsMinted = Number(stats[11]);
+  const publicRelicsMinted = publicRelics ? Number(stats[14]) : 0;
   const relicLimit = Number(allowance[2]);
   const relicsUsed = Number(allowance[5]);
   if (!Number.isSafeInteger(claimedMask) || claimedMask < 0 || claimedMask >= 2 ** ETHEREUM_MAX_RELICS ||
-    !Number.isSafeInteger(allocatedCrates) || allocatedCrates > 5555 ||
-    ![relicsAllocated, relicsMinted, relicLimit, relicsUsed].every(value => Number.isSafeInteger(value) && value >= 0 && value <= ETHEREUM_MAX_RELICS) ||
-    relicsMinted > relicsAllocated || relicsUsed > relicsMinted || allocatedCrates < relicsAllocated * ETHEREUM_CRATES_PER_RELIC ||
-    ethereumRelicClaimCount(claimedMask) !== relicsMinted) {
+    !Number.isSafeInteger(allocatedCrates) || allocatedCrates < 0 || allocatedCrates > 5555 ||
+    ![relicsAllocated, relicsMinted, publicRelicsMinted, relicLimit, relicsUsed].every(value => Number.isSafeInteger(value) && value >= 0 && value <= ETHEREUM_MAX_RELICS) ||
+    relicsMinted > relicsAllocated || relicsUsed > relicsMinted || relicsAllocated + publicRelicsMinted > ETHEREUM_MAX_RELICS ||
+    allocatedCrates < (relicsAllocated + publicRelicsMinted) * ETHEREUM_CRATES_PER_RELIC ||
+    ethereumRelicClaimCount(claimedMask) !== relicsMinted + publicRelicsMinted) {
     throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic availability.');
+  }
+  let publicSale: EthereumPublicRelicSale | null = null;
+  if (publicRelics) {
+    const [data] = await ethereumCallBatch(readContext,
+      [encodeCall(ETHEREUM_FUNCTIONS.publicRelicStats, ['address'], [owner ?? ZERO_ADDRESS])], snapshot.blockHash);
+    if (data.length !== 2 + 64 * 7) throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid public relic availability.');
+    const values = decodeReturn(['uint256', 'uint256', 'uint256', 'bool', 'uint256', 'uint16', 'uint16'], data);
+    const [limit, minted, mintable, freeLimit, freeUsed] = [values[0], values[1], values[4], values[5], values[6]].map(Number);
+    const active = values[3] === true;
+    const expectedMintable = stats[5] === true && active ? Math.min(limit - minted, Math.floor((5555 - allocatedCrates) / ETHEREUM_CRATES_PER_RELIC)) : 0;
+    if (![limit, minted, mintable, freeLimit, freeUsed].every(value => Number.isSafeInteger(value) && value >= 0 && value <= ETHEREUM_MAX_RELICS) ||
+      minted !== publicRelicsMinted || minted > limit || limit + relicsAllocated > ETHEREUM_MAX_RELICS || freeUsed > minted || mintable !== expectedMintable) {
+      throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid public relic availability.');
+    }
+    publicSale = { limit, minted, priceWei: String(values[2]), active, mintable, freeLimit, freeUsed,
+      remainingFreeAllowance: Math.max(0, freeLimit - freeUsed) };
   }
   await verifyEthereumBlockSnapshot(readContext, snapshot);
   return { chainId: deployment.chainId, contractAddress: deployment.contractAddress, owner,
     observedBlock: snapshot.blockNumber, blockHash: snapshot.blockHash, saleActive: stats[5] === true,
-    relicsAllocated, relicsMinted, remainingRelics: relicsAllocated - relicsMinted, claimedMask,
+    relicsAllocated, relicsMinted, publicRelicsMinted, publicSale, remainingRelics: relicsAllocated - relicsMinted, claimedMask,
     relicLimit, relicsUsed, remainingAllowance: Math.max(0, relicLimit - relicsUsed) };
 }

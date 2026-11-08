@@ -299,7 +299,7 @@ contract NFT111KGasTest is TestSupport {
         token = _deployCollection(recipients, shares);
         token.setSaleActive(true);
         assertEq(token.mintRecipientCount(), 8);
-        assertTrue(address(token).code.length <= 24576);
+        _assertDeploymentSize();
     }
 
     function _configureThirtyTwoRecipients(bool gasBurning) private {
@@ -312,6 +312,10 @@ contract NFT111KGasTest is TestSupport {
         token = _deployCollection(recipients, shares);
         token.setSaleActive(true);
         assertEq(token.mintRecipientCount(), 32);
+        _assertDeploymentSize();
+    }
+
+    function _assertDeploymentSize() internal view virtual {
         assertTrue(address(token).code.length <= 24576);
     }
 
@@ -436,6 +440,86 @@ contract NFT111KGasTest is TestSupport {
         vm.snapshotGasLastCall("claimRelicAfter1");
         _assertFreeUsage(alice, 0, 0, 2);
         assertEq(token.relicFirstCrate(7), 112);
+    }
+
+    function testGasMintRelic() public {
+        _publicRelic(alice, false, false, "mintRelic");
+    }
+
+    function testGasMintRelicAfter1() public {
+        _publicRelic(alice, false, true, "mintRelicAfter1");
+    }
+
+    function testGasMintRelicReceiver() public {
+        _publicRelic(receiver, false, false, "mintRelicReceiver");
+    }
+
+    function testGasMintRelicAfterReservedClaim() public {
+        _configureRelics(10);
+        _configureFreeWallet(alice);
+        vm.prank(alice);
+        token.claimRelic(18);
+        _publicRelic(alice, false, false, "mintRelicAfterReservedClaim");
+    }
+
+    function testGasMintFreeRelic() public {
+        _publicRelic(alice, true, false, "mintFreeRelic");
+    }
+
+    function testGasMintFreeRelicAfter1() public {
+        _publicRelic(alice, true, true, "mintFreeRelicAfter1");
+    }
+
+    function testGasMintFreeRelicReceiver() public {
+        _publicRelic(receiver, true, false, "mintFreeRelicReceiver");
+    }
+
+    function testGasSetPublicRelicSale() public {
+        token.setPublicRelicSale(2, 0.01 ether, true);
+        vm.snapshotGasLastCall("setPublicRelicSale");
+    }
+
+    function testGasSetPublicRelicSaleAfterMint() public {
+        token.setPublicRelicSale(2, 0.01 ether, true);
+        vm.prank(alice);
+        token.mintRelic{value: 0.01 ether}(7);
+        token.setPublicRelicSale(5, 0.02 ether, true);
+        vm.snapshotGasLastCall("setPublicRelicSaleAfterMint");
+    }
+
+    function testGasSetPublicRelicFreeMintAllowancesOne() public {
+        address[] memory wallets = new address[](1);
+        wallets[0] = alice;
+        token.setPublicRelicFreeMintAllowances(wallets, 2);
+        vm.snapshotGasLastCall("setPublicRelicFreeMintAllowancesOne");
+    }
+
+    function testGasSetPublicRelicFreeMintAllowancesThirtyTwo() public {
+        token.setPublicRelicFreeMintAllowances(_freeWallets(), 2);
+        vm.snapshotGasLastCall("setPublicRelicFreeMintAllowancesThirtyTwo");
+    }
+
+    function testGasPublicRelicStatsEmpty() public {
+        (uint256 limit, uint256 minted,,,, uint16 freeLimit, uint16 freeUsed) = token.publicRelicStats(alice);
+        vm.snapshotGasLastCall("publicRelicStatsEmpty");
+        assertEq(limit + minted + freeLimit + freeUsed, 0);
+    }
+
+    function testGasPublicRelicStatsAfterUse() public {
+        token.setPublicRelicSale(5, 0.01 ether, true);
+        address[] memory wallets = new address[](1);
+        wallets[0] = alice;
+        token.setPublicRelicFreeMintAllowances(wallets, 2);
+        vm.prank(alice);
+        token.mintFreeRelic(7);
+        (uint256 limit, uint256 minted,,, uint256 mintable, uint16 freeLimit, uint16 freeUsed) =
+            token.publicRelicStats(alice);
+        vm.snapshotGasLastCall("publicRelicStatsAfterUse");
+        assertEq(limit, 5);
+        assertEq(minted, 1);
+        assertEq(mintable, 4);
+        assertEq(freeLimit, 2);
+        assertEq(freeUsed, 1);
     }
 
     function testGasSetFreeMintAllowancesThirtyTwo() public {
@@ -1114,6 +1198,26 @@ contract NFT111KGasTest is TestSupport {
         address[] memory wallets = new address[](1);
         wallets[0] = wallet;
         token.setFreeMintAllowances(wallets, 100, 15, 18);
+    }
+
+    function _publicRelic(address wallet, bool freeMint, bool previous, string memory name) internal {
+        token.setPublicRelicSale(3, 0.01 ether, true);
+        address[] memory wallets = new address[](1);
+        wallets[0] = wallet;
+        token.setPublicRelicFreeMintAllowances(wallets, 2);
+        uint256 firstCrate = token.allocatedCrates() + 1;
+        vm.startPrank(wallet);
+        if (previous) {
+            if (freeMint) token.mintFreeRelic(4);
+            else token.mintRelic{value: 0.01 ether}(4);
+            firstCrate += 111;
+        }
+        if (freeMint) token.mintFreeRelic(7);
+        else token.mintRelic{value: 0.01 ether}(7);
+        vm.snapshotGasLastCall(name);
+        vm.stopPrank();
+        assertEq(token.relicFirstCrate(7), firstCrate);
+        assertEq(token.ownerOf(117178), wallet);
     }
 
     function _mintFree(address wallet, NFT111K.ItemKind kind, uint256 quantity, string memory name) internal {

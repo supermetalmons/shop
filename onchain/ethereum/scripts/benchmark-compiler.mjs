@@ -13,13 +13,13 @@ const arguments_ = process.argv.slice(2);
 const updateBaseline = arguments_.includes('--update-baseline');
 assert.ok(arguments_.filter(value => value === '--update-baseline').length <= 1, 'Duplicate --update-baseline flag');
 const [output, pipelineArgument, ...runArguments] = arguments_.filter(value => value !== '--update-baseline');
-if (!output || (pipelineArgument && !['legacy', 'ir'].includes(pipelineArgument))) {
-  throw new Error('Usage: node scripts/benchmark-compiler.mjs <output.json> [legacy|ir] [runs...] [--update-baseline]');
+if (!output || (pipelineArgument && !['legacy', 'ir', 'all'].includes(pipelineArgument))) {
+  throw new Error('Usage: node scripts/benchmark-compiler.mjs <output.json> [legacy|ir|all] [runs...] [--update-baseline]');
 }
 const defaultRuns = { legacy: [1, 50, 200, 500, 1000, 1500, 2000, 5000, 10000], ir: [1, 50, 200, 1000, 10000] };
 const requestedRuns = runArguments.length ? [...new Set(runArguments.map(Number))] : undefined;
 assert.ok(!requestedRuns || requestedRuns.every(value => Number.isSafeInteger(value) && value > 0), 'Runs must be positive integers');
-const pipelines = pipelineArgument ? [pipelineArgument] : ['legacy', 'ir'];
+const pipelines = pipelineArgument && pipelineArgument !== 'all' ? [pipelineArgument] : ['legacy', 'ir'];
 const outputPath = resolve(output);
 const read = path => readFileSync(path, 'utf8');
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -48,7 +48,7 @@ if (baselineReference) {
   assert.deepEqual(Object.keys(baselineReference.gas), expectedNames, 'Compiler baseline benchmark names changed');
 }
 const temporaryRoot = mkdtempSync(join(tmpdir(), '111k-compiler-'));
-const writeNames = expectedNames.filter(name => /^(allocateRelics|mint|unbox|deliver|claim|release|register|setFreeMintAllowances|setBaseURI)/.test(name));
+const writeNames = expectedNames.filter(name => !/^(get|preview|stats$|publicRelicStats|allocatedCrates$|warehousesMinted$)/.test(name));
 const progress = message => process.stderr.write(message + '\n');
 const save = report => writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
 const sourceHashes = directory => Object.fromEntries(readdirSync(join(directory, 'src'))
@@ -119,6 +119,8 @@ interface CompilerVm {
 }
 
 contract ${harnessName} is NFT111KGasTest {
+    function _assertDeploymentSize() internal pure override {}
+
     function _deployCollection(address[] memory recipients, uint256[] memory shares)
         internal
         override
@@ -141,6 +143,8 @@ contract ${harnessName} is NFT111KGasTest {
     cpSync(join(packageRoot, 'test', name), join(directory, 'test', name));
   }
   writeFileSync(join(directory, 'test', `${harnessName}.t.sol`), harness);
+  const configPath = join(directory, 'foundry.toml');
+  writeFileSync(configPath, read(configPath) + '\ncode_size_limit = 100000\n');
   run(directory, ['build', '--offline']);
   return { directory, sha256: hash(harness), testSupportSha256: hash(read(join(directory, 'test/TestSupport.sol'))) };
 }
@@ -187,6 +191,7 @@ const maximumCollectionArgumentBytes = collectionArguments(
   '0x0000000000000000000000000000000000000001', 32, 32, `${metadataBaseURI}${'a'.repeat(64)}/`).length / 2;
 
 async function deploymentMeasurements(variants) {
+  if (!variants.length) return;
   const server = createServer();
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -234,7 +239,11 @@ async function deploymentMeasurements(variants) {
           await delay();
         }
         assert.equal(receipt?.status, '0x1', `${variant.label}: deployment failed`);
-        return { address: receipt.contractAddress, gasUsed: Number(BigInt(receipt.gasUsed)), constructorArgumentBytes: args.length / 2 };
+        const deployedCode = await rpc('eth_getCode', [receipt.contractAddress, receipt.blockNumber]);
+        const runtimeBytes = (deployedCode.length - 2) / 2;
+        assert.equal(runtimeBytes, variant.artifacts[name].runtimeBytes, `${variant.label}: deployed runtime size changed`);
+        return { address: receipt.contractAddress, status: receipt.status, gasUsed: Number(BigInt(receipt.gasUsed)),
+          constructorArgumentBytes: args.length / 2, runtimeBytes };
       };
       const args = collectionArguments(wallet);
       variant.deploymentTransactions = { collection: await deploy('NFT111K', args) };
@@ -281,13 +290,14 @@ const report = {
     packageLockSha256: hash(read(join(packageRoot, 'package-lock.json'))),
   },
   reproduction: {
-    command: 'node scripts/benchmark-compiler.mjs <output.json> [legacy|ir] [runs...] [--update-baseline]',
+    command: 'node scripts/benchmark-compiler.mjs <output.json> [legacy|ir|all] [runs...] [--update-baseline]',
     defaultRuns,
     requestedMatrix: Object.fromEntries(pipelines.map(pipeline => [pipeline, requestedRuns ?? defaultRuns[pipeline]])),
     scriptSha256: hash(read(fileURLToPath(import.meta.url))),
     fixedSettings: { solc: '0.8.38', optimizer: true, evmVersion: 'prague', bytecodeHash: 'none' },
+    deployment: { engine: 'anvil', hardfork: 'prague', codeSizeLimit: 24576, initcodeSizeLimit: 49152 },
     maximumCollectionArgumentBytes,
-    harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE at identical addresses, preserving signed calldata.',
+    harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE at identical addresses, preserving signed calldata. The isolated harness permits oversized reference builds for gas comparison; only size-compliant variants receive normal-limit Anvil deployment receipts.',
     measurement: `All ${expectedNames.length} measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; Separate benchmarks sum 15 isolated single-unpack calls with snapshotValue. Read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.`,
     environment: 'FOUNDRY_* and DAPP_* overrides are removed for isolated builds. Tracked sources and normal gas snapshots are never modified. The compiler baseline is rewritten only with --update-baseline.',
   },
@@ -367,11 +377,15 @@ try {
     }
   }
   const measured = report.variants.filter(variant => variant.status === 'measured');
-  await deploymentMeasurements(measured);
-  for (const variant of measured) {
+  const deployable = measured.filter(variant => {
     variant.comparison ??= summarize(variant, baseline);
-    variant.comparison.deploymentDeltas = Object.fromEntries(['collection'].map(name =>
-      [name, variant.deploymentTransactions[name].gasUsed - baseline.deploymentTransactions[name].gasUsed]));
+    return variant.comparison.withinDeploymentSizeLimits;
+  });
+  await deploymentMeasurements(deployable);
+  for (const variant of measured) {
+    variant.comparison.deploymentDeltas = variant.deploymentTransactions && baseline.deploymentTransactions
+      ? Object.fromEntries(['collection'].map(name =>
+        [name, variant.deploymentTransactions[name].gasUsed - baseline.deploymentTransactions[name].gasUsed])) : null;
   }
   report.status = 'complete';
   save(report);

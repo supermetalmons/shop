@@ -64,6 +64,7 @@ interface NFT111KStats {
         uint256 relicsMinted_;
         uint256 maxDiscountedMints_;
         uint256 totalDiscountedMints_;
+        uint256 publicRelicsMinted_;
     }
 
     function stats(address wallet) external view returns (Stats memory);

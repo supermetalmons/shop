@@ -34,6 +34,8 @@ The fork test pays a simulated 39.1 ETH sellout balance at the initial mainnet p
 
 The dedicated JavaScript deployment tool supports Ethereum mainnet and Sepolia and encodes only the admin, treasury and initial quote signer in the constructor. The deploying wallet is `0xd58d143ca63d9baccc33fdf69ea203f59c58ae93` on both networks; mainnet assigns administration directly to the treasury Safe. It uses the existing encrypted deployer keystore and a temporary password file. Provide either `ETHEREUM_PRE111K_RPC_URL` or `ALCHEMY_API_KEY`; the RPC must match the selected network. Credentials are never written to public reports.
 
+New preparations use the project's Solidity 0.8.38 legacy/200 build. Existing releases continue to use their frozen compiler input and artifact.
+
 Mainnet preparation requires an explicit authorization signer, separate from the Sepolia signer. Subsequent steps use the frozen signer in the manifest. The transaction fee ceiling is 0.001 ETH on mainnet and 0.005 ETH on Sepolia; preparation also requires enough deployer balance for the actual buffered fee. Omitting `--network` selects Sepolia.
 
 ```sh

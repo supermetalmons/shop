@@ -10,6 +10,8 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { parseInitialDeliveryReceiver, parseProceedsConfig } from './proceeds-config.mjs';
 import { parseFreeMintConfigJson } from './free-mint-config.mjs';
 import { parseDiscountCapConfigJson } from './discount-cap-config.mjs';
+import { compilerGateSettings } from './compiler-gate.mjs';
+import { parseRelicReservation, relicReservation, validateRelicReservationSkip, verifyRelicReservationSkip } from './relic-reservation-config.mjs';
 import { deploymentGas, matchingRuntime, validateDeploymentBalance, validateDeploymentGasPrice } from './pre111k-deployment.mjs';
 import { withMetadataLock } from '../../../scripts/ethereum-metadata/lock.ts';
 import { record111kReleaseLocation, resolve111kReleaseLocation } from '../../../scripts/shared/ethereum111kReleaseLocations.ts';
@@ -114,7 +116,8 @@ export function parse111kDeploymentArgs(argv) {
   const values = {};
   for (let index = 0; index < arguments_.length; index += 2) {
     const key = arguments_[index];
-    assert.ok(['--directory', '--deployment-id', '--network', '--previous-contract', '--previous-directory', '--keystore', '--password-file'].includes(key) &&
+    assert.ok(['--directory', '--deployment-id', '--network', '--previous-contract', '--previous-directory', '--keystore', '--password-file',
+      '--reserved-relics', '--relic-reservation-value-wei'].includes(key) &&
       arguments_[index + 1] && !Object.hasOwn(values, key), 'Invalid or repeated deployment option');
     values[key] = arguments_[index + 1];
   }
@@ -124,10 +127,16 @@ export function parse111kDeploymentArgs(argv) {
   assert.ok(command !== 'prepare' || deploymentId, 'Preparing a replacement requires an explicit fresh --deployment-id');
   assert.ok(['prepare', 'finalize'].includes(command) || values['--previous-directory'] === undefined,
     '--previous-directory is only accepted for prepare or finalize');
+  let reservation;
+  if (command === 'prepare') {
+    assert.match(values['--reserved-relics'] ?? '', /^(0|[1-9][0-9]*)$/, 'Preparing a release requires explicit --reserved-relics');
+    reservation = parseRelicReservation({ quantity: Number(values['--reserved-relics']), valueWei: values['--relic-reservation-value-wei'] });
+  } else assert.ok(values['--reserved-relics'] === undefined && values['--relic-reservation-value-wei'] === undefined,
+    'Relic reservation configuration is only accepted for prepare');
   const previousContract = values['--previous-contract'];
   assert.ok(previousContract === undefined || /^0x[0-9a-fA-F]{40}$/.test(previousContract) && !/^0x0{40}$/.test(previousContract),
     'Invalid previous contract');
-  return { command, network: 'sepolia', deploymentId, previousContract: normalized(previousContract),
+  return { command, network: 'sepolia', deploymentId, previousContract: normalized(previousContract), relicReservation: reservation,
     previousDirectory: values['--previous-directory'] && path.resolve(values['--previous-directory']),
     directory: path.resolve(values['--directory'] || path.join(project, '.local', `111k-sepolia-${deploymentId ?? 'v16'}`)),
     keystore: values['--keystore'], passwordFile: values['--password-file'] };
@@ -185,7 +194,11 @@ export function nft111kAction(manifest, action, mintReceipt) {
   assert.equal(manifest.chainId, 11155111, 'Only Sepolia actions are supported');
   assert.notEqual(manifest.contractAddress, manifest.previousContract, 'Old and new collections must differ');
   if (action === 'deploy') return { to: null, data: manifest.creationCode, valueWei: '0' };
-  if (action === 'reserve') return { to: manifest.contractAddress, data: calldata('allocateRelics(uint256)', ['uint256'], [18]), valueWei: '18000000000000000' };
+  if (action === 'reserve') {
+    const { quantity, valueWei } = relicReservation(manifest);
+    assert.ok(quantity > 0, 'Zero relic reservations must use the verified skip without a transaction');
+    return { to: manifest.contractAddress, data: calldata('allocateRelics(uint256)', ['uint256'], [quantity]), valueWei };
+  }
   if (action === 'pause-old-sale') return { to: manifest.previousContract, data: calldata('setSaleActive(bool)', ['bool'], [false]), valueWei: '0' };
   if (action === 'pause-old-redemptions') return { to: manifest.previousContract, data: calldata('setRedemptionsPaused(bool)', ['bool'], [true]), valueWei: '0' };
   if (action === 'open') return { to: manifest.contractAddress, data: calldata('setSaleActive(bool)', ['bool'], [true]), valueWei: '0' };
@@ -274,10 +287,10 @@ function frozenCompilerInput(artifact) {
   assert.deepEqual(compilationTarget, { 'src/NFT111K.sol': 'NFT111K' });
   assert.equal(artifact.metadata.compiler.version, '0.8.38+commit.1835d247');
   assert.equal(settings.optimizer?.enabled, true);
-  assert.equal(settings.optimizer?.runs, 500);
+  assert.equal(settings.optimizer?.runs, compilerGateSettings.candidateRuns);
   assert.equal(settings.evmVersion, 'prague');
   assert.equal(settings.metadata?.bytecodeHash, 'none');
-  assert.ok(!settings.viaIR, 'Unexpected compiler pipeline');
+  assert.equal(settings.viaIR ?? false, compilerGateSettings.viaIR, 'Unexpected compiler pipeline');
   return { language: 'Solidity', sources, settings: { ...settings,
     outputSelection: { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode', 'metadata'], '': ['ast'] } } } };
 }
@@ -326,6 +339,10 @@ function requireConfiguration(manifest, configuration, deploymentId) {
   assert.equal(manifest.constructorArgs, constructorArgs(manifest), 'Frozen constructor changed');
   parseProceedsConfig(manifest.proceeds, manifest.contractAddress);
   parseInitialDeliveryReceiver({ initialReceiver: manifest.initialDeliveryReceiver }, manifest.contractAddress, manifest.proceeds.mintRecipients);
+  const reservation = relicReservation(manifest);
+  if (Object.hasOwn(manifest, 'relicReservation')) assert.equal(
+    manifest.freeMintAllocations.reduce((total, value) => total + value.relicLimit, 0), reservation.quantity,
+    'Initial relic allowances must match the frozen reservation quantity');
 }
 
 function loadFrozen(directory, configuration, deploymentId) {
@@ -409,6 +426,7 @@ async function requireNewCollection(rpc, frozen) {
 
 async function preflightAction(rpc, frozen, action, journal) {
   const { manifest } = frozen;
+  const reservation = relicReservation(manifest);
   const number = async (signature, contract = manifest.contractAddress) =>
     (await call(rpc, contract, signature, ['uint256']))[0];
   const boolean = async (signature, contract = manifest.contractAddress) =>
@@ -427,8 +445,9 @@ async function preflightAction(rpc, frozen, action, journal) {
     }
     return false;
   }
-  assert.ok(journal.actions.reserve?.receipt, 'Confirm the relic reservation first');
-  assert.equal(await number('relicsAllocated()'), 18n, 'Relic reservation changed');
+  if (reservation.quantity === 0) await verifyRelicReservationSkip(manifest, journal.actions.reserve, rpc);
+  else assert.ok(journal.actions.reserve?.receipt, 'Confirm the relic reservation first');
+  assert.equal(await number('relicsAllocated()'), BigInt(reservation.quantity), 'Relic reservation changed');
   if (action.startsWith('pause-old-')) {
     assert.equal((await call(rpc, manifest.previousContract, 'owner()', ['address']))[0], manifest.owner, 'Old collection owner changed');
     return action === 'pause-old-sale' ? !await boolean('saleActive()', manifest.previousContract)
@@ -445,7 +464,7 @@ async function preflightAction(rpc, frozen, action, journal) {
       call(rpc, manifest.contractAddress, 'totalMintReleased()', ['uint256'], [], [], block),
       rpc('eth_getBalance', [manifest.contractAddress, block]),
     ]);
-    assert.equal(received, 18000000000000000n, 'Reserved proceeds changed before opening');
+    assert.equal(received, BigInt(reservation.valueWei), 'Reserved proceeds changed before opening');
     assert.ok(released <= received, 'Released proceeds exceed received proceeds');
     assert.ok(BigInt(balance) >= received - released, 'Contract balance does not cover pending mint proceeds');
     return false;
@@ -494,6 +513,12 @@ export async function run111kDeployment(argv, overrides = {}) {
       const record = journal.actions[action];
       if (record !== undefined) {
         assert.ok(record && typeof record === 'object' && !Array.isArray(record), 'Invalid transaction journal record');
+        if (record.skipped) {
+          assert.equal(action, 'reserve', 'Only a zero relic reservation may be skipped');
+          await verifyRelicReservationSkip(frozen.manifest, record, rpc);
+          transactions.push({ action, skipped: true, blockNumber: Number(BigInt(record.blockNumber)) });
+          continue;
+        }
         assert.equal(record.action, action, 'Journal action identity changed');
         assert.equal(record.from, frozen.manifest.deployer, 'Journal signer changed');
         assert.equal(record.contractAddress, frozen.manifest.contractAddress, 'Journal collection identity changed');
@@ -513,9 +538,14 @@ export async function run111kDeployment(argv, overrides = {}) {
       const value = (await call(rpc, frozen.manifest.contractAddress, `${getter}()`, [getter.endsWith('Active') || getter.endsWith('Paused') ? 'bool' : 'uint256']))[0];
       state[getter] = typeof value === 'bigint' ? value.toString() : value;
     }
-    state.artworksMinted = (await call(rpc, frozen.manifest.contractAddress, 'stats(address)',
-      ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
-        'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'], ['address'], [frozen.manifest.deployer]))[2].toString();
+    const statsRaw = await rpc('eth_call', [{ to: frozen.manifest.contractAddress,
+      data: calldata('stats(address)', ['address'], [frozen.manifest.deployer]) }, 'latest']);
+    assert.ok(typeof statsRaw === 'string' && [2 + 64 * 14, 2 + 64 * 15].includes(statsRaw.length), 'Invalid collection statistics response');
+    const statsTypes = ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
+      'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'];
+    const stats = decoded(statsRaw.length === 2 + 64 * 15 ? [...statsTypes, 'uint256'] : statsTypes, statsRaw);
+    state.artworksMinted = stats[2].toString();
+    state.publicRelicsMinted = (stats[14] ?? 0n).toString();
     return { verified: true, chainId: 11155111, contractAddress: frozen.manifest.contractAddress,
       deploymentId: frozen.manifest.deploymentId, metadataBaseURI: frozen.manifest.metadataBaseURI, transactions, state };
   }
@@ -547,8 +577,8 @@ export async function run111kDeployment(argv, overrides = {}) {
       const proceeds = parseProceedsConfig(JSON.parse(configs['config/proceeds.json']), contractAddress);
       assert.equal(proceeds.mintRecipients.length, 14, 'The committed mint split must contain fourteen recipients');
       const freeMintAllocations = parseFreeMintConfigJson(configs['config/free-mints.sepolia.json'], contractAddress, 11155111).allocations;
-      assert.equal(freeMintAllocations.length, 7, 'The Sepolia preset must contain seven wallets');
-      assert.equal(freeMintAllocations.reduce((total, value) => total + value.relicLimit, 0), 18);
+      assert.equal(freeMintAllocations.reduce((total, value) => total + value.relicLimit, 0), options.relicReservation.quantity,
+        'Initial relic allowances must match the requested reservation quantity');
       assert.ok(freeMintAllocations.every(value => value.crateLimit === 0 && value.warehouseLimit === 0));
       const initialDeliveryReceiver = parseInitialDeliveryReceiver(JSON.parse(configs['config/delivery-routing.json']), contractAddress, proceeds.mintRecipients);
       const maxDiscountedMints = parseDiscountCapConfigJson(configs['config/discount-caps.json'], 11155111);
@@ -562,6 +592,7 @@ export async function run111kDeployment(argv, overrides = {}) {
         previousReleaseDirectory: previousLocation.directory, previousReleaseManifestSha256: previousLocation.manifestSha256,
         metadataBaseURI: `https://cdn.mons.shop/111k-sepolia/${deploymentId}/`, contractAddress, nonce,
         initialDeliveryReceiver, initialDeliveryConfigId: 1, discountRoot, maxDiscountedMints, proceeds, freeMintAllocations,
+        relicReservation: options.relicReservation,
         preparedAt: now(), artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(input)),
         compilerOutputSha256: sha256(json(output)), configSnapshotSha256: sha256(json(configs)),
         sourceConfigSha256: Object.fromEntries(Object.entries(configs).map(([name, content]) => [name, sha256(content)])), immutableNames };
@@ -582,7 +613,8 @@ export async function run111kDeployment(argv, overrides = {}) {
       await record111kReleaseLocation(options.directory, { chainId: manifest.chainId, deploymentId,
         contractAddress, metadataBaseUri: manifest.metadataBaseURI }, overrides.releaseLocationOptions);
       return { prepared: true, chainId: 11155111, deploymentId, contractAddress, nonce, metadataBaseURI: manifest.metadataBaseURI,
-        gasEstimate: manifest.gasEstimate, gasLimit: manifest.gasLimit, maximumFeeWei: manifest.maximumFeeWei };
+        gasEstimate: manifest.gasEstimate, gasLimit: manifest.gasLimit, maximumFeeWei: manifest.maximumFeeWei,
+        relicReservation: manifest.relicReservation };
     }
 
     const frozen = loadFrozen(options.directory, frozenConfiguration, options.deploymentId);
@@ -606,6 +638,11 @@ export async function run111kDeployment(argv, overrides = {}) {
     for (const action of actionOrder) if (journal.actions[action]) {
       const record = journal.actions[action];
       assert.equal(record.action, action, 'Journal action identity changed');
+      if (record.skipped) {
+        assert.equal(action, 'reserve', 'Only a zero relic reservation may be skipped');
+        validateRelicReservationSkip(manifest, record);
+        continue;
+      }
       assert.equal(record.nonce, nextNonce.toString(), 'Journal nonce sequence changed');
       nextNonce++;
     }
@@ -616,22 +653,54 @@ export async function run111kDeployment(argv, overrides = {}) {
       if (typeof transaction === 'string') transaction = JSON.parse(transaction);
       validateSigned111kTransaction(transaction, manifest, record, record.hash);
     };
+    const refreshReservationSkip = async deploymentReceipt => {
+      const previous = journal.actions.reserve;
+      if (previous) validateRelicReservationSkip(manifest, previous);
+      assert.ok(deploymentReceipt, 'Confirm deployment before verifying a zero relic reservation');
+      const changed = !previous || previous.blockNumber !== deploymentReceipt.blockNumber || previous.blockHash !== deploymentReceipt.blockHash;
+      const record = changed ? { action: 'reserve', skipped: true, chainId: manifest.chainId, contractAddress: manifest.contractAddress,
+        blockNumber: deploymentReceipt.blockNumber, blockHash: deploymentReceipt.blockHash, verifiedAt: now() } : previous;
+      await verifyRelicReservationSkip(manifest, record, rpc);
+      if (changed) {
+        journal.actions.reserve = record;
+        save();
+      }
+      return record;
+    };
     const refreshPrerequisites = async action => {
+      let deploymentReceipt;
       for (const previousAction of actionOrder.slice(0, actionOrder.indexOf(action))) {
         const previous = journal.actions[previousAction];
+        if (previous?.skipped) {
+          await refreshReservationSkip(deploymentReceipt);
+          continue;
+        }
         if (!previous?.raw) continue;
         validateRaw(previous);
         const receipt = await confirm111kTransaction(rpc, previous, { ...overrides, maxReceiptPolls: 1 });
+        if (previousAction === 'deploy') deploymentReceipt = receipt;
         if (json(receipt) !== json(previous.receipt)) {
           previous.receipt = receipt;
           previous.confirmedAt = now();
           save();
         }
       }
+      return deploymentReceipt;
     };
     const perform = async action => {
       let record = journal.actions[action];
       const resuming = Boolean(record);
+      if (action === 'reserve' && relicReservation(manifest).quantity === 0) {
+        const deploymentReceipt = await refreshPrerequisites(action);
+        if (!record) {
+          requireCurrentSources(frozen);
+          await requireChain();
+          await preflightAction(rpc, frozen, action, journal);
+        }
+        record = await refreshReservationSkip(deploymentReceipt);
+        return { action, skipped: true, blockNumber: Number(BigInt(record.blockNumber)),
+          ...(resuming ? { alreadySatisfied: true } : {}) };
+      }
       if (!record) {
         await refreshPrerequisites(action);
         requireCurrentSources(frozen);

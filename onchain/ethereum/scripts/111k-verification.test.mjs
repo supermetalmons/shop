@@ -38,7 +38,11 @@ for (const [name, environment, expectedUrl] of [
   assert.equal(requests, 1);
 });
 
-function fixture(stage, concurrent = false, preopeningPayout = false) {
+function fixture(stage, concurrent = false, preopeningPayout = false, options = {}) {
+  const reservation = options.reservation ?? { quantity: 18, valueWei: '18000000000000000' };
+  const publicMinted = options.publicMinted ?? 0;
+  const publicLimit = options.publicLimit ?? publicMinted;
+  const publicPrice = BigInt(options.publicPrice ?? '0');
   const manifest = { chainId: 11155111, deploymentId: 'v15', owner: address(99), deployer: address(99), quoteSigner: address(98),
     contractAddress: address(88), initialDeliveryReceiver: address(97), maxDiscountedMints: 5555,
     metadataBaseURI: 'https://cdn.mons.shop/111k-sepolia/v15/', discountRoot: hash(3), creationCode: '0x6000', constructorArgs: '0x1234',
@@ -46,6 +50,10 @@ function fixture(stage, concurrent = false, preopeningPayout = false) {
       mintSharesBps: [2750, 2600, 500, 500, 500, 500, 100, 100, 100, 100, 500, 583, 583, 584] },
     freeMintAllocations: Array.from({ length: 7 }, (_, i) => ({ wallet: address(100 + i), crateLimit: 0, warehouseLimit: 0, relicLimit: i < 4 ? 3 : 2 })),
     immutableNames: Object.fromEntries(names.map((name, i) => [i + 1, name])) };
+  if (options.reservation) {
+    manifest.relicReservation = reservation;
+    manifest.freeMintAllocations = reservation.quantity ? [{ wallet: address(100), crateLimit: 0, warehouseLimit: 0, relicLimit: reservation.quantity }] : [];
+  }
   const artifact = { deployedBytecode: { object: '0x' + '00'.repeat(32 * 7),
     immutableReferences: Object.fromEntries(names.map((_, i) => [i + 1, [{ start: i * 32, length: 32 }]])) },
     metadata: { compiler: { version: '0.8.38+commit.1835d247' } } };
@@ -55,13 +63,15 @@ function fixture(stage, concurrent = false, preopeningPayout = false) {
   const firstArtwork = concurrent ? 21 : 1;
   const calldata = {
     deploy: manifest.creationCode,
-    reserve: selector('allocateRelics(uint256)') + encoded(['uint256'], [18]).slice(2),
+    reserve: selector('allocateRelics(uint256)') + encoded(['uint256'], [reservation.quantity]).slice(2),
     open: selector('setSaleActive(bool)') + encoded(['bool'], [true]).slice(2),
     'mint-qa': selector('mintCrates(uint256)') + encoded(['uint256'], [1]).slice(2),
     'unpack-qa': selector('unboxCrate(uint256)') + encoded(['uint256'], [crateTokenId]).slice(2),
   };
   const journal = { actions: Object.fromEntries(actions.map((action, i) => [action, { action, hash: hash(i + 1000),
-    data: calldata[action], valueWei: action === 'reserve' ? '18000000000000000' : action === 'mint-qa' ? '100000000000000' : '0', nonce: i }])) };
+    data: calldata[action], valueWei: action === 'reserve' ? reservation.valueWei : action === 'mint-qa' ? '100000000000000' : '0', nonce: i }])) };
+  if (reservation.quantity === 0) journal.actions.reserve = { action: 'reserve', skipped: true, chainId: manifest.chainId,
+    contractAddress: manifest.contractAddress, blockNumber: '0x2', blockHash: hash(2) };
   const context = { manifest, artifact, compilerOutput, journal, manifestSha256: 'f'.repeat(64),
     input: { language: 'Solidity', sources: { 'src/NFT111K.sol': { content: 'contract NFT111K {}' } },
       settings: { optimizer: { enabled: true, runs: 500 }, evmVersion: 'prague' } } };
@@ -69,7 +79,8 @@ function fixture(stage, concurrent = false, preopeningPayout = false) {
   const reserved = stage !== 'closed';
   const minted = stage === 'mint-qa' || stage === 'unpack-qa';
   const unpacked = stage === 'unpack-qa';
-  const revenue = (reserved ? 18000000000000000n : 0n) + (minted ? 100000000000000n : 0n) + (concurrent ? 100000000000000n : 0n);
+  const revenue = (reserved ? BigInt(reservation.valueWei) : 0n) + (minted ? 100000000000000n : 0n) +
+    (concurrent ? 100000000000000n : 0n) + BigInt(publicMinted) * publicPrice;
   const payouts = manifest.proceeds.mintSharesBps.map((share, index) => preopeningPayout || concurrent && index === 0
     ? revenue * BigInt(share) / 10000n : 0n);
   const paid = payouts.reduce((total, payout) => total + payout, 0n);
@@ -83,13 +94,21 @@ function fixture(stage, concurrent = false, preopeningPayout = false) {
   register('deliveryConfigCount()', ['uint256'], [1]);
   register('deliveryConfigs(uint256)', ['address', 'address', 'uint16', 'uint256', 'uint256', 'uint256'], [manifest.initialDeliveryReceiver, address(0), 0, 0, 0, 0]);
   register('stats(address)', ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
-    [(reserved ? 1998 : 0) + (minted ? 1 : 0) + (concurrent ? 1 : 0), 0, (unpacked ? 20 : 0) + (concurrent ? 20 : 0), 100000000000000n, 1100000000000000n,
-      stages.indexOf(stage) >= 2, manifest.discountRoot, 50000000000000n, 1, 0, reserved ? 18 : 0, concurrent ? 1 : 0, 5555, 0]);
+    [(reserved ? reservation.quantity * 111 : 0) + (minted ? 1 : 0) + (concurrent ? 1 : 0) + publicMinted * 111,
+      0, (unpacked ? 20 : 0) + (concurrent ? 20 : 0), 100000000000000n, 1100000000000000n,
+      stages.indexOf(stage) >= 2, manifest.discountRoot, 50000000000000n, 1, 0, reserved ? reservation.quantity : 0, concurrent ? 1 : 0, 5555, 0]);
+  if (options.newInterface) {
+    const stats = lookup.get(selector('stats(address)'));
+    stats.types.push('uint256'); stats.values.push(publicMinted);
+    const active = stages.indexOf(stage) >= 2 && publicLimit > 0;
+    register('publicRelicStats(address)', ['uint256', 'uint256', 'uint256', 'bool', 'uint256', 'uint16', 'uint16'],
+      [publicLimit, publicMinted, publicPrice, active, active ? Math.min(publicLimit - publicMinted, Math.floor((5555 - stats.values[0]) / 111)) : 0, 0, 0]);
+  }
   register('eip712Domain()', ['bytes1', 'string', 'string', 'uint256', 'address', 'bytes32', 'uint256[]'], ['0x0f', '111K', '2', 11155111, manifest.contractAddress, hash(0), []]);
-  register('totalSupply()', ['uint256'], [(unpacked ? 20 : minted ? 1 : 0) + (concurrent ? 21 : 0)]);
+  register('totalSupply()', ['uint256'], [(unpacked ? 20 : minted ? 1 : 0) + (concurrent ? 21 : 0) + publicMinted]);
   register('totalMintReceived()', ['uint256'], [revenue]);
   register('totalMintReleased()', ['uint256'], [paid]);
-  register('getRelicClaimedMask()', ['uint256'], [concurrent ? 1 : 0]);
+  register('getRelicClaimedMask()', ['uint256'], [(1 << (publicMinted + (concurrent ? 1 : 0))) - 1]);
   register('redemptionsPaused()', ['bool'], [false]);
   const rpc = async (method, params = []) => {
     if (method === 'eth_chainId') return hex(11155111);
@@ -111,6 +130,11 @@ function fixture(stage, concurrent = false, preopeningPayout = false) {
       }
       return { hash: entry.hash, from: manifest.deployer, to: index === 0 ? null : manifest.contractAddress,
         input: entry.data, value: hex(entry.valueWei), nonce: hex(index), chainId: hex(11155111), blockHash: hash(index + 1), blockNumber };
+    }
+    if (method === 'eth_call' && reservation.quantity === 0 && params[1]?.blockHash === hash(2)) {
+      assert.deepEqual(params[1], { blockHash: hash(2), requireCanonical: true });
+      const isSale = params[0].data === selector('saleActive()');
+      return encoded([isSale ? 'bool' : 'uint256'], [isSale ? false : 0]);
     }
     assert.deepEqual(params[1], { blockHash: hash(10), requireCanonical: true });
     if (method === 'eth_getCode') return context.runtime;
@@ -155,9 +179,59 @@ for (const stage of stages) test(`verifies ${stage} at one canonical block with 
   assert.equal(report.mintRecipients.length, 14);
   assert.equal(report.mintRecipients[13].shareBps, 584n);
   assert.equal(report.freeMintAllowances.length, 7);
+  assert.equal(report.publicRelicsMinted, 0n);
+  assert.equal(report.publicSale, null);
   assert.equal(report.runtimeAndImmutablesMatch, true);
   assert.equal(report.totalMintReleased, 0n);
   assert.equal(Object.keys(report.actions).length, stages.indexOf(stage) + 1);
+});
+
+for (const quantity of [0, 3, 18]) test(`verifies an explicit ${quantity}-relic reservation and inactive public issuance`, async () => {
+  const reservation = { quantity, valueWei: quantity ? '17' : '0' };
+  const { context, rpc } = fixture('reserved', false, false, { reservation, newInterface: true });
+  const report = await verify111kDeployment(context, rpc, 'reserved');
+  assert.equal(report.stats[10], BigInt(quantity));
+  assert.equal(report.stats[0], BigInt(quantity * 111));
+  assert.equal(report.totalMintReceived, BigInt(reservation.valueWei));
+  assert.deepEqual(report.relicReservation, reservation);
+  assert.deepEqual(report.publicSale, [0n, 0n, 0n, false, 0n, 0n, 0n]);
+});
+
+test('public issuance does not consume reserved claims and shares the permanent ID mask', async () => {
+  const { context, rpc, lookup } = fixture('open', true, false, {
+    reservation: { quantity: 3, valueWei: '101' }, newInterface: true, publicMinted: 2, publicLimit: 4, publicPrice: '11',
+  });
+  const report = await verify111kDeployment(context, rpc, 'open');
+  assert.equal(report.stats[10], 3n);
+  assert.equal(report.stats[11], 1n);
+  assert.equal(report.publicRelicsMinted, 2n);
+  assert.equal(report.claimedRelicMask, 7n);
+  assert.equal(report.publicSale[4], 2n);
+  lookup.get(selector('getRelicClaimedMask()')).values[0] = 1;
+  await assert.rejects(verify111kDeployment(context, rpc, 'open'));
+});
+
+test('public stats failures and invalid capacity never fall back to legacy verification', async () => {
+  const { context, rpc, lookup } = fixture('open', false, false, {
+    reservation: { quantity: 2, valueWei: '0' }, newInterface: true, publicMinted: 1, publicLimit: 3,
+  });
+  lookup.get(selector('publicRelicStats(address)')).values[4] = 3;
+  await assert.rejects(verify111kDeployment(context, rpc, 'open'));
+  await assert.rejects(verify111kDeployment(context, async (method, params) => {
+    if (method === 'eth_call' && params[0].data.startsWith(selector('publicRelicStats(address)'))) throw new Error('Unavailable public stats');
+    return rpc(method, params);
+  }, 'open'), /Unavailable public stats/);
+});
+
+test('zero reservation verification rejects a missing skip and a changed historical snapshot', async () => {
+  const { context, rpc } = fixture('open', false, false, { reservation: { quantity: 0, valueWei: '0' }, newInterface: true });
+  await verify111kDeployment(context, rpc, 'open');
+  const entry = context.journal.actions.reserve;
+  delete context.journal.actions.reserve;
+  await assert.rejects(verify111kDeployment(context, rpc, 'open'), /Missing zero relic reservation/);
+  context.journal.actions.reserve = entry;
+  await assert.rejects(verify111kDeployment(context, async (method, params) => method === 'eth_getBlockByNumber' && params[0] === '0x2'
+    ? { number: '0x2', hash: hash(999) } : rpc(method, params), 'open'), /no longer canonical/);
 });
 
 test('rejects wrong immutable bytes instead of masking them', async () => {

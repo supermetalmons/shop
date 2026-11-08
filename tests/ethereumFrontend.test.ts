@@ -529,7 +529,7 @@ test('relic availability validates scope, lifetime usage and the complete claime
   let value = valid;
   const requests: string[] = [];
   t.mock.method(globalThis, 'fetch', async input => { requests.push(String(input)); return Response.json(value); });
-  assert.deepEqual(await ethereumApi.relics(config, owner), valid);
+  assert.deepEqual(await ethereumApi.relics(config, owner), { ...valid, publicRelicsMinted: 0, publicSale: null });
   assert.ok(requests[0].endsWith(`/ethereum/111k/relics?chainId=${config.chainId}&contractAddress=${contract}&owner=${owner}`));
   for (const patch of [
     { owner: other }, { contractAddress: other }, { chainId: 1 }, { observedBlock: -1 }, { blockHash: '0x00' },
@@ -551,6 +551,29 @@ test('relic availability validates scope, lifetime usage and the complete claime
     await assert.rejects(ethereumApi.relics({ ...config, contractAddress }, owner), /invalid response/);
   }
   assert.equal(requests.length, before);
+});
+
+test('relic availability validates public issuance without consuming reserved allowances', async t => {
+  const valid = { chainId: config.chainId, contractAddress: contract, owner, observedBlock: 12,
+    blockHash: `0x${'cd'.repeat(32)}`, saleActive: true, relicsAllocated: 10, relicsMinted: 1,
+    remainingRelics: 9, claimedMask: 7, relicLimit: 3, relicsUsed: 1, remainingAllowance: 2,
+    publicRelicsMinted: 2, publicSale: { limit: 5, minted: 2, priceWei: '1000', active: true, mintable: 3,
+      freeLimit: 0, freeUsed: 1, remainingFreeAllowance: 0 } };
+  let value: unknown = valid;
+  t.mock.method(globalThis, 'fetch', async () => Response.json(value));
+  assert.deepEqual(await ethereumApi.relics(config, owner), valid);
+  for (const patch of [{ publicRelicsMinted: -1 }, { publicRelicsMinted: 3 }, { publicSale: null },
+    { claimedMask: 3 }, { relicsAllocated: 17, remainingRelics: 16 }]) {
+    value = { ...valid, ...patch };
+    await assert.rejects(ethereumApi.relics(config, owner), /invalid response/);
+  }
+  for (const patch of [{ limit: 9 }, { minted: 1 }, { priceWei: '-1' }, { active: 1 }, { mintable: 4 },
+    { active: false }, { freeLimit: 19 }, { freeUsed: 3 }, { remainingFreeAllowance: 1 }]) {
+    value = { ...valid, publicSale: { ...valid.publicSale, ...patch } };
+    await assert.rejects(ethereumApi.relics(config, owner), /invalid response/);
+  }
+  value = { ...valid, saleActive: false, publicSale: { ...valid.publicSale, mintable: 0 } };
+  assert.equal((await ethereumApi.relics(config, owner)).publicSale?.mintable, 0);
 });
 
 test('relic metadata requests stay bounded and preserve ID order across out-of-order completions', async t => {

@@ -46,14 +46,14 @@ const wallet: EthereumWallet = {
   chooseWallet() {}, changeAccount() {}, checkAccount() {},
 };
 function stats(overrides: Partial<EthereumStats> = {}): EthereumStats {
-  return { allocatedCrates: 0, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
+  return { allocatedCrates: 0, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, publicRelicsMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
     warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingRelics: 0,
     chainId: config.chainId, contractAddress: contract, owner, discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT,
     discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0, ...overrides };
 }
 function relicStatus(address: string | null = owner, overrides: Partial<EthereumRelicStatus> = {}): EthereumRelicStatus {
   return { chainId: config.chainId, contractAddress: contract, owner: address, observedBlock: 10, blockHash: `0x${'ab'.repeat(32)}`,
-    saleActive: true, relicsAllocated: 12, relicsMinted: 0, remainingRelics: 12, claimedMask: 0,
+    saleActive: true, relicsAllocated: 12, relicsMinted: 0, publicRelicsMinted: 0, publicSale: null, remainingRelics: 12, claimedMask: 0,
     relicLimit: address ? 3 : 0, relicsUsed: 0, remainingAllowance: address ? 3 : 0, ...overrides };
 }
 const relicQueryKey = (address: string | null = owner) => ['ethereum111k', 'relics', config.chainId, contract, address];

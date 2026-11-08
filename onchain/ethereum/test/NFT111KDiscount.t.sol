@@ -406,7 +406,7 @@ contract NFT111KDiscountTest is TestSupport {
         assertEq(publicTotal, 1);
         (bool success, bytes memory encoded) = address(token).staticcall(abi.encodeCall(token.stats, (ALICE)));
         assertTrue(success);
-        assertEq(encoded.length, 14 * 32);
+        assertEq(encoded.length, 15 * 32);
         uint256[14] memory words = abi.decode(encoded, (uint256[14]));
         assertEq(words[9], 1);
         assertEq(words[12], 2);

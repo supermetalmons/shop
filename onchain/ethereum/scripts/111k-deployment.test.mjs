@@ -16,6 +16,8 @@ import {
 import { load111kVerification, verify111kDeployment } from './111k-verification.mjs';
 import { record111kReleaseLocation } from '../../../scripts/shared/ethereum111kReleaseLocations.ts';
 
+const reservationArgs = ['--reserved-relics', '18', '--relic-reservation-value-wei', '18000000000000000'];
+
 const project = fileURLToPath(new URL('../', import.meta.url));
 const json = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const hex = value => `0x${BigInt(value).toString(16)}`;
@@ -44,14 +46,28 @@ test('the deployment runner admits only explicit Sepolia operations', () => {
   assert.equal(NFT111K_SEPOLIA.chainId, 11155111);
   assert.equal(NFT111K_SEPOLIA.previousContract, '0xe665d1043f72886f49894006ea196450b33f0f89');
   assert.throws(() => parse111kDeploymentArgs(['prepare']), /explicit fresh --deployment-id/);
-  assert.equal(parse111kDeploymentArgs(['prepare', '--deployment-id', 'v99']).directory, path.join(project, '.local', '111k-sepolia-v99'));
-  assert.ok(parse111kDeploymentArgs(['prepare', '--network', 'sepolia', '--deployment-id', 'runner-test', '--directory', '/tmp/runner-test']));
+  assert.equal(parse111kDeploymentArgs(['prepare', ...reservationArgs, '--deployment-id', 'v99']).directory, path.join(project, '.local', '111k-sepolia-v99'));
+  assert.ok(parse111kDeploymentArgs(['prepare', ...reservationArgs, '--network', 'sepolia', '--deployment-id', 'runner-test', '--directory', '/tmp/runner-test']));
   assert.equal(parse111kDeploymentArgs(['finalize', '--directory', '/tmp/runner-test']).command, 'finalize');
   for (const argv of [
-    ['prepare', '--network', 'mainnet'], ['prepare', '--network', '1'], ['refund'], ['withdraw'], ['release-all'],
-    ['prepare', '--deployment-id', '../escape'], ['prepare', '--unknown'],
+    ['prepare', ...reservationArgs, '--network', 'mainnet'], ['prepare', ...reservationArgs, '--network', '1'], ['refund'], ['withdraw'], ['release-all'],
+    ['prepare', ...reservationArgs, '--deployment-id', '../escape'], ['prepare', '--unknown'],
     ['verify', '--previous-directory', '/tmp/old-release'],
   ]) assert.throws(() => parse111kDeploymentArgs(argv));
+});
+
+test('new releases require explicit bounded reservation settings only during prepare', () => {
+  assert.throws(() => parse111kDeploymentArgs(['prepare', '--deployment-id', 'new']), /explicit --reserved-relics/);
+  const args = ['prepare', '--deployment-id', 'new', '--reserved-relics', '3', '--relic-reservation-value-wei', '101'];
+  assert.deepEqual(parse111kDeploymentArgs(args).relicReservation, { quantity: 3, valueWei: '101' });
+  assert.deepEqual(parse111kDeploymentArgs(['prepare', '--deployment-id', 'new', '--reserved-relics', '0', '--relic-reservation-value-wei', '0']).relicReservation,
+    { quantity: 0, valueWei: '0' });
+  for (const invalid of [
+    ['prepare', '--deployment-id', 'new', '--reserved-relics', '19', '--relic-reservation-value-wei', '0'],
+    ['prepare', '--deployment-id', 'new', '--reserved-relics', '0', '--relic-reservation-value-wei', '1'],
+    ['prepare', '--deployment-id', 'new', '--reserved-relics', '1'],
+    ['open', ...reservationArgs],
+  ]) assert.throws(() => parse111kDeploymentArgs(invalid));
 });
 
 test('the predecessor resolver matches live and repository identity even while the storefront is paused', async () => {
@@ -72,7 +88,7 @@ test('preparation refuses a directory containing signing material or unrelated f
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const wallet = path.join(directory, 'wallet.json');
   fs.writeFileSync(wallet, JSON.stringify({ crypto: { ciphertext: 'protected' } }));
-  await assert.rejects(run111kDeployment(['prepare', '--deployment-id', 'new-release', '--directory', directory], {
+  await assert.rejects(run111kDeployment(['prepare', ...reservationArgs, '--deployment-id', 'new-release', '--directory', directory], {
     rpc: async method => { assert.equal(method, 'eth_chainId'); return '0xaa36a7'; },
     resolvePredecessor: async () => { throw new Error('Must reject occupied directory before resolving ownership'); },
   }), /fresh release directory/);
@@ -148,6 +164,17 @@ test('action payloads fix the reservation deposit and separate old and new colle
   });
   for (const action of ['refund', 'withdraw', 'releaseAllMint', 'mainnet']) assert.throws(() => nft111kAction(manifest, action));
   assert.throws(() => nft111kAction(manifest, 'unpack-qa'), /mint|receipt/i);
+});
+
+test('reservation transactions use frozen quantities and values without altering legacy interpretation', () => {
+  const manifest = { ...configuration(), relicReservation: { quantity: 7, valueWei: '123' } };
+  assert.deepEqual(nft111kAction(manifest, 'reserve'), {
+    to: manifest.contractAddress, data: cast(['calldata', 'allocateRelics(uint256)', '7']), valueWei: '123',
+  });
+  manifest.relicReservation = { quantity: 0, valueWei: '0' };
+  assert.throws(() => nft111kAction(manifest, 'reserve'), /verified skip/);
+  delete manifest.relicReservation;
+  assert.equal(nft111kAction(manifest, 'reserve').valueWei, '18000000000000000');
 });
 
 test('QA unpack derives its one crate from the matching paid mint event', () => {
@@ -250,7 +277,7 @@ test('preparation rejects the wrong RPC chain before creating deployment artifac
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   for (const chainId of ['0x1', '0x7a69', null, true, 11155111]) {
     const requests = [];
-    await assert.rejects(run111kDeployment(['prepare', '--network', 'sepolia', '--deployment-id', 'runner-wrong-chain', '--directory', directory], {
+    await assert.rejects(run111kDeployment(['prepare', ...reservationArgs, '--network', 'sepolia', '--deployment-id', 'runner-wrong-chain', '--directory', directory], {
       rpc: async method => { requests.push(method); return chainId; },
     }), /chain|Sepolia|network/i);
     assert.deepEqual(requests, ['eth_chainId']);
@@ -383,10 +410,10 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
     } };
   const invoke = action => run111kDeployment([action, ...baseArgs, '--keystore', 'fixture-keystore', '--password-file', 'fixture-password'], overrides);
   const startingNonce = BigInt(await f.rpc('eth_getTransactionCount', [f.owner, 'latest']));
-  await assert.rejects(run111kDeployment(['prepare', ...baseArgs, '--deployment-id', 'v99',
+  await assert.rejects(run111kDeployment(['prepare', ...reservationArgs, ...baseArgs, '--deployment-id', 'v99',
     '--previous-contract', NFT111K_SEPOLIA.previousContract], overrides), /Explicit predecessor/);
-  await assert.rejects(run111kDeployment(['prepare', ...baseArgs, '--deployment-id', 'v98'], overrides), /must differ/);
-  await run111kDeployment(['prepare', ...baseArgs, '--deployment-id', 'v99'], overrides);
+  await assert.rejects(run111kDeployment(['prepare', ...reservationArgs, ...baseArgs, '--deployment-id', 'v98'], overrides), /must differ/);
+  await run111kDeployment(['prepare', ...reservationArgs, ...baseArgs, '--deployment-id', 'v99'], overrides);
   overrides.resolvePredecessor = async () => { throw new Error('Frozen release resumes must not resolve current predecessor'); };
   const manifest = json(manifestPath);
   assert.equal(manifest.previousContract, old.contractAddress);
@@ -615,4 +642,199 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
   assert.equal(afterRetry.actions['mint-qa'].receipt.blockHash, remintedReceipt.blockHash);
   assert.equal(afterRetry.actions['unpack-qa'].raw, interruptedUnpack.raw);
   assert.equal(afterRetry.actions['unpack-qa'].hash, interruptedUnpack.hash);
+});
+
+test('zero-reservation releases verify and resume without signing or consuming a reservation nonce', { timeout: 120_000 }, async t => {
+  const f = await anvilFixture(t);
+  const presetPath = path.join(project, 'config/free-mints.sepolia.json');
+  const originalRead = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (filename, ...options) => path.resolve(String(filename)) === presetPath
+    ? JSON.stringify({ chainId: 11155111, groups: [] }) : originalRead(filename, ...options));
+  const proceeds = json(path.join(project, 'config/proceeds.json'));
+  const artifact = json(path.join(project, 'out/NFT111K.sol/NFT111K.json'));
+  const args = cast(['abi-encode', 'constructor(address,address,address,string,bytes32,address[],uint256[],(address,uint16,uint16,uint16)[],uint256)',
+    f.owner, NFT111K_SEPOLIA.quoteSigner, '0x5555555555555555555555555555555555555555',
+    'https://cdn.mons.shop/111k-sepolia/zero-old/', `0x${'0'.repeat(64)}`,
+    `[${proceeds.mintRecipients.join(',')}]`, `[${proceeds.mintSharesBps.join(',')}]`, '[]', '5555']);
+  const create = { from: f.owner, data: artifact.bytecode.object + args.slice(2) };
+  const hash = await f.rpc('eth_sendTransaction', [{ ...create, gas: await f.rpc('eth_estimateGas', [create]) }]);
+  await f.rpc('anvil_mine', [1]);
+  const old = await f.rpc('eth_getTransactionReceipt', [hash]);
+  assert.equal(old.status, '0x1');
+  const oldDirectory = path.join(f.directory, 'old');
+  fs.mkdirSync(oldDirectory, { mode: 0o700 });
+  fs.writeFileSync(path.join(oldDirectory, 'manifest.json'), JSON.stringify({ version: 1, network: 'sepolia', chainId: 11155111,
+    deploymentId: 'zero-old', contractAddress: old.contractAddress, metadataBaseURI: 'https://cdn.mons.shop/111k-sepolia/zero-old/' }));
+  const releaseLocationOptions = { registryDirectory: path.join(f.directory, 'locations') };
+  await record111kReleaseLocation(oldDirectory, { chainId: 11155111, deploymentId: 'zero-old',
+    contractAddress: old.contractAddress, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/zero-old/' }, releaseLocationOptions);
+  const directory = path.join(f.directory, 'replacement');
+  const rpc = async (method, params = []) => {
+    if (method === 'eth_gasPrice') return '0x3e8';
+    const result = await f.rpc(method, params);
+    if (method === 'eth_sendRawTransaction') await f.rpc('anvil_mine', [2]);
+    return result;
+  };
+  let cleaned = false;
+  const overrides = { configuration: { deployer: f.owner, owner: f.owner }, releaseLocationOptions, rpc, cast: f.cast,
+    sleep: async () => {}, maxReceiptPolls: 2,
+    resolvePredecessor: async () => ({ chainId: 11155111, contractAddress: old.contractAddress,
+      metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/zero-old/' }),
+    cleanupReplacement: async () => { cleaned = true; return { complete: true }; } };
+  const base = ['--directory', directory];
+  const signing = ['--keystore', 'fixture', '--password-file', 'fixture'];
+  await run111kDeployment(['prepare', ...base, '--deployment-id', 'zero-new', '--reserved-relics', '0',
+    '--relic-reservation-value-wei', '0'], overrides);
+  let beforeDeployment = await f.rpc('evm_snapshot');
+  await run111kDeployment(['deploy', ...base, ...signing], overrides);
+  const nonce = await f.rpc('eth_getTransactionCount', [f.owner, 'latest']);
+  const skipped = await run111kDeployment(['reserve', ...base], overrides);
+  assert.equal(skipped.transactions[0].skipped, true);
+  assert.equal((await run111kDeployment(['reserve', ...base], overrides)).transactions[0].alreadySatisfied, true);
+  assert.equal(await f.rpc('eth_getTransactionCount', [f.owner, 'latest']), nonce);
+  const journalPath = path.join(directory, 'transactions.private.json');
+  const entry = json(journalPath).actions.reserve;
+  const deploymentReceipt = json(journalPath).actions.deploy.receipt;
+  assert.equal(entry.blockNumber, deploymentReceipt.blockNumber);
+  assert.equal(entry.blockHash, deploymentReceipt.blockHash);
+  assert.ok(BigInt(await f.rpc('eth_blockNumber')) - BigInt(entry.blockNumber) >= 2n,
+    'The zero reservation skip must use the confirmed deployment block, not the unconfirmed head');
+  assert.equal(entry.raw, undefined);
+  assert.equal(entry.nonce, undefined);
+  assert.equal(entry.receipt, undefined);
+  const reserved = await verify111kDeployment(await load111kVerification(directory), rpc, 'reserved');
+  assert.equal(reserved.stats[0], 0n);
+  assert.equal(reserved.stats[10], 0n);
+  assert.equal(reserved.totalMintReceived, 0n);
+  const reorgDeployment = async emptyBlocks => {
+    const previous = json(journalPath);
+    assert.equal(await f.rpc('evm_revert', [beforeDeployment]), true);
+    beforeDeployment = await f.rpc('evm_snapshot');
+    await f.rpc('anvil_mine', [emptyBlocks]);
+    await run111kDeployment(['deploy', ...base, ...signing], overrides);
+    const current = json(journalPath);
+    assert.equal(current.actions.deploy.hash, previous.actions.deploy.hash);
+    assert.equal(current.actions.deploy.raw, previous.actions.deploy.raw);
+    assert.notEqual(current.actions.deploy.receipt.blockHash, previous.actions.deploy.receipt.blockHash);
+    assert.deepEqual(current.actions.reserve, previous.actions.reserve);
+    const canonical = await f.rpc('eth_getBlockByNumber', [current.actions.deploy.receipt.blockNumber, false]);
+    assert.equal(canonical.hash, current.actions.deploy.receipt.blockHash);
+    return current;
+  };
+  const assertRefreshedSkip = () => {
+    const current = json(journalPath);
+    assert.equal(current.actions.reserve.blockNumber, current.actions.deploy.receipt.blockNumber);
+    assert.equal(current.actions.reserve.blockHash, current.actions.deploy.receipt.blockHash);
+    assert.equal(current.actions.reserve.raw, undefined);
+    assert.equal(current.actions.reserve.nonce, undefined);
+    assert.equal(current.actions.reserve.receipt, undefined);
+  };
+  await t.test('reserve retries recover re-mined deployment evidence only after validating zero relic allocation', async () => {
+    const reorganized = await reorgDeployment(1);
+    const before = fs.readFileSync(journalPath, 'utf8');
+    await assert.rejects(run111kDeployment(['verify', ...base], overrides), /canonical/);
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), before);
+    const allocationSelector = cast(['sig', 'relicsAllocated()']);
+    for (const allocated of [false, true]) {
+      await assert.rejects(run111kDeployment(['reserve', ...base], { ...overrides, rpc: async (method, params) => {
+        if (method === 'eth_call' && params[1]?.blockHash === reorganized.actions.deploy.receipt.blockHash
+          && params[0].data === allocationSelector) {
+          if (!allocated) throw new Error('Historical RPC unavailable');
+          return `0x${'1'.padStart(64, '0')}`;
+        }
+        return rpc(method, params);
+      } }), allocated ? /Zero reservation precondition changed/ : /Historical RPC unavailable/);
+      assert.equal(fs.readFileSync(journalPath, 'utf8'), before);
+    }
+    const recovered = await run111kDeployment(['reserve', ...base], overrides);
+    assert.equal(recovered.transactions[0].skipped, true);
+    assert.equal(recovered.transactions[0].alreadySatisfied, true);
+    assert.equal(await f.rpc('eth_getTransactionCount', [f.owner, 'latest']), nonce);
+    assertRefreshedSkip();
+    await run111kDeployment(['verify', ...base], overrides);
+  });
+  await t.test('later actions refresh a stale reservation skip before signing', async () => {
+    await reorgDeployment(2);
+    await run111kDeployment(['pause-old', ...base, ...signing], overrides);
+    assertRefreshedSkip();
+    assert.equal(json(journalPath).actions['pause-old-redemptions'].nonce, BigInt(nonce).toString());
+  });
+  await run111kDeployment(['open', ...base, ...signing], overrides);
+  assert.equal(cleaned, true);
+  cleaned = false;
+  await run111kDeployment(['finalize', ...base], overrides);
+  assert.equal(cleaned, true);
+  const opened = await verify111kDeployment(await load111kVerification(directory), rpc, 'open');
+  assert.equal(opened.stats[5], true);
+  assert.equal(opened.publicRelicsMinted, 0n);
+  const beforeVerify = fs.readFileSync(journalPath, 'utf8');
+  const verified = await run111kDeployment(['verify', ...base], overrides);
+  assert.equal(verified.transactions.find(action => action.action === 'reserve').skipped, true);
+  assert.equal(fs.readFileSync(journalPath, 'utf8'), beforeVerify);
+  for (const [command, publicMints] of [['reserve', false], ['finalize', true]]) {
+    await t.test(`${command} recovers deployment and opening re-mined together${publicMints ? ' with paid and free public relics' : ''}`, async () => {
+      const previous = json(journalPath);
+      assert.equal(await f.rpc('evm_revert', [beforeDeployment]), true);
+      beforeDeployment = await f.rpc('evm_snapshot');
+      await f.rpc('evm_setAutomine', [false]);
+      const hashes = [];
+      for (const action of ['deploy', 'pause-old-sale', 'pause-old-redemptions', 'open']) {
+        if (previous.actions[action]?.raw) hashes.push(await f.rpc('eth_sendRawTransaction', [previous.actions[action].raw]));
+      }
+      if (publicMints) {
+        const contract = previous.actions.open.contractAddress;
+        let publicNonce = BigInt(previous.actions.open.nonce) + 1n;
+        for (const [data, value] of [
+          [cast(['calldata', 'setPublicRelicSale(uint256,uint256,bool)', '2', '17', 'true']), '0'],
+          [cast(['calldata', 'mintRelic(uint256)', '1']), '17'],
+          [cast(['calldata', 'setPublicRelicFreeMintAllowances(address[],uint16)', `[${f.owner}]`, '1']), '0'],
+          [cast(['calldata', 'mintFreeRelic(uint256)', '2']), '0'],
+        ]) {
+          const raw = f.cast(['mktx', '--legacy', '--chain', '11155111', '--nonce', String(publicNonce++),
+            '--gas-limit', '500000', '--gas-price', '1000', '--value', value, ...signing, contract, data]);
+          hashes.push(await f.rpc('eth_sendRawTransaction', [raw]));
+        }
+      }
+      await f.rpc('anvil_mine', [3]);
+      await f.rpc('evm_setAutomine', [true]);
+      const receipts = await Promise.all(hashes.map(hash => f.rpc('eth_getTransactionReceipt', [hash])));
+      for (const receipt of receipts) {
+        assert.equal(receipt.status, '0x1');
+        assert.equal(receipt.blockHash, receipts[0].blockHash);
+      }
+      assert.notEqual(receipts[0].blockHash, previous.actions.deploy.receipt.blockHash);
+      const nonceBeforeRecovery = await f.rpc('eth_getTransactionCount', [f.owner, 'latest']);
+      await run111kDeployment(['deploy', ...base], overrides);
+      const staleJournal = fs.readFileSync(journalPath, 'utf8');
+      await assert.rejects(run111kDeployment(['verify', ...base], overrides), /canonical/);
+      await assert.rejects(verify111kDeployment(await load111kVerification(directory), rpc, 'open'), /canonical/);
+      assert.equal(fs.readFileSync(journalPath, 'utf8'), staleJournal);
+      cleaned = false;
+      await run111kDeployment([command, ...base], overrides);
+      assertRefreshedSkip();
+      if (command === 'reserve') await run111kDeployment(['finalize', ...base], overrides);
+      assert.equal(cleaned, true);
+      assert.equal(await f.rpc('eth_getTransactionCount', [f.owner, 'latest']), nonceBeforeRecovery);
+      for (const action of ['deploy', 'pause-old-sale', 'pause-old-redemptions', 'open']) {
+        if (!previous.actions[action]) continue;
+        assert.equal(json(journalPath).actions[action].raw, previous.actions[action].raw);
+        assert.equal(json(journalPath).actions[action].hash, previous.actions[action].hash);
+      }
+      const recoveredJournal = fs.readFileSync(journalPath, 'utf8');
+      const verified = await run111kDeployment(['verify', ...base], overrides);
+      assert.equal(verified.state.saleActive, true);
+      assert.equal(verified.state.relicsAllocated, '0');
+      assert.equal(verified.state.publicRelicsMinted, publicMints ? '2' : '0');
+      const report = await verify111kDeployment(await load111kVerification(directory), rpc, 'open');
+      assert.equal(report.publicRelicsMinted, publicMints ? 2n : 0n);
+      assert.equal(report.totalSupply, publicMints ? 2n : 0n);
+      assert.equal(report.stats[0], publicMints ? 222n : 0n);
+      assert.equal(report.totalMintReceived, publicMints ? 17n : 0n);
+      assert.equal(fs.readFileSync(journalPath, 'utf8'), recoveredJournal);
+    });
+  }
+  const altered = json(journalPath);
+  altered.actions.reserve.blockHash = `0x${'99'.repeat(32)}`;
+  fs.writeFileSync(journalPath, JSON.stringify(altered));
+  await assert.rejects(run111kDeployment(['verify', ...base], overrides), /canonical/);
 });

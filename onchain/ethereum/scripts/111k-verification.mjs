@@ -5,6 +5,7 @@ import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { encode, decode } from '@metamask/abi-utils';
 import { keccak_256 } from '@noble/hashes/sha3';
+import { relicReservation, verifyRelicReservationSkip } from './relic-reservation-config.mjs';
 
 const CHAIN_ID = 11155111;
 const ZERO = '0x' + '0'.repeat(40);
@@ -91,6 +92,7 @@ export async function load111kVerification(directory) {
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
   assert.equal(manifest.chainId, CHAIN_ID, 'Verification supports Sepolia only');
   assert.equal(manifest.network, 'sepolia', 'Verification supports Sepolia only');
+  relicReservation(manifest);
   for (const field of ['contractAddress', 'deployer', 'owner', 'quoteSigner', 'initialDeliveryReceiver']) address(manifest[field]);
   const frozen = {};
   for (const [name, field] of [['artifact', 'artifactSha256'], ['standard-input', 'standardInputSha256'], ['compiler-output', 'compilerOutputSha256']]) {
@@ -154,6 +156,11 @@ export function verificationRpc(environment = process.env, request = fetch) {
 
 async function canonicalAction(context, action, rpc, head) {
   const entry = context.journal.actions[action];
+  if (action === 'reserve' && relicReservation(context.manifest).quantity === 0) {
+    await verifyRelicReservationSkip(context.manifest, entry, rpc);
+    assert.ok(BigInt(entry.blockNumber) <= BigInt(head.number), 'Reservation skip is newer than the verification snapshot');
+    return { skipped: true, blockNumber: Number(BigInt(entry.blockNumber)), blockHash: entry.blockHash, logs: [] };
+  }
   assert.ok(entry && /^0x[0-9a-f]{64}$/i.test(entry.hash), `Missing ${action} transaction`);
   const [receipt, transaction] = await Promise.all([
     rpc('eth_getTransactionReceipt', [entry.hash]), rpc('eth_getTransactionByHash', [entry.hash]),
@@ -187,8 +194,9 @@ async function canonicalAction(context, action, rpc, head) {
   } else {
     assert.equal(address(transaction.to), address(context.manifest.contractAddress));
     if (action === 'reserve') {
-      assert.equal(entry.data.toLowerCase(), callData('allocateRelics(uint256)', ['uint256'], [18]));
-      assert.equal(BigInt(entry.valueWei), 18_000_000_000_000_000n);
+      const reservation = relicReservation(context.manifest);
+      assert.equal(entry.data.toLowerCase(), callData('allocateRelics(uint256)', ['uint256'], [reservation.quantity]));
+      assert.equal(BigInt(entry.valueWei), BigInt(reservation.valueWei));
     } else if (action === 'open') {
       assert.equal(entry.data.toLowerCase(), callData('setSaleActive(bool)', ['bool'], [true]));
       assert.equal(BigInt(entry.valueWei), 0n);
@@ -217,6 +225,7 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
   const actions = {};
   for (const action of STAGE_ACTIONS.slice(0, STAGES.indexOf(stage) + 1)) actions[action] = await canonicalAction(context, action, rpc, snapshot);
   const { manifest } = context;
+  const reservation = relicReservation(manifest);
   const reference = { blockHash: snapshot.hash, requireCanonical: true };
   const call = async (signature, resultTypes, types = [], values = []) => decodedValue(decode(resultTypes,
     await rpc('eth_call', [{ to: manifest.contractAddress, data: callData(signature, types, values) }, reference])));
@@ -228,7 +237,11 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
     () => call('baseURI()', ['string']), () => call('mintRecipientCount()', ['uint256']),
     () => call('deliveryConfigCount()', ['uint256']),
     () => call('deliveryConfigs(uint256)', ['address', 'address', 'uint16', 'uint256', 'uint256', 'uint256'], ['uint256'], [1]),
-    () => call('stats(address)', STATS_TYPES, ['address'], [ZERO]),
+    async () => {
+      const raw = await rpc('eth_call', [{ to: manifest.contractAddress, data: callData('stats(address)', ['address'], [ZERO]) }, reference]);
+      assert.ok(typeof raw === 'string' && [2 + 64 * 14, 2 + 64 * 15].includes(raw.length), 'Invalid collection statistics response');
+      return decodedValue(decode(raw.length === 2 + 64 * 15 ? [...STATS_TYPES, 'uint256'] : STATS_TYPES, raw));
+    },
     () => call('eip712Domain()', ['bytes1', 'string', 'string', 'uint256', 'address', 'bytes32', 'uint256[]']),
     () => call('totalSupply()', ['uint256']), () => call('totalMintReceived()', ['uint256']),
     () => call('totalMintReleased()', ['uint256']), () => call('getRelicClaimedMask()', ['uint256']),
@@ -250,23 +263,37 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
   const minted = stage === 'mint-qa' || stage === 'unpack-qa';
   const unpacked = stage === 'unpack-qa';
   const opened = STAGES.indexOf(stage) >= 2;
-  const minimumRevenue = (reserved ? 18_000_000_000_000_000n : 0n) + (minted ? 100_000_000_000_000n : 0n);
+  const publicMinted = stats[14] ?? 0n;
+  const reservedCrates = reserved ? BigInt(reservation.quantity) * 111n : 0n;
+  const minimumRevenue = (reserved ? BigInt(reservation.valueWei) : 0n) + (minted ? 100_000_000_000_000n : 0n);
   assert.deepEqual(stats.slice(3, 10), [100_000_000_000_000n, 1_100_000_000_000_000n,
     opened, manifest.discountRoot.toLowerCase(), 50_000_000_000_000n, 1n, 0n]);
-  assert.equal(stats[10], reserved ? 18n : 0n);
+  assert.equal(stats[10], reserved ? BigInt(reservation.quantity) : 0n);
   assert.equal(stats[12], BigInt(manifest.maxDiscountedMints));
-  assert.ok(stats[0] >= (reserved ? 1998n : 0n) + (minted ? 1n : 0n) && stats[0] <= 5555n);
+  assert.ok(stats[10] + publicMinted <= 18n, 'Public relics exceeded the unreserved supply');
+  assert.ok(stats[0] >= reservedCrates + publicMinted * 111n + (minted ? 1n : 0n) && stats[0] <= 5555n);
   assert.ok(stats[1] <= 505n && stats[2] <= 111111n);
   assert.ok(stats[11] <= stats[10] && stats[13] <= stats[12] && stats[13] <= stats[0]);
   assert.ok(claimedMask[0] < (1n << 18n));
-  assert.equal(BigInt(claimedMask[0].toString(2).replaceAll('0', '').length), stats[11]);
+  assert.equal(BigInt(claimedMask[0].toString(2).replaceAll('0', '').length), stats[11] + publicMinted);
+  let publicSale = null;
+  if (stats.length === 15) {
+    publicSale = await call('publicRelicStats(address)', ['uint256', 'uint256', 'uint256', 'bool', 'uint256', 'uint16', 'uint16'], ['address'], [ZERO]);
+    assert.equal(publicSale[1], publicMinted);
+    assert.ok(publicSale[1] <= publicSale[0] && publicSale[0] <= 18n - stats[10]);
+    const capacity = (5555n - stats[0]) / 111n;
+    const available = publicSale[0] - publicMinted;
+    assert.equal(publicSale[4], opened && publicSale[3] ? available < capacity ? available : capacity : 0n);
+    assert.deepEqual(publicSale.slice(5), [0n, 0n]);
+    if (!opened) assert.deepEqual(publicSale, [0n, 0n, 0n, false, 0n, 0n, 0n]);
+  }
   assert.ok(totalReceived[0] >= minimumRevenue);
   assert.ok(totalReleased[0] <= totalReceived[0]);
   const pendingMint = totalReceived[0] - totalReleased[0];
   const pendingDelivery = deliveryConfig[3] - deliveryConfig[4];
   assert.ok(BigInt(balance) >= pendingMint + pendingDelivery, 'Contract balance does not cover accounted proceeds');
   if (!opened) {
-    assert.deepEqual([stats[0], stats[1], stats[2], stats[11], stats[13]], [reserved ? 1998n : 0n, 0n, 0n, 0n, 0n]);
+    assert.deepEqual([stats[0], stats[1], stats[2], stats[11], stats[13], publicMinted], [reservedCrates, 0n, 0n, 0n, 0n, 0n]);
     assert.equal(supply[0], 0n);
     assert.equal(totalReceived[0], minimumRevenue);
     assert.equal(deliveryConfig[3], 0n);
@@ -344,7 +371,8 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
     transactionHash: actions.deploy.transactionHash, deploymentBlock: actions.deploy.blockNumber, confirmations: actions.deploy.confirmations,
     runtimeBytes: bytes(runtime).length, runtimeKeccak256: hash(bytes(runtime)), runtimeAndImmutablesMatch: true,
     owner: owner[0], quoteSigner: signer[0], initialDeliveryReceiver: deliveryConfig[0], deliveryConfigId: 1,
-    mintRecipients: recipients, freeMintAllowances: allowances, stats, totalSupply: supply[0], totalMintReceived: totalReceived[0],
+    mintRecipients: recipients, freeMintAllowances: allowances, stats, publicSale, publicRelicsMinted: publicMinted,
+    relicReservation: reservation, totalSupply: supply[0], totalMintReceived: totalReceived[0],
     totalMintReleased: totalReleased[0], contractBalanceWei: BigInt(balance), claimedRelicMask: claimedMask[0], qa,
     actions: Object.fromEntries(Object.entries(actions).map(([name, { logs, ...action }]) => [name, action])), metadataPreviews: previews };
 }

@@ -175,7 +175,7 @@ export async function main(argv = process.argv.slice(2)) {
     assert.ok(!fs.existsSync(manifestPath) && !fs.existsSync(journalPath), 'Deployment directory already contains a release; resume it instead');
     const artifact = JSON.parse(fs.readFileSync(path.join(project, 'out/Pre111K.sol/Pre111K.json'), 'utf8'));
     assert.equal(artifact.metadata.compiler.version, '0.8.38+commit.1835d247');
-    assert.equal(artifact.metadata.settings.optimizer.runs, 500);
+    assert.equal(artifact.metadata.settings.optimizer.runs, 200);
     assert.equal(artifact.metadata.settings.evmVersion, 'prague');
     const nonce = BigInt(await rpc('eth_getTransactionCount', [deployer, 'latest']));
     assert.equal(BigInt(await rpc('eth_getTransactionCount', [deployer, 'pending'])), nonce, 'Resolve pending deployer transactions first');

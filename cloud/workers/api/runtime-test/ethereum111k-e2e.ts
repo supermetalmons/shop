@@ -830,6 +830,41 @@ try {
     }
     assert.deepEqual(await call(relicContract, 'totalMintReleased()', [], [], ['uint256']), [relicPreorderRevenue]);
     await send(admin, encodeCall('setSaleActive(bool)', ['bool'], [true]), relicContract);
+    const beforePublicRelics = await rpc<string>('evm_snapshot');
+    await send(admin, encodeCall(ETHEREUM_FUNCTIONS.setPublicRelicSale, ['uint256', 'uint256', 'bool'], [2, 1000, true]), relicContract);
+    await send(admin, encodeCall(ETHEREUM_FUNCTIONS.setPublicRelicFreeMintAllowances, ['address[]', 'uint16'], [[buyer], 1]), relicContract);
+    assert.deepEqual(await call(relicContract, 'allocatedCrates()', [], [], ['uint256']), [333n]);
+    const publicPaid = await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintRelic, ['uint256'], [17]), relicContract, 1000n);
+    gas.mintRelic = BigInt(publicPaid.gasUsed).toString();
+    const publicConfirmed = await api<EthereumTransactionConfirmResponse>(ETHEREUM_API_PATHS.transactionsConfirm,
+      { transactionHash: publicPaid.transactionHash });
+    assert.deepEqual(publicConfirmed.items.map(item => [item.tokenId, item.kind]), [['117188', 'relic']]);
+    gas.mintFreeRelic = BigInt((await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintFreeRelic, ['uint256'], [16]), relicContract)).gasUsed).toString();
+    const publicStatus = await relicStatus();
+    assert.equal(publicStatus.relicsMinted, 0);
+    assert.equal(publicStatus.remainingRelics, 3);
+    assert.equal(publicStatus.remainingAllowance, 3);
+    assert.equal(publicStatus.publicRelicsMinted, 2);
+    assert.deepEqual(publicStatus.publicSale, { limit: 2, minted: 2, priceWei: '1000', active: true,
+      mintable: 0, freeLimit: 1, freeUsed: 1, remainingFreeAllowance: 0 });
+    assert.equal(publicStatus.claimedMask, (1 << 16) | (1 << 15));
+    await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintRelic, ['uint256'], [15]), relicContract, 1000n));
+    await send(admin, encodeCall(ETHEREUM_FUNCTIONS.setPublicRelicSale, ['uint256', 'uint256', 'bool'], [3, 2000, false]), relicContract);
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), relicContract);
+    assert.deepEqual(await call(relicContract, 'relicFirstCrate(uint256)', ['uint256'], [18], ['uint256']), [1n]);
+    assert.deepEqual(await call(relicContract, 'relicFirstCrate(uint256)', ['uint256'], [17], ['uint256']), [334n]);
+    assert.deepEqual(await call(relicContract, 'relicFirstCrate(uint256)', ['uint256'], [16], ['uint256']), [445n]);
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.unboxRelic, ['uint256'], [117188]), relicContract);
+    await send(admin, encodeCall(ETHEREUM_FUNCTIONS.setPublicRelicSale, ['uint256', 'uint256', 'bool'], [3, 2000, true]), relicContract);
+    await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintRelic, ['uint256'], [17]), relicContract, 2000n));
+    await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintFreeRelic, ['uint256'], [15]), relicContract));
+    const publicStats = await api<EthereumStats>(ETHEREUM_API_PATHS.stats);
+    assert.equal(publicStats.allocatedCrates, 555);
+    assert.equal(publicStats.relicsMinted, 1);
+    assert.equal(publicStats.publicRelicsMinted, 2);
+    assert.equal(publicStats.remainingRelics, 2);
+    assert.equal((await relicStatus()).publicSale?.mintable, 1);
+    assert.equal(await rpc<boolean>('evm_revert', [beforePublicRelics]), true);
     const beforeExternalClaim = await rpc<string>('evm_snapshot');
     await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.claimRelic, ['uint256'], [18]), relicContract);
     const externalClaim = await relicStatus();
@@ -1006,6 +1041,7 @@ try {
   Object.assign(report, { reveal, relicContract, metadataSource: metadataDirectory ? 'generated-files' : 'live-cdn',
     metadataObjectCount: metadataManifest?.objectCount });
   report.passed.push('owner relic allocation reserves crates before sale and distributes preorder proceeds; chosen-ID claims, distinct imagery, transfer, 111-crate unpack and complete inventory recovery across two requests',
+    'paid and free public relic mints share staged limits, consume crates only on issuance, and preserve reserved claims across pause, unpack and duplicate-ID rejection',
     'relic lifetime count and crate reservations survive unpacking', 'all seven metadata types match the selected metadata source');
   report.passed.push('relic-only and mixed real-chain delivery with matching terminal receipts, fulfillment identity, and no relic claim codes',
     'relic receipts transfer but reject unpacking, redelivery, and signed crate claims while preserving consumed allocations');

@@ -7,11 +7,8 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
-    using Strings for uint256;
-
     enum ItemKind {
         None,
         Artwork,
@@ -63,6 +60,36 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         uint16 relicsUsed;
     }
 
+    struct PublicRelicSale {
+        uint256 priceWei;
+        uint8 limit;
+        uint8 minted;
+        bool active;
+    }
+
+    struct PublicRelicFreeMintAllowance {
+        uint16 limit;
+        uint16 used;
+    }
+
+    struct Stats {
+        uint256 allocatedCrates_;
+        uint256 warehousesMinted_;
+        uint256 artworksMinted_;
+        uint256 cratePrice_;
+        uint256 warehousePrice_;
+        bool saleActive_;
+        bytes32 discountMerkleRoot_;
+        uint256 discountCratePrice_;
+        uint256 discountAllowance_;
+        uint256 discountUsed_;
+        uint256 relicsAllocated_;
+        uint256 relicsMinted_;
+        uint256 maxDiscountedMints_;
+        uint256 totalDiscountedMints_;
+        uint256 publicRelicsMinted_;
+    }
+
     uint256 public constant MAX_ARTWORKS = 111_111;
     uint256 public constant MAX_ARTWORK_RECEIPTS = 222_222;
     address public constant SEAPORT = 0x0000000000000068F116a894984e2DB1123eB395;
@@ -87,6 +114,11 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public constant ARTWORK_RECEIPT_OFFSET = 1_000_000;
     uint256 public constant CRATE_RECEIPT_OFFSET = 2_000_000;
     uint256 public constant RELIC_RECEIPT_OFFSET = 3_000_000;
+    uint256 private constant METADATA_LIMITS = (MAX_ARTWORKS << 18) | (MAX_CRATES << 36) | (MAX_WAREHOUSES << 54)
+        | (MAX_ARTWORK_RECEIPTS << 72) | (MAX_CRATES << 90) | (MAX_RELICS << 108) | (MAX_RELICS << 126);
+    uint256 private constant METADATA_OFFSETS = ((CRATE_TOKEN_START - 1) << 44) | ((WAREHOUSE_TOKEN_START - 1) << 66)
+        | (ARTWORK_RECEIPT_OFFSET << 88) | (CRATE_RECEIPT_OFFSET << 110) | ((RELIC_TOKEN_START - 1) << 132)
+        | (RELIC_RECEIPT_OFFSET << 154);
 
     bytes32 private constant DELIVERY_TYPEHASH = keccak256(
         "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
@@ -124,10 +156,13 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     mapping(address => uint256) public discountUsed;
     mapping(address => FreeMintAllowance) public freeMintAllowances;
     mapping(address => bool) private seaportApprovalRevoked;
+    PublicRelicSale private publicRelicSale;
+    mapping(address => PublicRelicFreeMintAllowance) private publicRelicFreeMintAllowances;
 
     error InvalidQuantity();
     error InvalidRelicAllocation();
     error InvalidRelicId();
+    error InvalidPublicRelicConfig();
     error SoldOut();
     error SaleInactive();
     error RedemptionsPaused();
@@ -161,6 +196,11 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event WarehousesPurchased(address indexed wallet, uint256 firstWarehouseToken, uint256 quantity, uint256 paid);
     event RelicsAllocated(uint256 quantity, uint256 paid);
     event RelicClaimed(address indexed wallet, uint256 indexed relicId, uint256 tokenId);
+    event PublicRelicSaleUpdated(uint256 limit, uint256 priceWei, bool active);
+    event PublicRelicFreeMintAllowanceUpdated(address indexed wallet, uint16 limit);
+    event PublicRelicMinted(
+        address indexed wallet, uint256 indexed relicId, uint256 tokenId, uint256 paid, bool freeMint
+    );
     event RelicUnboxed(uint256 indexed relicToken, address indexed owner, uint256 firstCrateToken, uint256 count);
     event WarehouseUnboxed(
         uint256 indexed warehouseToken, address indexed owner, uint256 firstCrateToken, uint256 count
@@ -271,26 +311,42 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function allocateRelics(uint256 quantity) external payable onlyOwner nonReentrant {
-        if (saleStarted || relicsAllocated != 0 || quantity == 0 || quantity > MAX_RELICS) {
-            revert InvalidRelicAllocation();
+        unchecked {
+            if (saleStarted || relicsAllocated != 0 || quantity - 1 >= MAX_RELICS - publicRelicSale.limit) {
+                revert InvalidRelicAllocation();
+            }
         }
         relicsAllocated = quantity;
-        allocatedCrates = quantity * CRATES_PER_RELIC;
+        unchecked {
+            allocatedCrates = quantity * CRATES_PER_RELIC;
+        }
         if (msg.value != 0) totalMintReceived += msg.value;
         emit RelicsAllocated(quantity, msg.value);
     }
 
     function claimRelic(uint256 relicId) external nonReentrant {
         if (!saleActive) revert SaleInactive();
-        if (relicId == 0 || relicId > MAX_RELICS) revert InvalidRelicId();
+        unchecked {
+            if (relicId - 1 >= MAX_RELICS) revert InvalidRelicId();
+        }
         if (relicsMinted == relicsAllocated) revert SoldOut();
         FreeMintAllowance storage allowance = freeMintAllowances[msg.sender];
         allowance.relicsUsed = _consumeFreeMintAllowance(allowance.relicsUsed, allowance.relicLimit, 1);
-        relicFirstCrate[relicId] = relicsMinted * CRATES_PER_RELIC + 1;
-        ++relicsMinted;
-        uint256 tokenId = RELIC_TOKEN_START + relicId - 1;
-        _mintSpotOnce(msg.sender, tokenId);
-        emit RelicClaimed(msg.sender, relicId, tokenId);
+        unchecked {
+            relicFirstCrate[relicId] = relicsMinted * CRATES_PER_RELIC + 1;
+            ++relicsMinted;
+            uint256 tokenId = RELIC_TOKEN_START + relicId - 1;
+            _mintSpotOnce(msg.sender, tokenId);
+            emit RelicClaimed(msg.sender, relicId, tokenId);
+        }
+    }
+
+    function mintRelic(uint256 relicId) external payable nonReentrant {
+        _mintPublicRelic(relicId, false);
+    }
+
+    function mintFreeRelic(uint256 relicId) external nonReentrant {
+        _mintPublicRelic(relicId, true);
     }
 
     function mintFree(ItemKind kind, uint256 quantity) external nonReentrant {
@@ -313,21 +369,13 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function unboxRelic(uint256 tokenId) external nonReentrant {
         uint256 number = _requireOwnedKind(tokenId, ItemKind.Relic);
-        uint256 firstToken = CRATE_TOKEN_START + relicFirstCrate[number] - 1;
-        _burn(tokenId);
-        for (uint256 i; i < CRATES_PER_RELIC; ++i) {
-            _mintSpotOnce(msg.sender, firstToken + i);
-        }
+        uint256 firstToken = _unboxContainer(tokenId, relicFirstCrate[number], CRATES_PER_RELIC);
         emit RelicUnboxed(tokenId, msg.sender, firstToken, CRATES_PER_RELIC);
     }
 
     function unboxWarehouse(uint256 tokenId) external nonReentrant {
         uint256 number = _requireOwnedKind(tokenId, ItemKind.Warehouse);
-        uint256 firstToken = CRATE_TOKEN_START + warehouseFirstCrate[number] - 1;
-        _burn(tokenId);
-        for (uint256 i; i < CRATES_PER_WAREHOUSE; ++i) {
-            _mintSpotOnce(msg.sender, firstToken + i);
-        }
+        uint256 firstToken = _unboxContainer(tokenId, warehouseFirstCrate[number], CRATES_PER_WAREHOUSE);
         emit WarehouseUnboxed(tokenId, msg.sender, firstToken, CRATES_PER_WAREHOUSE);
     }
 
@@ -338,7 +386,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function unboxCrates(uint256[] calldata tokenIds) external nonReentrant {
-        if (tokenIds.length == 0 || tokenIds.length > MAX_UNBOX_QUANTITY) revert InvalidQuantity();
+        unchecked {
+            if (tokenIds.length - 1 >= MAX_UNBOX_QUANTITY) revert InvalidQuantity();
+        }
         uint256[] memory crateNumbers = new uint256[](tokenIds.length);
         // Burn hooks must remain free of external calls until every selected crate is burned.
         for (uint256 i; i < tokenIds.length; ++i) {
@@ -349,7 +399,11 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         for (uint256 i; i < tokenIds.length; ++i) {
             _mintCrateArtworks(tokenIds[i], crateNumbers[i]);
         }
-        emit CratesUnboxed(msg.sender, keccak256(abi.encode(tokenIds)), firstArtToken, _nextTokenId() - firstArtToken);
+        unchecked {
+            emit CratesUnboxed(
+                msg.sender, keccak256(abi.encode(tokenIds)), firstArtToken, _nextTokenId() - firstArtToken
+            );
+        }
     }
 
     function redeemForDelivery(uint256[] calldata tokenIds, DeliveryQuote calldata quote, bytes calldata signature)
@@ -358,7 +412,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         nonReentrant
     {
         if (redemptionsPaused) revert RedemptionsPaused();
-        if (tokenIds.length == 0 || tokenIds.length > MAX_DELIVERY_ITEMS) revert InvalidQuantity();
+        unchecked {
+            if (tokenIds.length - 1 >= MAX_DELIVERY_ITEMS) revert InvalidQuantity();
+        }
         if (quote.wallet != msg.sender || quote.orderId == 0) revert InvalidAuthorization();
         if (msg.value != quote.fee) revert WrongPayment();
         _checkDeadline(quote.deadline);
@@ -377,17 +433,19 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
                 )
             )
         );
-        if (ECDSA.recoverCalldata(digest, signature) != quoteSigner) revert InvalidAuthorization();
+        _checkSignature(digest, signature);
         DeliveryConfig storage deliveryConfig = deliveryConfigs[quote.configId];
         if (deliveryConfig.receiver1 == address(0)) revert InvalidDeliveryConfig();
         uint256[] memory receiptIds = new uint256[](tokenIds.length);
         for (uint256 i; i < tokenIds.length; ++i) {
             (uint8 kind, uint256 displayId, address holder) = getTokenInfo(tokenIds[i]);
             if (holder != msg.sender) revert WrongOwner();
-            if (kind == uint8(ItemKind.Artwork)) receiptIds[i] = ARTWORK_RECEIPT_OFFSET + displayId;
-            else if (kind == uint8(ItemKind.Crate)) receiptIds[i] = CRATE_RECEIPT_OFFSET + displayId;
-            else if (kind == uint8(ItemKind.Relic)) receiptIds[i] = RELIC_RECEIPT_OFFSET + displayId;
-            else revert WrongItemKind();
+            unchecked {
+                if (kind == uint8(ItemKind.Artwork)) receiptIds[i] = ARTWORK_RECEIPT_OFFSET + displayId;
+                else if (kind == uint8(ItemKind.Crate)) receiptIds[i] = CRATE_RECEIPT_OFFSET + displayId;
+                else if (kind == uint8(ItemKind.Relic)) receiptIds[i] = RELIC_RECEIPT_OFFSET + displayId;
+                else revert WrongItemKind();
+            }
         }
         if (keccak256(abi.encode(receiptIds)) != quote.receiptIdsHash) revert InvalidAuthorization();
         deliveryConfig.totalReceived += msg.value;
@@ -413,14 +471,19 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (usedClaims[claimId]) revert AuthorizationAlreadyUsed();
         bytes32 digest =
             _hashTypedDataV4(keccak256(abi.encode(CLAIM_TYPEHASH, msg.sender, receiptId, claimId, deadline)));
-        if (ECDSA.recoverCalldata(digest, signature) != quoteSigner) revert InvalidAuthorization();
+        _checkSignature(digest, signature);
         usedClaims[claimId] = true;
         _burn(receiptId);
         uint256 count = _crateContentsCount(crateNumber);
-        uint256 firstReceiptId = ARTWORK_RECEIPT_OFFSET + MAX_ARTWORKS + (crateNumber - 1) * 20 + 1;
+        uint256 firstReceiptId;
+        unchecked {
+            firstReceiptId = ARTWORK_RECEIPT_OFFSET + MAX_ARTWORKS + (crateNumber - 1) * 20 + 1;
+        }
         uint256[] memory receiptIds = new uint256[](count);
         for (uint256 i; i < count; ++i) {
-            receiptIds[i] = firstReceiptId + i;
+            unchecked {
+                receiptIds[i] = firstReceiptId + i;
+            }
             _mintSpotOnce(msg.sender, receiptIds[i]);
         }
         emit CrateReceiptClaimed(claimId, msg.sender, receiptId, receiptIds);
@@ -455,32 +518,32 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             return (uint8(ItemKind.Artwork), tokenId, ownership.addr);
         }
         holder = ownership.addr;
-        if (tokenId >= CRATE_TOKEN_START && tokenId < CRATE_TOKEN_START + MAX_CRATES) {
-            return (uint8(ItemKind.Crate), tokenId - CRATE_TOKEN_START + 1, holder);
-        }
-        if (tokenId >= WAREHOUSE_TOKEN_START && tokenId < WAREHOUSE_TOKEN_START + MAX_WAREHOUSES) {
-            return (uint8(ItemKind.Warehouse), tokenId - WAREHOUSE_TOKEN_START + 1, holder);
-        }
-        if (tokenId >= RELIC_TOKEN_START && tokenId < RELIC_TOKEN_START + MAX_RELICS) {
-            return (uint8(ItemKind.Relic), tokenId - RELIC_TOKEN_START + 1, holder);
-        }
-        if (tokenId > ARTWORK_RECEIPT_OFFSET && tokenId <= ARTWORK_RECEIPT_OFFSET + MAX_ARTWORK_RECEIPTS) {
-            return (uint8(ItemKind.ArtworkReceipt), tokenId - ARTWORK_RECEIPT_OFFSET, holder);
-        }
-        if (tokenId > CRATE_RECEIPT_OFFSET && tokenId <= CRATE_RECEIPT_OFFSET + MAX_CRATES) {
-            return (uint8(ItemKind.CrateReceipt), tokenId - CRATE_RECEIPT_OFFSET, holder);
-        }
-        if (tokenId > RELIC_RECEIPT_OFFSET && tokenId <= RELIC_RECEIPT_OFFSET + MAX_RELICS) {
+        unchecked {
+            if (tokenId < WAREHOUSE_TOKEN_START) {
+                return (uint8(ItemKind.Crate), tokenId - CRATE_TOKEN_START + 1, holder);
+            }
+            if (tokenId < RELIC_TOKEN_START) {
+                return (uint8(ItemKind.Warehouse), tokenId - WAREHOUSE_TOKEN_START + 1, holder);
+            }
+            if (tokenId < RELIC_TOKEN_START + MAX_RELICS) {
+                return (uint8(ItemKind.Relic), tokenId - RELIC_TOKEN_START + 1, holder);
+            }
+            if (tokenId < CRATE_RECEIPT_OFFSET) {
+                return (uint8(ItemKind.ArtworkReceipt), tokenId - ARTWORK_RECEIPT_OFFSET, holder);
+            }
+            if (tokenId < RELIC_RECEIPT_OFFSET) {
+                return (uint8(ItemKind.CrateReceipt), tokenId - CRATE_RECEIPT_OFFSET, holder);
+            }
             return (uint8(ItemKind.RelicReceipt), tokenId - RELIC_RECEIPT_OFFSET, holder);
         }
-        return (0, 0, address(0));
     }
 
     function getTokenInfos(uint256[] calldata tokenIds) external view returns (TokenInfo[] memory infos) {
         if (tokenIds.length > MAX_TOKEN_INFO_BATCH_SIZE) revert InvalidQuantity();
         infos = new TokenInfo[](tokenIds.length);
         for (uint256 i; i < tokenIds.length; ++i) {
-            (infos[i].kind, infos[i].displayId, infos[i].holder) = getTokenInfo(tokenIds[i]);
+            (uint8 kind, uint256 displayId, address holder) = getTokenInfo(tokenIds[i]);
+            infos[i] = TokenInfo(kind, displayId, holder);
         }
     }
 
@@ -490,53 +553,66 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
     }
 
-    function stats(address wallet)
+    function stats(address wallet) external view returns (Stats memory snapshot) {
+        snapshot.allocatedCrates_ = allocatedCrates;
+        snapshot.warehousesMinted_ = warehousesMinted;
+        snapshot.artworksMinted_ = _nextTokenId() - 1;
+        snapshot.cratePrice_ = cratePrice;
+        snapshot.warehousePrice_ = warehousePrice;
+        snapshot.saleActive_ = saleActive;
+        snapshot.discountMerkleRoot_ = discountMerkleRoot;
+        snapshot.discountCratePrice_ = discountCratePrice;
+        snapshot.discountAllowance_ = discountAllowance;
+        snapshot.discountUsed_ = discountUsed[wallet];
+        snapshot.relicsAllocated_ = relicsAllocated;
+        snapshot.relicsMinted_ = relicsMinted;
+        snapshot.maxDiscountedMints_ = maxDiscountedMints;
+        snapshot.totalDiscountedMints_ = totalDiscountedMints;
+        snapshot.publicRelicsMinted_ = publicRelicSale.minted;
+        // Stats contains fifteen static ABI words, all initialized above.
+        assembly ("memory-safe") {
+            return(snapshot, 480)
+        }
+    }
+
+    function publicRelicStats(address wallet)
         external
         view
         returns (
-            uint256 allocatedCrates_,
-            uint256 warehousesMinted_,
-            uint256 artworksMinted_,
-            uint256 cratePrice_,
-            uint256 warehousePrice_,
-            bool saleActive_,
-            bytes32 discountMerkleRoot_,
-            uint256 discountCratePrice_,
-            uint256 discountAllowance_,
-            uint256 discountUsed_,
-            uint256 relicsAllocated_,
-            uint256 relicsMinted_,
-            uint256 maxDiscountedMints_,
-            uint256 totalDiscountedMints_
+            uint256 limit,
+            uint256 minted,
+            uint256 priceWei,
+            bool active,
+            uint256 mintable,
+            uint16 freeLimit,
+            uint16 freeUsed
         )
     {
-        discountUsed_ = _discountUsage(wallet);
-        allocatedCrates_ = allocatedCrates;
-        warehousesMinted_ = warehousesMinted;
-        artworksMinted_ = _nextTokenId() - 1;
-        cratePrice_ = cratePrice;
-        warehousePrice_ = warehousePrice;
-        saleActive_ = saleActive;
-        discountMerkleRoot_ = discountMerkleRoot;
-        discountCratePrice_ = discountCratePrice;
-        discountAllowance_ = discountAllowance;
-        relicsAllocated_ = relicsAllocated;
-        relicsMinted_ = relicsMinted;
-        maxDiscountedMints_ = maxDiscountedMints;
-        totalDiscountedMints_ = totalDiscountedMints;
-    }
-
-    function _discountUsage(address wallet) private view returns (uint256) {
-        return discountUsed[wallet];
+        PublicRelicSale storage sale = publicRelicSale;
+        limit = sale.limit;
+        minted = sale.minted;
+        priceWei = sale.priceWei;
+        active = sale.active;
+        if (saleActive && active) {
+            unchecked {
+                uint256 capacity = (MAX_CRATES - allocatedCrates) / CRATES_PER_RELIC;
+                mintable = limit - minted;
+                if (capacity < mintable) mintable = capacity;
+            }
+        }
+        PublicRelicFreeMintAllowance storage allowance = publicRelicFreeMintAllowances[wallet];
+        freeLimit = allowance.limit;
+        freeUsed = allowance.used;
     }
 
     function remainingCrates() external view returns (uint256) {
-        return MAX_CRATES - allocatedCrates;
+        unchecked {
+            return MAX_CRATES - allocatedCrates;
+        }
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        (uint8 kind,,) = getTokenInfo(tokenId);
-        if (kind == 0) revert URIQueryForNonexistentToken();
+        if (!_exists(tokenId)) revert URIQueryForNonexistentToken();
         return _tokenURI(tokenId);
     }
 
@@ -573,7 +649,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function setDiscountConfig(bytes32 root, uint256 allowance) external onlyOwner {
-        if (allowance == 0 || allowance > MAX_DISCOUNT_ALLOWANCE) revert InvalidDiscountConfig();
+        unchecked {
+            if (allowance - 1 >= MAX_DISCOUNT_ALLOWANCE) revert InvalidDiscountConfig();
+        }
         discountMerkleRoot = root;
         discountAllowance = allowance;
         emit DiscountConfigUpdated(root, allowance);
@@ -585,12 +663,29 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         uint16 warehouseLimit,
         uint16 relicLimit
     ) external onlyOwner {
-        if (wallets.length == 0 || wallets.length > 32) revert InvalidFreeMintConfig();
+        _validateFreeMintWallets(wallets);
         for (uint256 i; i < wallets.length; ++i) {
-            for (uint256 j; j < i; ++j) {
-                if (wallets[j] == wallets[i]) revert InvalidFreeMintConfig();
-            }
             _setFreeMintAllowance(wallets[i], crateLimit, warehouseLimit, relicLimit);
+        }
+    }
+
+    function setPublicRelicSale(uint256 limit, uint256 priceWei, bool active) external onlyOwner {
+        if (limit < publicRelicSale.minted || limit > MAX_RELICS - relicsAllocated) {
+            revert InvalidPublicRelicConfig();
+        }
+        publicRelicSale.limit = uint8(limit);
+        publicRelicSale.priceWei = priceWei;
+        publicRelicSale.active = active;
+        emit PublicRelicSaleUpdated(limit, priceWei, active);
+    }
+
+    function setPublicRelicFreeMintAllowances(address[] calldata wallets, uint16 limit) external onlyOwner {
+        if (limit > MAX_RELICS) revert InvalidFreeMintConfig();
+        _validateFreeMintWallets(wallets);
+        for (uint256 i; i < wallets.length; ++i) {
+            _validateFreeMintWallet(wallets[i]);
+            publicRelicFreeMintAllowances[wallets[i]].limit = limit;
+            emit PublicRelicFreeMintAllowanceUpdated(wallets[i], limit);
         }
     }
 
@@ -648,13 +743,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         mintReleased[recipient] = entitlement;
         uint256 totalReleased = totalMintReleased;
         totalMintReleased = totalReleased + amount;
-        bool paid;
-        if (batch) {
-            paid = _payWithBoundedGas(recipient, amount);
-        } else {
-            (paid,) = payable(recipient).call{value: amount}("");
-        }
-        if (!paid) {
+        if (!_payProceeds(recipient, amount, batch)) {
             if (!batch) revert ProceedsPaymentFailed();
             mintReleased[recipient] = released;
             totalMintReleased = totalReleased;
@@ -715,10 +804,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         address receiver = secondary ? config.receiver2 : config.receiver1;
         if (secondary) config.released2 += amount;
         else config.released1 += amount;
-        bool paid;
-        if (batch) paid = _payWithBoundedGas(receiver, amount);
-        else (paid,) = payable(receiver).call{value: amount}("");
-        if (!paid) {
+        if (!_payProceeds(receiver, amount, batch)) {
             if (!batch) revert ProceedsPaymentFailed();
             if (secondary) config.released2 -= amount;
             else config.released1 -= amount;
@@ -729,7 +815,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function _shareOf(uint256 total, uint256 share) private pure returns (uint256) {
-        return (total / 10_000) * share + ((total % 10_000) * share) / 10_000;
+        unchecked {
+            return (total / 10_000) * share + ((total % 10_000) * share) / 10_000;
+        }
     }
 
     function _payWithBoundedGas(address receiver, uint256 amount) private returns (bool paid) {
@@ -740,6 +828,11 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
     }
 
+    function _payProceeds(address receiver, uint256 amount, bool batch) private returns (bool paid) {
+        if (batch) return _payWithBoundedGas(receiver, amount);
+        (paid,) = payable(receiver).call{value: amount}("");
+    }
+
     function _validateDeliveryPaymentReceiver(address receiver) private view {
         if (receiver == address(0) || receiver == address(this) || mintSharesBps[receiver] != 0) {
             revert InvalidAddress();
@@ -748,23 +841,50 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function _checkPurchase(uint256 quantity, uint256 crateUnits, uint256 unitPrice) private view {
         if (!saleActive) revert SaleInactive();
-        if (quantity == 0 || quantity > MAX_PURCHASE_QUANTITY) revert InvalidQuantity();
+        unchecked {
+            if (quantity - 1 >= MAX_PURCHASE_QUANTITY) revert InvalidQuantity();
+        }
         if (crateUnits > MAX_CRATES - allocatedCrates) revert SoldOut();
         if (msg.value != quantity * unitPrice) revert WrongPayment();
     }
 
     function _mintCrates(uint256 quantity) private {
-        uint256 firstCrate = allocatedCrates + 1;
-        // Single-crate mints skip the shared allocator's container mapping.
-        _mintAllocated(quantity, firstCrate, 1, CRATE_TOKEN_START, warehouseFirstCrate);
-        emit CratesPurchased(msg.sender, CRATE_TOKEN_START + firstCrate - 1, quantity, msg.value);
+        unchecked {
+            uint256 firstCrate = allocatedCrates + 1;
+            // Single-crate mints skip the shared allocator's container mapping.
+            _mintAllocated(quantity, firstCrate, 1, CRATE_TOKEN_START, warehouseFirstCrate);
+            emit CratesPurchased(msg.sender, CRATE_TOKEN_START + firstCrate - 1, quantity, msg.value);
+        }
     }
 
     function _mintWarehouses(uint256 quantity) private {
-        uint256 firstWarehouse = warehousesMinted + 1;
-        warehousesMinted += quantity;
-        _mintAllocated(quantity, firstWarehouse, CRATES_PER_WAREHOUSE, WAREHOUSE_TOKEN_START, warehouseFirstCrate);
-        emit WarehousesPurchased(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse - 1, quantity, msg.value);
+        unchecked {
+            uint256 firstWarehouse = warehousesMinted + 1;
+            warehousesMinted += quantity;
+            _mintAllocated(quantity, firstWarehouse, CRATES_PER_WAREHOUSE, WAREHOUSE_TOKEN_START, warehouseFirstCrate);
+            emit WarehousesPurchased(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse - 1, quantity, msg.value);
+        }
+    }
+
+    function _mintPublicRelic(uint256 relicId, bool freeMint) private {
+        PublicRelicSale storage sale = publicRelicSale;
+        if (!sale.active) revert SaleInactive();
+        unchecked {
+            if (relicId - 1 >= MAX_RELICS) revert InvalidRelicId();
+        }
+        if (sale.minted == sale.limit) revert SoldOut();
+        _checkPurchase(1, CRATES_PER_RELIC, freeMint ? 0 : sale.priceWei);
+        if (freeMint) {
+            PublicRelicFreeMintAllowance storage allowance = publicRelicFreeMintAllowances[msg.sender];
+            allowance.used = _consumeFreeMintAllowance(allowance.used, allowance.limit, 1);
+        }
+        unchecked {
+            ++sale.minted;
+        }
+        _mintAllocated(1, relicId, CRATES_PER_RELIC, RELIC_TOKEN_START, relicFirstCrate);
+        unchecked {
+            emit PublicRelicMinted(msg.sender, relicId, RELIC_TOKEN_START + relicId - 1, msg.value, freeMint);
+        }
     }
 
     function _mintAllocated(
@@ -774,8 +894,11 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         uint256 tokenStart,
         mapping(uint256 => uint256) storage firstCrates
     ) private {
-        uint256 firstCrate = allocatedCrates + 1;
-        allocatedCrates += quantity * crateUnits;
+        uint256 firstCrate;
+        unchecked {
+            firstCrate = allocatedCrates + 1;
+            allocatedCrates += quantity * crateUnits;
+        }
         if (msg.value != 0) totalMintReceived += msg.value;
         // Purchase checks bound every allocation and token index below the collection limits.
         unchecked {
@@ -787,7 +910,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function _setFreeMintAllowance(address wallet, uint16 crates, uint16 warehouses, uint16 relics) private {
-        if (wallet == address(0) || wallet == address(this)) revert InvalidAddress();
+        _validateFreeMintWallet(wallet);
         if (crates > MAX_CRATES || warehouses > MAX_WAREHOUSES || relics > MAX_RELICS) {
             revert InvalidFreeMintConfig();
         }
@@ -798,10 +921,28 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit FreeMintAllowanceUpdated(wallet, crates, warehouses, relics);
     }
 
+    function _validateFreeMintWallet(address wallet) private view {
+        if (wallet == address(0) || wallet == address(this)) revert InvalidAddress();
+    }
+
+    function _validateFreeMintWallets(address[] calldata wallets) private pure {
+        unchecked {
+            if (wallets.length - 1 >= 32) revert InvalidFreeMintConfig();
+        }
+        for (uint256 i; i < wallets.length; ++i) {
+            address wallet = wallets[i];
+            for (uint256 j; j < i; ++j) {
+                if (wallets[j] == wallet) revert InvalidFreeMintConfig();
+            }
+        }
+    }
+
     function _consumeFreeMintAllowance(uint16 used, uint16 limit, uint256 quantity) private pure returns (uint16) {
-        uint256 total = uint256(used) + quantity;
-        if (total > limit) revert FreeMintAllowanceExceeded();
-        return uint16(total);
+        unchecked {
+            uint256 total = uint256(used) + quantity;
+            if (total > limit) revert FreeMintAllowanceExceeded();
+            return uint16(total);
+        }
     }
 
     function _requireOwnedKind(uint256 tokenId, ItemKind expected) private view returns (uint256 displayId) {
@@ -833,9 +974,25 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit CrateUnboxed(tokenId, msg.sender, firstToken, count);
     }
 
+    function _unboxContainer(uint256 tokenId, uint256 firstCrate, uint256 count) private returns (uint256 firstToken) {
+        unchecked {
+            firstToken = CRATE_TOKEN_START + firstCrate - 1;
+        }
+        _burn(tokenId);
+        unchecked {
+            for (uint256 i; i < count; ++i) {
+                _mintSpotOnce(msg.sender, firstToken + i);
+            }
+        }
+    }
+
     function _checkDeadline(uint256 deadline) private view {
         if (deadline < block.timestamp) revert AuthorizationExpired();
         if (deadline > block.timestamp + MAX_QUOTE_LIFETIME) revert AuthorizationTooLong();
+    }
+
+    function _checkSignature(bytes32 digest, bytes calldata signature) private view {
+        if (ECDSA.recoverCalldata(digest, signature) != quoteSigner) revert InvalidAuthorization();
     }
 
     function _crateContentsCount(uint256 crateNumber) private pure returns (uint256) {
@@ -843,29 +1000,17 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function _tokenURI(uint256 tokenId) private view returns (string memory) {
-        return string.concat(baseURI, tokenId.toString(), ".json");
+        return string.concat(baseURI, _toString(tokenId), ".json");
     }
 
     function _metadataTokenId(uint8 kind, uint256 displayId) private pure returns (uint256) {
-        if (displayId == 0) revert InvalidMetadataItem();
-        if (kind == uint8(ItemKind.Artwork) && displayId <= MAX_ARTWORKS) return displayId;
-        if (kind == uint8(ItemKind.Crate) && displayId <= MAX_CRATES) return CRATE_TOKEN_START + displayId - 1;
-        if (kind == uint8(ItemKind.Warehouse) && displayId <= MAX_WAREHOUSES) {
-            return WAREHOUSE_TOKEN_START + displayId - 1;
+        unchecked {
+            uint256 maximum = (METADATA_LIMITS >> (uint256(kind) * 18)) & 0x3ffff;
+            if (displayId == 0 || displayId > maximum) {
+                revert InvalidMetadataItem();
+            }
+            return ((METADATA_OFFSETS >> (uint256(kind) * 22)) & 0x3fffff) + displayId;
         }
-        if (kind == uint8(ItemKind.Relic) && displayId <= MAX_RELICS) {
-            return RELIC_TOKEN_START + displayId - 1;
-        }
-        if (kind == uint8(ItemKind.ArtworkReceipt) && displayId <= MAX_ARTWORK_RECEIPTS) {
-            return ARTWORK_RECEIPT_OFFSET + displayId;
-        }
-        if (kind == uint8(ItemKind.CrateReceipt) && displayId <= MAX_CRATES) {
-            return CRATE_RECEIPT_OFFSET + displayId;
-        }
-        if (kind == uint8(ItemKind.RelicReceipt) && displayId <= MAX_RELICS) {
-            return RELIC_RECEIPT_OFFSET + displayId;
-        }
-        revert InvalidMetadataItem();
     }
 
     function _validateBaseURI(string memory baseURI_) private view {
@@ -889,5 +1034,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function _sequentialUpTo() internal pure override returns (uint256) {
         return MAX_ARTWORKS;
+    }
+
+    function _reentrancyGuardStorageSlot() internal pure override returns (bytes32) {
+        // This non-proxy contract reserves transient slot 1 exclusively for the inherited guard.
+        return bytes32(uint256(1));
     }
 }

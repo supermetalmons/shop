@@ -118,6 +118,7 @@ function fixture(controlActive = true) {
     ]),
     allocatedCrates: 25, relicsAllocated: 0, relicsMinted: 0, relicInterface: true, relicLimit: 18,
     claimedMask: 0n, relicMaskInterface: true, saleActive: true,
+    publicRelicsMinted: null as number | null, publicRelicStats: null as unknown[] | null,
     freeMintAllowances: new Map<string, number[]>(),
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     discountTotals: [] as number[],
@@ -180,6 +181,9 @@ function fixture(controlActive = true) {
         return encodeAbi(['uint16', 'uint16', 'uint16', 'uint16', 'uint16', 'uint16'],
           state.freeMintAllowances.get(owner) ?? [0, 0, 0, 0, 0, 0]);
       }
+      if (selector === functionSelector('publicRelicStats(address)')) {
+        return state.publicRelicStats === null ? '0x' : encodeAbi(['uint256', 'uint256', 'uint256', 'bool', 'uint256', 'uint16', 'uint16'], state.publicRelicStats);
+      }
       if (selector === functionSelector('quoteSigner()')) return encodeAbi(['address'], [state.expectedSigner]);
       if (selector === functionSelector('deliveryConfigs(uint256)')) {
         const [configId] = decodeReturn(['uint256'], argumentsHex) as [bigint];
@@ -222,10 +226,10 @@ function fixture(controlActive = true) {
       if (selector === functionSelector('stats(address)')) {
         const [owner] = decodeReturn(['address'], argumentsHex) as [string];
         return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256',
-          ...state.discountTotals.map(() => 'uint256')],
+          ...state.discountTotals.map(() => 'uint256'), ...(state.publicRelicsMinted === null ? [] : ['uint256'])],
           [state.allocatedCrates, 2, 20, '100000000000000', '1100000000000000', state.saleActive, state.discountRoot,
             '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.relicsAllocated, state.relicsMinted,
-            ...state.discountTotals]);
+            ...state.discountTotals, ...(state.publicRelicsMinted === null ? [] : [state.publicRelicsMinted])]);
       }
     }
     throw new Error(`Unexpected mocked RPC: ${payload.method}`);
@@ -1516,7 +1520,7 @@ test('public stats verify the relic interface then read wallet discount usage wi
       assert.equal(result.response.status, 200);
       assert.deepEqual(result.body, {
         chainId: 31337, contractAddress: CONTRACT, owner,
-        allocatedCrates: 25, warehousesMinted: 2, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 20,
+        allocatedCrates: 25, warehousesMinted: 2, relicsAllocated: 0, relicsMinted: 0, publicRelicsMinted: 0, artworksMinted: 20,
         cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', saleActive: true,
         remainingCrates: 5530, remainingWarehouses: 502, remainingRelics: 0,
         discountMerkleRoot: f.state.discountRoot, discountCratePriceWei: '50000000000000',
@@ -1562,7 +1566,7 @@ test('stats expose total discounted usage and preserve free relic allowance read
 test('stats reject incomplete or impossible discounted totals instead of treating them as uncapped', async () => {
   const f = fixture();
   try {
-    for (const totals of [[500], [500, 0, 0], [5556, 0], [500, 501], [500, 26]]) {
+    for (const totals of [[500], [500, 0, 0, 0], [5556, 0], [500, 501], [500, 26]]) {
       f.state.discountTotals = totals;
       const result = await f.request(paths.stats);
       assert.equal(result.response.status, 503, JSON.stringify(totals));
@@ -4573,7 +4577,7 @@ test('relic status batches all state at one canonical latest block without metad
     assert.equal(result.response.status, 200);
     assert.deepEqual(result.body, { chainId: 31337, contractAddress: CONTRACT, owner: WALLET,
       observedBlock: 102, blockHash: blockHash(102), saleActive: true,
-      relicsAllocated: 12, relicsMinted: 2, remainingRelics: 10, claimedMask: 131073,
+      relicsAllocated: 12, relicsMinted: 2, publicRelicsMinted: 0, publicSale: null, remainingRelics: 10, claimedMask: 131073,
       relicLimit: 3, relicsUsed: 1, remainingAllowance: 2 });
     assert.deepEqual(f.state.batchSizes, [3]);
     assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_getBlockByNumber', 'eth_call', 'eth_call', 'eth_call', 'eth_getBlockByNumber']);
@@ -4585,6 +4589,92 @@ test('relic status batches all state at one canonical latest block without metad
     assert.equal(anonymous.body.owner, null);
     assert.equal(anonymous.body.claimedMask, 131073);
     assert.equal(anonymous.body.remainingAllowance, 0);
+  } finally { f.close(); }
+});
+
+test('public relic availability shares the issued mask while keeping reserved claims independent', async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.state, { allocatedCrates: 1332, relicsAllocated: 10, relicsMinted: 1, publicRelicsMinted: 2,
+      claimedMask: 7n, discountTotals: [5555, 0], publicRelicStats: [5, 2, 1000, true, 3, 3, 1] });
+    f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 1]);
+    const result = await f.request<EthereumRelicStatus>(relicPath(WALLET));
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.remainingRelics, 9);
+    assert.equal(result.body.remainingAllowance, 2);
+    assert.equal(result.body.claimedMask, 7);
+    assert.equal(result.body.publicRelicsMinted, 2);
+    assert.deepEqual(result.body.publicSale, { limit: 5, minted: 2, priceWei: '1000', active: true,
+      mintable: 3, freeLimit: 3, freeUsed: 1, remainingFreeAllowance: 2 });
+    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === blockHash(102)));
+    const stats = await f.request<EthereumStats>(paths.stats);
+    assert.equal(stats.response.status, 200);
+    assert.equal(stats.body.publicRelicsMinted, 2);
+    assert.equal(stats.body.remainingRelics, 9);
+    for (const [allocatedCrates, saleActive, active, mintable] of [[5444, true, true, 1], [5445, true, true, 0],
+      [1332, false, true, 0], [1332, true, false, 0]] as const) {
+      Object.assign(f.state, { allocatedCrates, saleActive, publicRelicStats: [5, 2, 1000, active, mintable, 0, 1] });
+      const changed = await f.request<EthereumRelicStatus>(relicPath(WALLET));
+      assert.equal(changed.response.status, 200);
+      assert.equal(changed.body.remainingRelics, 9);
+      assert.equal(changed.body.publicSale?.mintable, mintable);
+      assert.equal(changed.body.publicSale?.remainingFreeAllowance, 0);
+    }
+  } finally { f.close(); }
+});
+
+test('public relic reads reject malformed or inconsistent sale data without a legacy fallback', async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.state, { allocatedCrates: 1332, relicsAllocated: 10, relicsMinted: 1, publicRelicsMinted: 2,
+      claimedMask: 7n, discountTotals: [5555, 0] });
+    for (const publicRelicStats of [null, [5, 1, 1000, true, 3, 3, 1], [9, 2, 1000, true, 7, 3, 1],
+      [1, 2, 1000, true, 0, 3, 1], [5, 2, 1000, true, 4, 3, 1], [5, 2, 1000, false, 3, 3, 1],
+      [5, 2, 1000, true, 3, 19, 1], [5, 2, 1000, true, 3, 3, 3]]) {
+      f.state.publicRelicStats = publicRelicStats;
+      assert.equal((await f.request(relicPath(WALLET))).response.status, 503);
+    }
+    f.state.publicRelicStats = [5, 2, 1000, true, 3, 3, 1];
+    for (const patch of [{ publicRelicsMinted: 19 }, { relicsAllocated: 17 }, { allocatedCrates: 1331 }, { claimedMask: 3n }]) {
+      Object.assign(f.state, { allocatedCrates: 1332, relicsAllocated: 10, publicRelicsMinted: 2, claimedMask: 7n }, patch);
+      assert.equal((await f.request(relicPath(WALLET))).response.status, 503);
+      if (!('claimedMask' in patch)) assert.equal((await f.request(paths.stats)).response.status, 503);
+    }
+  } finally { f.close(); }
+});
+
+test('public relic reads reject RPC errors and reorganizations during the second snapshot read', async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.state, { allocatedCrates: 1332, relicsAllocated: 10, relicsMinted: 1, publicRelicsMinted: 2,
+      claimedMask: 7n, discountTotals: [5555, 0], publicRelicStats: [5, 2, 1000, true, 3, 3, 1] });
+    const isPublicRead = (entry: Rpc) => entry.method === 'eth_call' &&
+      (entry.params[0] as { data: string }).data.startsWith(functionSelector('publicRelicStats(address)'));
+    let failedReads = 0;
+    const failed = await f.request(relicPath(WALLET), undefined, undefined, { fetch: async (input, init) => {
+      const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+      if (Array.isArray(payload) && payload.some(isPublicRead)) {
+        failedReads++;
+        return Response.json(payload.map(entry => ({ jsonrpc: '2.0', id: entry.id,
+          error: { code: -32000, message: 'Historical state unavailable' } })));
+      }
+      return f.providerFetch(input, init);
+    } });
+    assert.equal(failed.response.status, 503);
+    assert.equal(failedReads, 1);
+    f.state.afterRpc = async entry => {
+      if (isPublicRead(entry)) {
+        assert.equal((entry.params[0] as { to: string }).to, CONTRACT);
+        assert.equal(entry.params[1], blockHash(102));
+        f.state.canonical.set(102, blockHash(999));
+      }
+    };
+    assert.equal((await f.request(relicPath(WALLET))).response.status, 503);
+    f.state.afterRpc = null;
+    const refreshed = await f.request<EthereumRelicStatus>(relicPath(WALLET));
+    assert.equal(refreshed.response.status, 200);
+    assert.equal(refreshed.body.blockHash, blockHash(999));
+    assert.equal(refreshed.body.publicSale?.minted, 2);
   } finally { f.close(); }
 });
 

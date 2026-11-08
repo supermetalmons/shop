@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { deploymentConfiguration, deploymentGas, main, matchingRuntime, PRE111K_MAINNET, PRE111K_SEPOLIA,
   validateDeploymentBalance, validateDeploymentConfiguration, validateDeploymentGasPrice, validateSignedDeployment } from './pre111k-deployment.mjs';
 
@@ -114,12 +116,12 @@ test('mainnet signed deployment uses the deployer and enforces chain 1 and the i
   assert.throws(() => deploymentGas('1000000', '1000000000', PRE111K_MAINNET.maximumFeeWei), /fee ceiling/);
 });
 
-function prepareFixture(t, chainId = '0x1') {
+function prepareFixture(t, chainId = '0x1', buildArtifact) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pre111k-deployment-test-'));
   const previousRpc = process.env.ETHEREUM_PRE111K_RPC_URL;
   process.env.ETHEREUM_PRE111K_RPC_URL = 'https://pre111k-rpc.invalid';
-  const artifact = { metadata: { compiler: { version: '0.8.38+commit.1835d247' }, sources: {}, settings: {
-    optimizer: { enabled: true, runs: 500 }, evmVersion: 'prague', compilationTarget: { 'src/Pre111K.sol': 'Pre111K' },
+  const artifact = buildArtifact ?? { metadata: { compiler: { version: '0.8.38+commit.1835d247' }, sources: {}, settings: {
+    optimizer: { enabled: true, runs: 200 }, evmVersion: 'prague', compilationTarget: { 'src/Pre111K.sol': 'Pre111K' },
   } }, bytecode: { object: '0x60006000f3' } };
   const readFile = fs.readFileSync.bind(fs);
   t.mock.method(fs, 'readFileSync', (filename, ...args) => String(filename).endsWith('/out/Pre111K.sol/Pre111K.json')
@@ -141,6 +143,21 @@ function prepareFixture(t, chainId = '0x1') {
   });
   return { directory, requests, read: () => JSON.parse(readFile(path.join(directory, 'manifest.json'), 'utf8')) };
 }
+
+test('preparation accepts and freezes the default project build', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pre111k-build-test-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  execFileSync('forge', ['build', '--offline', 'src/Pre111K.sol', '--out', path.join(directory, 'out'),
+    '--cache-path', path.join(directory, 'cache')], {
+    cwd: fileURLToPath(new URL('../', import.meta.url)), stdio: 'pipe', timeout: 30_000,
+  });
+  const artifact = JSON.parse(fs.readFileSync(path.join(directory, 'out/Pre111K.sol/Pre111K.json'), 'utf8'));
+  const f = prepareFixture(t, '0xaa36a7', artifact);
+  await main(['prepare', '--network', 'sepolia', '--directory', f.directory]);
+  const frozen = JSON.parse(fs.readFileSync(path.join(f.directory, 'Pre111K.artifact.json'), 'utf8'));
+  assert.deepEqual(frozen.metadata.settings, artifact.metadata.settings);
+  assert.equal(f.read().creationCode, artifact.bytecode.object + f.read().constructorArgs.slice(2));
+});
 
 test('mainnet preparation freezes Safe constructor values and reads only the deployer nonce and funds', async t => {
   const f = prepareFixture(t);

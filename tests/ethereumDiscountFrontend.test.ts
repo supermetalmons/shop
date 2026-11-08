@@ -43,7 +43,7 @@ test('the published draft proves the explicit wallet and distinguishes an absent
 test('stats requests scope wallet usage and reject another owner, chain, deployment, or malformed discount data', async t => {
   const valid = {
     chainId: config.chainId, contractAddress: config.contractAddress, owner,
-    allocatedCrates: 0, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
+    allocatedCrates: 0, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, publicRelicsMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
     warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingRelics: 0,
     discountMerkleRoot: dataset.root, discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0,
   };
@@ -62,6 +62,8 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
     ...[-1, 5556, 0.5, '500', null].map(maxDiscountedMints => ({ maxDiscountedMints, totalDiscountedMints: 0 })),
     ...[-1, 501, 0.5, '1', null].map(totalDiscountedMints => ({ maxDiscountedMints: 500, totalDiscountedMints })),
     { relicsAllocated: -1 }, { relicsAllocated: 19 }, { relicsMinted: 1 }, { remainingRelics: 1 }, { relicsMinted: -1 }, { remainingRelics: -1 },
+    { publicRelicsMinted: -1 }, { publicRelicsMinted: 19 }, { publicRelicsMinted: 1 },
+    { relicsAllocated: 17, remainingRelics: 17, publicRelicsMinted: 2, allocatedCrates: 2109 },
   ]) {
     value = { ...valid, ...changed };
     await assert.rejects(ethereumApi.stats(config, owner), /invalid response/);
@@ -69,6 +71,11 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
   value = { ...valid, owner: null };
   assert.deepEqual(await ethereumApi.stats(config, null), value);
   assert.equal(new URL(urls.at(-1)!, 'https://mons.shop').searchParams.has('owner'), false);
+  value = { ...valid, publicRelicsMinted: undefined };
+  assert.deepEqual(await ethereumApi.stats(config, owner), valid);
+  value = { ...valid, allocatedCrates: 333, remainingCrates: 5222, remainingWarehouses: 474,
+    relicsAllocated: 1, remainingRelics: 1, publicRelicsMinted: 2 };
+  assert.deepEqual(await ethereumApi.stats(config, owner), value);
   for (const [maxDiscountedMints, totalDiscountedMints] of [[0, 0], [500, 499], [500, 500], [5555, 5555]]) {
     value = { ...valid, maxDiscountedMints, totalDiscountedMints };
     assert.deepEqual(await ethereumApi.stats(config, owner), value);
@@ -81,7 +88,7 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
 test('mint quotes require the full quantity to fit wallet and total discounted allowances', () => {
   const stats = {
     chainId: config.chainId, contractAddress: config.contractAddress!, owner,
-    allocatedCrates: 499, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, artworksMinted: 0,
+    allocatedCrates: 499, warehousesMinted: 0, relicsAllocated: 0, relicsMinted: 0, publicRelicsMinted: 0, artworksMinted: 0,
     cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true,
     remainingCrates: 5056, remainingWarehouses: 459, remainingRelics: 0,
     discountMerkleRoot: dataset.root, discountCratePriceWei: '50000000000000', discountAllowance: 3, discountUsed: 0,

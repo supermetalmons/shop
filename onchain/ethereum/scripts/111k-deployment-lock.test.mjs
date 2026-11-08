@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { run111kDeployment } from './111k-deployment.mjs';
 
+const reservationArgs = ['--reserved-relics', '18', '--relic-reservation-value-wei', '18000000000000000'];
+
 test('a stale deployment lock cannot remove a replacement owner', { timeout: 10_000 }, async t => {
   const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), '111k-lock-race-')));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -38,7 +40,7 @@ test('a stale deployment lock cannot remove a replacement owner', { timeout: 10_
     return content;
   });
   syncBuiltinESMExports();
-  const invoke = () => run111kDeployment(['prepare', '--directory', directory, '--deployment-id', 'lock-test'], {
+  const invoke = () => run111kDeployment(['prepare', ...reservationArgs, '--directory', directory, '--deployment-id', 'lock-test'], {
     resolvePredecessor: async () => ({ chainId: 11155111, contractAddress: `0x${'44'.repeat(20)}`,
       metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/old-lock/' }),
     rpc: async method => {
@@ -78,7 +80,7 @@ test('legacy deployment lock files are rejected without deleting their owner', a
   const lock = join(directory, 'operation.lock');
   const owner = JSON.stringify({ pid: process.pid, host: hostname(), id: randomUUID() });
   await fs.writeFile(lock, owner);
-  await assert.rejects(run111kDeployment(['prepare', '--directory', directory, '--deployment-id', 'lock-test'], {
+  await assert.rejects(run111kDeployment(['prepare', ...reservationArgs, '--directory', directory, '--deployment-id', 'lock-test'], {
     rpc: async method => {
       assert.equal(method, 'eth_chainId');
       return '0xaa36a7';

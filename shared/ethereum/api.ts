@@ -18,6 +18,7 @@ export type EthereumSession = { token: string; address: string; chainId: number;
 export type EthereumStats = {
   chainId: number; contractAddress: string; owner: string | null;
   allocatedCrates: number; warehousesMinted: number; relicsAllocated: number; relicsMinted: number; artworksMinted: number;
+  publicRelicsMinted: number;
   cratePriceWei: string; warehousePriceWei: string; saleActive: boolean;
   remainingCrates: number; remainingWarehouses: number; remainingRelics: number;
   discountMerkleRoot: string; discountCratePriceWei: string; discountAllowance: number; discountUsed: number;
@@ -27,6 +28,11 @@ export type EthereumRelicStatus = {
   chainId: number; contractAddress: string; owner: string | null; observedBlock: number; blockHash: string;
   saleActive: boolean; relicsAllocated: number; relicsMinted: number; remainingRelics: number; claimedMask: number;
   relicLimit: number; relicsUsed: number; remainingAllowance: number;
+  publicRelicsMinted: number; publicSale: EthereumPublicRelicSale | null;
+};
+export type EthereumPublicRelicSale = {
+  limit: number; minted: number; priceWei: string; active: boolean; mintable: number;
+  freeLimit: number; freeUsed: number; remainingFreeAllowance: number;
 };
 export type EthereumInventoryResponse = { items: EthereumInventoryItem[]; nextCursor: string | null; observedBlock: number };
 export type EthereumPreparedTransaction = { to: string; data: string; value: string; chainId: number };

@@ -87,7 +87,7 @@ test('the local API probes relic constants and the extended stats before initial
     rpcUrl: 'http://127.0.0.1:8545', contractAddress: `0x${'7'.repeat(40)}`, deploymentBlock: 0,
     quoteSigner: fixture.signer, metadataBaseURI, initialDeliveryReceiver, deliveryConfigId: 1 };
   const types = ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
-    'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'];
+    'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'];
   const stats = [111n, 0n, 0n, 100n, 1100n, true, `0x${'0'.repeat(64)}`, 50n, 1n, 0n, 1n, 0n];
   try {
     for (const scenario of [
@@ -105,6 +105,10 @@ test('the local API probes relic constants and the extended stats before initial
       { name: 'current interface', values: stats, limit: 18, crates: 111, valid: true },
       { name: 'capped interface', values: [...stats, 500n, 0n], limit: 18, crates: 111, valid: true },
       { name: 'disabled discounts', values: [...stats, 0n, 0n], limit: 18, crates: 111, valid: true },
+      { name: 'public relic interface', values: [333n, ...stats.slice(1), 500n, 0n, 2n], limit: 18, crates: 111, mask: 3, valid: true },
+      { name: 'public relic mask mismatch', values: [333n, ...stats.slice(1), 500n, 0n, 2n], limit: 18, crates: 111, mask: 1, valid: false },
+      { name: 'public relic capacity exceeded', values: [5555n, ...stats.slice(1), 500n, 0n, 18n], limit: 18, crates: 111, mask: (1 << 18) - 1, valid: false },
+      { name: 'public relic crates missing', values: [...stats, 500n, 0n, 2n], limit: 18, crates: 111, mask: 3, valid: false },
       { name: 'partial discount totals', values: [...stats, 500n], limit: 18, crates: 111, valid: false },
       { name: 'invalid discount cap', values: [...stats, 5556n, 0n], limit: 18, crates: 111, valid: false, discountError: true },
       { name: 'discount cap exceeded', values: [...stats, 1n, 2n], limit: 18, crates: 111, valid: false, discountError: true },
@@ -114,7 +118,7 @@ test('the local API probes relic constants and the extended stats before initial
       { name: 'legacy manifest with cap', values: stats, limit: 18, crates: 111, valid: false, manifestCap: 500, manifestError: true },
     ]) {
       const maxDiscountedMints = scenario.manifestCap === null ? undefined : scenario.manifestCap ??
-        (scenario.values.length === 14 ? Number(scenario.values[12]) : undefined);
+        (scenario.values.length >= 14 ? Number(scenario.values[12]) : undefined);
       writeFileSync(deploymentFile, JSON.stringify({ ...manifest, maxDiscountedMints }));
       const responses = {
         [encodeCall('quoteSigner()', [], [])]: encodeAbi(['address'], [fixture.signer]),

@@ -311,6 +311,7 @@ export default {
     assert.equal(result.headers.get('X-Test-RPC-Calls'), '6');
     assert.deepEqual(await result.json(), { chainId: 1, contractAddress: contract, owner: WALLET,
       observedBlock: 102, blockHash, saleActive: true, relicsAllocated: 3, relicsMinted: 1,
+      publicRelicsMinted: 0, publicSale: null,
       remainingRelics: 2, claimedMask: 1 << 17, relicLimit: 3, relicsUsed: 1, remainingAllowance: 2 });
     const anonymous = await worker.fetch(`https://api.mons.shop${paths.relics}?${scope}`, { headers });
     const anonymousStatus = await anonymous.json() as EthereumRelicStatus;

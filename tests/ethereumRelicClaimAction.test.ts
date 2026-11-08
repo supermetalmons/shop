@@ -21,7 +21,7 @@ const disconnected: EthereumWallet = {
 const connected: EthereumWallet = { ...disconnected, status: 'connected', address, provider };
 const status = (owner: string | null = address, overrides: Partial<EthereumRelicStatus> = {}): EthereumRelicStatus => ({
   chainId: config.chainId, contractAddress: config.contractAddress, owner, observedBlock: 10, blockHash: `0x${'ab'.repeat(32)}`,
-  saleActive: true, relicsAllocated: 12, relicsMinted: 0, remainingRelics: 12, claimedMask: 0,
+  saleActive: true, relicsAllocated: 12, relicsMinted: 0, publicRelicsMinted: 0, publicSale: null, remainingRelics: 12, claimedMask: 0,
   relicLimit: owner ? 3 : 0, relicsUsed: 0, remainingAllowance: owner ? 3 : 0, ...overrides,
 });
 
