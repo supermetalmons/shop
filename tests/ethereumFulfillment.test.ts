@@ -101,7 +101,7 @@ test('fulfillment previews deduplicate only pending reads within the same scope 
 test('fulfillment previews reject unsafe image URLs', async t => {
   let image = '';
   t.mock.method(globalThis, 'fetch', async () => Response.json({ image }));
-  for (image of ['http://wip.lil.org/receipt.webp', 'https://user@wip.lil.org/receipt.webp', 'javascript:alert(1)']) {
+  for (image of ['http://example.com/receipt.webp', 'https://user@example.com/receipt.webp', 'javascript:alert(1)']) {
     await assert.rejects(loadEthereumFulfillmentPreview('crate_receipt', 1), /Invalid Ethereum preview/);
   }
 });

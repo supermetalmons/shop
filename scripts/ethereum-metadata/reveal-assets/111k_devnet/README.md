@@ -1,6 +1,6 @@
 # 111k reveal asset catalog
 
-[manifest.json](manifest.json) is the generated `111k-v4` reveal catalog for fresh
+[manifest.json](manifest.json) is the generated `111k-v5` reveal catalog for fresh
 testnet and future mainnet deployments. [source.json](source.json) preserves the
 supplied `111k.json` dimensions map. The catalog uses the media root
 `https://cdn.lil.org/nft/111k/`; metadata JSONs still use the deployment's
@@ -34,11 +34,12 @@ Videos are not uniformly 16:9: 53 have that ratio, four use 427:240, and one use
 54:31. Always render the stored per-asset ratio. Ratios describe media proportions,
 not original pixel dimensions or model geometry.
 
-The separately cataloged 85,556 receipt WEBPs retain their original
-`https://wip.lil.org/111k/receipts/{id}.webp` URLs and square ratio. They are not
-part of the artwork allocation or a per-category receipt metadata mapping.
-Placeholder, crate, warehouse, relic, and receipt metadata templates retain
-their existing image URLs until replacement assets are supplied.
+The separately cataloged 85,556 receipts all use
+`https://cdn.lil.org/nft/111k/placeholder.png` at 466:503. They are not part of the
+artwork allocation or a per-category receipt metadata mapping. Unrevealed artwork
+and every artwork, crate, and relic receipt metadata template use this same
+placeholder. Crates use `crate.webp` at 4:3 and warehouses use `warehouse.webp` at
+3:2 under the same CDN root. Relic images keep their existing individual URLs.
 
 ## Import an updated dimensions map
 
@@ -47,7 +48,7 @@ The importer accepts a complete JSON object mapping relative media paths to
 Run it from the shop repository:
 
 ```sh
-npm run ethereum:assets -- import --source /path/to/updated/111k.json --catalog-version 111k-v5
+npm run ethereum:assets -- import --source /path/to/updated/111k.json --catalog-version 111k-v6
 npm run check:ethereum-assets
 ```
 
@@ -80,15 +81,15 @@ video/poster pairs, and supply before writing generated outputs.
 
 ## Manifest and metadata references
 
-Storage format version 2 is distinct from the `111k-v4` catalog revision.
+Storage format version 2 is distinct from the `111k-v5` catalog revision.
 `source.sha256` hashes the exact source bytes. `importSettings` records the
 available egg inventory and square egg ratio. The compact shared descriptor
 pins the catalog version and SHA-256 of `JSON.stringify(manifest)`; browser
 code imports that descriptor without importing the full dimensions catalog.
 
-Each category records its count and primary `pathTemplate`. Moving media also
-records an `imagePathTemplate`. A category may override the global `baseUrl`,
-as the legacy receipts do. Ratios use either `aspectRatio: [width, height]` or
+Each category records its count and primary `pathTemplate`. Receipts use a
+fixed `placeholder.png` path shared by every receipt ID. Moving media also
+records an `imagePathTemplate`. A category may override the global `baseUrl`. Ratios use either `aspectRatio: [width, height]` or
 a reduced, sorted `aspectRatioPalette` with `aspectRatioIndexById`. Index
 `id - 1` selects that asset's palette entry. Painting alternatives have their
 own ratio data under `variants.alt`.
@@ -108,7 +109,9 @@ Before publishing a new release, verify public GET/HEAD responses, media content
 types, and anonymous cross-origin access for first and last allocated assets in
 each category, including PNG posters and GLB/MP4 companions. Check egg inventory
 boundaries as well. The v4 preparation checked representative public media paths
-and confirmed that eggs 1 and 76,700 are 1024 × 1024 PNGs.
+and confirmed that eggs 1 and 76,700 are 1024 × 1024 PNGs. The v5 media update
+uses a 1448 × 1086 crate WEBP, 1536 × 1024 warehouse WEBP, and 932 × 1006
+placeholder PNG, preserving all existing artwork counts and source dimensions.
 
 Generate and validate the complete 344,984-object baseline revision, then follow
 the reveal runbook for fresh-prefix publication, verification, contract

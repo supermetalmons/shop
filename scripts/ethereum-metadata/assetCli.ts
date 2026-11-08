@@ -6,7 +6,7 @@ import { importRevealAssets, type RevealAssetImportOptions } from './assetImport
 const usage = `Usage: npm run ethereum:assets -- import [options]
 
   --source PATH              Complete asset dimension JSON (default: saved source.json)
-  --catalog-version VERSION  Catalog revision, e.g. 111k-v4 (default: saved descriptor)
+  --catalog-version VERSION  Catalog revision, e.g. 111k-v5 (default: saved descriptor)
   --available-eggs NUMBER    Available egg images (default: saved settings or 76700)
   --check                    Verify generated outputs without writing
   --help                     Show this help

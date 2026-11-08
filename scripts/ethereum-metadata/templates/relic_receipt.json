@@ -1,8 +1,9 @@
 {
   "name": "Relic Receipt #{{displayId}}",
   "description": "",
-  "image": "https://wip.lil.org/111k/receipt_background.webp",
+  "image": "https://cdn.lil.org/nft/111k/placeholder.png",
   "attributes": [
     { "trait_type": "type", "value": "relic receipt" }
-  ]
+  ],
+  "aspectRatio": { "width": 466, "height": 503 }
 }

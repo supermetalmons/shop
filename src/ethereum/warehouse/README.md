@@ -6,10 +6,15 @@ critical strike. Confirmed results and prepared GPU resources gate destruction.
 Eleven camera-facing crate images emerge from the building and settle into a
 stationary pile. Dismiss the result to open individual crates from inventory.
 
-The warehouse model uses the unchanged warehouse reference artwork on a simple
-hollow shell. Its pieces follow deterministic fracture trajectories. The crates
+The warehouse model projects `public/111k/warehouse-reference-v16.webp`, a
+byte-identical local mirror of <https://cdn.lil.org/nft/111k/warehouse.webp>, onto a
+hollow shell with a pitched roof, front gable and three roof vents. Its calibrated
+camera and image landmarks match the 1536 × 1024 reference; its 3:2 aspect comes
+from the shared container media configuration. Native alpha remains intact.
+The roof and wall pieces follow deterministic fracture trajectories. The crates
 share one instanced plane batch and one 512px preview texture: 22 triangles total.
-The local crate image loads when the overlay opens and is reused for both the
+The versioned local crate mirror of <https://cdn.lil.org/nft/111k/crate.webp>
+loads when the overlay opens and is reused for both the
 scene and fallback. Texture upload, compilation, and the offscreen warm render
 are staged independently of confirmation; result arrival does not build or load a model.
 The critical meteor launches only when the reveal can run continuously, without
@@ -37,7 +42,7 @@ Reset creates a fresh session. Suspend pauses the active session. The submission
 counter helps detect unintended duplicate transactions. Escape and outside
 dismissal use production behavior. Block the scene module or lose its WebGL
 context to exercise the prepared-image fallback; block
-`/111k/crate-reference.webp` to check asset preparation failures. A different image
+`/111k/crate-reference-v16.webp` to check asset preparation failures. A different image
 URL on a fixture crate does not change the shared local preview.
 
 Inspect the intact building against the static artwork, impact positions,

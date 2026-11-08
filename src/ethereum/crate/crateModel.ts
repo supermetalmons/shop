@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { ETHEREUM_CONTAINER_MEDIA } from '../containerMedia';
 
-export const CRATE_IMAGE_ASPECT = 1218 / 833;
-export const CRATE_BOUNDS = Object.freeze({ width: 3.2, height: 1.82236, depth: 2.12055 });
+export const CRATE_IMAGE_ASPECT = ETHEREUM_CONTAINER_MEDIA.crate.aspectRatio;
+export const CRATE_BOUNDS = Object.freeze({ width: 3.2, height: 1.87149, depth: 2.20102 });
 export const CRATE_CAMERA = Object.freeze({
-  position: [-6.70969, 3.91294, 14.65304] as const,
-  target: [0.052155, -0.203879, 0] as const,
-  fov: 9.67981,
+  position: [-6.66606, 4.64376, 14.87276] as const,
+  target: [0.061155, -0.104464, 0] as const,
+  fov: 10.77718,
 });
 
 export type CrateModel = {
@@ -25,7 +26,7 @@ type Surface = 'timber' | 'front' | 'left' | 'lid' | 'rear-corner' | 'inside' | 
 type GeometryBuckets = { photo: THREE.BufferGeometry[]; wood: THREE.BufferGeometry[] };
 const { width: WIDTH, height: HEIGHT, depth: DEPTH } = CRATE_BOUNDS;
 const LID_PIVOT = new THREE.Vector3(0, HEIGHT / 2, -DEPTH / 2);
-const WOOD_PATCH = { left: 0.493, right: 0.638, bottom: 0.518, top: 0.704 };
+const WOOD_PATCH = { left: 0.54, right: 0.62, bottom: 0.43, top: 0.65 };
 const MAX_DAMAGE = 4;
 
 function createReferenceCamera() {
@@ -190,7 +191,7 @@ function loadCrateTexture(signal?: AbortSignal): Promise<THREE.Texture> {
       }).catch(() => fail(new Error('Unable to prepare the crate image. Please retry.')));
     };
     if (signal?.aborted) abort();
-    else image.src = '/111k/crate-reference.webp';
+    else image.src = '/111k/crate-reference-v16.webp';
   });
 }
 

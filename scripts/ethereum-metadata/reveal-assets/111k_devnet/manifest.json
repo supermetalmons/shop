@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "catalogVersion": "111k-v4",
+  "catalogVersion": "111k-v5",
   "dropId": "111k_devnet",
   "baseUrl": "https://cdn.lil.org/nft/111k/",
   "artworkCount": 111111,
@@ -65602,11 +65602,10 @@
     },
     "receipts": {
       "count": 85556,
-      "pathTemplate": "receipts/{id}.webp",
-      "baseUrl": "https://wip.lil.org/111k/",
+      "pathTemplate": "placeholder.png",
       "aspectRatio": [
-        1,
-        1
+        466,
+        503
       ]
     }
   }

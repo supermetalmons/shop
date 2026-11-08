@@ -69,14 +69,14 @@ test('Ethereum relic fulfillment shows the matching relic without contents or co
   t.mock.method(globalThis, 'fetch', async input => {
     const url = String(input);
     urls.push(url);
-    return Response.json({ image: 'https://wip.lil.org/111k/receipt_background.webp' });
+    return Response.json({ image: 'https://cdn.lil.org/nft/111k/placeholder.png' });
   });
   const view = render(createElement(FulfillmentOrderCard, props({
     order: order({ dropId: '111k_devnet', source: 'ethereum', relics: [18] }), drop: undefined,
   })));
   assert.ok(view.getByText('Relic #18'));
   const image = await view.findByRole('img', { name: 'relic receipt #18' });
-  assert.equal(image.getAttribute('src'), 'https://wip.lil.org/111k/receipt_background.webp');
+  assert.equal(image.getAttribute('src'), 'https://cdn.lil.org/nft/111k/placeholder.png');
   assert.ok(urls.some(url => new URL(url).searchParams.get('kind') === 'relic_receipt'));
   assert.equal(view.queryByRole('button', { name: 'Show contents' }), null);
   assert.equal(view.queryByRole('button', { name: 'Download code PNG' }), null);

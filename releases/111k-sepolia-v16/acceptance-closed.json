@@ -1,0 +1,340 @@
+{
+  "stage": "closed",
+  "success": true,
+  "checkedAt": "2026-11-08T00:03:06.037Z",
+  "chainId": 11155111,
+  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+  "deploymentId": "v16",
+  "catalogVersion": "111k-v5",
+  "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a",
+  "remoteReadOnly": true,
+  "config": {
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "chainName": "Sepolia",
+    "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/",
+    "deploymentBlock": 12087015,
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "enabled": true,
+    "testnet": true,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "deliveryFeeWei": "100000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15,
+    "maxDeliveryItems": 50
+  },
+  "stats": {
+    "chainId": 11155111,
+    "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+    "owner": null,
+    "allocatedCrates": 1998,
+    "warehousesMinted": 0,
+    "artworksMinted": 0,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": false,
+    "remainingCrates": 3557,
+    "remainingWarehouses": 323,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "maxDiscountedMints": 5555,
+    "totalDiscountedMints": 0,
+    "relicsAllocated": 18,
+    "relicsMinted": 0,
+    "remainingRelics": 18
+  },
+  "registry": {
+    "deploymentId": "v16",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/",
+    "deploymentBlock": 12087015,
+    "catalogVersion": "111k-v5",
+    "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://cdn.lil.org/nft/111k/placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}],\"aspectRatio\":{\"width\":466,\"height\":503}}",
+    "templateSha256": "07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9",
+    "state": "active",
+    "revision": 3,
+    "createdAtMs": 1794095510000,
+    "updatedAtMs": 1794096130000,
+    "activatedAtMs": 1794096130000,
+    "provisionedAtMs": 1794096013032,
+    "lastError": null
+  },
+  "baselineChecks": [
+    {
+      "kind": "artwork",
+      "displayId": 111111,
+      "tokenId": "111111",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "crate",
+      "displayId": 1,
+      "tokenId": "111112",
+      "image": "https://cdn.lil.org/nft/111k/crate.webp",
+      "aspectRatio": {
+        "width": 4,
+        "height": 3
+      }
+    },
+    {
+      "kind": "crate",
+      "displayId": 5555,
+      "tokenId": "116666",
+      "image": "https://cdn.lil.org/nft/111k/crate.webp",
+      "aspectRatio": {
+        "width": 4,
+        "height": 3
+      }
+    },
+    {
+      "kind": "warehouse",
+      "displayId": 1,
+      "tokenId": "116667",
+      "image": "https://cdn.lil.org/nft/111k/warehouse.webp",
+      "aspectRatio": {
+        "width": 3,
+        "height": 2
+      }
+    },
+    {
+      "kind": "warehouse",
+      "displayId": 505,
+      "tokenId": "117171",
+      "image": "https://cdn.lil.org/nft/111k/warehouse.webp",
+      "aspectRatio": {
+        "width": 3,
+        "height": 2
+      }
+    },
+    {
+      "kind": "artwork_receipt",
+      "displayId": 1,
+      "tokenId": "1000001",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "artwork_receipt",
+      "displayId": 111111,
+      "tokenId": "1111111",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "artwork_receipt",
+      "displayId": 111112,
+      "tokenId": "1111112",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "artwork_receipt",
+      "displayId": 222222,
+      "tokenId": "1222222",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "crate_receipt",
+      "displayId": 1,
+      "tokenId": "2000001",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "crate_receipt",
+      "displayId": 5555,
+      "tokenId": "2005555",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "relic_receipt",
+      "displayId": 1,
+      "tokenId": "3000001",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "relic_receipt",
+      "displayId": 18,
+      "tokenId": "3000018",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    },
+    {
+      "kind": "artwork",
+      "displayId": 1,
+      "tokenId": "1",
+      "image": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "aspectRatio": {
+        "width": 466,
+        "height": 503
+      }
+    }
+  ],
+  "primaryMediaChecks": [
+    {
+      "url": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "contentType": "image/png",
+      "bytes": 68090,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/crate.webp",
+      "contentType": "image/webp",
+      "bytes": 278364,
+      "cors": "*"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+      "contentType": "image/webp",
+      "bytes": 320838,
+      "cors": "*"
+    }
+  ],
+  "relicAllowances": [
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "owner": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "observedBlock": 12087097,
+      "blockHash": "0x00087a51faf1faecb132f414b69a70aa36ec2bc5ad1952b3d553c183da3fcf40",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "owner": "0xe4790dd79c334e3f848904975272ec17f9f70366",
+      "observedBlock": 12087097,
+      "blockHash": "0x00087a51faf1faecb132f414b69a70aa36ec2bc5ad1952b3d553c183da3fcf40",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "owner": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "observedBlock": 12087097,
+      "blockHash": "0x00087a51faf1faecb132f414b69a70aa36ec2bc5ad1952b3d553c183da3fcf40",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "owner": "0x29f7a2cfe212492ddb343035479d062112284ddf",
+      "observedBlock": 12087097,
+      "blockHash": "0x00087a51faf1faecb132f414b69a70aa36ec2bc5ad1952b3d553c183da3fcf40",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 3,
+      "relicsUsed": 0,
+      "remainingAllowance": 3
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "owner": "0x31cd63c73e74808793f134f8146a1e3aa1637b5d",
+      "observedBlock": 12087097,
+      "blockHash": "0x00087a51faf1faecb132f414b69a70aa36ec2bc5ad1952b3d553c183da3fcf40",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 2,
+      "relicsUsed": 0,
+      "remainingAllowance": 2
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "owner": "0xf743b8e23d3ffcbde398aba9b9f83a98f56845f4",
+      "observedBlock": 12087097,
+      "blockHash": "0x00087a51faf1faecb132f414b69a70aa36ec2bc5ad1952b3d553c183da3fcf40",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 2,
+      "relicsUsed": 0,
+      "remainingAllowance": 2
+    },
+    {
+      "chainId": 11155111,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "owner": "0x336c8e2add19149bfc934fb2557c6bdeffa8009b",
+      "observedBlock": 12087097,
+      "blockHash": "0x00087a51faf1faecb132f414b69a70aa36ec2bc5ad1952b3d553c183da3fcf40",
+      "saleActive": false,
+      "relicsAllocated": 18,
+      "relicsMinted": 0,
+      "remainingRelics": 18,
+      "claimedMask": 0,
+      "relicLimit": 2,
+      "relicsUsed": 0,
+      "remainingAllowance": 2
+    }
+  ],
+  "qa": null
+}

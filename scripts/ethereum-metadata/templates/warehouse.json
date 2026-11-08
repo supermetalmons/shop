@@ -1,8 +1,9 @@
 {
   "name": "Warehouse #{{displayId}}",
   "description": "",
-  "image": "https://wip.lil.org/111k/warehouse.webp",
+  "image": "https://cdn.lil.org/nft/111k/warehouse.webp",
   "attributes": [
     { "trait_type": "type", "value": "warehouse" }
-  ]
+  ],
+  "aspectRatio": { "width": 3, "height": 2 }
 }

@@ -9,8 +9,8 @@ function installImage(t: TestContext, decode: () => Promise<void> = () => Promis
   const requests: string[] = [];
   class TestImage {
     decoding = '';
-    naturalWidth = 1254;
-    naturalHeight = 1104;
+    naturalWidth = 1536;
+    naturalHeight = 1024;
     onload: (() => void) | null = null;
     onerror: (() => void) | null = null;
     decode = decode;
@@ -24,24 +24,31 @@ function installImage(t: TestContext, decode: () => Promise<void> = () => Promis
   return requests;
 }
 
-test('warehouse is a bounded hollow shell with a floor and calibrated projected exterior', async t => {
+test('warehouse is a bounded hollow pitched-roof shell with a floor and calibrated projected exterior', async t => {
   const requests = installImage(t);
   const model = await createWarehouseModel();
-  assert.deepEqual(requests, ['/111k/warehouse-reference.webp']);
-  assert.ok(model.hitMeshes.length <= 24);
+  assert.deepEqual(requests, ['/111k/warehouse-reference-v16.webp']);
+  assert.ok(model.hitMeshes.length <= 32);
   const camera = new THREE.PerspectiveCamera(WAREHOUSE_CAMERA.fov, WAREHOUSE_IMAGE_ASPECT, 0.1, 100);
   camera.position.fromArray(WAREHOUSE_CAMERA.position);
   camera.lookAt(...WAREHOUSE_CAMERA.target);
   camera.updateMatrixWorld(true);
   model.root.updateMatrixWorld(true);
   const bounds = new THREE.Box3().setFromObject(model.root);
-  assert.ok(Math.abs(bounds.min.y + WAREHOUSE_BOUNDS.height / 2) < 1e-6);
-  assert.ok(Math.abs(bounds.max.x - WAREHOUSE_BOUNDS.width / 2) < 1e-6);
-  assert.ok(Math.abs(bounds.max.z - WAREHOUSE_BOUNDS.depth / 2) < 1e-6);
+  assert.ok(bounds.min.y >= -WAREHOUSE_BOUNDS.height / 2 - 0.5);
+  assert.ok(bounds.max.y <= WAREHOUSE_BOUNDS.height / 2 + 0.75);
+  assert.ok(Math.max(Math.abs(bounds.min.x), bounds.max.x) <= WAREHOUSE_BOUNDS.width / 2 + 0.2);
+  assert.ok(Math.max(Math.abs(bounds.min.z), bounds.max.z) <= WAREHOUSE_BOUNDS.depth / 2 + 0.02);
   const ray = new THREE.Raycaster(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -1, 0));
   const floor = ray.intersectObjects(model.hitMeshes)[0];
   assert.ok(floor);
-  assert.ok(floor.point.y < -3.8, 'The interior remains empty down to the floor.');
+  assert.equal(floor.object.name, 'warehouse-floor');
+  assert.ok(Math.abs(floor.point.y + WAREHOUSE_BOUNDS.height / 2 - 0.1) < 1e-6, 'The interior remains empty down to the floor.');
+  for (const [x, y, name] of [[900, 650, 'warehouse-front'], [200, 500, 'warehouse-left'],
+    [700, 200, 'warehouse-roof-left'], [660, 45, 'warehouse-roof-vent-0']] as const) {
+    ray.setFromCamera(new THREE.Vector2(x / 1536 * 2 - 1, 1 - y / 1024 * 2), camera);
+    assert.ok(ray.intersectObjects(model.hitMeshes)[0]?.object.name.startsWith(name), `The photograph's ${name} must land on its own geometry.`);
+  }
   let triangles = 0;
   const point = new THREE.Vector3();
   for (const mesh of model.hitMeshes) {
@@ -54,7 +61,7 @@ test('warehouse is a bounded hollow shell with a floor and calibrated projected 
       assert.ok(Math.abs(coordinates.getY(index) / coordinates.getZ(index) - (point.y + 1) / 2) < 1e-6);
     }
   }
-  assert.ok(triangles <= 300);
+  assert.ok(triangles <= 600);
   model.dispose();
 });
 
@@ -101,7 +108,7 @@ test('fracture is deterministic, finite, reversible and fully disposes its share
 });
 
 function cratePreview() {
-  return { image: { width: 512, height: 350 } as HTMLCanvasElement, width: 1218, height: 833 };
+  return { image: { width: 512, height: 384 } as HTMLCanvasElement, width: 1448, height: 1086 };
 }
 
 test('eleven crate sprites use one shared decoded image and twenty-two triangles without loading a model', t => {
@@ -145,7 +152,7 @@ test('eleven crate sprites use one shared decoded image and twenty-two triangles
   crates.dispose();
   assert.deepEqual(disposed, { texture: 1, material: 1, geometry: 1, batch: 1 });
   assert.equal(crates.root.children.length, 0);
-  assert.deepEqual([preview.image.width, preview.image.height], [512, 350], 'The fallback still owns the decoded canvas.');
+  assert.deepEqual([preview.image.width, preview.image.height], [512, 384], 'The fallback still owns the decoded canvas.');
 });
 
 test('invalid sprite allocations, previews and transforms fail before drawing', t => {

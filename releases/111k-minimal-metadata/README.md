@@ -1,8 +1,11 @@
 # 111K minimal metadata
 
+This historical record describes the October 28 publication. Use the current
+[metadata guide](../../scripts/docs/111k_metadata.md) for replacement deployments.
+
 Published and verified on October 28, 2026 (Europe/Istanbul). All 689,896 JSON objects were replaced at their existing URLs: 344,948 each under `111k-sepolia/` and `111k/`. Both networks now contain identical JSON bodies for each token ID.
 
-Metadata uses minimal names, empty descriptions, the five supplied `wip.lil.org` image URLs, and one lowercase `type` attribute. Artwork names are decimal token IDs. Other names use their existing item numbers: `Warehouse #N`, `Crate #N`, `Crate Receipt #N`, and `Receipt #N`. Artwork has type `painting`; artwork receipts have type `receipt`. Physical-only receipts retain their existing numbering through `Receipt #222222`.
+That publication used minimal names, empty descriptions, five original image URLs, and one lowercase `type` attribute. Artwork names are decimal token IDs. Other names use their existing item numbers: `Warehouse #N`, `Crate #N`, `Crate Receipt #N`, and `Receipt #N`. Artwork has type `painting`; artwork receipts have type `receipt`. Physical-only receipts retain their existing numbering through `Receipt #222222`. Original image observations remain in the archived evidence linked below.
 
 ## Editing and publishing
 
@@ -37,5 +40,5 @@ Configure the R2 credentials described in the metadata guide before publishing o
 - [Manifest](manifest.json) and [generation validation](generation-validation.json)
 - [Publication](publication.json), [Sepolia audit](verification-sepolia.json), and [mainnet audit](verification-mainnet.json)
 - [Application release](application-release.json) and [public HTTP checks](http-headers-verification.json)
-- [Sample acceptance](sample-smoke.json), [production acceptance](public-smoke.json), and [end-to-end verification](e2e-verification.json)
-- [Browser/export verification](browser-verification.json) and [rollback verification](rollback-verification.json)
+- [Sample acceptance](https://github.com/supermetalmons/shop/blob/28b7fb1c23d089b5d3031218628e43d75bb3cad8/releases/111k-minimal-metadata/sample-smoke.json), [production acceptance](https://github.com/supermetalmons/shop/blob/28b7fb1c23d089b5d3031218628e43d75bb3cad8/releases/111k-minimal-metadata/public-smoke.json), and [end-to-end verification](e2e-verification.json)
+- [Browser/export verification](https://github.com/supermetalmons/shop/blob/28b7fb1c23d089b5d3031218628e43d75bb3cad8/releases/111k-minimal-metadata/browser-verification.json) and [rollback verification](rollback-verification.json)

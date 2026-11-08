@@ -1,0 +1,117 @@
+[
+  {
+    "network": "sepolia",
+    "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+    "bucket": "cdn-mons-shop",
+    "prefix": "111k-sepolia/v16/",
+    "objectsSha256": "52bac70eac017a92123b83467ea63dddf6977de0d9dfd01b92ee832ce4d1db24",
+    "objectCount": 344984,
+    "totalBytes": 88551428,
+    "complete": true,
+    "samples": [
+      {
+        "tokenId": "1",
+        "sha256": "3810244d069fe0b0cff58253c0e263a13453bad444e8cc20502c795977631828",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "55556",
+        "sha256": "9627a50e856661f373a5c05dce3eba5e3fd6b4ae51c835039698ccb01f35d781",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "111111",
+        "sha256": "ae052bf919fde60cde1394c99dfe39167aa067847da89814986c75057a10d853",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "111112",
+        "sha256": "7587469fef0faed966d57b8d24725c25ef684d7b8c7016fab19563428a3f1644",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "116666",
+        "sha256": "a7a78408f590c620d24fc264a6b00bdfb5e3abbc91643c317980a2000a8281fd",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "116667",
+        "sha256": "0e0b4c575a79ef224d544dd7dd6d86f55675c2ba50be6baf7bea24c0c2e7a607",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "117171",
+        "sha256": "e95b572679ee93db035af780a57bd30e314078c0de07088499c6f37a9603d17d",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "117172",
+        "sha256": "cbdd0f541d28a9546042e1c4e4e8aabdddd90ddf85b27ce3a85f6b223d5fe20c",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "117189",
+        "sha256": "d27c99e9ba0201c7b22077e4e4fabdc76cbcb9f5189ebdc2b6340e1bb636e8be",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "1000001",
+        "sha256": "5356d23980836609502ee09038256dddf54bcb578144089b0a2dc0173da36050",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "1111111",
+        "sha256": "5ce74921e94be65636f4015be6c78a6ba9dce9044531f1b7b90e1c741056f83b",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "1111112",
+        "sha256": "08b7ae830dce3fb5e70f4a84bc1358a71807853fe5b20d547a6853ab9dbcefee",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "1222222",
+        "sha256": "2b28f7c129eab6db98de394b0b4d53de2d68646c0fb7d1126966b336acb01105",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "2000001",
+        "sha256": "2eb9a72820c8f40f3d837e0c85bc7614ed091d71e26b3db190097182484ae395",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "2005555",
+        "sha256": "194ddbd87662e4532a1bf8c71c56a4fec96b50e4f3e6a93f7c81e6aefb3c91b8",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "3000001",
+        "sha256": "d8e4e3f7c655508d83a19cb5bd3d87f15c70b7fd154b061f452fcd24ffc1842a",
+        "cacheControl": "no-store",
+        "cors": "*"
+      },
+      {
+        "tokenId": "3000018",
+        "sha256": "e691f68e4519fe7ce7ba9f30e80b7209c17bb46deab9a1b1730604fd6a7f2bc7",
+        "cacheControl": "no-store",
+        "cors": "*"
+      }
+    ],
+    "verifiedAt": "2026-11-07T23:45:57.321Z"
+  }
+]

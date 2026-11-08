@@ -13,10 +13,10 @@ import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_de
 const REVEAL_TRANSIENT_TRANSACTION_LIMIT = 10_000;
 const REVEAL_TRANSIENT_TRANSACTION_TTL_MS = 15 * 60_000;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: 'Preserved description',
-  image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }, { trait_type: 'series', value: '111K' }] });
+  image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }, { trait_type: 'series', value: '111K' }] });
 const deployment: EthereumRevealDeployment = { deploymentId: 'test-sepolia-1', dropId: '111k_devnet', chainId: 11155111,
   contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/test-sepolia-1/',
-  deploymentBlock: 100, catalogVersion: '111k-v4', templateJson,
+  deploymentBlock: 100, catalogVersion: '111k-v5', templateJson,
   templateSha256: createHash('sha256').update(templateJson).digest('hex'), state: 'active', revision: 3,
   createdAtMs: 1, updatedAtMs: 3, provisionedAtMs: 2, activatedAtMs: 3, lastError: null };
 const crateId = (index: number) => String(111_112 + index);
@@ -107,7 +107,7 @@ test('catalog preserves all category counts, exact ratios, posters, and immutabl
   assert.equal(result.artwork.description, 'Preserved description');
   assert.deepEqual(result.artwork.attributes, [{ trait_type: 'series', value: '111K' }, { trait_type: 'type', value: 'video' }]);
   assert.equal(JSON.parse(result.metadataJson).animation_url, 'https://cdn.lil.org/nft/111k/videos/3.mp4');
-  assert.equal(JSON.parse(result.placeholderJson).image, 'https://wip.lil.org/111k/artwork_placeholder.png');
+  assert.equal(JSON.parse(result.placeholderJson).image, 'https://cdn.lil.org/nft/111k/placeholder.png');
   for (const assetId of [1, 3000]) {
     const model = buildRevealedArtwork({ ...input, category: '3d', assetId });
     assert.equal(model.artwork.name, '71');

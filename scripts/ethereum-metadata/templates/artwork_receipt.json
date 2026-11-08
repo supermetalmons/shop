@@ -1,8 +1,9 @@
 {
   "name": "Receipt #{{displayId}}",
   "description": "",
-  "image": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+  "image": "https://cdn.lil.org/nft/111k/placeholder.png",
   "attributes": [
     { "trait_type": "type", "value": "receipt" }
-  ]
+  ],
+  "aspectRatio": { "width": 466, "height": 503 }
 }

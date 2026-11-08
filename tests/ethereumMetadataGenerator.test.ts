@@ -17,21 +17,23 @@ import { generateMetadata } from '../scripts/ethereum-metadata/generate.ts';
 import { withMetadataLock } from '../scripts/ethereum-metadata/lock.ts';
 
 const examples: Array<{ kind: EthereumItemKind; name: string; image: string; type: string }> = [
-  { kind: 'artwork', name: '1', image: 'artwork_placeholder.png', type: 'painting' },
+  { kind: 'artwork', name: '1', image: 'placeholder.png', type: 'painting' },
   { kind: 'warehouse', name: 'Warehouse #1', image: 'warehouse.webp', type: 'warehouse' },
   { kind: 'relic', name: 'Relic #1', image: 'relics/1.webp', type: 'relic' },
-  { kind: 'crate', name: 'Crate #1', image: 'crate.jpg', type: 'crate' },
-  { kind: 'crate_receipt', name: 'Crate Receipt #1', image: 'crate_receipt.webp', type: 'crate receipt' },
-  { kind: 'artwork_receipt', name: 'Receipt #1', image: 'artwork_placeholder_receipt.webp', type: 'receipt' },
-  { kind: 'relic_receipt', name: 'Relic Receipt #1', image: 'receipt_background.webp', type: 'relic receipt' },
+  { kind: 'crate', name: 'Crate #1', image: 'crate.webp', type: 'crate' },
+  { kind: 'crate_receipt', name: 'Crate Receipt #1', image: 'placeholder.png', type: 'crate receipt' },
+  { kind: 'artwork_receipt', name: 'Receipt #1', image: 'placeholder.png', type: 'receipt' },
+  { kind: 'relic_receipt', name: 'Relic Receipt #1', image: 'placeholder.png', type: 'relic receipt' },
 ];
 
 test('the editable templates produce the approved metadata format', async () => {
   const { templates } = await loadMetadataTemplates();
   for (const example of examples) {
     assert.deepEqual(renderMetadata(example.kind, 1, templates), {
-      name: example.name, description: '', image: `https://wip.lil.org/111k/${example.image}`,
+      name: example.name, description: '', image: `${example.kind === 'relic' ? 'https://wip.lil.org/111k/' : 'https://cdn.lil.org/nft/111k/'}${example.image}`,
       attributes: [{ trait_type: 'type', value: example.type }],
+      ...(example.kind === 'relic' ? {} : { aspectRatio: example.kind === 'crate' ? { width: 4, height: 3 } :
+        example.kind === 'warehouse' ? { width: 3, height: 2 } : { width: 466, height: 503 } }),
     });
   }
   assert.equal(renderMetadata('artwork', 111111, templates).name, '111111');
@@ -54,12 +56,12 @@ test('all eighteen relics use their individual images and reject numbers outside
   for (const displayId of [0, 19]) assert.throws(() => renderMetadata('relic', displayId, templates), /Invalid item number/);
 });
 
-test('all eighteen relic receipts use the shared receipt background and matching display numbers', async () => {
+test('all eighteen relic receipts use the shared placeholder and matching display numbers', async () => {
   const { templates } = await loadMetadataTemplates();
   for (let displayId = 1; displayId <= 18; displayId++) {
     assert.deepEqual(renderMetadata('relic_receipt', displayId, templates), {
-      name: `Relic Receipt #${displayId}`, description: '', image: 'https://wip.lil.org/111k/receipt_background.webp',
-      attributes: [{ trait_type: 'type', value: 'relic receipt' }],
+      name: `Relic Receipt #${displayId}`, description: '', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
+      attributes: [{ trait_type: 'type', value: 'relic receipt' }], aspectRatio: { width: 466, height: 503 },
     });
   }
   for (const displayId of [0, 19]) assert.throws(() => renderMetadata('relic_receipt', displayId, templates), /Invalid item number/);
@@ -96,6 +98,7 @@ test('templates can evolve without embedding descriptions, images, or attributes
   assert.deepEqual(renderMetadata('artwork', 42, templates), {
     name: '42', description: 'Painting 42, token 42.', image: 'https://example.com/paintings/42.png',
     attributes: [{ trait_type: 'type', value: 'painting' }, { trait_type: 'edition', value: 3 }],
+    aspectRatio: { width: 466, height: 503 },
   });
   templates.artwork.name = '{{unknown}}';
   assert.throws(() => renderMetadata('artwork', 42, templates), /Unresolved/);
@@ -154,7 +157,7 @@ test('artifact manifests bind the stored template snapshot and object ledger', a
   assert.deepEqual(await readMetadataManifest(directory), manifest);
   const snapshot = join(directory, 'templates', 'artwork.json');
   const template = await readFile(snapshot, 'utf8');
-  await writeFile(snapshot, template.replace('artwork_placeholder.png', 'replacement.png'));
+  await writeFile(snapshot, template.replace('placeholder.png', 'replacement.png'));
   await assert.rejects(readMetadataManifest(directory), /template checksum mismatch/);
   await writeFile(snapshot, template);
   await writeFile(join(directory, 'objects.jsonl'), '{}\n');

@@ -1,0 +1,34 @@
+{
+  "assets": [
+    {
+      "url": "https://cdn.lil.org/nft/111k/crate.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "accessControlAllowOrigin": "*",
+      "width": 1448,
+      "height": 1086,
+      "bytes": 278364,
+      "sha256": "38a78883b37325bd90fb1723bdd3f1973fc85753d198298f21651f773ceb13e7"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+      "status": 200,
+      "contentType": "image/webp",
+      "accessControlAllowOrigin": "*",
+      "width": 1536,
+      "height": 1024,
+      "bytes": 320838,
+      "sha256": "a581c2249e33deef41bb8d424e1018f2d040cbb653c78ba27e0dddf228cc8e2b"
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/placeholder.png",
+      "status": 200,
+      "contentType": "image/png",
+      "accessControlAllowOrigin": "*",
+      "width": 932,
+      "height": 1006,
+      "bytes": 68090,
+      "sha256": "4c1f53eae720bff03255e4aa329c8cf5af7e528e29ea85aef289bdd24640cd75"
+    }
+  ]
+}

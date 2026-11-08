@@ -75,7 +75,7 @@ test('Ethereum PNG and ZIP claim links stay on the local app origin', async () =
   inputs.displayedOrders = [{ ...order(), dropId: '111k_devnet', source: 'ethereum',
     boxes: [{ boxId: 5555, claimCode: 'ABCDEF123456', dudeIds: [111081] }], cardClaims: [] }];
   inputs.fulfillmentFigureMetadataTargets = [];
-  const image = 'https://wip.lil.org/crate-receipt.webp';
+  const image = 'https://cdn.lil.org/nft/111k/placeholder.png';
   mock.method(globalThis, 'fetch', async () => Response.json({ image }));
   const files = dependencies();
   const { result } = renderHook(() => useFulfillmentExports(inputs, files));

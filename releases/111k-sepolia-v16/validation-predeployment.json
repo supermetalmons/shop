@@ -1,0 +1,89 @@
+{
+  "recordedAt": "2026-11-07T23:16:23.432Z",
+  "deploymentId": "v16",
+  "catalogVersion": "111k-v5",
+  "checks": [
+    {
+      "command": "npm run test:ethereum:contracts",
+      "log": ".cache/111k-v16-release/contracts-tests.log",
+      "logSha256": "c8923dfb2fdff3d63e2517ba355d7ca06c0c94c3d40250d5e4c6ade2307a94fd",
+      "exitCode": 0,
+      "solidityPassed": 266,
+      "soliditySkipped": 4,
+      "toolingPassed": 125
+    },
+    {
+      "command": "npm run typecheck:tools",
+      "log": ".cache/111k-v16-release/typecheck-tools.log",
+      "logSha256": "70d6d696e83e6b05146bb20c710947dfcc17dcc8ed45df60dce9bae0299950c0",
+      "exitCode": 0
+    },
+    {
+      "command": "node --import tsx --test tests/ethereumAbi.test.ts tests/ethereum/singleContractDeployment.test.ts",
+      "log": ".cache/111k-v16-release/defaults-tests.log",
+      "logSha256": "74042e25c24bc07490f9f7f2afe194bed3becbcd01bba072bd7b90c5ffe780d6",
+      "exitCode": 0,
+      "passed": 13
+    },
+    {
+      "command": "node --import tsx --test tests/checkAll.test.ts",
+      "log": ".cache/111k-v16-release/validation-workspace-tests.log",
+      "logSha256": "ac9c4647f57c3ef60ef1c70c5bc64e55c2938650dfd22586508a3c4f2ecc7879",
+      "exitCode": 0,
+      "passed": 6
+    },
+    {
+      "command": "npm run ethereum:metadata -- generate --directory .cache/111k-metadata/v16",
+      "log": ".cache/111k-v16-release/metadata-generate.log",
+      "logSha256": "1a62ead65e23429afc6ba6b8294833fe0834991075cac94a641713e308d453ac",
+      "exitCode": 0,
+      "objectCount": 344984
+    },
+    {
+      "command": "npm run ethereum:metadata -- validate --directory .cache/111k-metadata/v16",
+      "log": ".cache/111k-v16-release/metadata-validation.log",
+      "logSha256": "67d9377c8546ccdf828e1dd5a951655a7b01c80c86b77150ecf7cc5fdd477f7d",
+      "exitCode": 0,
+      "objectCount": 344984
+    },
+    {
+      "command": "ETHEREUM_111K_E2E_METADATA_DIRECTORY=.cache/111k-metadata/v16 npm run test:ethereum:e2e",
+      "log": ".cache/111k-v16-release/e2e.log",
+      "logSha256": "307c46ab7dcb978b3eafc97191ef98ade295e2d974d057d98218bd44a4553f15",
+      "exitCode": 0,
+      "lifecycleAssertions": 43
+    },
+    {
+      "command": "npm run check:api",
+      "exitCode": 0,
+      "testGroupsPassed": [
+        3079,
+        58
+      ],
+      "logSha256": "40be4f5b360124ec9f374aaca2fcc11c7eef9ef802a10b53c764101c15f8581c"
+    },
+    {
+      "command": "npm run check:frontend",
+      "exitCode": 0,
+      "testGroupsPassed": [
+        4,
+        29,
+        1,
+        4994
+      ],
+      "logSha256": "9df56876e48afdb8770923cd76a2912ffd8e9b3a357ba346c1f00bd9e697da2c"
+    }
+  ],
+  "preparation": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+  "signedTransactions": 0,
+  "visualChecks": {
+    "deterministicFrames": 24,
+    "mintCases": 8,
+    "interactiveRevealCases": 10,
+    "sceneTests": 90
+  },
+  "testIsolationRepairs": [
+    "Full collection restoration test has a 180-second bound; all restore assertions retained.",
+    "Direct payment page tests mock confirmation requests."
+  ]
+}

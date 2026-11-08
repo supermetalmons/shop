@@ -20,10 +20,10 @@ import { publishObjects } from '../scripts/ethereum-metadata/remote.ts';
 import { createAsyncD1MaintenanceQuery } from '../scripts/shared/asyncD1MaintenanceQuery.ts';
 
 const scope = { chainId: 11155111, contractAddress: `0x${'ab'.repeat(20)}` };
-const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }] });
+const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }], aspectRatio: { width: 466, height: 503 } });
 const registration = { deploymentId: 'sepolia-test-2', dropId: '111k_devnet', ...scope,
   metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/sepolia-test-2/', deploymentBlock: 12005467,
-  catalogVersion: '111k-v4', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
+  catalogVersion: '111k-v5', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
 
 async function fixture(t: TestContext) {
   const database = new DatabaseSync(':memory:');
@@ -75,7 +75,7 @@ test('registry lookup is scoped to chain and normalized contract', async t => {
   assert.equal(await readEthereumRevealDeployment(db, { ...scope, chainId: 1 }), null);
 });
 
-for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`${catalogVersion} records remain inspectable and pausable but cannot register or activate`, async t => {
+for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3', '111k-v4']) test(`${catalogVersion} records remain inspectable and pausable but cannot register or activate`, async t => {
   const { database, query } = await fixture(t);
   const legacy = { ...registration, catalogVersion };
   query(buildEthereumRevealRegistration(legacy));
@@ -164,6 +164,26 @@ test('registration reads an unrevealed immutable template and control arguments 
   assert.equal(parseEthereumRevealControlArgs(['register', '--manifest', manifest]).write, false);
   assert.throws(() => parseEthereumRevealControlArgs(['activate', '--deployment-id', registration.deploymentId]), /expected-revision/);
   assert.throws(() => parseEthereumRevealControlArgs(['status', '--write']), /only accepts/);
+});
+
+test('registration requires the CDN placeholder and its canonical aspect ratio', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'reveal-registration-media-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const manifest = join(directory, 'deployment.json');
+  const template = JSON.parse(templateJson);
+  await writeFile(manifest, JSON.stringify({ ...registration, templateFile: 'template.json' }));
+  for (const aspectRatio of [undefined, null, [], {}, { width: 466 }, { width: 0, height: 503 },
+    { width: 466, height: -503 }, { width: '466', height: 503 }, { width: 1, height: 1 },
+    { width: 932, height: 1006 }, { width: 466, height: 503, extra: true }]) {
+    await writeFile(join(directory, 'template.json'), JSON.stringify({ ...template, aspectRatio }));
+    await assert.rejects(loadEthereumRevealRegistration(manifest), /unrevealed/);
+  }
+  await writeFile(join(directory, 'template.json'), JSON.stringify({ ...template, image: 'https://example.com/placeholder.png' }));
+  await assert.rejects(loadEthereumRevealRegistration(manifest), /unrevealed/);
+  await writeFile(join(directory, 'template.json'), templateJson);
+  const loaded = await loadEthereumRevealRegistration(manifest);
+  assert.equal(loaded.templateJson, templateJson);
+  assert.equal(loaded.templateSha256, createHash('sha256').update(templateJson).digest('hex'));
 });
 
 test('control arguments accept exactly one manifest or deployment ID target', () => {

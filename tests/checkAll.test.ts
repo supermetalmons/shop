@@ -23,6 +23,7 @@ function project(t: TestContext) {
   write('onchain/ethereum/package.json', '{"private":true}');
   write('onchain/ethereum/fixtures/eip712.json', '{"version":1}');
   write('onchain/ethereum/src/NFT111K.sol', 'original Solidity source');
+  write('scripts/ethereum-metadata/lock.ts', 'export const withMetadataLock = async (_path, work) => work();');
   write('shared/removed.ts', 'removed after staging');
   write('tests/ethereum/local.test.ts', 'nested test');
   write('tests/ethereumRoot.test.ts', 'root test');
@@ -42,6 +43,8 @@ test('validation copies current source and removes temporary changes after failu
     workspace = directory;
     assert.equal(readFileSync(join(directory, 'onchain/ethereum/src/NFT111K.sol'), 'utf8'), 'current unstaged Solidity source');
     assert.equal(readFileSync(join(directory, 'shared/new.ts'), 'utf8'), 'current untracked source');
+    assert.equal(readFileSync(join(directory, 'scripts/ethereum-metadata/lock.ts'), 'utf8'),
+      'export const withMetadataLock = async (_path, work) => work();');
     assert.equal(existsSync(join(directory, 'shared/removed.ts')), false);
     writeFileSync(join(directory, 'onchain/ethereum/fixtures/eip712.json'), 'temporary generated fixture');
     throw new Error('test failure');

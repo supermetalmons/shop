@@ -135,7 +135,7 @@ function previews(count = 20): CratePreviewAssets {
 function harness(overrides: Partial<CrateSceneProps> = {}) {
   const events = { ready: 0, assets: 0, complete: 0, errors: [] as Error[], frames: 0 };
   let props: CrateSceneProps = { assets: null, hit: null, opening: false, active: true, suspended: false, reducedMotion: false,
-    viewport: { left: 0, top: 0, width: 1000, height: 800 }, crateRect: { left: 250, top: 200, width: 500, height: 500 * 833 / 1218 },
+    viewport: { left: 0, top: 0, width: 1000, height: 800 }, crateRect: { left: 250, top: 200, width: 500, height: 500 * 1086 / 1448 },
     onReady: () => { events.ready++; }, onAssetsReady: () => { events.assets++; }, onComplete: () => { events.complete++; },
     onError: error => { events.errors.push(error); }, onFrame: () => { events.frames++; }, ...overrides };
   const view = render(createElement(CrateScene, props));
@@ -237,8 +237,8 @@ test('a completed reduced-motion reveal stays complete when the motion preferenc
 
 for (const count of [20, 31]) for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
   test(`${count} preview quads stay outside the crate after clearing its rim at ${width}x${height}`, async () => {
-    const crateWidth = Math.min(width * 0.76, height * 0.42 * 1218 / 833, 700);
-    const crateHeight = crateWidth * 833 / 1218;
+    const crateWidth = Math.min(width * 0.76, height * 0.42 * 1448 / 1086, 700);
+    const crateHeight = crateWidth * 1086 / 1448;
     const run = harness({ assets: previews(count), inspectionTime: 0,
       viewport: { left: 0, top: 0, width, height },
       crateRect: { left: (width - crateWidth) / 2, top: height * 0.56 - crateHeight / 2, width: crateWidth, height: crateHeight } });

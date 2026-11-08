@@ -64,6 +64,11 @@ For unrevealed artwork, receipts, crates, warehouses, relics and other image
 paths outside the table, retain the supplied `metadata.image`. Their URLs do
 not use these companion rules.
 
+Fresh publications use `crate.webp` (1448 × 1086, 4:3) and `warehouse.webp`
+(1536 × 1024, 3:2) at the same CDN root. Unrevealed artwork and all receipt
+kinds use `placeholder.png` (932 × 1006, 466:503). Their metadata includes
+the corresponding `aspectRatio`; display these images without stretching.
+
 ## URL examples
 
 Each example uses asset ID 1 within its own family.

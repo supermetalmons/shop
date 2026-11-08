@@ -7,9 +7,9 @@ import { EthereumRevealStore, type RevealReceiptClaim, type RevealSql } from '..
 const deployment: EthereumRevealDeployment = {
   deploymentId: 'dispatch-test', dropId: '111k_devnet', chainId: 11155111,
   contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/dispatch-test/',
-  deploymentBlock: 100, catalogVersion: '111k-v4',
+  deploymentBlock: 100, catalogVersion: '111k-v5',
   templateJson: JSON.stringify({ name: '{{tokenId}}', description: '',
-    image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
+    image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [] }),
   templateSha256: '0'.repeat(64), state: 'active', revision: 3, createdAtMs: 1, updatedAtMs: 3,
   provisionedAtMs: 2, activatedAtMs: 3, lastError: null,
 };

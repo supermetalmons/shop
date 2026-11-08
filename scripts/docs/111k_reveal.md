@@ -11,15 +11,17 @@ For the relic selection and claim page, use the [relic claims guide](111k_relic_
 - Allowed VVV origins: `https://vvv.so` and `https://www.vvv.so`. Browsers set `Origin` automatically; backend callers must supply it.
 - No API key, wallet session, or signature is required.
 
-Examples target the Sepolia [v15 release](../../releases/111k-sepolia-v15/README.md), using catalog `111k-v4`. The release record tracks activation and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
+Examples target the Sepolia [v16 release](../../releases/111k-sepolia-v16/README.md), using catalog `111k-v5`. The collection is live with sales and reveal enabled, following deployment at block `12087015`; the release record documents activation, opening, and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
 
 ## Unrevealed artwork
 
 The **placeholder** is the shared image for unrevealed artwork. An unrevealed token's metadata has this `image` URL:
 
-[`https://wip.lil.org/111k/artwork_placeholder.png`](https://wip.lil.org/111k/artwork_placeholder.png)
+[`https://cdn.lil.org/nft/111k/placeholder.png`](https://cdn.lil.org/nft/111k/placeholder.png)
 
-Show this image while waiting, then replace it with the returned artwork. Pending responses contain `artworks: []`, not an artwork object containing the placeholder URL.
+The placeholder is 932 × 1006 pixels; metadata includes `"aspectRatio": { "width": 466, "height": 503 }`. Artwork, crate, and relic receipts share this placeholder. Crates use `https://cdn.lil.org/nft/111k/crate.webp` at 4:3 and warehouses use `https://cdn.lil.org/nft/111k/warehouse.webp` at 3:2.
+
+Show the placeholder while waiting, then replace it with the returned artwork and its assigned aspect ratio. Pending responses contain `artworks: []`, not an artwork object containing the placeholder URL.
 
 ## 1. Reveal an unpack transaction
 
@@ -32,7 +34,7 @@ POST /ethereum/111k/reveal/transaction
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
   "transactionHash": "<wallet-returned 0x-prefixed 64-hex-digit hash>"
 }
 ```
@@ -63,7 +65,7 @@ POST /ethereum/111k/reveal/tokens
 ```json
 {
   "chainId": 11155111,
-  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
   "tokenIds": ["1", "21"]
 }
 ```
@@ -103,7 +105,7 @@ Each artwork has this shape (illustrative values):
   "aspectRatio": { "width": 16, "height": 9 },
   "observation": {
     "transactionHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
-    "blockNumber": 12054660,
+    "blockNumber": 12087016,
     "blockHash": "0x2222222222222222222222222222222222222222222222222222222222222222"
   }
 }
@@ -153,7 +155,7 @@ frame, represented by the reduced ratio 466:503. Always use the returned
 future assets may differ. The fragment has the same surrounding artwork fields
 as the complete example above.
 
-The v4 catalog contains 76,642 eggs, 30,990 paintings, 58 videos, 3,000 3D
+The v5 catalog contains 76,642 eggs, 30,990 paintings, 58 videos, 3,000 3D
 models, and 421 animated artworks: 111,111 artworks total. The token-ID range
 and request limits are unchanged. Painting alts and video posters are variants
 of those artworks, not extra tokens. Videos include 16:9, 427:240, and 54:31

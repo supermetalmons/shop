@@ -99,7 +99,7 @@ test('clear cards keep a single pack preview as mint quantity changes', () => {
 
 for (const { path, family, title, image } of [
   { path: '/doge_day_2026', family: 'doge_day_2026', title: 'Doge Day 2026', image: '/drops/doge_day_2026/cover.jpg' },
-  { path: '/111k', family: '111k', title: '111k', image: 'https://wip.lil.org/111k/artwork_placeholder.png' },
+  { path: '/111k', family: '111k', title: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png' },
 ]) {
   test(`${title} displays its cover and subscribes to its family without purchase controls`, async t => {
     const route = resolveAppRoute({ pathname: `${path}/` });

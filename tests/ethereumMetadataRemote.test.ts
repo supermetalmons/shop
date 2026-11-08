@@ -536,7 +536,8 @@ test('unbound legacy snapshots cannot be reused by a publication', async t => {
   assert.deepEqual(objects.map(object => object.body.toString()).sort(), ['old one', 'old three', 'old two']);
 });
 
-test('restoration repairs missing objects, damaged metadata and headers from both snapshot versions', { timeout: 90_000 }, async t => {
+// Both versions restore all 344,984 objects with durable journals while other test files run concurrently.
+test('restoration repairs missing objects, damaged metadata and headers from both snapshot versions', { timeout: 180_000 }, async t => {
   const root = await temporaryDirectory(t);
   const directory = join(root, 'sepolia');
   await mkdir(directory);

@@ -71,7 +71,7 @@ function artwork(tokenId = '1', category: EthereumRevealedArtwork['category'] = 
 function item(tokenId = '1'): EthereumInventoryItem {
   return { tokenId, id: ethereumAssetId(config.chainId, contract, tokenId), chainId: config.chainId,
     contractAddress: contract, kind: 'artwork', displayId: Number(tokenId), owner, name: tokenId,
-    image: 'https://wip.lil.org/111k/artwork_placeholder.png', revealStatus: 'unrevealed' };
+    image: 'https://cdn.lil.org/nft/111k/placeholder.png', revealStatus: 'unrevealed' };
 }
 function pending(): EthereumPendingTransaction {
   return { scope, hash, action: 'unbox', submittedAt: submissionTime + 1, intent: {
@@ -484,7 +484,7 @@ test('tokens heal without a transaction hash and revealed media stays fixed afte
   const original = item();
   const view = harness({ items: [original, { ...item('2000001'), kind: 'crate_receipt' }] });
   await waitFor(() => assert.equal(view.result.current.applyArtwork(original).category, 'egg'));
-  view.update({ items: [{ ...original, image: 'https://wip.lil.org/old-placeholder.webp' }] });
+  view.update({ items: [{ ...original, image: 'https://example.com/stale-placeholder.webp' }] });
   assert.equal(view.result.current.applyArtwork(original).image, artwork().image);
   assert.equal(mocks.transaction.mock.callCount(), 0);
   assert.equal(readEthereumRevealJobs(scope).length, 0);

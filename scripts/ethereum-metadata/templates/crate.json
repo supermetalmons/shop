@@ -1,8 +1,9 @@
 {
   "name": "Crate #{{displayId}}",
   "description": "",
-  "image": "https://wip.lil.org/111k/crate.jpg",
+  "image": "https://cdn.lil.org/nft/111k/crate.webp",
   "attributes": [
     { "trait_type": "type", "value": "crate" }
-  ]
+  ],
+  "aspectRatio": { "width": 4, "height": 3 }
 }

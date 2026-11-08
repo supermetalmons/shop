@@ -102,12 +102,16 @@ async function loadRegistrationInput(path: string): Promise<{ deployment: Regist
   const source = await readFile(typeof row.templateFile === 'string' ? resolve(resolve(path, '..'), row.templateFile) :
     publicationDirectory ? join(publicationDirectory, 'templates', 'artwork.json') : DEFAULT_TEMPLATE, 'utf8');
   const template = JSON.parse(source) as Record<string, unknown>;
+  const aspectRatio = template.aspectRatio;
   if (typeof template.name !== 'string' || !template.name || typeof template.description !== 'string' ||
-    template.image !== 'https://wip.lil.org/111k/artwork_placeholder.png' || !Array.isArray(template.attributes) ||
-    Object.keys(template).some(key => !['name', 'description', 'image', 'attributes'].includes(key)) ||
+    template.image !== 'https://cdn.lil.org/nft/111k/placeholder.png' || !Array.isArray(template.attributes) ||
+    !aspectRatio || typeof aspectRatio !== 'object' || Array.isArray(aspectRatio) ||
+    !('width' in aspectRatio) || aspectRatio.width !== 466 || !('height' in aspectRatio) || aspectRatio.height !== 503 ||
+    Object.keys(aspectRatio).some(key => !['width', 'height'].includes(key)) ||
+    Object.keys(template).some(key => !['name', 'description', 'image', 'attributes', 'aspectRatio'].includes(key)) ||
     template.attributes.some(attribute => !attribute || typeof attribute !== 'object' || typeof attribute.trait_type !== 'string' ||
       !['string', 'number'].includes(typeof attribute.value))) throw new Error('Registration requires an unrevealed artwork template.');
-  const rendered = JSON.stringify(template).replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
+  const rendered = JSON.stringify(template, null, 2).replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
   if (/\{\{|\}\}/.test(rendered)) throw new Error('Unsupported metadata template substitution.');
   const templateJson = JSON.stringify(template);
   return { publicationDirectory, deployment: { ...identity,

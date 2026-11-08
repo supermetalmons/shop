@@ -5,13 +5,19 @@ and completed-operation evidence. Counts, URLs, versions, and state descriptions
 apply to their recorded verification time. Use the [project runbooks](../README.md#operations-and-reference)
 and committed deployment registry for current behavior.
 
+Obsolete 111K snapshots containing replaced container, placeholder, and receipt
+artwork have been removed from the current checkout. Historical links resolve
+to their original Git revision so the recorded observations and checksums remain
+intact. Current publications use the CDN assets documented in the
+[111K metadata guide](../scripts/docs/111k_metadata.md).
+
 | Area | Evidence |
 | --- | --- |
 | pre111k relic preorders | [Mainnet v2](pre111k-mainnet-v2/README.md), [Sepolia v2](pre111k-sepolia-v2/README.md), [Mainnet v1 deployment and activation](pre111k-mainnet-v1/README.md), [Sepolia v1 contract and storefront](pre111k-sepolia-v1/README.md) |
 | Mi Note mainnet launch | [Deployment and launch](mi-note-cards/README.md), [completed preorder conversion](mi-note-cards/preorder-upgrade/README.md) |
 | Mi Note devnet rehearsal | [Deployment, activation, and conversion](mi-note-cards-devnet/README.md) |
 | Mi Note metadata | [Public metadata](mi-note-cards-mainnet/README.md), [1396–1398](mi-note-cards-1396-1398/README.md), [1399–1400](mi-note-cards-1399-1400/README.md), [1409–1413](mi-note-cards-1409-1413/README.md), [1414–1419](mi-note-cards-1414-1419/README.md), [1420–1430](mi-note-cards-1420-1430/README.md) |
-| 111K Sepolia | [v14 animated artworks](111k-sepolia-v14/README.md), [v13 3D artworks](111k-sepolia-v13/README.md), [v12 relic reservation](111k-sepolia-v12/README.md), [v11 relic claims](111k-sepolia-v11/README.md), [v10 delivery configurations](111k-sepolia-v10/README.md), [v9 monument receipts](111k-sepolia-v9/README.md), [v8 monuments](111k-sepolia-v8/README.md), [v7](111k-sepolia-v7/README.md), [Single-contract release](111k-sepolia-single-contract/README.md), [Offchain metadata release](111k-sepolia-offchain/README.md), [Seaport release](111k-sepolia-seaport/README.md), [proceeds release](111k-sepolia-proceeds/README.md), [discount release](111k-sepolia-discounts/README.md), [initial release](111k-sepolia/README.md), [October 18 validation](111k-validation-2026-10-18/README.md) |
+| 111K Sepolia | [v16 container and placeholder media](111k-sepolia-v16/README.md), [v15 final artwork catalog](111k-sepolia-v15/README.md), [v14 animated artworks](111k-sepolia-v14/README.md), [v13 3D artworks](111k-sepolia-v13/README.md), [v12 relic reservation](111k-sepolia-v12/README.md), [v11 relic claims](111k-sepolia-v11/README.md), [v10 delivery configurations](111k-sepolia-v10/README.md), [v9 monument receipts](111k-sepolia-v9/README.md), [v8 monuments](111k-sepolia-v8/README.md), [v7](111k-sepolia-v7/README.md), [Single-contract release](111k-sepolia-single-contract/README.md), [Offchain metadata release](111k-sepolia-offchain/README.md), [Seaport release](111k-sepolia-seaport/README.md), [proceeds release](111k-sepolia-proceeds/README.md), [discount release](111k-sepolia-discounts/README.md), [initial release](111k-sepolia/README.md), [October 18 validation](111k-validation-2026-10-18/README.md) |
 | 111K metadata hosting | [Public R2 migration](111k-public-r2/README.md), [minimal metadata](111k-minimal-metadata/README.md) |
 | 111K reveals and recovery | [Reveal rollout](111k-reveal-2026-10-29/README.md), [recovery](111k-recovery-2026-10-30/README.md), [unminted tokens](111k-unminted-2026-10-30/README.md), [lifecycle repair](111k-lifecycle-2026-10-30/README.md), [scheduler indexes](111k-scheduler-index-2026-10-30/README.md), [concurrency](111k-concurrency-2026-10-30/README.md) |
 | Binder packing replacements | [Completed issuance and current export path](binder-packing-replacements-2026-10-20/README.md) |

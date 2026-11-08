@@ -252,11 +252,11 @@ for (const exhaustedAllowance of [{ discountUsed: 1 }, { maxDiscountedMints: 500
 test('the mint panel shares the drop frame and previews the selected crate quantity', async () => {
   const view = page({ header: createElement('header', {}, 'Shop header') });
   const crateImage = view.getByRole('img', { name: '111K crate' });
-  assert.equal(crateImage.getAttribute('src'), 'https://wip.lil.org/111k/crate_clean.webp');
-  assert.equal(crateImage.getAttribute('width'), '1218');
-  assert.equal(crateImage.getAttribute('height'), '833');
+  assert.equal(crateImage.getAttribute('src'), 'https://cdn.lil.org/nft/111k/crate.webp');
+  assert.equal(crateImage.getAttribute('width'), '1448');
+  assert.equal(crateImage.getAttribute('height'), '1086');
   const previewStyle = (view.container.querySelector('.mint-panel__boxes') as HTMLElement).style;
-  assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1218 / 833)}px`);
+  assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1448 / 1086)}px`);
   assert.equal(previewStyle.getPropertyValue('--box-height'), '120px');
   await waitFor(() => assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '5555 / 5555 left'));
   const frame = view.container.querySelector('.drop-page-frame--active')!;
@@ -312,11 +312,11 @@ test('switching containers preserves quantity unless it exceeds the available su
   assert.equal(view.queryByRole('img', { name: '111K crate' }), null);
   assert.equal(view.getAllByRole('img', { name: '111K warehouse' }).length, 2);
   const warehouseImage = view.getAllByRole('img', { name: '111K warehouse' })[0];
-  assert.equal(warehouseImage.getAttribute('src'), 'https://wip.lil.org/111k/warehouse_clean.webp');
-  assert.equal(warehouseImage.getAttribute('width'), '1254');
-  assert.equal(warehouseImage.getAttribute('height'), '1104');
+  assert.equal(warehouseImage.getAttribute('src'), 'https://cdn.lil.org/nft/111k/warehouse.webp');
+  assert.equal(warehouseImage.getAttribute('width'), '1536');
+  assert.equal(warehouseImage.getAttribute('height'), '1024');
   const previewStyle = (view.container.querySelector('.mint-panel__boxes') as HTMLElement).style;
-  assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1254 / 1104)}px`);
+  assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1536 / 1024)}px`);
   assert.equal(previewStyle.getPropertyValue('--box-height'), '120px');
   assert.equal(view.container.querySelector('.mint-panel__availability')?.textContent, '003 / 505 left');
   assert.ok(view.getByRole('button', { name: /Mint\s*2 warehouses.*0.0022 ETH/ }));
@@ -580,9 +580,9 @@ test('Ethereum and Solana appear in one inventory while selection dispatch stays
   await waitFor(() => assert.equal(view.container.querySelectorAll('[data-inventory-id]').length, 2));
   const ethereumTile = view.container.querySelector(`[data-inventory-id="${item().id}"]`)!;
   const crateImage = ethereumTile.querySelector('img')!;
-  assert.equal(crateImage.getAttribute('src'), 'https://wip.lil.org/111k/crate_clean.webp');
-  assert.equal(crateImage.getAttribute('width'), '1218');
-  assert.equal(crateImage.getAttribute('height'), '833');
+  assert.equal(crateImage.getAttribute('src'), 'https://cdn.lil.org/nft/111k/crate.webp');
+  assert.equal(crateImage.getAttribute('width'), '1448');
+  assert.equal(crateImage.getAttribute('height'), '1086');
   fireEvent.click(ethereumTile);
   assert.equal(cleared, 1);
   assert.ok(view.getByRole('button', { name: 'Open' }));

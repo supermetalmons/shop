@@ -22,7 +22,7 @@ const sample = (): Record<string, unknown> => ({
   'videos/1.webp': [854, 480],
 });
 const build = (source = JSON.stringify(sample())) => buildRevealAssetCatalog(source, {
-  catalogVersion: '111k-v4', availableEggs: 111111,
+  catalogVersion: '111k-v5', availableEggs: 111111,
 });
 
 async function snapshot(directory: string): Promise<Record<string, { sha256: string; mtime: string }>> {
@@ -53,7 +53,7 @@ async function fixture(t: TestContext) {
   await writeFile(inputPath, bytes);
   const rootDirectory = join(directory, 'output');
   return { directory, rootDirectory, inputPath, bytes,
-    options: { rootDirectory, sourcePath: inputPath, catalogVersion: '111k-v4', availableEggs: 111111 } };
+    options: { rootDirectory, sourcePath: inputPath, catalogVersion: '111k-v5', availableEggs: 111111 } };
 }
 
 function interruptImport(options: Parameters<typeof importRevealAssets>[0], destination: string) {
@@ -77,10 +77,10 @@ function interruptImport(options: Parameters<typeof importRevealAssets>[0], dest
 
 test('saved source imports the final five categories, exact ratios and balanced egg supply', async () => {
   const source = await readFile(sourcePath);
-  const catalog = buildRevealAssetCatalog(source, { catalogVersion: '111k-v4' });
+  const catalog = buildRevealAssetCatalog(source, { catalogVersion: '111k-v5' });
   validateRevealAssetCatalog(catalog);
   assert.equal(catalog.version, 2);
-  assert.equal(catalog.catalogVersion, '111k-v4');
+  assert.equal(catalog.catalogVersion, '111k-v5');
   assert.equal(Object.keys(JSON.parse(source.toString('utf8'))).length, 65517);
   assert.deepEqual(catalog.source, { filename: '111k.json', sha256: digest(source) });
   assert.deepEqual(catalog.importSettings, { availableEggs: 76700, eggAspectRatio: [1, 1] });
@@ -103,8 +103,8 @@ test('saved source imports the final five categories, exact ratios and balanced 
   for (const id of [1, 40, 46, 58]) assert.deepEqual(revealCatalogMedia(catalog, 'video', id).aspectRatio, { width: 16, height: 9 });
   for (const id of [41, 42, 43, 44]) assert.deepEqual(revealCatalogMedia(catalog, 'video', id).aspectRatio, { width: 427, height: 240 });
   assert.deepEqual(revealCatalogMedia(catalog, 'video', 45).aspectRatio, { width: 54, height: 31 });
-  assert.equal(catalog.categories.receipts.baseUrl, 'https://wip.lil.org/111k/');
-  assert.deepEqual(buildRevealAssetCatalog(source, { catalogVersion: '111k-v4' }), catalog);
+  assert.deepEqual(catalog.categories.receipts, { count: 85556, pathTemplate: 'placeholder.png', aspectRatio: [466, 503] });
+  assert.deepEqual(buildRevealAssetCatalog(source, { catalogVersion: '111k-v5' }), catalog);
 });
 
 test('source ordering cannot change asset IDs or ratio palette ordering, and variants do not add artworks', () => {
@@ -124,13 +124,32 @@ test('source ordering cannot change asset IDs or ratio palette ordering, and var
   assert.deepEqual(forward.categories.paintings.variants?.alt.aspectRatioIndexById, [1, 0]);
 });
 
+test('legacy receipt catalog imports advance the revision without changing artwork allocation', async t => {
+  const f = await fixture(t);
+  const initial = await importRevealAssets(f.options);
+  const legacy = structuredClone(initial.manifest);
+  legacy.catalogVersion = '111k-v4';
+  legacy.categories.receipts = { count: 85556, pathTemplate: 'receipts/{id}.webp',
+    baseUrl: 'https://legacy.example/111k/', aspectRatio: [1, 1] };
+  validateRevealAssetCatalog(legacy);
+  await writeFile(join(f.rootDirectory, assetDirectory, 'manifest.json'), JSON.stringify(legacy));
+  await writeFile(join(f.rootDirectory, descriptorPath), JSON.stringify({ catalogVersion: legacy.catalogVersion,
+    manifestSha256: digest(JSON.stringify(legacy)) }));
+  const imported = await importRevealAssets(f.options);
+  assert.equal(imported.status, 'updated');
+  assert.equal(imported.manifest.catalogVersion, '111k-v5');
+  assert.deepEqual(imported.manifest, initial.manifest);
+  legacy.catalogVersion = '111k-v5';
+  assert.throws(() => validateRevealAssetCatalog(legacy), /invalid receipts media/);
+});
+
 test('egg balancing rejects insufficient availability and invalid catalog revisions', () => {
   const source = JSON.stringify(sample());
   for (const availableEggs of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 111106]) {
-    assert.throws(() => buildRevealAssetCatalog(source, { catalogVersion: '111k-v4', availableEggs }), /eggs|Egg allocation/);
+    assert.throws(() => buildRevealAssetCatalog(source, { catalogVersion: '111k-v5', availableEggs }), /eggs|Egg allocation/);
   }
-  assert.equal(buildRevealAssetCatalog(source, { catalogVersion: '111k-v4', availableEggs: 111107 }).categories.eggs.count, 111107);
-  for (const catalogVersion of ['', 'v4', '111k-v0', '111k-v04', '111k-v4.5']) {
+  assert.equal(buildRevealAssetCatalog(source, { catalogVersion: '111k-v5', availableEggs: 111107 }).categories.eggs.count, 111107);
+  for (const catalogVersion of ['', 'v4', '111k-v0', '111k-v04', '111k-v5.5']) {
     assert.throws(() => buildRevealAssetCatalog(source, { catalogVersion, availableEggs: 111111 }), /Catalog version/);
   }
 });
@@ -149,7 +168,7 @@ test('a complete non-egg inventory allocates zero eggs and excess artwork cannot
   const before = await snapshot(f.rootDirectory);
   source['3d/111109.png'] = [2048, 2048];
   await writeFile(f.inputPath, JSON.stringify(source));
-  await assert.rejects(importRevealAssets({ ...f.options, catalogVersion: '111k-v5' }), /Egg allocation/);
+  await assert.rejects(importRevealAssets({ ...f.options, catalogVersion: '111k-v6' }), /Egg allocation/);
   assert.deepEqual(await snapshot(f.rootDirectory), before);
 });
 
@@ -202,7 +221,7 @@ test('check mode on a fresh destination and malformed source leave all outputs u
     JSON.stringify({ ...sample(), '3d/3.png': [1, 1] }),
     JSON.stringify({ ...sample(), 'videos/2.webp': [1, 1] }), '[]']) {
     await writeFile(f.inputPath, source);
-    await assert.rejects(importRevealAssets({ ...f.options, catalogVersion: '111k-v5' }));
+    await assert.rejects(importRevealAssets({ ...f.options, catalogVersion: '111k-v6' }));
     assert.deepEqual(await snapshot(f.rootDirectory), before);
   }
 });
@@ -215,8 +234,8 @@ test('source changes require a new catalog revision and older versions cannot ov
   await writeFile(f.inputPath, JSON.stringify(changed));
   await assert.rejects(importRevealAssets(f.options), /higher catalog version/);
   assert.deepEqual(await snapshot(f.rootDirectory), before);
-  const next = await importRevealAssets({ ...f.options, catalogVersion: '111k-v5' });
-  assert.equal(next.manifest.catalogVersion, '111k-v5');
+  const next = await importRevealAssets({ ...f.options, catalogVersion: '111k-v6' });
+  assert.equal(next.manifest.catalogVersion, '111k-v6');
   assert.deepEqual(revealCatalogMedia(next.manifest, '3d', 1).aspectRatio, { width: 2, height: 1 });
   const after = await snapshot(f.rootDirectory);
   await assert.rejects(importRevealAssets(f.options), /cannot decrease/);
@@ -228,18 +247,18 @@ test('interrupted imports and interrupted recovery roll back before retrying, wh
   const f = await fixture(t);
   await importRevealAssets(f.options);
   await writeFile(f.inputPath, JSON.stringify({ ...sample(), '3d/1.png': [2048, 1024] }));
-  const options = { ...f.options, catalogVersion: '111k-v5' };
+  const options = { ...f.options, catalogVersion: '111k-v6' };
   const manifestPath = join(f.rootDirectory, assetDirectory, 'manifest.json');
   interruptImport(options, manifestPath);
-  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).catalogVersion, '111k-v5');
-  assert.equal(JSON.parse(await readFile(join(f.rootDirectory, descriptorPath), 'utf8')).catalogVersion, '111k-v4');
+  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).catalogVersion, '111k-v6');
+  assert.equal(JSON.parse(await readFile(join(f.rootDirectory, descriptorPath), 'utf8')).catalogVersion, '111k-v5');
   const interrupted = await snapshot(f.rootDirectory);
   await assert.rejects(importRevealAssets({ ...options, check: true }), /Interrupted asset import/);
   assert.deepEqual(await snapshot(f.rootDirectory), interrupted);
   interruptImport(options, manifestPath);
-  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).catalogVersion, '111k-v4');
+  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).catalogVersion, '111k-v5');
   const retried = await importRevealAssets(options);
-  assert.equal(retried.manifest.catalogVersion, '111k-v5');
+  assert.equal(retried.manifest.catalogVersion, '111k-v6');
   assert.deepEqual(revealCatalogMedia(retried.manifest, '3d', 1).aspectRatio, { width: 2, height: 1 });
   assert.equal((await importRevealAssets({ rootDirectory: f.rootDirectory, check: true })).status, 'checked');
   await assert.rejects(readFile(join(f.rootDirectory, '.cache/111k-assets/recovery.json')), { code: 'ENOENT' });
@@ -250,7 +269,7 @@ test('recovery preserves intervening edits and allows a higher revision after th
   await importRevealAssets(f.options);
   await writeFile(f.inputPath, JSON.stringify({ ...sample(), '3d/1.png': [2048, 1024] }));
   const manifestPath = join(f.rootDirectory, assetDirectory, 'manifest.json');
-  interruptImport({ ...f.options, catalogVersion: '111k-v5' }, manifestPath);
+  interruptImport({ ...f.options, catalogVersion: '111k-v6' }, manifestPath);
   const interruptedManifest = await readFile(manifestPath);
   await writeFile(manifestPath, 'manual edit');
   const before = Object.fromEntries(Object.entries(await snapshot(f.rootDirectory))
@@ -287,10 +306,10 @@ test('malformed saved descriptors fail before any output is changed', async t =>
   const f = await fixture(t);
   await importRevealAssets(f.options);
   const path = join(f.rootDirectory, descriptorPath);
-  for (const descriptor of [null, [], {}, { catalogVersion: '111k-v4' },
+  for (const descriptor of [null, [], {}, { catalogVersion: '111k-v5' },
     { catalogVersion: 'invalid', manifestSha256: '0'.repeat(64) },
-    { catalogVersion: '111k-v4', manifestSha256: 'not-a-hash' },
-    { catalogVersion: '111k-v4', manifestSha256: '0'.repeat(64), extra: true }]) {
+    { catalogVersion: '111k-v5', manifestSha256: 'not-a-hash' },
+    { catalogVersion: '111k-v5', manifestSha256: '0'.repeat(64), extra: true }]) {
     await writeFile(path, JSON.stringify(descriptor));
     const before = await snapshot(f.rootDirectory);
     await assert.rejects(importRevealAssets({ ...f.options, check: true }), /descriptor|Catalog version/i);
@@ -327,7 +346,7 @@ test('baseline artwork template changes require a revision and retain only the s
   const before = await snapshot(f.rootDirectory);
   await assert.rejects(importRevealAssets({ ...f.options, artworkTemplatePath: templatePath }), /higher catalog version/);
   assert.deepEqual(await snapshot(f.rootDirectory), before);
-  await importRevealAssets({ ...f.options, artworkTemplatePath: templatePath, catalogVersion: '111k-v5' });
+  await importRevealAssets({ ...f.options, artworkTemplatePath: templatePath, catalogVersion: '111k-v6' });
   for (const category of ['egg', 'painting', 'video', '3d', 'animated']) {
     const reference = JSON.parse(await readFile(join(f.rootDirectory, assetDirectory, `${category}.template.json`), 'utf8'));
     assert.equal(reference.description, 'Shared description');
@@ -355,8 +374,8 @@ test('shared validation binds the descriptor to catalog bytes and rejects malfor
 });
 
 test('asset CLI accepts explicit imports and rejects ambiguous or malformed options', () => {
-  assert.deepEqual(parseAssetCliArgs(['import', '--source', 'input.json', '--catalog-version', '111k-v4', '--available-eggs', '76700', '--check']), {
-    sourcePath: resolve('input.json'), catalogVersion: '111k-v4', availableEggs: 76700, check: true,
+  assert.deepEqual(parseAssetCliArgs(['import', '--source', 'input.json', '--catalog-version', '111k-v5', '--available-eggs', '76700', '--check']), {
+    sourcePath: resolve('input.json'), catalogVersion: '111k-v5', availableEggs: 76700, check: true,
   });
   assert.deepEqual(parseAssetCliArgs(['import', '--check']), { check: true });
   assert.equal(parseAssetCliArgs(['--help']), null);

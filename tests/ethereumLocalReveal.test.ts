@@ -64,7 +64,8 @@ test('local initialization registers, completely provisions and activates its im
     assert.equal(deployment.metadataBaseUri, input.metadataBaseUri);
     assert.equal(deployment.provisionedAtMs, 100);
     assert.match(deployment.templateSha256, /^[a-f0-9]{64}$/);
-    assert.ok(deployment.templateJson.includes('artwork_placeholder.png'));
+    assert.equal(JSON.parse(deployment.templateJson).image, 'https://cdn.lil.org/nft/111k/placeholder.png');
+    assert.deepEqual(JSON.parse(deployment.templateJson).aspectRatio, { width: 466, height: 503 });
     assert.deepEqual(await initializeLocalEthereumReveal(env, input), deployment);
     assert.equal(calls, 2);
     await assert.rejects(initializeLocalEthereumReveal(env, { ...input, deploymentBlock: 99 }), /does not match/);

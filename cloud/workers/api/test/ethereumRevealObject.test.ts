@@ -23,10 +23,10 @@ const OWNER = `0x${'22'.repeat(20)}`;
 const WRAPPER = `0x${'33'.repeat(20)}`;
 const ZERO = `0x${'00'.repeat(20)}`;
 const ids = (first: number, count = 20) => Array.from({ length: count }, (_, index) => String(first + index));
-const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] });
+const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [] });
 const deployment: EthereumRevealDeployment = {
   deploymentId: 'test-local', dropId: '111k_devnet', chainId: 31337, contractAddress: CONTRACT,
-  metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/', deploymentBlock: 100, catalogVersion: '111k-v4',
+  metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/', deploymentBlock: 100, catalogVersion: '111k-v5',
   templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex'), state: 'active', revision: 3,
   createdAtMs: 1, updatedAtMs: 3, provisionedAtMs: 2, activatedAtMs: 3, lastError: null,
 };
@@ -1262,7 +1262,7 @@ test('incomplete receipt evidence stays private and does not block another crate
   assert.equal(f.store.frozen(ids(1)).length, 20);
 });
 
-for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`retired catalog ${catalogVersion} alarms stop without changing frozen artwork, reservations or pending publication`, async t => {
+for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3', '111k-v4']) test(`retired catalog ${catalogVersion} alarms stop without changing frozen artwork, reservations or pending publication`, async t => {
   const f = fixture(t, catalogVersion);
   const legacy = { ...deployment, catalogVersion };
   f.store.reserve(['111112', '111113']);

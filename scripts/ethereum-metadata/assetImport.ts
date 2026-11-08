@@ -154,7 +154,7 @@ export function buildRevealAssetCatalog(
       videos: mediaCategory(groups['videos/mp4'], 'videos/{id}.mp4', 'videos/{id}.webp'),
       '3d': mediaCategory(groups['3d'], '3d/{id}.glb', '3d/{id}.png'),
       animated: mediaCategory(groups.animated, 'animated/{id}.mp4', 'animated/{id}.png'),
-      receipts: { count: 85_556, pathTemplate: 'receipts/{id}.webp', baseUrl: 'https://wip.lil.org/111k/', aspectRatio: [1, 1] },
+      receipts: { count: 85_556, pathTemplate: 'placeholder.png', aspectRatio: [466, 503] },
     },
   };
   validateRevealAssetCatalog(manifest);

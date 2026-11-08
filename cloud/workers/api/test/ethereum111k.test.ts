@@ -69,7 +69,7 @@ function fixture(controlActive = true) {
         template_json, template_sha256, state, revision, created_at_ms, updated_at_ms)
       VALUES (?, '111k_devnet', ?, ?, ?, 2, '111k-v3', ?, ?, ?, 1, ?, ?)`)
       .run(id, chainId, contractAddress, `https://cdn.mons.shop/${chainId === 1 ? '111k' : '111k-sepolia'}/${id}/`,
-        JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://wip.lil.org/111k/artwork_placeholder.png', attributes: [] }),
+        JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [] }),
         '0'.repeat(64), state, NOW, NOW);
   };
   registerDeployment();
@@ -4789,7 +4789,7 @@ test('relic receipt inventory and metadata retain the matching number and shared
     for (const displayId of [1, 18]) {
       const tokenId = String(3_000_000 + displayId);
       const metadata = { name: `Relic Receipt #${displayId}`, description: '',
-        image: 'https://wip.lil.org/111k/receipt_background.webp', attributes: [{ trait_type: 'type', value: 'relic receipt' }] };
+        image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [{ trait_type: 'type', value: 'relic receipt' }] };
       f.state.tokens.set(tokenId, { kind: 7, displayId, owner: WALLET });
       f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
       const infos = await ethereumTokenInfos(readContext(f), [tokenId]);

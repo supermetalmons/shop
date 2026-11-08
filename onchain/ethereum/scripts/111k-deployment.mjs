@@ -18,7 +18,7 @@ export const NFT111K_SEPOLIA = Object.freeze({
   deployer: '0xd58d143ca63d9baccc33fdf69ea203f59c58ae93',
   owner: '0xd58d143ca63d9baccc33fdf69ea203f59c58ae93',
   quoteSigner: '0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca',
-  previousContract: '0x6d194e6cc762424e408b84907c25d60f0db29d12',
+  previousContract: '0xe665d1043f72886f49894006ea196450b33f0f89',
   maximumFeeWei: '5000000000000000',
 });
 
@@ -76,7 +76,7 @@ async function withLock(directory, work) {
 
 export function parse111kDeploymentArgs(argv) {
   const [command, ...arguments_] = argv;
-  assert.ok(commands.includes(command), `Use ${commands.join('|')} --directory PATH --network sepolia [--deployment-id v15] [--keystore PATH --password-file PATH]`);
+  assert.ok(commands.includes(command), `Use ${commands.join('|')} --directory PATH --network sepolia [--deployment-id v16] [--keystore PATH --password-file PATH]`);
   const values = {};
   for (let index = 0; index < arguments_.length; index += 2) {
     const key = arguments_[index];
@@ -91,7 +91,7 @@ export function parse111kDeploymentArgs(argv) {
   assert.ok(previousContract === undefined || /^0x[0-9a-fA-F]{40}$/.test(previousContract) && !/^0x0{40}$/.test(previousContract),
     'Invalid previous contract');
   return { command, network: 'sepolia', deploymentId, previousContract: normalized(previousContract),
-    directory: path.resolve(values['--directory'] || path.join(project, '.local', `111k-sepolia-${deploymentId ?? 'v15'}`)),
+    directory: path.resolve(values['--directory'] || path.join(project, '.local', `111k-sepolia-${deploymentId ?? 'v16'}`)),
     keystore: values['--keystore'], passwordFile: values['--password-file'] };
 }
 
@@ -464,7 +464,7 @@ export async function run111kDeployment(argv, overrides = {}) {
       const original = JSON.parse(fs.readFileSync(path.join(project, 'out/NFT111K.sol/NFT111K.json'), 'utf8'));
       const input = frozenCompilerInput(original);
       const { artifact, output, immutableNames } = compileFrozen(input, original);
-      const deploymentId = options.deploymentId ?? 'v15';
+      const deploymentId = options.deploymentId ?? 'v16';
       const manifest = { version: 1, network: 'sepolia', ...configuration, deploymentId,
         metadataBaseURI: `https://cdn.mons.shop/111k-sepolia/${deploymentId}/`, contractAddress, nonce,
         initialDeliveryReceiver, initialDeliveryConfigId: 1, discountRoot, maxDiscountedMints, proceeds, freeMintAllocations,

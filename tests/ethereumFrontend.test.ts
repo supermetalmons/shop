@@ -274,11 +274,11 @@ test('Ethereum inventory and confirmations preserve metadata while container pre
     assert.equal(view.imageDimensions, undefined);
   }
   for (const container of [
-    { kind: 'crate', width: 1218, height: 833 },
-    { kind: 'warehouse', width: 1254, height: 1104 },
+    { kind: 'crate', width: 1448, height: 1086 },
+    { kind: 'warehouse', width: 1536, height: 1024 },
   ] as const) {
     const view = ethereumInventoryView({ ...artwork, kind: container.kind });
-    assert.equal(view.image, `https://wip.lil.org/111k/${container.kind}_clean.webp`);
+    assert.equal(view.image, `https://cdn.lil.org/nft/111k/${container.kind}.webp`);
     assert.deepEqual(view.imageDimensions, { width: container.width, height: container.height });
     assert.equal(view.ethereum.image, artwork.image);
   }

@@ -120,7 +120,7 @@ const UPCOMING_ROUTES = [
     solanaCluster: 'mainnet-beta',
     label: '111k',
     title: '111k',
-    previewImageUrl: 'https://wip.lil.org/111k/artwork_placeholder.png',
+    previewImageUrl: 'https://cdn.lil.org/nft/111k/placeholder.png',
     previewAspectRatio: 932 / 1006,
     boxNamePrefix: 'drop',
   },

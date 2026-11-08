@@ -55,7 +55,7 @@ function metadataShape(value: unknown): value is MetadataTemplates[EthereumItemK
 
 function requireTemplate(value: unknown, kind: EthereumItemKind): MetadataTemplates[EthereumItemKind] {
   if (!metadataShape(value)) throw new Error(`Invalid metadata template: ${kind}`);
-  const body = JSON.stringify(value).replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
+  const body = JSON.stringify(value, null, 2).replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
   if (/\{\{|\}\}/.test(body)) throw new Error(`Unresolved metadata template placeholder: ${kind}`);
   const image = value.image.replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
   if (!/^https:\/\//i.test(image) || !isEthereumMetadataImage(image)) throw new Error(`Metadata image must be a public HTTPS URL: ${kind}`);
@@ -81,7 +81,7 @@ export async function loadMetadataTemplates(directory = DEFAULT_TEMPLATES_DIRECT
 export function renderMetadata(kind: EthereumItemKind, displayId: number, templates: MetadataTemplates): MetadataTemplates[EthereumItemKind] {
   const tokenId = ethereumMetadataTokenId(kind, displayId);
   const value = requireTemplate(templates[kind], kind);
-  const body = JSON.stringify(value).replaceAll('{{tokenId}}', tokenId).replaceAll('{{displayId}}', String(displayId));
+  const body = JSON.stringify(value, null, 2).replaceAll('{{tokenId}}', tokenId).replaceAll('{{displayId}}', String(displayId));
   if (/\{\{|\}\}/.test(body)) throw new Error(`Unresolved metadata template placeholder: ${kind}`);
   return requireTemplate(JSON.parse(body), kind);
 }

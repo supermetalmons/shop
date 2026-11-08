@@ -1,0 +1,11 @@
+{
+  "chainId": 11155111,
+  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+  "transactionHash": "0xfce1772654764f0068489003c3fd2c205231238566d84cf60eff1c84dc53af87",
+  "checkedAt": "2026-11-07T23:48:10.495Z",
+  "creationMatch": "match",
+  "runtimeMatch": "match",
+  "frozenSourcesMatch": true,
+  "runtimeAndImmutablesMatch": true,
+  "url": "https://repo.sourcify.dev/11155111/0x938b6a488951b2797b29284d6939dd70efe146a0"
+}

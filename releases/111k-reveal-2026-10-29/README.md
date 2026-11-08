@@ -16,7 +16,7 @@ Allocation tests exhaust all 111111 assets, including reorgs that reuse token ID
 
 The real Anvil end-to-end run verified first-confirmation reveal, local R2 publication, immutable media after `evm_revert`, and recovery without a submitted hash. Frontend, API, tooling, Ethereum, generated-schema, bundle, startup, and dead-code checks passed, including targeted rechecks after final changes.
 
-[Public API verification](public-api-smoke.json) used an unminted token and the collection deployment transaction, returning `unminted` and `not_unpack` with empty artwork arrays. VVV origins were accepted; an unrelated origin was rejected. Existing metadata samples remained placeholders before frontend rollout. No historical backfill was initiated. [Frontend verification](frontend-smoke.json) confirms that the live storefront serves the build containing both reveal methods.
+[Public API verification](https://github.com/supermetalmons/shop/blob/28b7fb1c23d089b5d3031218628e43d75bb3cad8/releases/111k-reveal-2026-10-29/public-api-smoke.json) used an unminted token and the collection deployment transaction, returning `unminted` and `not_unpack` with empty artwork arrays. VVV origins were accepted; an unrelated origin was rejected. Existing metadata samples remained placeholders before frontend rollout. No historical backfill was initiated. [Frontend verification](frontend-smoke.json) confirms that the live storefront serves the build containing both reveal methods.
 
 The existing named R2 binding is deployed with automatic resource provisioning disabled. This avoids Wrangler's optional bucket-configuration lookup and uses the existing Worker edit permission; no credential change or browser sign-in was needed.
 

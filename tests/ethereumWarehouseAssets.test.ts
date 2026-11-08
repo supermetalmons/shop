@@ -5,8 +5,8 @@ import { loadWarehouseCrateImage, warehouseCratePreviews } from '../src/ethereum
 
 function factories() {
   class PreviewImage {
-    naturalWidth = 1218;
-    naturalHeight = 833;
+    naturalWidth = 1448;
+    naturalHeight = 1086;
     complete = false;
     decoding = '';
     fetchPriority = '';
@@ -40,18 +40,18 @@ function factories() {
 function crate(index: number): EthereumInventoryItem {
   return { id: `crate-${index}`, tokenId: String(index), name: `Crate ${index}`, kind: 'crate',
     owner: `0x${'11'.repeat(20)}`, chainId: 11155111, contractAddress: `0x${'33'.repeat(20)}`, displayId: index,
-    image: '/111k/crate-reference.webp' };
+    image: '/111k/crate-reference-v16.webp' };
 }
 
 test('one local image is prepared before result identities exist and shared by every confirmed crate', async () => {
   const batch = factories();
   const pending = loadWarehouseCrateImage(batch);
   assert.equal(batch.images.length, 1);
-  assert.equal(batch.images[0].src, '/111k/crate-reference.webp');
+  assert.equal(batch.images[0].src, '/111k/crate-reference-v16.webp');
   batch.images[0].finish();
   const image = await pending;
-  assert.deepEqual(batch.drawings, [{ width: 512, height: 350 }]);
-  assert.equal(image.width / image.height, 1218 / 833);
+  assert.deepEqual(batch.drawings, [{ width: 512, height: 384 }]);
+  assert.equal(image.width / image.height, 1448 / 1086);
   assert.equal(warehouseCratePreviews([], image), null);
   const confirmed = Array.from({ length: 11 }, (_, index) => crate(index + 1));
   const assets = warehouseCratePreviews(confirmed, image)!;

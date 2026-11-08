@@ -7,8 +7,8 @@ function installImage(t: TestContext, decode: () => Promise<void> = () => Promis
   const original = Object.getOwnPropertyDescriptor(globalThis, 'Image');
   class TestImage {
     decoding = '';
-    naturalWidth = 1218;
-    naturalHeight = 833;
+    naturalWidth = 1448;
+    naturalHeight = 1086;
     onload: (() => void) | null = null;
     onerror: (() => void) | null = null;
     decode = decode;

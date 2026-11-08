@@ -1,0 +1,10 @@
+{
+  "chainId": 11155111,
+  "deploymentId": "v15",
+  "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+  "checkedAt": "2026-11-07T23:53:51.247Z",
+  "blockNumber": 12087052,
+  "blockHash": "0x04337ca0c908e82cd5defbf98aaf35bef33b628c4197a7e97c38af99f67a1559",
+  "saleActive": false,
+  "redemptionsPaused": true
+}

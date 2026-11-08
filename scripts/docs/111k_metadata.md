@@ -1,6 +1,8 @@
 # 111K offchain metadata
 
-The [v15 release](../../releases/111k-sepolia-v15/README.md) publishes the complete relic collection at `https://cdn.mons.shop/111k-sepolia/v15/`: 344984 metadata objects, including relic tokens `117172.json`–`117189.json` and relic receipts `3000001.json`–`3000018.json`. Relic IDs 1–18 use `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. The [v14 release](../../releases/111k-sepolia-v14/README.md), [v13 release](../../releases/111k-sepolia-v13/README.md), [v12 release](../../releases/111k-sepolia-v12/README.md), [v11 release](../../releases/111k-sepolia-v11/README.md), [v10 release](../../releases/111k-sepolia-v10/README.md), and earlier releases preserve their original metadata and registered prefixes; the replacement does not republish those namespaces.
+The [v16 release](../../releases/111k-sepolia-v16/README.md) publishes and verifies the complete collection at `https://cdn.mons.shop/111k-sepolia/v16/`: 344984 metadata objects, including relic tokens `117172.json`–`117189.json` and relic receipts `3000001.json`–`3000018.json`. The collection was deployed with sales closed at `0x938b6a488951b2797b29284d6939dd70efe146a0`, Sepolia block `12087015`, in [this transaction](https://sepolia.etherscan.io/tx/0xfce1772654764f0068489003c3fd2c205231238566d84cf60eff1c84dc53af87). It uses catalog `111k-v5` and is now live with sales and reveal enabled; the release record documents activation and acceptance. Crates use `https://cdn.lil.org/nft/111k/crate.webp` at 4:3, warehouses use `https://cdn.lil.org/nft/111k/warehouse.webp` at 3:2, and unrevealed artwork plus every receipt kind use `https://cdn.lil.org/nft/111k/placeholder.png` at 466:503. Relic IDs 1–18 retain their individual images.
+
+The historical [v15 release](../../releases/111k-sepolia-v15/README.md), [v14 release](../../releases/111k-sepolia-v14/README.md), and earlier releases preserve their original metadata and registered prefixes; v16 does not republish those namespaces.
 
 Deployment IDs are globally unique across networks. Later replacements must choose an unused ID. A future mainnet deployment can use a distinct ID such as `mainnet-relics-v1`, with the same ID in its prefix suffix. Publish and verify the complete collection at each new prefix before deployment and registration. Existing reveal-managed prefixes remain associated with their original deployments.
 
@@ -33,26 +35,26 @@ The JSON objects on `cdn.mons.shop` are the authoritative runtime metadata. Loca
 
 The relic-ready generator produces 344984 JSON objects per deployment, including 18 relics and 18 relic receipts. Both networks use the same generated JSON contents; the network determines only the destination prefix. Historical publications retain their original identities and artwork assignments. The `cdn-mons-shop` bucket remains in Eastern North America (`enam`). Historical release manifests describe their own publications and remain unchanged.
 
-The [111k asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) now prepares fresh deployments with `111k-v4`: 76,642 eggs, 30,990 paintings, 58 videos, 3,000 3D models, and 421 animated artworks, totaling 111,111. Its reproducible importer reads the supplied path-to-dimensions JSON, preserves a source snapshot, and fills the remaining allocation from 76,700 available eggs. Use `npm run ethereum:assets -- import --source /path/to/111k.json --catalog-version 111k-v5` for the next changed catalog and `npm run check:ethereum-assets` to verify generated files.
+The [111k asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) now prepares fresh deployments with `111k-v5`: 76,642 eggs, 30,990 paintings, 58 videos, 3,000 3D models, and 421 animated artworks, totaling 111,111. Its reproducible importer reads the supplied path-to-dimensions JSON, preserves a source snapshot, and fills the remaining allocation from 76,700 available eggs. Use `npm run ethereum:assets -- import --source /path/to/111k.json --catalog-version 111k-v6` for the next changed catalog and `npm run check:ethereum-assets` to verify generated files.
 
-Revealed media uses `https://cdn.lil.org/nft/111k/`. Eggs and paintings use PNGs; 3D and animated artworks use PNG previews with GLB and original MP4 companions respectively. Videos use WEBP posters and MP4s. Every ratio comes from the catalog, including video ratios other than 16:9. Painting alternate WEBPs are recorded as variants and do not add artworks. The [unpack reveal service](111k_reveal.md) uses the catalog for private reservations and permanent, confirmation-gated artwork publication. V4 requires a fresh contract and reveal pool. The baseline metadata count, onchain identities, and existing placeholder/container/receipt image URLs are unchanged. V14 and earlier release records describe their original publications. The v15 release record tracks its cutover and acceptance.
+Revealed media uses `https://cdn.lil.org/nft/111k/`. Eggs and paintings use PNGs; 3D and animated artworks use PNG previews with GLB and original MP4 companions respectively. Videos use WEBP posters and MP4s. Every ratio comes from the catalog, including video ratios other than 16:9. Painting alternate WEBPs are recorded as variants and do not add artworks. The [unpack reveal service](111k_reveal.md) uses the catalog for private reservations and permanent, confirmation-gated artwork publication. V5 requires a fresh contract, metadata namespace, and reveal pool. The baseline metadata count and onchain identities are unchanged. Unrevealed artwork and every receipt use the new CDN placeholder; crates and warehouses use their new CDN images. Historical release records describe their original publications and image URLs.
 
 See [111K Web Assets](111k_web_assets.md) to derive published thumbnails, mid images,
 painting alternatives and playable media from `metadata.image`.
 
 ## Templates
 
-Each template contains `name`, `description`, `image`, and `attributes`. The initial minimal format uses an empty description and one lowercase `type` trait:
+Each template contains `name`, `description`, `image`, and `attributes`. The six updated media templates also include their measured `aspectRatio`. Descriptions remain empty and each template has one lowercase `type` trait:
 
-| Template | Name | Image filename | Type value |
-| --- | --- | --- | --- |
-| `artwork.json` | `{{tokenId}}` | `artwork_placeholder.png` | `painting` |
-| `warehouse.json` | `Warehouse #{{displayId}}` | `warehouse.webp` | `warehouse` |
-| `relic.json` | `Relic #{{displayId}}` | `relics/{{displayId}}.webp` | `relic` |
-| `crate.json` | `Crate #{{displayId}}` | `crate.jpg` | `crate` |
-| `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `crate_receipt.webp` | `crate receipt` |
-| `artwork_receipt.json` | `Receipt #{{displayId}}` | `artwork_placeholder_receipt.webp` | `receipt` |
-| `relic_receipt.json` | `Relic Receipt #{{displayId}}` | `receipt_background.webp` | `relic receipt` |
+| Template | Name | Image filename | Aspect ratio | Type value |
+| --- | --- | --- | --- | --- |
+| `artwork.json` | `{{tokenId}}` | `placeholder.png` | 466:503 | `painting` |
+| `warehouse.json` | `Warehouse #{{displayId}}` | `warehouse.webp` | 3:2 | `warehouse` |
+| `relic.json` | `Relic #{{displayId}}` | `relics/{{displayId}}.webp` | Unchanged | `relic` |
+| `crate.json` | `Crate #{{displayId}}` | `crate.webp` | 4:3 | `crate` |
+| `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `crate receipt` |
+| `artwork_receipt.json` | `Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `receipt` |
+| `relic_receipt.json` | `Relic Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `relic receipt` |
 
 The generated [reveal references](../ethereum-metadata/reveal-assets/111k_devnet/README.md#manifest-and-metadata-references)
 cover all five artwork categories. They retain `{{tokenId}}` and `{{assetId}}`
@@ -61,7 +63,7 @@ metadata. The complete baseline still uses `artwork.json` for all 111,111 artwor
 tokens. The reveal runtime combines that registered template with the assigned
 asset's media and exact ratio after confirmation.
 
-New relic publications use the `relics/` image path. Historical publications retain their recorded image URLs. The image filenames above are rooted at `https://wip.lil.org/111k/`. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
+New relic publications use the `relics/` image path. Historical publications retain their recorded image URLs. Crate, warehouse, placeholder, and receipt image filenames above are rooted at `https://cdn.lil.org/nft/111k/`. Only relic images retain the `https://wip.lil.org/111k/` root. Aspect ratios are reduced from the actual asset dimensions: crate 1448 × 1086, warehouse 1536 × 1024, and placeholder 932 × 1006. Reveal registration requires the canonical CDN placeholder with its 466:503 ratio; confirmed reveals replace that ratio with the assigned artwork’s catalog ratio. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
 
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
@@ -154,7 +156,7 @@ Freshness applies when a client requests metadata. An already rendered page or a
 
 ## Local development and checks
 
-Local deployment manifest version 15 records `metadataBaseURI`. Local deployment and the end-to-end test default to the replacement `https://cdn.mons.shop/111k-sepolia/v14/` publication. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` overrides the local deployment namespace. The variable accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 15 requires a fresh deployment with relic claim availability, including manifests with matching CDN URLs. Local baseline metadata reads still require network access. The v10 publication retains historical names; updated relic names require a newly published full collection. Before publication, E2E validation can use a generated local revision through the test-only adapter below.
+Local deployment manifest version 15 records `metadataBaseURI`. Local deployment and the end-to-end test default to the replacement `https://cdn.mons.shop/111k-sepolia/v16/` publication. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` overrides the local deployment namespace. The variable accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 15 requires a fresh deployment with relic claim availability, including manifests with matching CDN URLs. Local baseline metadata reads still require network access. The v10 publication retains historical names; updated relic names require a newly published full collection. Before publication, E2E validation can use a generated local revision through the test-only adapter below.
 
 Publish the baseline metadata for a custom namespace before using it locally. Local artwork media is verified against the local reveal ledger even if shared CDN metadata was already revealed by a different collection.
 

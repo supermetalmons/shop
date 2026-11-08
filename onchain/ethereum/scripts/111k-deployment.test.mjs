@@ -40,6 +40,8 @@ function signedFixture(action = 'reserve') {
 
 test('the deployment runner admits only explicit Sepolia operations', () => {
   assert.equal(NFT111K_SEPOLIA.chainId, 11155111);
+  assert.equal(NFT111K_SEPOLIA.previousContract, '0xe665d1043f72886f49894006ea196450b33f0f89');
+  assert.equal(parse111kDeploymentArgs(['prepare']).directory, path.join(project, '.local', '111k-sepolia-v16'));
   assert.ok(parse111kDeploymentArgs(['prepare', '--network', 'sepolia', '--deployment-id', 'runner-test', '--directory', '/tmp/runner-test']));
   for (const argv of [
     ['prepare', '--network', 'mainnet'], ['prepare', '--network', '1'], ['refund'], ['withdraw'], ['release-all'],

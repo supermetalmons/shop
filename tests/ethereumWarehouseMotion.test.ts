@@ -14,7 +14,9 @@ const bounds = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(),
 test('eleven crates start inside the shell and land on the floor or an authored support', () => {
   const poses = createWarehouseCrateLayout(bounds);
   const object = new THREE.Object3D();
-  const interior = new THREE.Box3(new THREE.Vector3(-3.88, -3.88, -3.88), new THREE.Vector3(3.88, 3.88, 3.88));
+  const interior = new THREE.Box3(new THREE.Vector3(-WAREHOUSE_BOUNDS.width / 2 + 0.12,
+    -WAREHOUSE_BOUNDS.height / 2 + 0.12, -WAREHOUSE_BOUNDS.depth / 2 + 0.12),
+  new THREE.Vector3(WAREHOUSE_BOUNDS.width / 2 - 0.12, WAREHOUSE_BOUNDS.height / 2 - 1.1, WAREHOUSE_BOUNDS.depth / 2 - 0.12));
   assert.equal(poses.length, 11);
   assert.equal(poses.filter(pose => pose.support === null).length, 8);
   const finalBounds: THREE.Box3[] = [];
@@ -54,7 +56,7 @@ test('authored ground crates do not intersect despite their varied yaw', () => {
 });
 
 test('all sprite layout footprints remain separated throughout the burst', t => {
-  const instances = createCrateSprites(11, { image: { width: 512, height: 350 } as HTMLCanvasElement, width: 1218, height: 833 });
+  const instances = createCrateSprites(11, { image: { width: 512, height: 384 } as HTMLCanvasElement, width: 1448, height: 1086 });
   t.after(() => instances.dispose());
   const bounds = instances.bounds;
   const localCenter = bounds.getCenter(new THREE.Vector3());

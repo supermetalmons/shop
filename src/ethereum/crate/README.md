@@ -6,9 +6,11 @@ all decoded preview images, and GPU preparation must finish before opening.
 The scene's completion callback starts the presentation's dismissal cooldown.
 
 `crateModel.ts` contains the geometry and calibrated camera. Exterior UVs project
-the unchanged `public/111k/crate-reference.webp`, sourced from
-<https://wip.lil.org/111k/crate_clean.webp>, onto real timber geometry. Preserve
-this image and the closed reference pose when adjusting the opening motion.
+`public/111k/crate-reference-v16.webp`, a byte-identical local mirror of
+<https://cdn.lil.org/nft/111k/crate.webp>, onto real timber geometry. The camera,
+wall proportions and wood samples match this 1448 × 1086 image; its 4:3 aspect
+comes from the shared container media configuration. Preserve its native alpha
+and the closed reference pose when adjusting the opening motion.
 Unphotographed interior surfaces use wood samples from the same image.
 
 `crateAssets.ts` prepares up to four previews at a time, retaining at most 512px

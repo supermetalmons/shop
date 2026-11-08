@@ -4,14 +4,14 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-New deployments use catalog version `111k-v4`: 76,642 eggs, 30,990 paintings,
+New deployments use catalog version `111k-v5`: 76,642 eggs, 30,990 paintings,
 58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
 111,111-artwork supply from 76,700 available eggs after counting all non-egg
-artworks. The runtime supports this catalog only; v1–v3 registrations remain historical records.
+artworks. The runtime supports this catalog only; v1–v4 registrations remain historical records.
 Retired-catalog API requests return `409`, watchdog scans skip them, and their
 alarms stop. Status and pause commands can still inspect or pause those records;
 registration and activation require the current catalog. Do not rewrite an old
-catalog version or migrate an existing allocation pool to v4.
+catalog version or migrate an existing allocation pool to v5.
 
 The media root is `https://cdn.lil.org/nft/111k/`. Eggs, paintings, 3D previews,
 and animated previews use PNGs. 3D models use GLBs; animated artworks use original
@@ -31,7 +31,7 @@ metadata do not change afterward.
 
 Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired collections retain their original prefixes. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
-The relic collection contains 344984 metadata objects, including relic tokens 117172–117189 and terminal relic receipts 3000001–3000018. Every relic receipt uses `https://wip.lil.org/111k/receipt_background.webp`. Publish the complete collection to each replacement prefix before deployment and registration; a selected-object preview cannot qualify. Relic images are fixed at `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. Owner allocation reserves relic crate supply before sales; claiming does not change the reserved supply. Opening a relic creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
+The relic collection contains 344984 metadata objects, including relic tokens 117172–117189 and terminal relic receipts 3000001–3000018. Every relic receipt uses `https://cdn.lil.org/nft/111k/placeholder.png`. Publish the complete collection to each replacement prefix before deployment and registration; a selected-object preview cannot qualify. Relic images are fixed at `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. Owner allocation reserves relic crate supply before sales; claiming does not change the reserved supply. Opening a relic creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
 
 For a fresh prefix, publish and verify the complete generated, validated placeholder collection. Set the deployment ID once and derive its prefix. Do not rerun an upload after that prefix is registered:
 
@@ -71,7 +71,7 @@ Create a private local manifest using the deployment ID and prefix chosen above:
   "contractAddress": "<deployed contract address>",
   "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/<new-sepolia-deployment-id>/",
   "deploymentBlock": 0,
-  "catalogVersion": "111k-v4",
+  "catalogVersion": "111k-v5",
   "publicationDirectory": "./published-metadata"
 }
 ```

@@ -34,7 +34,7 @@ const MEDIA_PATHS = {
   videos: ['videos/{id}.mp4', 'videos/{id}.webp'],
   '3d': ['3d/{id}.glb', '3d/{id}.png'],
   animated: ['animated/{id}.mp4', 'animated/{id}.png'],
-  receipts: ['receipts/{id}.webp'],
+  receipts: ['placeholder.png'],
 } as const;
 const CATALOG_VERSION = /^111k-v[1-9]\d{0,8}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -111,7 +111,8 @@ export function validateRevealAssetCatalog(value: unknown, descriptor?: unknown)
     const category = value.categories[name];
     if (!record(category) || !keys(category, ['count', 'pathTemplate', 'imagePathTemplate', 'baseUrl', 'availableCount', 'variants',
       'aspectRatio', 'aspectRatioPalette', 'aspectRatioIndexById']) || !count(category.count) ||
-      category.pathTemplate !== paths[0] || category.imagePathTemplate !== paths[1] ||
+      category.pathTemplate !== paths[0] && !(name === 'receipts' && Number(value.catalogVersion.slice(6)) <= 4 &&
+        category.pathTemplate === 'receipts/{id}.webp') || category.imagePathTemplate !== paths[1] ||
       category.baseUrl !== undefined && !baseUrl(category.baseUrl)) invalid(`invalid ${name} media`);
     validateRatios(category, category.count);
     if (name !== 'receipts') total += category.count;

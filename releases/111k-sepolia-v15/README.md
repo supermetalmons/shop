@@ -1,6 +1,9 @@
 # 111K Sepolia v15 — final CDN assets
 
-**Live and open.** The [111K testnet page](https://mons.shop/111k_devnet) uses v15, with minting and relic claims enabled.
+**Retired.** V15 sales, redemptions, and reveal admission are paused. The
+[v16 replacement](../111k-sepolia-v16/README.md) records the new deployment and
+storefront rollout. V15 NFTs, published metadata, and its reveal ledger remain
+historical records.
 
 | Item | Value |
 | --- | --- |

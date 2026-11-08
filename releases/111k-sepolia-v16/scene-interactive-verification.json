@@ -1,0 +1,204 @@
+{
+  "errors": [],
+  "results": [
+    {
+      "layout": "desktop",
+      "kind": "crate",
+      "mode": "normal",
+      "announcement": "31 artworks revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/crate.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "crateReady": "true",
+          "drawCalls": "31",
+          "triangles": "62",
+          "textures": "33",
+          "animating": "false",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "desktop",
+      "kind": "warehouse",
+      "mode": "normal",
+      "announcement": "11 crates revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp",
+        "http://127.0.0.1:5173/111k/warehouse-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "warehouseReady": "true",
+          "drawCalls": "2",
+          "triangles": "242",
+          "textures": "3",
+          "animating": "false",
+          "phase": "complete",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "mobile",
+      "kind": "crate",
+      "mode": "normal",
+      "announcement": "31 artworks revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/crate.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "crateReady": "true",
+          "drawCalls": "31",
+          "triangles": "62",
+          "textures": "33",
+          "animating": "false",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "mobile",
+      "kind": "warehouse",
+      "mode": "normal",
+      "announcement": "11 crates revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp",
+        "http://127.0.0.1:5173/111k/warehouse-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "warehouseReady": "true",
+          "drawCalls": "2",
+          "triangles": "242",
+          "textures": "3",
+          "animating": "false",
+          "phase": "complete",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "landscape",
+      "kind": "crate",
+      "mode": "normal",
+      "announcement": "31 artworks revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/crate.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "crateReady": "true",
+          "drawCalls": "31",
+          "triangles": "62",
+          "textures": "33",
+          "animating": "false",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "landscape",
+      "kind": "warehouse",
+      "mode": "normal",
+      "announcement": "11 crates revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp",
+        "http://127.0.0.1:5173/111k/warehouse-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "warehouseReady": "true",
+          "drawCalls": "2",
+          "triangles": "242",
+          "textures": "3",
+          "animating": "false",
+          "phase": "complete",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "mobile",
+      "kind": "crate",
+      "mode": "reduced",
+      "announcement": "31 artworks revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/crate.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "crateReady": "true",
+          "drawCalls": "31",
+          "triangles": "62",
+          "textures": "33",
+          "animating": "false",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "mobile",
+      "kind": "warehouse",
+      "mode": "reduced",
+      "announcement": "11 crates revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp",
+        "http://127.0.0.1:5173/111k/warehouse-reference-v16.webp"
+      ],
+      "scene": [
+        {
+          "warehouseReady": "true",
+          "drawCalls": "2",
+          "triangles": "242",
+          "textures": "3",
+          "animating": "false",
+          "phase": "complete",
+          "assetsReady": "true",
+          "complete": "true"
+        }
+      ]
+    },
+    {
+      "layout": "desktop",
+      "kind": "crate",
+      "mode": "fallback",
+      "announcement": "31 artworks revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/crate.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp"
+      ],
+      "scene": []
+    },
+    {
+      "layout": "desktop",
+      "kind": "warehouse",
+      "mode": "fallback",
+      "announcement": "11 crates revealed",
+      "requests": [
+        "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "http://127.0.0.1:5173/111k/crate-reference-v16.webp",
+        "http://127.0.0.1:5173/111k/warehouse-reference-v16.webp"
+      ],
+      "scene": []
+    }
+  ]
+}

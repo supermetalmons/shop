@@ -263,7 +263,7 @@ test('warehouse image and GPU preparation precede confirmation without fabricati
   await waitFor(() => assert.ok(warehouseProps?.crateImage));
   const image = warehouseProps!.crateImage;
   assert.equal(warehousePreparations, 1);
-  assert.deepEqual(imageSources, ['/111k/crate-reference.webp']);
+  assert.deepEqual(imageSources, ['/111k/crate-reference-v16.webp']);
   assert.equal(warehouseProps!.assets, null);
   assert.deepEqual(view.presentation.overlay?.results, []);
   const button = view.getByRole('button', { name: `Reveal ${view.source.name}` });
@@ -305,7 +305,7 @@ test('warehouse image retry reuses confirmed results without resubmitting', asyn
   imageFailure = false;
   fireEvent.click(view.getByRole('button', { name: 'Retry loading' }));
   await waitFor(() => assert.equal(warehouseProps!.opening, true));
-  assert.deepEqual(imageSources, ['/111k/crate-reference.webp', '/111k/crate-reference.webp']);
+  assert.deepEqual(imageSources, ['/111k/crate-reference-v16.webp', '/111k/crate-reference-v16.webp']);
   assert.equal(view.sends, 1);
   assert.equal(sources.length, 1);
 });

@@ -54,8 +54,8 @@ test('one inventory orders pending mints and Ethereum container groups before th
   assert.ok(inventory.items.slice(0, -2).every(item => item.dropId === '111k'));
   assert.equal(inventory.items.at(-2), solanaItems[0]);
   assert.equal(inventory.items.at(-1), solanaItems[1]);
-  assert.equal(inventory.items[0].image, 'https://wip.lil.org/111k/warehouse_clean.webp');
-  assert.equal(inventory.items[1].image, 'https://wip.lil.org/111k/crate_clean.webp');
+  assert.equal(inventory.items[0].image, 'https://cdn.lil.org/nft/111k/warehouse.webp');
+  assert.equal(inventory.items[1].image, 'https://cdn.lil.org/nft/111k/crate.webp');
   assert.deepEqual(inputs.map(item => item.tokenId), ['1', '2', '3', '4', '5', '6']);
 });
 

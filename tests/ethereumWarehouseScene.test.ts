@@ -195,12 +195,12 @@ function crateImage(): NonNullable<WarehouseSceneProps['crateImage']> {
   const image = document.createElement('canvas');
   image.width = 512;
   image.height = 350;
-  return { image, width: 1218, height: 833, release() {} };
+  return { image, width: 1448, height: 1086, release() {} };
 }
 function previews(count = 11): CratePreviewAssets {
   const image = document.createElement('canvas');
   return { items: Array.from({ length: count }, (_, index) => ({ id: String(index), src: '/crate.webp',
-    name: `Crate ${index + 1}`, width: 1218, height: 833, image })), release() {} };
+    name: `Crate ${index + 1}`, width: 1448, height: 1086, image })), release() {} };
 }
 const hits = [{ id: 1, x: -0.3, y: -0.1 }, { id: 2, x: 0.3, y: 0.1 }, { id: 3, x: 0, y: 0 }];
 function harness(overrides: Partial<WarehouseSceneProps> = {}) {
@@ -209,7 +209,7 @@ function harness(overrides: Partial<WarehouseSceneProps> = {}) {
   let props: WarehouseSceneProps = {
     assets: null, crateImage: crateImage(), hits: [], opening: false, active: true, suspended: false, reducedMotion: false,
     viewport: { left: 0, top: 0, width: 1000, height: 800 },
-    containerRect: { left: 300, top: 200, width: 400, height: 400 * 1104 / 1254 },
+    containerRect: { left: 300, top: 200, width: 400, height: 400 * 1024 / 1536 },
     onReady: () => { events.ready++; }, onAssetsReady: () => { events.assets++; }, onComplete: () => { events.complete++; },
     onError: error => { events.errors.push(error); }, onFrame: () => { events.frames++; },
     onImpact: critical => { events.impacts.push({ critical, time, fracture: modelLoads[0].model.fracture }); }, ...overrides,

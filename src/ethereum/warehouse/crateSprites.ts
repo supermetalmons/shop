@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export const CRATE_SPRITE_BOUNDS = Object.freeze({ width: 3.42, height: 2.11836, depth: 2.36555 });
+export const CRATE_SPRITE_BOUNDS = Object.freeze({ width: 3.42, height: 2.16749, depth: 2.44602 });
 
 export type CrateSprites = {
   root: THREE.Group;

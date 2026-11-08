@@ -1,0 +1,282 @@
+{
+  "checkedAt": "2026-11-08T00:13:08.122Z",
+  "startedAt": "2026-11-08T00:12:59.992Z",
+  "url": "https://mons.shop/111k_devnet",
+  "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+  "frontendScripts": [
+    "/assets/index-BgQuRPSV.js",
+    "/assets/rolldown-runtime-C0FnF6B9.js",
+    "/assets/jsx-runtime-CKeovgl0.js",
+    "/assets/focusTrap-eSUcgXD5.js",
+    "/assets/shipmentHistory-BEsFzUCN.js",
+    "/assets/index.browser.esm-CsAzrryx.js",
+    "/assets/dropMediaDefaults-DN__LRNm.js",
+    "/assets/deploymentCore-C5QiUkUp.js",
+    "/assets/dropLabels-B-kENt49.js",
+    "/assets/ModalFocusScope-tbifo_U_.js",
+    "/assets/useShopFeedback-Dzn4vyzm.js",
+    "/assets/preload-helper-Czpn1I53.js",
+    "/assets/browser-VJeGqe__.js",
+    "/assets/drifCards-BhCh5MGg.js",
+    "/assets/miNoteCards-q9U-jpua.js",
+    "/assets/dropContent-jDANJ6Xb.js",
+    "/assets/Transport-CL7hAnp_.js",
+    "/assets/WalletContext-C_65RmKj.js",
+    "/assets/useDarkColorScheme-BMFWw038.js",
+    "/assets/ColorSchemeImage-DGYGLtKL.js",
+    "/assets/metadataImage-C753MIYV.js",
+    "/assets/miNoteCardInput-BnV3fERD.js"
+  ],
+  "method": "Fresh headless Chromium contexts; live production page and network; no API mocks, wallet connection, signatures or transaction submissions.",
+  "passed": true,
+  "configurations": [
+    {
+      "layout": "desktop",
+      "status": 200,
+      "enabled": true,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/"
+    },
+    {
+      "layout": "mobile",
+      "status": 200,
+      "enabled": true,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/"
+    }
+  ],
+  "statistics": [
+    {
+      "layout": "desktop",
+      "status": 200,
+      "saleActive": true,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "allocatedCrates": 1999,
+      "remainingCrates": 3556,
+      "warehousesMinted": 0,
+      "remainingWarehouses": 323,
+      "artworksMinted": 20
+    },
+    {
+      "layout": "mobile",
+      "status": 200,
+      "saleActive": true,
+      "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+      "allocatedCrates": 1999,
+      "remainingCrates": 3556,
+      "warehousesMinted": 0,
+      "remainingWarehouses": 323,
+      "artworksMinted": 20
+    }
+  ],
+  "results": [
+    {
+      "layout": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "kind": "crate",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 685,
+        "displayHeight": 514,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    },
+    {
+      "layout": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "kind": "crate",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 196,
+        "displayHeight": 147,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    },
+    {
+      "layout": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "kind": "warehouse",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 771,
+        "displayHeight": 514,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    },
+    {
+      "layout": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "kind": "warehouse",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 220,
+        "displayHeight": 147,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "kind": "crate",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 356,
+        "displayHeight": 267,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "kind": "crate",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/crate.webp",
+        "naturalWidth": 1448,
+        "naturalHeight": 1086,
+        "declaredWidth": 1448,
+        "declaredHeight": 1086,
+        "displayWidth": 110,
+        "displayHeight": 82.99999237060547,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "kind": "warehouse",
+      "quantity": 1,
+      "renderedCount": 1,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 355,
+        "displayHeight": 237,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    },
+    {
+      "layout": "mobile",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "kind": "warehouse",
+      "quantity": 15,
+      "renderedCount": 15,
+      "image": {
+        "url": "https://cdn.lil.org/nft/111k/warehouse.webp",
+        "naturalWidth": 1536,
+        "naturalHeight": 1024,
+        "declaredWidth": 1536,
+        "declaredHeight": 1024,
+        "displayWidth": 109,
+        "displayHeight": 73,
+        "objectFit": "contain"
+      },
+      "mintEnabled": true,
+      "passed": true
+    }
+  ],
+  "assetRequests": [
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/crate.webp"
+    },
+    {
+      "layout": "desktop",
+      "url": "https://cdn.lil.org/nft/111k/warehouse.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/crate.webp"
+    },
+    {
+      "layout": "mobile",
+      "url": "https://cdn.lil.org/nft/111k/warehouse.webp"
+    }
+  ],
+  "oldAssetRequests": [],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "requestFailures": [],
+  "screenshots": [
+    "crate-desktop-1.png",
+    "crate-desktop-15.png",
+    "warehouse-desktop-1.png",
+    "warehouse-desktop-15.png",
+    "crate-mobile-1.png",
+    "crate-mobile-15.png",
+    "warehouse-mobile-1.png",
+    "warehouse-mobile-15.png"
+  ]
+}
