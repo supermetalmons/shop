@@ -6,8 +6,8 @@ import test, { type TestContext } from 'node:test';
 import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 import type { EthereumRevealResult, EthereumRevealTokensResponse, EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
-import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
-import type { EthereumRevealStore, RevealSql, RevealReceiptClaim, RevealScanClaim } from '../src/ethereumRevealStore.ts';
+import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import { EthereumRevealStore, type RevealSql, type RevealReceiptClaim, type RevealScanClaim } from '../src/ethereumRevealStore.ts';
 import type { RevealVerificationResult, RevealVerificationScope, RevealVerificationWork } from '../src/ethereumRevealVerification.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
@@ -53,10 +53,15 @@ function receipt(transactionHash: string, blockNumber: number, crates: Crate[] =
 type Receipt = ReturnType<typeof receipt>;
 type InternalObject = {
   store: EthereumRevealStore;
+  configure(deployment: EthereumRevealDeployment): void;
   revealTransaction(deployment: EthereumRevealDeployment, hash: string, admit?: boolean, deadlineMs?: number): Promise<EthereumRevealResult<EthereumRevealTransactionResponse>>;
   revealTokens(deployment: EthereumRevealDeployment, ids: string[], admit?: boolean, deadlineMs?: number): Promise<EthereumRevealResult<EthereumRevealTokensResponse>>;
   watchdog(deployment: EthereumRevealDeployment): Promise<void>;
   alarm(): Promise<void>;
+  arm(): Promise<void>;
+  alarmUpdate: Promise<void> | null;
+  canContinue(scope: Pick<EthereumRevealDeployment, 'chainId' | 'contractAddress'>): Promise<boolean>;
+  startBackground(deployment: EthereumRevealDeployment, preferredHash?: string, tokenIds?: string[]): Promise<void>;
   processReceipt(deployment: EthereumRevealDeployment, claim: RevealReceiptClaim): Promise<void>;
   processScan(deployment: EthereumRevealDeployment, claim: RevealScanClaim): Promise<void>;
   withinBudget(work: Promise<unknown>, deadline: number): Promise<boolean>;
@@ -89,6 +94,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys=ON');
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', 'utf8'));
   database.prepare(`INSERT INTO ethereum_reveal_deployments(deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,
     deployment_block,catalog_version,template_json,template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
     VALUES(?,?,?,?,?,?,?,?,?,'active',3,1,3,2,3)`).run(deployment.deploymentId, deployment.dropId, deployment.chainId, CONTRACT,
@@ -123,6 +129,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
     },
   };
   const context = {
+    id: { toString: () => `${deployment.chainId}:${CONTRACT}`, equals: (other: DurableObjectId) => other.toString() === `${deployment.chainId}:${CONTRACT}` },
     storage: { sql, transactionSync<T>(action: () => T) {
       database.exec('BEGIN');
       try { const result = action(); database.exec('COMMIT'); return result; }
@@ -138,8 +145,10 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
   let publisher: InstanceType<typeof EthereumRevealPublisherObject>;
   const env = { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545',
     ALCHEMY_MI_NOTE_API_KEY: '', ETHEREUM_REVEAL_METADATA: metadata, OPS_DB: d1Database(database),
-    ETHEREUM_REVEAL: { getByName: () => current },
-    ETHEREUM_REVEAL_PUBLISHER: { getByName: () => publisher },
+    ETHEREUM_REVEAL: { getByName: () => current,
+      idFromName: (name: string) => ({ toString: () => name }) },
+    ETHEREUM_REVEAL_PUBLISHER: { getByName: () => publisher,
+      idFromName: (name: string) => ({ toString: () => name }) },
     ETHEREUM_REVEAL_VERIFIER: { getByName(name: string) {
       let verifier = verifiers.get(name);
       if (!verifier) {
@@ -152,12 +161,14 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
   publisher = new EthereumRevealPublisherObject(context as unknown as DurableObjectState, env as unknown as Env);
   const make = () => {
     current = new EthereumRevealObject(context as unknown as DurableObjectState, env as unknown as Env) as unknown as InternalObject;
+    if (catalogVersion === deployment.catalogVersion) current.configure(deployment);
     return current;
   };
   const object = make();
-  object.store.configure({ ...deployment, catalogVersion });
-  while (!object.store.initializeChunk()) {}
-  while (!object.store.migrationReady()) object.store.migrateChunk(Date.now(), 128);
+  const store = catalogVersion === deployment.catalogVersion ? object.store : new EthereumRevealStore(sql, context.storage.transactionSync);
+  store.configure({ ...deployment, catalogVersion });
+  while (!store.initializeChunk()) {}
+  while (!store.migrationReady()) store.migrateChunk(Date.now(), 128);
   const state = { head: 1000, minted: 0, receipts: new Map<string, Receipt | Promise<Receipt | null>>(),
     transactions: new Map<string, Record<string, unknown>>(), failedReceipts: new Set<string>(),
     failedMethods: new Set<string>(), canonicalHashes: new Map<number, string>(), logsUnavailable: false,
@@ -223,12 +234,22 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
     assert.equal(tasks.size, 0, 'Background work must yield with a durable retry instead of spinning.');
   };
   t.after(async () => { await settle(); database.close(); });
-  const freeze = (transactionHash: string, first = 1, crateTokenId = '111112', all = true) => object.store.freeze(deployment,
+  const freeze = (transactionHash: string, first = 1, crateTokenId = '111112', all = true) => store.freeze(deployment,
     { transactionHash, blockNumber: 101, blockHash: hash(101) }, [{ crateTokenId, tokenIds: ids(first) }], Date.now(), all);
-  return { object, store: object.store, database, sql, state, published, metadata, media, firstBatch: firstBatch.promise,
+  return { object, store, database, sql, env, state, published, metadata, media, firstBatch: firstBatch.promise,
     pending, freeze, settle, reopen: make, getAlarm: () => alarm, setAlarm: context.storage.setAlarm,
+    storage: context.storage, tasks,
     verifier: (transactionHash: string) => env.ETHEREUM_REVEAL_VERIFIER.getByName(`${deployment.chainId}:${CONTRACT}:${transactionHash}`),
     rows: (query: string) => database.prepare(query).all() };
+}
+
+async function completesWithin<T>(work: Promise<T>, milliseconds = 200): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Foreground work exceeded its bounded wait.')), milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -273,11 +294,114 @@ test('new transaction and token work require admission without chain or storage 
   assert.equal(f.rows('SELECT COUNT(*) AS count FROM receipt_work')[0].count, 0);
 });
 
+for (const kind of ['transaction', 'tokens'] as const) {
+  const reveal = (f: ReturnType<typeof fixture>, deadline: number, frozen = true):
+    Promise<EthereumRevealResult<EthereumRevealTransactionResponse | EthereumRevealTokensResponse>> => kind === 'transaction'
+    ? f.object.revealTransaction(deployment, hash(frozen ? 1 : 2), true, deadline)
+    : f.object.revealTokens(deployment, ids(frozen ? 1 : 21), true, deadline);
+  const mockAuthorizationRead = (t: TestContext, f: ReturnType<typeof fixture>, first: () => Promise<Record<string, unknown> | null>) =>
+    t.mock.method(f.env.OPS_DB, 'prepare', (query: string) => {
+      assert.match(query, /FROM ethereum_reveal_deployments WHERE chain_id = \? AND contract_address = \?/);
+      const statement = { bind(...bindings: unknown[]) {
+        assert.deepEqual(bindings, [deployment.chainId, CONTRACT]);
+        return statement;
+      }, first };
+      return statement as unknown as D1PreparedStatement;
+    });
+  const effects = (f: ReturnType<typeof fixture>) => ({
+    changes: f.rows('SELECT total_changes() AS count')[0].count,
+    frozen: f.store.frozen(ids(1)), alarm: f.getAlarm(), calls: [...f.state.calls], media: { ...f.media },
+    publications: [...f.published], tasks: f.tasks.size, receipts: f.object.receipts.size, scans: f.object.scans.size,
+  });
+
+  for (const completion of ['resolve', 'reject'] as const) test(`${kind} initial OPS authorization times out before frozen disclosure or admission and ignores a late ${completion}`, async t => {
+    const f = fixture(t), entered = Promise.withResolvers<void>(), blocked = Promise.withResolvers<Record<string, unknown> | null>();
+    f.freeze(hash(1));
+    const canonical = f.rows('SELECT * FROM ethereum_reveal_deployments')[0];
+    const before = effects(f), alarmWrites = t.mock.method(f.storage, 'setAlarm');
+    let reads = 0;
+    mockAuthorizationRead(t, f, () => { if (++reads === 2) entered.resolve(); return blocked.promise; });
+    const deadline = Date.now() + 30;
+    const requests = [reveal(f, deadline), reveal(f, deadline, false)];
+    const rejected = requests.map(request => assert.rejects(request, { code: 'unavailable' }));
+    try {
+      await completesWithin(entered.promise);
+      await completesWithin(Promise.all(rejected));
+      assert.deepEqual(effects(f), before);
+      assert.equal(alarmWrites.mock.callCount(), 0);
+    } finally {
+      if (completion === 'resolve') blocked.resolve(canonical);
+      else blocked.reject(new Error('Late OPS query failure'));
+      await Promise.allSettled([...requests, ...rejected]);
+      await new Promise(resolve => setImmediate(resolve));
+      await f.settle();
+    }
+    assert.equal(reads, 2);
+    assert.deepEqual(effects(f), before);
+    assert.equal(alarmWrites.mock.callCount(), 0);
+  });
+
+  test(`${kind} initial OPS authorization skips expired deadlines and rejects results delivered after the deadline`, async t => {
+    const f = fixture(t);
+    f.freeze(hash(1));
+    const canonical = f.rows('SELECT * FROM ethereum_reveal_deployments')[0], before = effects(f);
+    let now = Date.now(), reads = 0;
+    t.mock.method(Date, 'now', () => now);
+    const prepare = mockAuthorizationRead(t, f, async () => { reads++; now += 30; return canonical; });
+    await completesWithin(assert.rejects(reveal(f, now), { code: 'unavailable' }));
+    assert.equal(prepare.mock.callCount(), 0);
+    assert.equal(reads, 0);
+    await completesWithin(assert.rejects(reveal(f, now + 30), { code: 'unavailable' }));
+    assert.equal(reads, 1);
+    assert.deepEqual(effects(f), before);
+  });
+
+  test(`${kind} initial OPS authorization permits fast frozen reads and rejects failed or retired canonical reads`, async t => {
+    const f = fixture(t);
+    f.freeze(hash(1));
+    const expected = kind === 'transaction' ? f.store.transactionResponse(deployment, hash(1))
+      : f.store.tokensResponse(deployment, ids(1));
+    const fast = await completesWithin(reveal(f, Date.now() + 30));
+    assert.deepEqual(fast, { kind: 'ready', value: expected });
+    const canonical = f.rows('SELECT * FROM ethereum_reveal_deployments')[0], before = effects(f);
+    let retired = false, reads = 0;
+    mockAuthorizationRead(t, f, async () => {
+      reads++;
+      if (!retired) throw new Error('OPS query failure');
+      return { ...canonical, state: 'paused', retired_at_ms: Date.now(), replacement_deployment_id: 'replacement' };
+    });
+    await completesWithin(assert.rejects(reveal(f, Date.now() + 30), { code: 'unavailable' }));
+    retired = true;
+    await completesWithin(assert.rejects(reveal(f, Date.now() + 30), { code: 'unavailable' }));
+    assert.equal(reads, 2);
+    assert.deepEqual(effects(f), before);
+  });
+}
+
+test('a wrong retired scope cannot poison a healthy coordinator instance', async t => {
+  const f = fixture(t);
+  for (const [id, address, state] of [['foreign-new', `0x${'44'.repeat(20)}`, 'active'], ['foreign-old', `0x${'55'.repeat(20)}`, 'paused']]) {
+    f.database.prepare(`INSERT INTO ethereum_reveal_deployments
+      (deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,deployment_block,catalog_version,template_json,
+        template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
+      SELECT ?,drop_id,11155111,?,?,deployment_block,catalog_version,template_json,template_sha256,?,revision,
+        created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms FROM ethereum_reveal_deployments WHERE deployment_id=?`)
+      .run(id, address, `https://cdn.mons.shop/111k-sepolia/${id}/`, state, deployment.deploymentId);
+  }
+  f.database.exec("UPDATE ethereum_reveal_deployments SET retired_at_ms=100,replacement_deployment_id='foreign-new',revision=4 WHERE deployment_id='foreign-old'");
+  const foreign = parseEthereumRevealDeployment(f.database.prepare("SELECT * FROM ethereum_reveal_deployments WHERE deployment_id='foreign-old'").get()!);
+  await assert.rejects(f.object.watchdog(foreign), /object does not match/);
+  assert.deepEqual(await f.object.revealTokens(deployment, ['1']), { kind: 'admission' });
+  assert.equal(f.store.ready(), true);
+  assert.deepEqual(f.state.calls, []);
+});
+
 test('complete frozen snapshots bypass chain, publication and admission even while paused', async t => {
   const f = fixture(t);
   f.freeze(hash(1));
   const before = f.store.transactionResponse(deployment, hash(1));
   const paused = { ...deployment, state: 'paused' as const };
+  f.database.exec("UPDATE ethereum_reveal_deployments SET state='paused',revision=revision+1");
   assert.deepEqual(value(await f.object.revealTransaction(paused, hash(1))), before);
   assert.deepEqual(value(await f.object.revealTokens(paused, ['1', '2'])).artworks.map(artwork => artwork.tokenId), ['1', '2']);
   assert.deepEqual(f.state.calls, []);
@@ -326,6 +450,321 @@ test('a blocked receipt yields a bounded pending response with durable continuat
   } finally { blocked.resolve(receipt(hash(1), 1000)); await f.settle(); }
   assert.equal(value(await f.object.revealTransaction(deployment, hash(1))).status, 'revealed');
   assert.equal(f.published.size, 20);
+});
+
+test('thirty-two simultaneous alarm requests coalesce slow registry checks', async t => {
+  const f = fixture(t);
+  f.store.admitTransaction(hash(1), deployment.deploymentBlock, Date.now());
+  const canContinue = f.object.canContinue.bind(f.object);
+  let checks = 0;
+  t.mock.method(f.object, 'canContinue', async (...args: Parameters<InternalObject['canContinue']>) => {
+    checks++;
+    await new Promise<void>(resolve => setTimeout(resolve, 100));
+    return canContinue(...args);
+  });
+  const requests = Array.from({ length: 32 }, () => f.object.arm());
+  try {
+    await completesWithin(Promise.all(requests), 750);
+    assert.ok(checks <= 2, `Expected at most two registry checks, received ${checks}.`);
+    assert.ok(f.getAlarm() !== null);
+    assert.equal(f.object.alarmUpdate, null);
+  } finally { await Promise.allSettled(requests); }
+});
+
+test('a failed alarm pass rejects its callers while the queued pass can retry successfully', async t => {
+  const f = fixture(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  f.store.admitTransaction(hash(1), deployment.deploymentBlock, Date.now());
+  const setAlarm = f.storage.setAlarm.bind(f.storage);
+  let writes = 0;
+  t.mock.method(f.storage, 'setAlarm', async (next: number) => {
+    if (++writes === 1) {
+      entered.resolve();
+      await release.promise;
+      throw new Error('Alarm write failed');
+    }
+    return setAlarm(next);
+  });
+  const first = f.object.arm(), rejected = assert.rejects(first, /Alarm write failed/);
+  const requests = [first];
+  try {
+    await completesWithin(entered.promise);
+    const retry = f.object.arm();
+    requests.push(retry);
+    assert.notEqual(retry, first);
+    for (let index = 0; index < 31; index++) assert.equal(f.object.arm(), retry);
+    assert.equal(f.object.alarmUpdate, retry);
+    release.resolve();
+    await completesWithin(Promise.all([rejected, retry]));
+    assert.equal(writes, 2);
+    assert.ok(f.getAlarm() !== null);
+    assert.equal(f.object.alarmUpdate, null);
+  } finally { release.resolve(); await Promise.allSettled([...requests, rejected]); }
+});
+
+for (const blockedMethod of ['getAlarm', 'setAlarm'] as const) test(`alarm requests arriving during ${blockedMethod} retain an earlier wake`, async t => {
+  const f = fixture(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const later = Date.now() + 10_000, earlier = later - 5_000;
+  let wakes = 0, checks = 0;
+  t.mock.method(f.store, 'nextWake', () => ++wakes === 1 ? later : earlier);
+  const canContinue = f.object.canContinue.bind(f.object);
+  t.mock.method(f.object, 'canContinue', (...args: Parameters<InternalObject['canContinue']>) => {
+    checks++;
+    return canContinue(...args);
+  });
+  const getAlarm = f.storage.getAlarm.bind(f.storage), setAlarm = f.storage.setAlarm.bind(f.storage);
+  let calls = 0;
+  if (blockedMethod === 'getAlarm') t.mock.method(f.storage, 'getAlarm', async () => {
+    if (++calls === 1) { entered.resolve(); await release.promise; }
+    return getAlarm();
+  });
+  else t.mock.method(f.storage, 'setAlarm', async (next: number) => {
+    if (++calls === 1) { entered.resolve(); await release.promise; }
+    return setAlarm(next);
+  });
+  const requests = [f.object.arm()];
+  try {
+    await completesWithin(entered.promise);
+    requests.push(...Array.from({ length: 31 }, () => f.object.arm()));
+    release.resolve();
+    await completesWithin(Promise.all(requests));
+    assert.equal(checks, 2);
+    assert.equal(wakes, 2);
+    assert.equal(f.getAlarm(), earlier);
+  } finally { release.resolve(); await Promise.allSettled(requests); }
+});
+
+for (const kind of ['transaction', 'tokens'] as const) {
+  test(`${kind} admission returns and starts background work while new arrivals keep alarm passes queued`, async t => {
+    const f = fixture(t), blockedReceipt = Promise.withResolvers<Receipt | null>(), blockedScan = Promise.withResolvers<void>();
+    f.state.minted = 1;
+    f.state.receipts.set(hash(1), blockedReceipt.promise);
+    f.state.logGate = blockedScan.promise;
+    const passes = Array.from({ length: 3 }, () => ({
+      entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>(),
+    }));
+    const getAlarm = f.storage.getAlarm.bind(f.storage), arm = f.object.arm.bind(f.object);
+    let reads = 0, arms = 0;
+    t.mock.method(f.storage, 'getAlarm', async () => {
+      const pass = passes[reads++];
+      if (pass) { pass.entered.resolve(); await pass.release.promise; }
+      return getAlarm();
+    });
+    t.mock.method(f.object, 'arm', () => { arms++; return arm(); });
+    t.mock.method(f.object, 'runPublications', async () => {});
+    const request = () => {
+      const work = kind === 'transaction' ? f.object.revealTransaction(deployment, hash(1), true, Date.now() + 500)
+        : f.object.revealTokens(deployment, ['1'], true, Date.now() + 500);
+      void work.catch(() => undefined);
+      return work;
+    };
+    const first = request(), requests: Promise<unknown>[] = [first];
+    try {
+      await completesWithin(passes[0].entered.promise);
+      requests.push(request());
+      await waitFor(() => arms >= 2);
+      passes[0].release.resolve();
+      await completesWithin(passes[1].entered.promise);
+      await waitFor(() => kind === 'transaction' ? f.state.receiptLookups.length > 0 : f.state.scans.length > 0);
+      assert.ok(f.getAlarm() !== null);
+      requests.push(request());
+      await waitFor(() => arms >= 3);
+      passes[1].release.resolve();
+      await completesWithin(passes[2].entered.promise);
+      requests.push(request());
+      await waitFor(() => arms >= 4);
+      const result = await completesWithin<EthereumRevealResult<EthereumRevealTransactionResponse | EthereumRevealTokensResponse>>(first, 1_000);
+      assert.equal(result.kind, 'ready');
+      if (result.kind !== 'ready') assert.fail();
+      if ('status' in result.value) assert.equal(result.value.status, 'pending');
+      else assert.deepEqual(result.value.unresolved.map(entry => entry.status), ['recovering']);
+      assert.ok(f.object.alarmUpdate);
+      assert.equal(reads, 3);
+    } finally {
+      for (const pass of passes) pass.release.resolve();
+      blockedReceipt.resolve(null);
+      blockedScan.resolve();
+      await Promise.allSettled(requests);
+      await f.settle();
+    }
+  });
+
+  for (const stage of ['registry', 'getAlarm', 'setAlarm'] as const) test(`${kind} admission times out while ${stage} blocks alarm durability and continues in waitUntil`, async t => {
+    const f = fixture(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const gate = async () => { entered.resolve(); await release.promise; };
+    if (stage === 'registry') {
+      const canContinue = f.object.canContinue.bind(f.object);
+      let checks = 0;
+      t.mock.method(f.object, 'canContinue', async (...args: Parameters<InternalObject['canContinue']>) => {
+        if (++checks === 1) await gate();
+        return canContinue(...args);
+      });
+    } else if (stage === 'getAlarm') {
+      const getAlarm = f.storage.getAlarm.bind(f.storage);
+      let reads = 0;
+      t.mock.method(f.storage, 'getAlarm', async () => {
+        if (++reads === 1) await gate();
+        return getAlarm();
+      });
+    } else {
+      const setAlarm = f.storage.setAlarm.bind(f.storage);
+      let writes = 0;
+      t.mock.method(f.storage, 'setAlarm', async (next: number) => {
+        if (++writes === 1) await gate();
+        return setAlarm(next);
+      });
+    }
+    const deadline = Date.now() + 30;
+    const request = kind === 'transaction' ? f.object.revealTransaction(deployment, hash(1), true, deadline)
+      : f.object.revealTokens(deployment, ['1'], true, deadline);
+    const rejected = assert.rejects(request, { code: 'unavailable' });
+    try {
+      await completesWithin(entered.promise);
+      await completesWithin(rejected);
+      assert.equal(f.getAlarm(), null);
+      assert.ok(f.tasks.size > 0);
+      assert.deepEqual(f.state.calls, []);
+    } finally { release.resolve(); await Promise.allSettled([request, rejected]); await f.settle(); }
+    assert.ok(f.getAlarm() !== null);
+    assert.ok(f.state.calls.length > 0);
+  });
+
+  for (const stage of ['registry', 'getAlarm', 'setAlarm'] as const) test(`${kind} admission rejects a ${stage} failure before its durable alarm is armed`, async t => {
+    const f = fixture(t);
+    const fail = async () => { throw new Error('Alarm setup failed'); };
+    if (stage === 'registry') t.mock.method(f.object, 'canContinue', fail);
+    else t.mock.method(f.storage, stage, fail);
+    const deadline = Date.now() + 30;
+    const request = kind === 'transaction' ? f.object.revealTransaction(deployment, hash(1), true, deadline)
+      : f.object.revealTokens(deployment, ['1'], true, deadline);
+    await completesWithin(assert.rejects(request, { code: 'unavailable' }));
+    await f.settle();
+    assert.equal(f.getAlarm(), null);
+    assert.deepEqual(f.state.calls, []);
+  });
+
+  test(`${kind} admission returns pending after a durable alarm while background registry lookup continues`, async t => {
+    const f = fixture(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const canContinue = f.object.canContinue.bind(f.object);
+    let checks = 0;
+    t.mock.method(f.object, 'canContinue', async (...args: Parameters<InternalObject['canContinue']>) => {
+      if (++checks === 2) { entered.resolve(); await release.promise; }
+      return canContinue(...args);
+    });
+    const deadline = Date.now() + 30;
+    const request = kind === 'transaction' ? f.object.revealTransaction(deployment, hash(1), true, deadline)
+      : f.object.revealTokens(deployment, ['1'], true, deadline);
+    try {
+      await completesWithin(entered.promise);
+      const result = await completesWithin<EthereumRevealResult<EthereumRevealTransactionResponse | EthereumRevealTokensResponse>>(request);
+      assert.equal(result.kind, 'ready');
+      if (result.kind !== 'ready') assert.fail();
+      if ('status' in result.value) assert.equal(result.value.status, 'pending');
+      else assert.deepEqual(result.value.unresolved.map(entry => entry.status), ['recovering']);
+      assert.ok(f.getAlarm() !== null);
+      assert.ok(f.tasks.size > 0);
+      assert.deepEqual(f.state.calls, []);
+    } finally { release.resolve(); await Promise.allSettled([request]); await f.settle(); }
+    assert.ok(f.state.calls.length > 0);
+  });
+}
+
+for (const stage of ['registry', 'getAlarm', 'setAlarm', 'kickoff'] as const) test(`retirement fences ${stage} continuation across coordinator purge`, async t => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), draining = Promise.withResolvers<void>();
+  const row: Record<string, unknown> = {
+    deployment_id: deployment.deploymentId, drop_id: deployment.dropId, chain_id: 11155111, contract_address: CONTRACT,
+    metadata_base_uri: deployment.metadataBaseUri, deployment_block: 100, catalog_version: deployment.catalogVersion,
+    template_json: templateJson, template_sha256: deployment.templateSha256, state: 'active', revision: 3,
+    created_at_ms: 1, updated_at_ms: 3, provisioned_at_ms: 2, activated_at_ms: 3, last_error: null,
+  };
+  const active = parseEthereumRevealDeployment(row), request = { deploymentId: deployment.deploymentId, expectedRevision: 4 };
+  let registryReads = 0, alarmReads = 0, alarmWrites = 0, tables = 1, purged = false, writesAfterPurge = 0, dispatches = 0;
+  let alarm: number | null = null;
+  const tasks = new Set<Promise<unknown>>();
+  const gate = async () => { entered.resolve(); await release.promise; };
+  const database = { prepare(sql: string) {
+    const statement = { bind: (..._values: unknown[]) => statement, async first() {
+      if (sql.includes('ethereum_111k_control')) return { paused: 0, revision: 1, paused_at_ms: null,
+        chain_id: 11155111, contract_address: OWNER, reset_guard_id: null, last_reset_id: null, updated_at_ms: 1 };
+      const snapshot = { ...row };
+      if (sql.includes('WHERE chain_id = ?')) {
+        registryReads++;
+        if (stage === 'registry' && registryReads === 1 || stage === 'kickoff' && registryReads === 2) await gate();
+      }
+      return snapshot;
+    } };
+    return statement;
+  } };
+  const context = {
+    id: { equals: (other: DurableObjectId) => other.toString() === `11155111:${CONTRACT}` },
+    waitUntil(work: Promise<unknown>) {
+      tasks.add(work);
+      void work.finally(() => tasks.delete(work)).catch(() => undefined);
+    },
+    blockConcurrencyWhile: async <T>(operation: () => Promise<T>) => operation(),
+    storage: {
+      sql: { exec: () => ({ toArray: () => [{ count: tables }] }) }, list: async () => new Map(),
+      async getAlarm() { if (++alarmReads === 1 && stage === 'getAlarm') await gate(); return alarm; },
+      async setAlarm(next: number) {
+        if (++alarmWrites === 1 && stage === 'setAlarm') await gate();
+        if (purged) writesAfterPurge++;
+        alarm = next;
+      },
+      deleteAlarm: async () => { alarm = null; },
+      deleteAll: async () => { tables = 0; purged = true; },
+    },
+  };
+  const env = { OPS_DB: database, COMMERCE_DB: database, ETHEREUM_111K_CHAIN_ID: '11155111',
+    ETHEREUM_111K_CONTRACT_ADDRESS: OWNER,
+    ETHEREUM_REVEAL: { idFromName: (name: string) => ({ toString: () => name }) },
+    ETHEREUM_REVEAL_PUBLISHER: { getByName: () => ({ drainRetired: async () => { draining.resolve(); return { drained: true }; } }) },
+  };
+  const object = new EthereumRevealObject(context as unknown as DurableObjectState, env as unknown as Env) as unknown as InternalObject & {
+    configuredStore: EthereumRevealStore | null;
+    startForeground(deployment: EthereumRevealDeployment, deadline: number): Promise<void>;
+    purgeRetired(request: unknown): Promise<{ purged: true; storageEmpty: true; alarmCleared: true }>;
+    pump(): void;
+  };
+  object.configuredStore = { identity: () => active, nextWake: () => Date.now() + 1000, migrationReady: () => true } as unknown as EthereumRevealStore;
+  t.mock.method(object, 'pump', () => { dispatches++; });
+  t.mock.method(object, 'runPublications', async () => {});
+  const foreground = object.startForeground(active, Date.now() + 30);
+  const rejected = assert.rejects(foreground, { code: 'unavailable' });
+  let purge: ReturnType<typeof object.purgeRetired> | undefined;
+  let queued: Promise<void> | undefined;
+  try {
+    await completesWithin(entered.promise);
+    if (stage !== 'kickoff') {
+      queued = object.arm();
+      assert.equal(object.alarmUpdate, queued);
+    }
+    Object.assign(row, { state: 'paused', revision: 4, retired_at_ms: Date.now() - 65_001, replacement_deployment_id: 'replacement' });
+    purge = object.purgeRetired(request);
+    await completesWithin(draining.promise);
+    await completesWithin(rejected);
+    if (stage === 'kickoff') {
+      const result = await completesWithin(purge);
+      assert.equal(result.purged, true);
+    } else {
+      assert.equal(purged, false);
+      assert.ok(object.alarmUpdate);
+    }
+    release.resolve();
+    const result = await completesWithin(purge);
+    assert.equal(result.storageEmpty, true);
+    assert.equal(result.alarmCleared, true);
+    await foreground.catch(() => undefined);
+    await Promise.allSettled([...tasks]);
+    await object.arm();
+    await object.startBackground(active);
+    assert.equal(alarm, null);
+    assert.equal(tables, 0);
+    assert.equal(writesAfterPurge, 0);
+    assert.equal(dispatches, 0);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([foreground, rejected, ...(purge ? [purge] : []), ...(queued ? [queued] : [])]);
+    await Promise.allSettled([...tasks]);
+  }
 });
 
 test('observed wrapped pending transactions survive later absence, age and restart until a receipt resolves them', async t => {
@@ -929,6 +1368,7 @@ test('mixed negative refresh still requires admission and paused deployments ser
   await f.object.revealTokens(deployment, ['21'], true);
   await f.settle();
   const paused = { ...deployment, state: 'paused' as const };
+  f.database.exec("UPDATE ethereum_reveal_deployments SET state='paused',revision=revision+1");
   const calls = f.state.calls.length;
   assert.equal(value(await f.object.revealTokens(paused, ['1', '21'])).unresolved[0].status, 'unminted');
   now += 2_000;

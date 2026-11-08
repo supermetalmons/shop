@@ -7,11 +7,12 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 New deployments use catalog version `111k-v5`: 76,642 eggs, 30,990 paintings,
 58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
 111,111-artwork supply from 76,700 available eggs after counting all non-egg
-artworks. The runtime supports this catalog only; v1–v4 registrations remain historical records.
-Retired-catalog API requests return `409`, watchdog scans skip them, and their
-alarms stop. Status and pause commands can still inspect or pause those records;
-registration and activation require the current catalog. Do not rewrite an old
-catalog version or migrate an existing allocation pool to v5.
+artworks. The runtime supports this catalog only. Retired-catalog API requests return `409`,
+watchdog scans skip them, and their alarms stop. Superseded testnet registrations
+retain ownership records that prevent prefix reuse; their reveal ledgers and CDN
+metadata can be deleted through the retirement procedure below. Registration and
+activation require the current catalog. Do not rewrite an old catalog version or
+migrate an existing allocation pool to v5.
 
 The media root is `https://cdn.lil.org/nft/111k/`. Eggs, paintings, 3D previews,
 and animated previews use PNGs. 3D models use GLBs; animated artworks use original
@@ -29,7 +30,7 @@ companions. Confirm the egg allocation fits the available inventory. Freeze
 the resulting catalog before registration; confirmed assignments and their
 metadata do not change afterward.
 
-Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired collections retain their original prefixes. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
+Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired deployment identities continue to reserve their original prefixes even after testnet data is purged. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
 The relic collection contains 344984 metadata objects, including relic tokens 117172–117189 and terminal relic receipts 3000001–3000018. Every relic receipt uses `https://cdn.lil.org/nft/111k/placeholder.png`. Publish the complete collection to each replacement prefix before deployment and registration; a selected-object preview cannot qualify. Relic images are fixed at `https://wip.lil.org/111k/relics/1.webp` through `18.webp`. Owner allocation reserves relic crate supply before sales; claiming does not change the reserved supply. Opening a relic creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
 
@@ -55,7 +56,7 @@ Reveal registrations are independent of the API's global `ETHEREUM_111K_*` store
 
 The shared URI builder derives each metadata address from the validated chain-specific base URI and decimal token ID. Storefront metadata reads and reveal publication do not call `tokenURI`, `previewTokenURI`, or `previewTokenURIs` to reconstruct that address. Inventory ownership, mint existence, receipt confirmation, and canonical block snapshots still require their existing chain checks. Metadata-only reads remain available during an RPC outage when the CDN is available; they do not establish that a token was minted.
 
-The contract owner can change `baseURI()`, but the registered reveal prefix is immutable. Keep the onchain base URI, storefront configuration, and reveal registration aligned; do not change a registered contract's base URI independently. Registration and provisioning verify the initial match. A replacement deployment requires a new contract and a fresh prefix registered together, preserving the old prefix and ledger.
+The contract owner can change `baseURI()`, but the registered reveal prefix is immutable. Keep the onchain base URI, storefront configuration, and reveal registration aligned; do not change a registered contract's base URI independently. Registration and provisioning verify the initial match. A replacement deployment requires a new contract and a fresh prefix registered together. For Sepolia replacements, preserve the old ledger only through verified cutover, then immediately perform the required testnet retirement phase below in the same deployment task. Mainnet retention is unchanged.
 
 ## Registration and credentials
 
@@ -128,7 +129,7 @@ Migration advances at most 128 evidence associations per turn, with frozen reads
 
 The lifecycle upgrade uses the same resumable migration path to restore lost admission reservations, recompute receipt deadlines, and remove obsolete token interests in batches of at most 128 rows. Already accepted unresolved watches count toward capacity immediately, including before their rows are repaired. If corrected usage exceeds 10,000, existing work stays admitted and new admission waits for capacity. Crates without receipt candidates wait on their discovery schedule. An unminted result closes token-only receipt interests; independent transaction and crate recovery continue. Polling respects the two-second discovery retry floor, while saved split ranges remain eligible for immediate continuation.
 
-## Pausing, replacement, and local development
+## Pausing and replacement
 
 ```sh
 target_manifest='<manifest-for-the-collection-being-maintained.json>'
@@ -140,6 +141,138 @@ npm run ethereum-reveal-control -- activate --manifest "$target_manifest" --expe
 
 These commands pause and resume one collection for maintenance. During a replacement, pause the retired collection using its separate `old_manifest`; activate only the replacement's `new_manifest` from the registration steps above.
 
-For the current catalog, pausing stops new admission while previously admitted recovery/publication continues and frozen results remain readable. Retiring a catalog version stops its API execution and background work; its previously published CDN metadata remains available. Preserve retired deployment records, private reservations, frozen assignments, and metadata objects. Commerce reset does not delete reveal state. Never reset a production reveal object or restore an older ledger without reconciling every published immutable assignment. Use a fresh contract and prefix for a replacement collection.
+For the current catalog, pausing stops new admission while previously admitted recovery/publication continues and frozen results remain readable. Retiring a catalog version stops its API execution and background work. Commerce reset does not delete reveal state. Mainnet and the current collection retain their ledgers and metadata. Use a fresh contract and prefix for a replacement collection.
+
+## Superseded testnet retirement
+
+### Required after every replacement
+
+Replacing the 111k testnet includes purging its superseded deployment. Begin
+retirement as soon as the replacement is active and verified; do not accumulate
+old deployments or leave cleanup for a later task. A replacement is complete
+only after both cutover and retirement verification succeed.
+
+1. Before cutover, apply OPS migration `0011_ethereum_reveal_retirement.sql` and
+   Commerce migration `0048_ethereum_retirement_fence.sql`, then deploy the matching
+   Worker. Prepare a fresh deployment ID with the release runner;
+   it derives the predecessor from matching repository and live configuration.
+   The finalizer binds both scopes to the frozen manifest, signed transactions,
+   canonical chain evidence, registry, and live commerce configuration. Never
+   change an immutable registration, bump the shared catalog solely to unlock
+   deletion, or bypass current-deployment and mainnet protections.
+   Update the shared metadata default in `shared/ethereum/config.ts` and the
+   local fallback in `onchain/ethereum/script/Deploy111K.s.sol` with the API
+   configuration. Finalization refuses to purge a namespace still selected by
+   those supported runtime defaults.
+2. Close the old sale/redemptions and clear its scoped commerce state through the
+   guarded cutover procedure while commerce control still targets the old scope.
+   Verify the new contract, storefront, commerce control, reveal registration,
+   metadata, and live acceptance agree. Fence all old admission, recovery,
+   publication, callbacks, and alarms; pausing alone leaves background work alive.
+   The finalizer records an irreversible retirement timestamp and replacement ID,
+   quiesces old writers, and waits at least 65 seconds before purging. This works
+   even when the old and new deployments share a catalog. Pending storage
+   operations must settle before metadata deletion.
+3. Purge old reveal storage and alarms, exact old metadata prefixes, obsolete
+   publication leases, and any remaining deployment-scoped backend records.
+   Preserve permanent identity/prefix ownership records, the current collection,
+   mainnet, pre111k, shared media, profiles, authentication, and unrelated drops.
+   Never switch commerce control back to an old deployment just to prune it.
+4. Verify old data is absent, old API access is rejected, and the replacement's
+   complete expected metadata and frozen artwork remain healthy. Recheck retired
+   storage, metadata, and alarms after at least one five-minute scheduler interval
+   to prove that writers cannot recreate them.
+5. Remove superseded release trees, generated metadata/render scratch, caches,
+   and old backup files once backend verification passes. Move any still-required
+   shared inputs out of old release folders first. Keep the current signed
+   transaction journal intact, even when it records actions against the previous
+   contract. Retain only required current evidence, Git history, and a compact
+   cleanup record; do not create or retain a legacy archive. Delete any temporary
+   safety snapshot required by the guarded commerce reset after verified cleanup.
+
+If retirement fails, keep the replacement task open and resume its scoped journal
+until cleanup and verification finish. Do not describe a successful cutover alone
+as a completed replacement.
+
+### Automatic finalization
+
+`nft111k:deploy open` automatically runs replacement verification and cleanup
+after the opening transaction is confirmed. It requires existing Cloudflare
+operator access as well as the deployment RPC credentials. Opening remains
+journaled if cleanup fails; retry the same directory without rebroadcasting:
+
+```sh
+npm --prefix onchain/ethereum run nft111k:deploy -- finalize --network sepolia --directory "$release_dir"
+```
+
+The reusable finalizer can also be invoked directly. Without `--write` it checks
+the already-open replacement and prepares its bound cleanup plans without
+retiring or deleting remote data:
+
+```sh
+npm run finalize:ethereum111k -- --release-directory "$release_dir"
+npm run finalize:ethereum111k -- --release-directory "$release_dir" --write
+```
+
+`cleanup-finalization.json` and `cleanup-artifacts.json` live beside the frozen
+release manifest. Keep them when resuming. The finalizer verifies complete new
+metadata key coverage and a stable cutoff of frozen artworks, so newer reveals
+can continue normally. Old publication may finish while paused; its deletion
+inventory is sealed only after retirement, draining, and verified storage purge.
+Each deletion window is acknowledged before advancing, and a fresh listing must
+prove the old prefix empty. The finalizer then verifies the replacement, prunes
+owned old artifacts, and repeats the retirement checks after five minutes.
+It reports `complete: true` only after every stage succeeds.
+
+After retirement commits, `finalize` can recover from a pause/resume of the same
+replacement. It revalidates the replacement and frozen artwork before recording
+fresh control revisions, while retaining the original retirement evidence.
+
+Artifact cleanup uses deployment identity, publication journals, and matching
+release evidence to recognize old files. It rejects symlinks, scope mismatches,
+changed inventories, and references from current/shared inputs. Resolve such a
+failure before retrying; do not bypass the guard or delete the current signed
+journal. Mainnet, pre111k, shared assets, and unrelated data are protected.
+
+Private release locations are indexed by deployment ID and frozen into the next
+replacement manifest. For a pre-existing custom directory, pass
+`--previous-directory PATH` to `prepare` or a recovery `finalize`. Custom release
+directories must be dedicated to release outputs; keep signing keys elsewhere.
+Mainnet/shared cache ownership includes publication reports, journals, and snapshots.
+Shared caches are removed once every Sepolia owner is proven retired; current,
+mainnet, and unknown owners continue to protect the cache.
+
+A pending retirement fence blocks commerce scope changes until the OPS outcome
+is resolved. Retry `finalize` first; `ethereum111k-control status` reports any
+pending request. To abandon an attempt that has not committed retirement:
+
+```sh
+npm run cleanup:ethereum111k -- cancel --release-directory "$release_dir" --write
+```
+
+Cancellation invalidates the old revision before releasing the fence. It removes
+only the unstarted finalization journal; signed release evidence and the artifact
+plan remain. If retirement already committed, cancellation retains the journal
+for `finalize` and never reactivates the old deployment.
+
+### November 8 cleanup tooling
+
+The [cleanup record](../../releases/111k-testnet-cleanup-2026-11-08/README.md) tracks the approved removal of deployments preceding v16. This operation creates no archive. It preserves the current collection, mainnet and pre111k data, shared media, and the deployment ownership records that permanently reserve retired IDs and prefixes.
+
+The version-1 `plan`/`apply`/`verify` commands below remain specific to that
+historical v16 cleanup. Use replacement finalization above for future releases;
+changing a version-1 manifest does not retarget its fixed scope.
+
+```sh
+npm run cleanup:ethereum111k -- plan --manifest '<reviewed-retirement-manifest.json>'
+npm run cleanup:ethereum111k -- apply --manifest '<reviewed-retirement-manifest.json>' --write
+npm run cleanup:ethereum111k -- verify --manifest '<reviewed-retirement-manifest.json>'
+```
+
+Apply only the reviewed manifest after confirming its protected v16 identity and exact retired contracts and prefixes. Deployment and publication guards must be active before the maintenance service purges old Durable Object data. The private `EthereumRevealMaintenance.purgeRetired({ deploymentId, expectedRevision })` operation retains registry ownership records; retirement does not free an ID or prefix for reuse. Verification must show the retired data is absent and current v16 behavior is intact before local release trees, scratch files, and obsolete backups are pruned.
+
+After purging, do not roll back to Worker or publication tooling that ignores `retired_at_ms`, including the historical catalog-only retirement implementation. Preserve the Commerce retirement fences and their recovery support as well. Older code could recreate removed prefixes or accept work for deleted ledgers. Use a forward fix that preserves the permanent marker and writer guards. Never reset the current collection or restore an older active ledger without reconciling every published immutable assignment.
+
+## Local development
 
 `npm run dev:ethereum:api` provisions local Anvil reveal inventory automatically. Local bindings use isolated SQLite and R2; public CDN baseline metadata reads remain read-only. Restarting the local API discards its local reveal state, so restart Anvil and redeploy the contract together. Local deployment uses the committed default metadata namespace; set `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` only when selecting another complete published baseline. Custom local prefixes must be canonical and have published baseline metadata. Local artwork is checked against its local ledger even if another collection has already revealed the shared CDN metadata. Local contracts also start closed; use the Anvil owner to call `setSaleActive(true)` explicitly before test purchases.

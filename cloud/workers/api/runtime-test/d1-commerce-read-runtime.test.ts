@@ -362,6 +362,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0045_preorder_asset_lookup.sql',
       '0046_frozen_commerce_metadata_cleanup.sql',
       '0047_ethereum_delivery_routing.sql',
+      '0048_ethereum_retirement_fence.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms

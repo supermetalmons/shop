@@ -10,6 +10,44 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { decodeReturn, encodeCall } from '../../shared/ethereum/abi.ts';
 import { parseFreeMintConfig } from '../../onchain/ethereum/scripts/free-mint-config.mjs';
 
+test('the bare Foundry deployment uses the supported local baseline and honors an explicit override', { timeout: 60_000 }, t => {
+  const original = resolve(import.meta.dirname, '../../onchain/ethereum');
+  const project = mkdtempSync(join(tmpdir(), '111k-metadata-default-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  mkdirSync(join(project, 'test'));
+  copyFileSync(join(original, 'foundry.toml'), join(project, 'foundry.toml'));
+  copyFileSync(join(original, 'test/TestSupport.sol'), join(project, 'test/TestSupport.sol'));
+  for (const directory of ['src', 'script', 'node_modules']) {
+    symlinkSync(join(original, directory), join(project, directory), 'dir');
+  }
+  writeFileSync(join(project, 'test/MetadataDefault.t.sol'), `pragma solidity 0.8.38;
+import {Deploy111K} from "../script/Deploy111K.s.sol";
+import {TestSupport} from "./TestSupport.sol";
+interface Environment { function setEnv(string calldata name, string calldata value) external; }
+contract MetadataHarness is Deploy111K {
+    function metadataBaseURI() external returns (string memory) { return _metadataBaseURI(); }
+}
+contract MetadataDefaultTest is TestSupport {
+    function testLocalDefaultAndOverride() public {
+        vm.chainId(31337);
+        MetadataHarness harness = new MetadataHarness();
+        assertEq(harness.metadataBaseURI(), "https://cdn.mons.shop/111k-sepolia/v16/");
+        string memory explicitUri = "https://cdn.mons.shop/111k-sepolia/local-override/";
+        Environment(address(vm)).setEnv("ETHEREUM_111K_METADATA_BASE_URI", explicitUri);
+        assertEq(harness.metadataBaseURI(), explicitUri);
+    }
+}
+`);
+  const result = spawnSync('forge', ['test', '--offline', '--match-contract', 'MetadataDefaultTest', '--gas-snapshot-emit=false'], {
+    cwd: project, encoding: 'utf8', timeout: 55_000,
+    env: Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+      !/^(FOUNDRY_|DAPP_)/.test(name) && name !== 'ETHEREUM_111K_METADATA_BASE_URI')),
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /1 passed; 0 failed/);
+});
+
 test('local deployment rejects current-address payees and deploys one collection at the current nonce', { timeout: 90_000 }, async () => {
   const root = resolve(import.meta.dirname, '../..');
   const originalProject = join(root, 'onchain/ethereum');

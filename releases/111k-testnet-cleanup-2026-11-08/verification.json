@@ -1,0 +1,77 @@
+{
+  "completed": true,
+  "recordedAt": "2026-11-08T09:22:51.598Z",
+  "current": {
+    "deploymentId": "v16",
+    "chainId": 11155111,
+    "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/",
+    "deploymentBlock": 12087015,
+    "catalogVersion": "111k-v5"
+  },
+  "apiDeployment": {
+    "versionId": "4fcff2b4-5689-4eb8-ad76-a100fad9cdae",
+    "confirmedAt": "2026-11-08T08:16:00.900Z",
+    "drainNotBefore": "2026-11-08T08:17:05.900Z"
+  },
+  "remote": {
+    "completedAt": "2026-11-08T09:14:40.174Z",
+    "verifiedAt": "2026-11-08T09:18:06.176Z",
+    "deletedObjects": 3449810,
+    "deletedBytes": 712144812,
+    "emptyMetadataPrefixes": 11,
+    "purgedRevealStores": 10,
+    "permanentRegistrationsRetained": true,
+    "currentExpectedObjects": 344984,
+    "currentObservedObjects": 344984,
+    "currentFrozenArtworkHashesPreserved": 20,
+    "obsoleteCommerceAndPackStatusRows": 0
+  },
+  "liveAcceptance": {
+    "checkedAt": "2026-11-08T09:14:49.229Z",
+    "passed": true,
+    "revealedArtworks": 20,
+    "unresolvedArtworks": 0,
+    "currentMetadata": 35,
+    "media": 26,
+    "retiredRevealScopes": 10,
+    "retiredMetadata": 13,
+    "mainnetMetadata": 2,
+    "failures": []
+  },
+  "schedulerRecheck": {
+    "checkedAt": "2026-11-08T09:20:31.772Z",
+    "elapsedSeconds": 351,
+    "passed": true,
+    "emptyMetadataPrefixes": 11,
+    "emptyRevealStores": 10,
+    "registryPreserved": true,
+    "previewLeaseRemoved": true,
+    "mainnetLeasePreserved": true
+  },
+  "local": {
+    "removedTargets": 64,
+    "removedFiles": 345701,
+    "removedLogicalBytes": 420380809,
+    "remainingTargets": 0
+  },
+  "validation": {
+    "apiUnitTests": 3101,
+    "apiRuntimeTests": 59,
+    "cleanupCliTests": 23,
+    "localPruningSafetyTests": 5,
+    "solidityDeploymentTests": 19,
+    "nodeDeploymentTests": 2,
+    "acrylicTests": 40,
+    "approvedPresetAssets": 10,
+    "postPruneSourceLookupTests": 2,
+    "toolsTypecheck": true,
+    "apiBundleCredentialScan": true,
+    "apiStartupProfile": true,
+    "deadCodeAndProductionExports": true,
+    "postPruneDocumentationLinks": true,
+    "whitespace": true
+  },
+  "recoveryArchiveCreated": false,
+  "onchainTransactionsSubmitted": false
+}

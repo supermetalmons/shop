@@ -47,7 +47,7 @@ export function parseEthereumRevealControlArgs(argv: string[]): Args {
   return { command, write: values.write, deploymentId, expectedRevision, manifest: values.manifest };
 }
 
-type Registration = Omit<EthereumRevealDeployment, 'state' | 'revision' | 'createdAtMs' | 'updatedAtMs' | 'activatedAtMs' | 'provisionedAtMs' | 'lastError'>;
+type Registration = Omit<EthereumRevealDeployment, 'state' | 'revision' | 'createdAtMs' | 'updatedAtMs' | 'activatedAtMs' | 'provisionedAtMs' | 'lastError' | 'retiredAtMs' | 'replacementDeploymentId'>;
 type RegistrationIdentity = Omit<Registration, 'templateJson' | 'templateSha256'>;
 
 export async function ethereumRevealRegistrationRpcKey(env: Readonly<Record<string, string | undefined>> = process.env,
@@ -142,6 +142,7 @@ export function buildEthereumRevealRegistration(value: Registration, publication
 }
 
 export function buildEthereumRevealTransition(command: 'activate' | 'pause', current: EthereumRevealDeployment, revision: number): string {
+  if (current.retiredAtMs != null) throw new Error('Retired reveal deployments cannot be reactivated or transitioned.');
   if (command === 'activate' && current.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) {
     throw new Error('Retired reveal catalogs cannot be activated.');
   }
@@ -151,7 +152,8 @@ export function buildEthereumRevealTransition(command: 'activate' | 'pause', cur
   }
   return `UPDATE ethereum_reveal_deployments SET state = '${command === 'activate' ? 'active' : 'paused'}', revision = revision + 1,
     updated_at_ms = ${COMMERCE_D1_NOW_MS_SQL}${command === 'activate' ? `, activated_at_ms = COALESCE(activated_at_ms, ${COMMERCE_D1_NOW_MS_SQL})` : ''}
-    WHERE deployment_id = ${sqlString(current.deploymentId)} AND revision = ${revision} AND state = ${sqlString(current.state)} RETURNING *`;
+    WHERE deployment_id = ${sqlString(current.deploymentId)} AND revision = ${revision} AND state = ${sqlString(current.state)}
+      AND retired_at_ms IS NULL RETURNING *`;
 }
 
 export async function runEthereumRevealControl(argv: string[], overrides: {

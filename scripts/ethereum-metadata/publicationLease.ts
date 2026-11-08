@@ -13,9 +13,25 @@ export type MetadataPublicationLease = MetadataWriteFence & {
   close(): Promise<void>;
 };
 
-export async function acquireMetadataPublicationLease(metadataBaseUri: string, options: {
+type LeaseOptions = {
   query?: CommerceAuthorityQuery; now?: () => number; wallNow?: () => number; leaseId?: string;
-} = {}): Promise<MetadataPublicationLease> {
+};
+const RETIRED_PREVIEW = 'https://cdn.mons.shop/111k-sepolia/reliquaries-v1/';
+
+export function assertMetadataPublicationAllowed(metadataBaseUri: string): void {
+  if (metadataBaseUri === RETIRED_PREVIEW) throw new Error('This historical Sepolia preview prefix is retired and cannot be published or restored.');
+}
+
+export async function acquireMetadataPublicationLease(metadataBaseUri: string, options: LeaseOptions = {}): Promise<MetadataPublicationLease> {
+  assertMetadataPublicationAllowed(metadataBaseUri);
+  return acquireLease(metadataBaseUri, options);
+}
+
+export async function acquireRetired111kPreviewCleanupLease(options: LeaseOptions = {}): Promise<MetadataPublicationLease> {
+  return acquireLease(RETIRED_PREVIEW, options);
+}
+
+async function acquireLease(metadataBaseUri: string, options: LeaseOptions): Promise<MetadataPublicationLease> {
   const query = options.query ?? createAsyncD1MaintenanceQuery('ops');
   const now = options.now ?? (() => performance.now());
   const wallNow = options.wallNow ?? Date.now;

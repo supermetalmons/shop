@@ -12,6 +12,7 @@ import { parseFreeMintConfigJson } from './free-mint-config.mjs';
 import { parseDiscountCapConfigJson } from './discount-cap-config.mjs';
 import { deploymentGas, matchingRuntime, validateDeploymentBalance, validateDeploymentGasPrice } from './pre111k-deployment.mjs';
 import { withMetadataLock } from '../../../scripts/ethereum-metadata/lock.ts';
+import { record111kReleaseLocation, resolve111kReleaseLocation } from '../../../scripts/shared/ethereum111kReleaseLocations.ts';
 
 export const NFT111K_SEPOLIA = Object.freeze({
   chainId: 11155111,
@@ -24,7 +25,7 @@ export const NFT111K_SEPOLIA = Object.freeze({
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const repository = path.resolve(project, '../..');
-const commands = ['prepare', 'deploy', 'reserve', 'pause-old', 'open', 'mint-qa', 'unpack-qa', 'verify'];
+const commands = ['prepare', 'deploy', 'reserve', 'pause-old', 'open', 'finalize', 'mint-qa', 'unpack-qa', 'verify'];
 const actionOrder = ['deploy', 'reserve', 'pause-old-sale', 'pause-old-redemptions', 'open', 'mint-qa', 'unpack-qa'];
 const configPaths = ['config/proceeds.json', 'config/free-mints.sepolia.json', 'config/delivery-routing.json',
   'config/discount-caps.json', '../../src/ethereum/discounts/111k.json'];
@@ -48,6 +49,33 @@ function cast(args) {
   catch { throw new Error(`Cast ${args[0]} failed; inspect the private release state before retrying`); }
 }
 
+export function run111kReplacementFinalization({ releaseDirectory }, executeFile = execFileSync) {
+  releaseDirectory = fs.realpathSync(releaseDirectory);
+  executeFile(process.execPath, ['--import', 'tsx', 'scripts/ops/cleanupEthereum111k.ts',
+    'finalize', '--release-directory', releaseDirectory, '--write'], {
+    cwd: repository, encoding: 'utf8', stdio: ['ignore', 'ignore', 'inherit'],
+  });
+  const manifest = JSON.parse(fs.readFileSync(path.join(releaseDirectory, 'manifest.json'), 'utf8'));
+  const journalPath = path.join(releaseDirectory, 'cleanup-finalization.json');
+  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  assert.equal(journal.version, 2, 'Unsupported replacement cleanup journal');
+  assert.equal(journal.kind, '111k-replacement-cleanup');
+  assert.equal(journal.complete, true, 'Replacement cleanup remains incomplete');
+  assert.equal(journal.release?.releaseDirectory, path.resolve(releaseDirectory));
+  assert.equal(journal.release?.manifestSha256, sha256(json(manifest)), 'Cleanup is not bound to this frozen manifest');
+  for (const key of ['chainId', 'deploymentId', 'contractAddress', 'previousContract']) {
+    assert.equal(journal.release?.[key], manifest[key], `Cleanup release ${key} changed`);
+  }
+  assert.equal(journal.release?.metadataBaseUri, manifest.metadataBaseURI);
+  assert.equal(journal.oldDeployment?.contractAddress, manifest.previousContract);
+  assert.equal(journal.newDeployment?.contractAddress, manifest.contractAddress);
+  assert.equal(journal.artifacts?.report?.complete, true, 'Local replacement artifacts remain');
+  assert.ok(Number.isSafeInteger(journal.metadataDeletedAtMs) && Number.isSafeInteger(journal.verifiedAtMs)
+    && journal.verifiedAtMs - journal.metadataDeletedAtMs >= 300_000, 'Replacement cleanup has not passed its scheduler observation interval');
+  return { complete: true, journalPath, retiredDeploymentId: journal.oldDeployment.deploymentId,
+    deploymentId: manifest.deploymentId, verifiedAtMs: journal.verifiedAtMs, artifacts: journal.artifacts.report };
+}
+
 function durableWrite(filename, value) {
   const temporary = `${filename}.${randomUUID()}.tmp`;
   const descriptor = fs.openSync(temporary, 'wx', 0o600);
@@ -59,40 +87,79 @@ function durableWrite(filename, value) {
 }
 
 function privateDirectory(directory) {
-  const relative = path.relative(repository, directory);
-  if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-    assert.ok(relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
-      'Release state must be in a private ignored directory or outside the repository');
-  }
+  const allowed = directory => {
+    const relative = path.relative(repository, directory);
+    if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      assert.ok(relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
+        'Release state must be in a private ignored directory or outside the repository');
+    }
+  };
+  allowed(directory);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   assert.ok(fs.lstatSync(directory).isDirectory() && (fs.statSync(directory).mode & 0o077) === 0,
     'Release directory must be private (mode 0700)');
+  const canonical = fs.realpathSync(directory);
+  allowed(canonical);
+  return canonical;
 }
 
 async function withLock(directory, work) {
-  privateDirectory(directory);
-  return withMetadataLock(path.join(directory, 'operation.lock'), work);
+  const canonical = privateDirectory(directory);
+  return withMetadataLock(path.join(canonical, 'operation.lock'), () => work(canonical));
 }
 
 export function parse111kDeploymentArgs(argv) {
   const [command, ...arguments_] = argv;
-  assert.ok(commands.includes(command), `Use ${commands.join('|')} --directory PATH --network sepolia [--deployment-id v16] [--keystore PATH --password-file PATH]`);
+  assert.ok(commands.includes(command), `Use ${commands.join('|')} --directory PATH --network sepolia [--deployment-id ID (required for prepare)] [--previous-directory PATH] [--keystore PATH --password-file PATH]`);
   const values = {};
   for (let index = 0; index < arguments_.length; index += 2) {
     const key = arguments_[index];
-    assert.ok(['--directory', '--deployment-id', '--network', '--previous-contract', '--keystore', '--password-file'].includes(key) &&
+    assert.ok(['--directory', '--deployment-id', '--network', '--previous-contract', '--previous-directory', '--keystore', '--password-file'].includes(key) &&
       arguments_[index + 1] && !Object.hasOwn(values, key), 'Invalid or repeated deployment option');
     values[key] = arguments_[index + 1];
   }
   assert.equal(values['--network'] ?? 'sepolia', 'sepolia', 'Only Sepolia is supported');
   const deploymentId = values['--deployment-id'];
   assert.ok(deploymentId === undefined || /^[a-z0-9][a-z0-9-]{0,63}$/.test(deploymentId), 'Invalid deployment ID');
+  assert.ok(command !== 'prepare' || deploymentId, 'Preparing a replacement requires an explicit fresh --deployment-id');
+  assert.ok(['prepare', 'finalize'].includes(command) || values['--previous-directory'] === undefined,
+    '--previous-directory is only accepted for prepare or finalize');
   const previousContract = values['--previous-contract'];
   assert.ok(previousContract === undefined || /^0x[0-9a-fA-F]{40}$/.test(previousContract) && !/^0x0{40}$/.test(previousContract),
     'Invalid previous contract');
   return { command, network: 'sepolia', deploymentId, previousContract: normalized(previousContract),
+    previousDirectory: values['--previous-directory'] && path.resolve(values['--previous-directory']),
     directory: path.resolve(values['--directory'] || path.join(project, '.local', `111k-sepolia-${deploymentId ?? 'v16'}`)),
     keystore: values['--keystore'], passwordFile: values['--password-file'] };
+}
+
+function predecessorIdentity(value) {
+  assert.equal(Number(value?.chainId), 11155111, 'The current predecessor must be on Sepolia');
+  const contractAddress = normalized(value?.contractAddress);
+  assert.match(contractAddress, /^0x[0-9a-f]{40}$/, 'Current predecessor contract is invalid');
+  assert.notEqual(contractAddress, `0x${'0'.repeat(40)}`, 'The current predecessor is not deployed');
+  const deploymentId = /^https:\/\/cdn\.mons\.shop\/111k-sepolia\/([a-z0-9][a-z0-9-]{0,63})\/$/.exec(value?.metadataBaseUri)?.[1];
+  assert.ok(deploymentId, 'Current predecessor metadata namespace is invalid');
+  return { chainId: 11155111, contractAddress, metadataBaseUri: value.metadataBaseUri, deploymentId };
+}
+
+export async function resolve111kPredecessor(overrides = {}) {
+  const configured = await (overrides.readConfiguration ?? (async () => {
+    const { unstable_readConfig } = await import('wrangler');
+    const config = unstable_readConfig({ config: path.join(repository, 'cloud/workers/api/wrangler.jsonc'),
+      'env-file': [path.join(repository, 'cloud/workers/api/release.env')] });
+    return { chainId: config.vars.ETHEREUM_111K_CHAIN_ID, contractAddress: config.vars.ETHEREUM_111K_CONTRACT_ADDRESS,
+      metadataBaseUri: config.vars.ETHEREUM_111K_METADATA_BASE_URI };
+  }))();
+  const live = await (overrides.readLiveConfiguration ?? (async () => {
+    const response = await fetch('https://mons.shop/api/ethereum/111k/config', { headers: { Accept: 'application/json' },
+      cache: 'no-store', signal: AbortSignal.timeout(15_000) });
+    assert.equal(response.status, 200, 'Cannot verify the live predecessor configuration');
+    return response.json();
+  }))();
+  const expected = predecessorIdentity(configured);
+  assert.deepEqual(predecessorIdentity(live), expected, 'Repository and live predecessor configurations differ');
+  return expected;
 }
 
 export function nft111kDeploymentGas(estimate, gasPrice) {
@@ -416,13 +483,25 @@ export async function run111kDeployment(argv, overrides = {}) {
   const read = name => JSON.parse(fs.readFileSync(path.join(options.directory, name), 'utf8'));
 
   if (options.command === 'verify') {
+    options.directory = fs.realpathSync(options.directory);
     const frozen = loadFrozen(options.directory, frozenConfiguration, options.deploymentId);
     const journal = read('transactions.private.json');
     assert.equal(journal.manifestSha256, frozen.manifestSha256, 'Release manifest changed after signing');
+    assert.ok(journal.actions && typeof journal.actions === 'object' && !Array.isArray(journal.actions), 'Invalid transaction journal');
+    assert.ok(Object.keys(journal.actions).every(action => actionOrder.includes(action)), 'Unexpected journal action');
     const transactions = [];
     for (const action of actionOrder) {
       const record = journal.actions[action];
-      if (record?.raw) {
+      if (record !== undefined) {
+        assert.ok(record && typeof record === 'object' && !Array.isArray(record), 'Invalid transaction journal record');
+        assert.equal(record.action, action, 'Journal action identity changed');
+        assert.equal(record.from, frozen.manifest.deployer, 'Journal signer changed');
+        assert.equal(record.contractAddress, frozen.manifest.contractAddress, 'Journal collection identity changed');
+        assert.match(record.raw, /^0x(?:[a-f0-9]{2})+$/i, 'Journal signed transaction is missing');
+        assert.equal(hashHex(record.raw), record.hash, 'Journaled transaction changed');
+        const intended = nft111kAction(frozen.manifest, action, journal.actions['mint-qa']?.receipt);
+        for (const key of ['to', 'data', 'valueWei']) assert.equal(record[key], intended[key], `Journal ${key} changed`);
+        if (action === 'deploy') assert.equal(record.nonce, frozen.manifest.nonce, 'Deployment nonce changed');
         const receipt = await confirm111kTransaction(rpc, record, { ...overrides, maxReceiptPolls: 1 });
         transactions.push({ action, hash: record.hash, blockNumber: Number(BigInt(receipt.blockNumber)) });
       }
@@ -441,12 +520,26 @@ export async function run111kDeployment(argv, overrides = {}) {
       deploymentId: frozen.manifest.deploymentId, metadataBaseURI: frozen.manifest.metadataBaseURI, transactions, state };
   }
 
-  return withLock(options.directory, async () => {
+  return withLock(options.directory, async directory => {
+    options.directory = directory;
     if (options.command === 'prepare') {
       assert.ok(!fs.existsSync(path.join(options.directory, 'manifest.json')) && !fs.existsSync(path.join(options.directory, 'transactions.private.json')),
         'Release state already exists; resume its next action');
+      assert.ok(fs.readdirSync(options.directory).every(name => name === 'operation.lock' || /^\.operation\.lock-[a-zA-Z0-9]+$/.test(name)),
+        'Prepare requires a fresh release directory; keep signing material and unrelated files outside it');
+      const predecessor = predecessorIdentity(await (overrides.resolvePredecessor ?? resolve111kPredecessor)());
+      assert.notEqual(options.deploymentId, predecessor.deploymentId, 'Replacement deployment ID must differ from the current metadata namespace');
+      if (options.previousContract || overrides.configuration?.previousContract !== undefined) {
+        assert.equal(configuration.previousContract, predecessor.contractAddress, 'Explicit predecessor does not match the current deployment');
+      }
+      configuration.previousContract = predecessor.contractAddress;
       const nonce = BigInt(await rpc('eth_getTransactionCount', [configuration.deployer, 'latest'])).toString();
       await requireNonce(rpc, configuration.deployer, nonce);
+      const previousLocation = await resolve111kReleaseLocation(predecessor,
+        { ...overrides.releaseLocationOptions, directory: options.previousDirectory });
+      assert.ok(![path.relative(previousLocation.directory, options.directory), path.relative(options.directory, previousLocation.directory)]
+        .some(relative => relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)),
+      'Old and replacement release directories must not overlap');
       const contractAddress = normalized(runCast(['compute-address', configuration.deployer, '--nonce', nonce]).match(/0x[0-9a-fA-F]{40}/)?.[0]);
       assert.ok(contractAddress, 'Unable to predict deployment address');
       assert.equal(await rpc('eth_getCode', [contractAddress, 'latest']), '0x', 'Predicted address already has code');
@@ -464,8 +557,9 @@ export async function run111kDeployment(argv, overrides = {}) {
       const original = JSON.parse(fs.readFileSync(path.join(project, 'out/NFT111K.sol/NFT111K.json'), 'utf8'));
       const input = frozenCompilerInput(original);
       const { artifact, output, immutableNames } = compileFrozen(input, original);
-      const deploymentId = options.deploymentId ?? 'v16';
+      const deploymentId = options.deploymentId;
       const manifest = { version: 1, network: 'sepolia', ...configuration, deploymentId,
+        previousReleaseDirectory: previousLocation.directory, previousReleaseManifestSha256: previousLocation.manifestSha256,
         metadataBaseURI: `https://cdn.mons.shop/111k-sepolia/${deploymentId}/`, contractAddress, nonce,
         initialDeliveryReceiver, initialDeliveryConfigId: 1, discountRoot, maxDiscountedMints, proceeds, freeMintAllocations,
         preparedAt: now(), artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(input)),
@@ -485,12 +579,22 @@ export async function run111kDeployment(argv, overrides = {}) {
       durableWrite(path.join(options.directory, 'NFT111K.compiler-output.json'), output);
       durableWrite(path.join(options.directory, 'config.snapshot.json'), configs);
       durableWrite(path.join(options.directory, 'manifest.json'), manifest);
+      await record111kReleaseLocation(options.directory, { chainId: manifest.chainId, deploymentId,
+        contractAddress, metadataBaseUri: manifest.metadataBaseURI }, overrides.releaseLocationOptions);
       return { prepared: true, chainId: 11155111, deploymentId, contractAddress, nonce, metadataBaseURI: manifest.metadataBaseURI,
         gasEstimate: manifest.gasEstimate, gasLimit: manifest.gasLimit, maximumFeeWei: manifest.maximumFeeWei };
     }
 
     const frozen = loadFrozen(options.directory, frozenConfiguration, options.deploymentId);
     const { manifest } = frozen;
+    await record111kReleaseLocation(options.directory, { chainId: manifest.chainId, deploymentId: manifest.deploymentId,
+      contractAddress: manifest.contractAddress, metadataBaseUri: manifest.metadataBaseURI }, overrides.releaseLocationOptions);
+    if (options.previousDirectory) {
+      const previous = JSON.parse(fs.readFileSync(path.join(options.previousDirectory, 'manifest.json'), 'utf8'));
+      assert.equal(previous.contractAddress, manifest.previousContract, 'Previous release directory belongs to another contract');
+      await record111kReleaseLocation(options.previousDirectory, { chainId: previous.chainId, deploymentId: previous.deploymentId,
+        contractAddress: previous.contractAddress, metadataBaseUri: previous.metadataBaseUri ?? previous.metadataBaseURI }, overrides.releaseLocationOptions);
+    }
     const predicted = normalized(runCast(['compute-address', manifest.deployer, '--nonce', manifest.nonce]).match(/0x[0-9a-fA-F]{40}/)?.[0]);
     assert.equal(predicted, manifest.contractAddress, 'Predicted CREATE address changed');
     const journalPath = path.join(options.directory, 'transactions.private.json');
@@ -593,18 +697,41 @@ export async function run111kDeployment(argv, overrides = {}) {
         artifactSha256: manifest.artifactSha256, standardInputSha256: manifest.standardInputSha256,
       });
       return { action, hash: record.hash, blockNumber: Number(BigInt(record.receipt.blockNumber)),
+        ...(resuming && existing ? { alreadySatisfied: true } : {}),
         ...(action === 'mint-qa' ? { crateTokenId: nft111kMintedCrate(manifest, record.receipt) } : {}) };
     };
+    const finalize = async () => {
+      assert.ok(journal.actions.open?.receipt, 'Confirm sale opening before finalizing replacement cleanup');
+      await refreshPrerequisites('mint-qa');
+      await requireChain();
+      await requireNewCollection(rpc, frozen);
+      assert.equal((await call(rpc, manifest.contractAddress, 'saleActive()', ['bool']))[0], true,
+        'Replacement sale must be active before finalizing cleanup');
+      try {
+        const result = await (overrides.cleanupReplacement ?? run111kReplacementFinalization)({ releaseDirectory: options.directory });
+        assert.equal(result?.complete, true, 'Cleanup did not verify complete retirement');
+        return result;
+      } catch (error) {
+        throw new Error(`Replacement cleanup is incomplete; sale opening remains journaled. Retry finalize --directory ${options.directory}.`,
+          { cause: error });
+      }
+    };
+    if (options.command === 'finalize') {
+      return { chainId: 11155111, deploymentId: manifest.deploymentId, contractAddress: manifest.contractAddress,
+        transactions: [], cleanup: await finalize() };
+    }
     const actions = options.command === 'pause-old' ? ['pause-old-sale', 'pause-old-redemptions'] : [options.command];
     const transactions = [];
     for (const action of actions) transactions.push(await perform(action));
-    return { chainId: 11155111, deploymentId: manifest.deploymentId, contractAddress: manifest.contractAddress, transactions };
+    return { chainId: 11155111, deploymentId: manifest.deploymentId, contractAddress: manifest.contractAddress, transactions,
+      ...(options.command === 'open' ? { cleanup: await finalize() } : {}) };
   });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   run111kDeployment(process.argv.slice(2)).then(result => console.log(json(result))).catch(error => {
     console.error(error instanceof assert.AssertionError || error?.message?.startsWith('Transaction is pending')
+      || error?.message?.startsWith('Replacement cleanup is incomplete')
       ? error.message : '111K deployment operation failed; inspect the private journal before retrying.');
     process.exitCode = 1;
   });

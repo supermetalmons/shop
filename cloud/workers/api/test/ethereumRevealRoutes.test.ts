@@ -19,6 +19,7 @@ type RevealCall = { method: 'transaction' | 'tokens'; deployment: EthereumReveal
 function fixture() {
   const database = new DatabaseSync(':memory:');
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', 'utf8'));
   let allowed = true;
   let admissionAllowed = true;
   const limits: string[] = [];
@@ -141,6 +142,23 @@ for (const method of ['transaction', 'tokens'] as const) {
     const response = await f.request(body, { path });
     assert.equal(response.status, 409);
     assert.deepEqual(await response.json(), { ok: false, error: { code: 'failed-precondition', message: 'Reveal is retired for this collection.' } });
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.admissions.length, 0);
+  });
+
+  test(`${method} explicit same-catalog retirement returns 409 before object access`, async t => {
+    const f = fixture();
+    t.after(() => f.database.close());
+    f.register('paused');
+    f.database.prepare(`INSERT INTO ethereum_reveal_deployments
+      (deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,deployment_block,catalog_version,template_json,
+        template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
+      SELECT 'replacement',drop_id,chain_id,?,'https://cdn.mons.shop/111k-sepolia/replacement/',101,catalog_version,
+        template_json,template_sha256,'active',3,1,1,1,1 FROM ethereum_reveal_deployments WHERE deployment_id='test-sepolia'`)
+      .run(`0x${'44'.repeat(20)}`);
+    f.database.exec("UPDATE ethereum_reveal_deployments SET retired_at_ms=100,replacement_deployment_id='replacement',revision=4 WHERE deployment_id='test-sepolia'");
+    const response = await f.request(body, { path });
+    assert.equal(response.status, 409);
     assert.equal(f.calls.length, 0);
     assert.equal(f.admissions.length, 0);
   });

@@ -31,4 +31,4 @@ Wrangler deleted the Worker successfully but then failed its optional legacy KV 
 - [API deployment and drain](api-release.json) and [Worker deletion](worker-deletion.json)
 - [Validation results](validation.json)
 
-The [earlier offchain release](../111k-sepolia-offchain/README.md) remains historical evidence of the original Worker deployment and contract cutover.
+The [earlier offchain release](https://github.com/supermetalmons/shop/blob/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases/111k-sepolia-offchain/README.md) remains historical evidence of the original Worker deployment and contract cutover.

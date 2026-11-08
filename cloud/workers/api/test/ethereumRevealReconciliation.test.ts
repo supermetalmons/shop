@@ -13,6 +13,7 @@ function fixture(count: number, failId?: string) {
     template_json: JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [] }),
     template_sha256: 'a'.repeat(64), state: 'active', revision: 3, created_at_ms: index,
     updated_at_ms: index, provisioned_at_ms: 1, activated_at_ms: 2, last_error: null,
+    retired_at_ms: null as number | null, replacement_deployment_id: null as string | null,
   }));
   const visited: string[] = [];
   const names: string[] = [];
@@ -24,13 +25,13 @@ function fixture(count: number, failId?: string) {
         bind(...values: unknown[]) {
           return {
             async all<T>() {
-              assert.match(sql, /WHERE catalog_version=\? ORDER BY updated_at_ms ASC LIMIT 100/);
+              assert.match(sql, /WHERE catalog_version=\? AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100/);
               assert.deepEqual(values, ['111k-v5']);
-              return { results: rows.filter(row => row.catalog_version === values[0])
+              return { results: rows.filter(row => row.catalog_version === values[0] && row.retired_at_ms === null)
                 .sort((a, b) => a.updated_at_ms - b.updated_at_ms).slice(0, 100).map(row => ({ ...row })) as T[] };
             },
             async run() {
-              assert.equal(sql, 'UPDATE ethereum_reveal_deployments SET updated_at_ms=? WHERE deployment_id=?');
+              assert.equal(sql, 'UPDATE ethereum_reveal_deployments SET updated_at_ms=? WHERE deployment_id=? AND retired_at_ms IS NULL');
               assert.equal(typeof values[0], 'number');
               const row = rows.find(value => value.deployment_id === values[1]);
               assert.ok(row);
@@ -68,6 +69,20 @@ test('watchdog rotates a bounded page so later deployments are not starved', asy
   assert.deepEqual(visited.slice(100, 105), ['test-100', 'test-101', 'test-102', 'test-103', 'test-104']);
   assert.equal(names[0], `11155111:0x${'1'.padStart(40, '0')}`);
   assert.equal(peak(), 4);
+});
+
+test('watchdog excludes explicitly retired deployments even when their catalog is current', async () => {
+  const { env, visited, rows } = fixture(130);
+  for (const row of rows.slice(0, 125)) {
+    row.state = 'paused';
+    row.retired_at_ms = 100;
+    row.replacement_deployment_id = 'test-129';
+  }
+  const retired = structuredClone(rows.slice(0, 125));
+  const result = await reconcileEthereumReveals(env, new AbortController().signal);
+  assert.equal(result.attempted, 5);
+  assert.deepEqual(visited, ['test-125', 'test-126', 'test-127', 'test-128', 'test-129']);
+  assert.deepEqual(rows.slice(0, 125), retired);
 });
 
 for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`watchdog excludes retired catalog ${catalogVersion} before its bounded page without changing historical rows`, async () => {

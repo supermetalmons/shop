@@ -4,7 +4,7 @@ The separate [pre111k reservation contract](PRE111K.md) accepts backend-authoriz
 
 An ERC721A collection with public crate and warehouse sales, allocated preorder relic claims, allowlist crate discounts, per-wallet free mint allowances, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, free mint allowances, sale status, the emergency redemption pause, the authorization signer and metadata base URL, and register immutable delivery configurations. Mint recipients, their shares, and the lifetime discounted-mint cap are fixed at deployment.
 
-The [v14 release](../../releases/111k-sepolia-v14/README.md) deploys the five-category `111k-v3` catalog at `0x6d194e6cc762424e408b84907c25d60f0db29d12` (Sepolia block `12054659`). It adds 102 animated artworks by replacing the final 102 paintings, retaining 111,111 artworks, and fixes the lifetime discounted-mint cap at 5,555. Artwork categories remain offchain; adding animated media changes no Solidity supply or artwork token ranges. V14 was deployed with sales closed; its release record tracks cutover and activation. The [v13 release](../../releases/111k-sepolia-v13/README.md) preserves the preceding four-category catalog, including 1,000 3D models. The [v12 release](../../releases/111k-sepolia-v12/README.md) records its Solidity 0.8.38 / 500-run build and eighteen-relic Sepolia reservation. The [v11 release](../../releases/111k-sepolia-v11/README.md) adds the relic claim UI and permanent claimed-ID availability. The [v10 release](../../releases/111k-sepolia-v10/README.md) records registered delivery configurations. The [v9 release](../../releases/111k-sepolia-v9/README.md) preserves the preceding relic receipt collection and verification. The [v8 release](../../releases/111k-sepolia-v8/README.md), [v7 release](../../releases/111k-sepolia-v7/README.md), [single-contract release](../../releases/111k-sepolia-single-contract/README.md), and earlier releases remain historical records. The [offchain metadata release](../../releases/111k-sepolia-offchain/README.md) records the separate URL renderer, and the [first Sepolia deployment](../../releases/111k-sepolia/README.md) records the original SVG renderer. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
+The [v16 release](../../releases/111k-sepolia-v16/README.md) is the supported Sepolia collection: `0x938b6a488951b2797b29284d6939dd70efe146a0`, block `12087015`, catalog `111k-v5`, and metadata under `https://cdn.mons.shop/111k-sepolia/v16/`. It keeps the 111,111-artwork allocation, eighteen reserved relics, and a lifetime discounted-mint cap of 5,555. The [testnet cleanup record](../../releases/111k-testnet-cleanup-2026-11-08/README.md) tracks retirement of superseded testnet metadata and backend state. Prior deployment evidence remains in [Git history](https://github.com/supermetalmons/shop/tree/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases); onchain contracts and transactions remain unchanged. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
 Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving signer rotation and emergency controls. Proceeds releases are permissionless. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
 
@@ -59,6 +59,13 @@ Follow the [local chain, API, and frontend setup](../../scripts/docs/111k_testne
 
 ## Future public network deployments
 
+Every Sepolia replacement includes [immediate retirement of the superseded
+deployment](../../scripts/docs/111k_reveal_ops.md#superseded-testnet-retirement)
+once the new deployment is active and verified. Deploy the retirement migration
+and Worker before cutover. The runner's `open` action automatically finalizes
+cleanup, including same-catalog replacements, and does not report success until
+old backend data, release artifacts, caches, and backups are purged and verified.
+
 The checked-in Sepolia release runner uses an encrypted Foundry keystore and a
 private transaction journal. From the repository root, prepare a new, unused
 deployment ID and absolute release directory:
@@ -70,6 +77,14 @@ npm --prefix onchain/ethereum run nft111k:deploy -- prepare --network sepolia \
   --deployment-id "$deployment_id" --previous-contract OLD_ADDRESS --directory "$release_dir"
 ```
 
+Preparation requires an explicit fresh deployment ID. It derives the predecessor
+from matching repository and live Sepolia configuration; an explicit
+`--previous-contract` must match that current predecessor. Paused storefronts are
+accepted. Frozen release resumes keep their original predecessor after cutover.
+Private release locations are recorded for the next cleanup. For a predecessor
+created before location tracking in a custom directory, pass `--previous-directory
+PATH` to `prepare` or recovery `finalize`. Use an empty dedicated directory for
+new releases and keep keystores outside it.
 Preparation freezes the current contract sources, compiler input/output,
 constructor configuration, nonce, predicted address, and gas allowance. It reads
 the fourteen-recipient split, seven-wallet Sepolia allowance preset, delivery
@@ -91,6 +106,20 @@ the frozen previous collection's sale and redemptions. Complete the
 [application cutover](../../scripts/docs/111k_testnet.md#ethereum-maintenance-and-replacement)
 before `open`; `mint-qa` buys one ordinary crate for 0.0001 Sepolia ETH and
 `unpack-qa` uses its purchase event to select the exact crate.
+
+During cutover, update the API metadata URI, the shared default in
+`shared/ethereum/config.ts`, and this project's `Deploy111K.s.sol` local fallback
+together. The finalizer blocks retirement while supported local/default consumers
+still point at the old namespace.
+
+`open` verifies the replacement and automatically invokes the reusable finalizer,
+which requires existing Cloudflare operator credentials. The opening transaction
+stays journaled if retirement fails. Resume cleanup with
+`nft111k:deploy finalize --network sepolia --directory "$release_dir"`; it does not
+rebroadcast opening or require another signature. The finalizer protects the new
+deployment, retires and drains the predecessor, purges its data and owned local
+artifacts, and checks for recreation after a scheduler interval. `verify` remains
+read-only. See [finalization commands](../../scripts/docs/111k_reveal_ops.md#automatic-finalization).
 
 `npm --prefix onchain/ethereum run nft111k:verify -- verify --directory "$release_dir" --stage STAGE`
 checks `closed`, `reserved`, `open`, `mint-qa`, or `unpack-qa` against one canonical
@@ -156,7 +185,7 @@ The signed quote contains only `configId` for payment routing. Redemption valida
 
 Batch payouts use the same bounded-call mechanism as mint payouts, skip failed receivers, and retain their unpaid amounts without blocking others. `releaseDeliveryFor(uint256 configId, bool secondary)` is the optional permissionless normal-gas fallback for a receiver that needs more callback gas; a failed fallback reverts. Mint and delivery accounting remain separate. There are no mutable global delivery totals or per-address delivery balance getters; aggregate reporting can sum the public configuration records or events.
 
-The API selects the server-only `ETHEREUM_111K_DELIVERY_CONFIG_ID`, initially `"1"`. Before creating a quote it validates the selected onchain configuration. Each quote saves its ID once, and retries/deadline refreshes reuse it despite later environment changes. Clients cannot select a configuration. `DeliveryRedeemed` includes the signed ID, and transaction/receipt recovery checks it against the saved quote. Migration 0047 requires the old test quotes to be archived/reset before application, then adds a required immutable `config_id` with no legacy backfill.
+The API selects the server-only `ETHEREUM_111K_DELIVERY_CONFIG_ID`, initially `"1"`. Before creating a quote it validates the selected onchain configuration. Each quote saves its ID once, and retries/deadline refreshes reuse it despite later environment changes. Clients cannot select a configuration. `DeliveryRedeemed` includes the signed ID, and transaction/receipt recovery checks it against the saved quote. Migration 0047 requires the old test quotes to be cleared through the guarded reset before application, then adds a required immutable `config_id` with no legacy backfill.
 
 Local deployments read `{ "initialReceiver": "0x…" }` from `config/delivery-routing.json` and record `initialDeliveryReceiver` and `deliveryConfigId: 1` in manifest version 14. The local API verifies configuration 1 and may select another registered ID via `ETHEREUM_111K_DELIVERY_CONFIG_ID`. Public deployment requires an explicit bootstrap receiver, read and rechecked from the old collection before broadcast. Historical contracts, metadata and release reports remain separate; the application has one registered-configuration protocol.
 
@@ -275,7 +304,7 @@ Pausing does not revoke signatures or extend their deadlines. An unused signatur
 
 Secret codes and shipping details remain offchain. The backend authorizes a specific wallet and crate receipt only after validating its code. The contract derives the 20/31 output count and receipt numbers itself. Events bind completed operations to their offchain order/claim records.
 
-New nonlocal deployments through `script/Deploy111K.s.sol` require an explicit `ETHEREUM_111K_METADATA_BASE_URI`: `https://cdn.mons.shop/111k/<deploymentId>/` on mainnet or `https://cdn.mons.shop/111k-sepolia/<deploymentId>/` on Sepolia. The script rejects legacy bare prefixes and unsupported chains. Choose an unused lowercase deployment ID of 1–64 letters, digits, or hyphens, starting with a letter or digit; publish its placeholders before deployment. Follow the [reveal provisioning guide](../../scripts/docs/111k_reveal_ops.md#operator-setup) before activating reveals. Existing contracts retain their original namespaces. The isolated local deployment defaults to the v16 namespace.
+New nonlocal deployments through `script/Deploy111K.s.sol` require an explicit `ETHEREUM_111K_METADATA_BASE_URI`: `https://cdn.mons.shop/111k/<deploymentId>/` on mainnet or `https://cdn.mons.shop/111k-sepolia/<deploymentId>/` on Sepolia. The script rejects legacy bare prefixes and unsupported chains. Choose an unused lowercase deployment ID of 1–64 letters, digits, or hyphens, starting with a letter or digit; publish its placeholders before deployment. Follow the [reveal provisioning guide](../../scripts/docs/111k_reveal_ops.md#operator-setup) before activating reveals. Existing contracts retain their original onchain namespaces; superseded testnet metadata may be removed under the retirement policy. Both local deployment entrypoints default to the v16 namespace.
 
 The owner can change the metadata prefix with `setBaseURI(string)`. The constructor and setter validate the same URL rules. Every successful setter call emits `BaseURIUpdated` and ERC-4906 `BatchMetadataUpdate`, including calls that keep the same URL to refresh updated CDN files. Ownership, supply rules, and redemption logic are unchanged. Coordinate base URL changes with the API metadata configuration and its allowed URL policy.
 

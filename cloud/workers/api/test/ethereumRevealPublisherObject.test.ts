@@ -10,8 +10,18 @@ const scope = { deploymentId: 'test-sepolia', chainId: 11155111, contractAddress
 const job = (id = '1'): RevealPublicationJob => ({ token_id: id, metadata_json: `{"image":"https://example.test/${id}.webp"}`,
   placeholder_json: '{"image":"https://example.test/placeholder.webp"}', attempts: 0 });
 const key = (id = '1') => `111k-sepolia/test-sepolia/${id}.json`;
+const registration = {
+  deployment_id: scope.deploymentId, drop_id: '111k_devnet', chain_id: scope.chainId, contract_address: scope.contractAddress,
+  metadata_base_uri: scope.metadataBaseUri, deployment_block: 100, catalog_version: '111k-v5',
+  template_json: '{"name":"artwork","description":"","image":"placeholder","attributes":[]}', template_sha256: 'a'.repeat(64),
+  state: 'active', revision: 3, created_at_ms: 1, updated_at_ms: 3, activated_at_ms: 3, provisioned_at_ms: 2, last_error: null,
+};
+const currentContract = `0x${'22'.repeat(20)}`;
+const control = { paused: 0, revision: 4, paused_at_ms: null, chain_id: 11155111, contract_address: currentContract,
+  reset_guard_id: null, last_reset_id: null, updated_at_ms: 1 };
 
 function fixture() {
+  const registry = { row: { ...registration } as Record<string, unknown> | null };
   const objects = new Map<string, { body: string; etag: string }>();
   const writes: Array<{ key: string; body: string; options: R2PutOptions }> = [];
   let reads = 0;
@@ -32,9 +42,19 @@ function fixture() {
       return { etag: `etag-${writes.length}` } as R2Object;
     },
   };
-  const reopen = () => new EthereumRevealPublisherObject({ waitUntil() {}, abort() { aborts++; } } as never,
-    { ETHEREUM_REVEAL_METADATA: bucket } as Env);
-  return { publisher: reopen(), reopen, bucket, objects, writes, reads: () => reads, aborts: () => aborts };
+  const objectName = `${scope.chainId}:${scope.contractAddress}`;
+  const database = { prepare(sql: string) {
+    const statement = { bind(..._values: unknown[]) { return statement; }, async first() {
+      return sql.includes('ethereum_111k_control') ? control : registry.row;
+    } };
+    return statement;
+  } };
+  const reopen = () => new EthereumRevealPublisherObject({ waitUntil() {}, abort() { aborts++; },
+    id: { equals: (id: DurableObjectId) => id.toString() === objectName } } as never,
+    { ETHEREUM_REVEAL_METADATA: bucket, OPS_DB: database, COMMERCE_DB: database,
+      ETHEREUM_111K_CHAIN_ID: '11155111', ETHEREUM_111K_CONTRACT_ADDRESS: currentContract,
+      ETHEREUM_REVEAL_PUBLISHER: { idFromName: (name: string) => ({ toString: () => name }) } } as unknown as Env);
+  return { publisher: reopen(), reopen, registry, bucket, objects, writes, reads: () => reads, aborts: () => aborts };
 }
 
 for (const previous of ['absent', 'placeholder', 'published'] as const) test(`publisher handles ${previous} metadata idempotently`, async () => {
@@ -188,6 +208,123 @@ test('publisher starts no storage work after a caller lease expires', async () =
   assert.equal(f.aborts(), 0);
 });
 
+for (const invalid of ['missing', 'retired', 'deployment', 'prefix'] as const) {
+  test(`publisher refuses ${invalid} registry scope before R2 access`, async () => {
+    const f = fixture();
+    if (invalid === 'missing') f.registry.row = null;
+    else f.registry.row![invalid === 'retired' ? 'catalog_version' : invalid === 'deployment' ? 'deployment_id' : 'metadata_base_uri'] =
+      invalid === 'retired' ? '111k-v4' : invalid === 'deployment' ? 'other' : 'https://cdn.mons.shop/111k-sepolia/other/';
+    await assert.rejects(f.publisher.publishBatch(scope, [job()]), /not current and registered/);
+    assert.equal(f.reads(), 0);
+    assert.equal(f.writes.length, 0);
+  });
+}
+
+test('publisher preserves admitted publication for a paused current catalog', async () => {
+  const f = fixture();
+  f.registry.row!.state = 'paused';
+  assert.deepEqual(await f.publisher.publishBatch(scope, [job()]), [{ tokenId: '1', status: 'published' }]);
+  await assert.rejects(f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 }), /retired Sepolia/);
+  assert.deepEqual(await f.publisher.publishBatch(scope, [job('2')]), [{ tokenId: '2', status: 'published' }]);
+});
+
+test('a wrong retired scope cannot poison a healthy publisher instance', async () => {
+  const f = fixture();
+  const foreign = { ...scope, deploymentId: 'foreign-old', contractAddress: `0x${'55'.repeat(20)}`,
+    metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/foreign-old/' };
+  f.registry.row = { ...registration, deployment_id: foreign.deploymentId, contract_address: foreign.contractAddress,
+    metadata_base_uri: foreign.metadataBaseUri, state: 'paused', retired_at_ms: 100, replacement_deployment_id: 'foreign-new' };
+  await assert.rejects(f.publisher.publishBatch(foreign, [job()]), /object does not match/);
+  f.registry.row = { ...registration };
+  assert.deepEqual(await f.publisher.publishBatch(scope, [job()]), [{ tokenId: '1', status: 'published' }]);
+  assert.equal(f.writes.length, 1);
+});
+
+test('retired publisher fences new batches and drains the actual pending PUT before confirming', async () => {
+  const f = fixture();
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const put = f.bucket.put;
+  f.bucket.put = async (...args) => { entered.resolve(); await release.promise; return put(...args); };
+  const publication = f.publisher.publishBatch(scope, [job()]);
+  await entered.promise;
+  f.registry.row!.catalog_version = '111k-v4';
+  f.registry.row!.state = 'paused';
+  let completed = false;
+  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 }).then(result => { completed = true; return result; });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(completed, false);
+    assert.deepEqual(await f.publisher.publishBatch(scope, [job('2')]), [{ tokenId: '2', status: 'retry' }]);
+    release.resolve();
+    assert.deepEqual(await drain, { drained: true });
+    assert.deepEqual(await publication, [{ tokenId: '1', status: 'published' }]);
+    assert.equal(f.writes.length, 1);
+    await assert.rejects(f.reopen().publishBatch(scope, [job('2')]), /not current and registered/);
+    assert.equal(f.writes.length, 1);
+  } finally { release.resolve(); await Promise.allSettled([publication, drain]); }
+});
+
+test('retirement during a stalled GET prevents its continuation from starting a PUT', async () => {
+  const f = fixture();
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const get = f.bucket.get;
+  f.bucket.get = async key => { entered.resolve(); await release.promise; return get(key); };
+  const publication = f.publisher.publishBatch(scope, [job()]);
+  await entered.promise;
+  f.registry.row!.catalog_version = '111k-v4';
+  f.registry.row!.state = 'paused';
+  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release.resolve();
+    assert.deepEqual(await publication, [{ tokenId: '1', status: 'retry' }]);
+    assert.deepEqual(await drain, { drained: true });
+    assert.equal(f.writes.length, 0);
+  } finally { release.resolve(); await Promise.allSettled([publication, drain]); }
+});
+
+test('a same-catalog marker is checked again after a stalled GET even before the local drain RPC arrives', async () => {
+  const f = fixture();
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const get = f.bucket.get;
+  f.bucket.get = async key => { entered.resolve(); await release.promise; return get(key); };
+  const publication = f.publisher.publishBatch(scope, [job()]);
+  try {
+    await entered.promise;
+    Object.assign(f.registry.row!, { state: 'paused', retired_at_ms: Date.now(), replacement_deployment_id: 'replacement', revision: 4 });
+    release.resolve();
+    assert.deepEqual(await publication, [{ tokenId: '1', status: 'retry' }]);
+    assert.equal(f.writes.length, 0);
+    await assert.rejects(f.reopen().publishBatch(scope, [job()]), /not current and registered/);
+    assert.deepEqual(await f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 }), { drained: true });
+    assert.equal(f.writes.length, 0);
+  } finally { release.resolve(); await publication; }
+});
+
+test('a timed-out PUT remains in the retirement drain and a resetting executor never confirms success', async () => {
+  const f = fixture();
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const put = f.bucket.put;
+  f.bucket.put = async (...args) => { entered.resolve(); await release.promise; return put(...args); };
+  const publication = f.publisher.publishBatch(scope, [job()], Date.now() + 20);
+  await entered.promise;
+  assert.deepEqual(await publication, [{ tokenId: '1', status: 'retry' }]);
+  f.registry.row!.catalog_version = '111k-v4';
+  f.registry.row!.state = 'paused';
+  let settled = false;
+  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 });
+  const rejection = assert.rejects(drain, /restart/).then(() => { settled = true; });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(settled, false);
+    assert.equal(f.writes.length, 0);
+    release.resolve();
+    await rejection;
+    assert.equal(f.writes.length, 1);
+    assert.deepEqual(await f.reopen().drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 }), { drained: true });
+  } finally { release.resolve(); await rejection; }
+});
+
 test('native publisher timeout resets its instance and retries frozen work through a fresh instance', { timeout: 10_000 }, async () => {
   const [{ build }, { Miniflare }] = await Promise.all([import('esbuild'), import('miniflare')]);
   const items = Array.from({ length: 8 }, (_, index) => job(String(index + 1)));
@@ -196,7 +333,8 @@ test('native publisher timeout resets its instance and retries frozen work throu
     export class NativePublisher extends EthereumRevealPublisherObject {
       constructor(ctx, env) {
         const state = { stalled: true, writes: 0 };
-        super(ctx, { ETHEREUM_REVEAL_METADATA: {
+        super(ctx, { ETHEREUM_REVEAL_PUBLISHER: env.PUBLISHER,
+          OPS_DB: { prepare: () => ({ bind: () => ({ first: async () => (${JSON.stringify(registration)}) }) }) }, ETHEREUM_REVEAL_METADATA: {
           get: key => env.BUCKET.get(key),
           put: (...args) => { state.writes++; return state.stalled ? new Promise(() => {}) : env.BUCKET.put(...args); },
         } });
@@ -212,7 +350,7 @@ test('native publisher timeout resets its instance and retries frozen work throu
     }
     export default { async fetch(request, env) {
       const path = new URL(request.url).pathname;
-      const object = env.PUBLISHER.getByName('publisher');
+      const object = env.PUBLISHER.getByName(${JSON.stringify(`${scope.chainId}:${scope.contractAddress}`)});
       try { return Response.json(path === '/identity' ? await object.identity() : await object.run(path === '/stall')); }
       catch { return new Response('Publisher reset', { status: 503 }); }
     } };

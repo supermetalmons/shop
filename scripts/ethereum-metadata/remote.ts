@@ -13,7 +13,7 @@ import {
   type MetadataNetwork, type MetadataNetworkSelection, type MetadataStorage, type RemoteObject, type UploadDestination,
 } from './storage.ts';
 import { withMetadataLock } from './lock.ts';
-import { acquireMetadataPublicationLease, type MetadataPublicationLease, type MetadataWriteFence } from './publicationLease.ts';
+import { acquireMetadataPublicationLease, assertMetadataPublicationAllowed, type MetadataPublicationLease, type MetadataWriteFence } from './publicationLease.ts';
 
 export type { MetadataNetwork, MetadataNetworkSelection } from './storage.ts';
 type Progress = (value: { phase: string; network: MetadataNetwork; completed: number; total: number }) => void;
@@ -334,6 +334,7 @@ export async function selectedInventory(storage: MetadataStorage, network: Metad
 export async function uploadMetadata(directory: string, network: MetadataNetworkSelection, options: CommonOptions & {
   tokenIds?: string[]; snapshotDirectory?: string; priorCacheRoot?: string;
 } = {}) {
+  for (const selectedNetwork of metadataNetworks(network)) assertMetadataPublicationAllowed(`https://cdn.mons.shop/${metadataPrefix(selectedNetwork, options.prefix)}`);
   const concurrency = metadataUploadConcurrency(options.concurrency);
   const selected = selectedIds(options.tokenIds);
   const manifest = await validatedManifest(directory);
@@ -432,6 +433,7 @@ export async function verifyMetadata(directory: string, network: MetadataNetwork
 }
 
 export async function restoreMetadata(snapshotDirectory: string, network: MetadataNetworkSelection, options: CommonOptions = {}) {
+  for (const selectedNetwork of metadataNetworks(network)) assertMetadataPublicationAllowed(`https://cdn.mons.shop/${metadataPrefix(selectedNetwork, options.prefix)}`);
   const concurrency = metadataUploadConcurrency(options.concurrency);
   const storage = options.storage ?? environmentStorage(concurrency);
   const reports = [];

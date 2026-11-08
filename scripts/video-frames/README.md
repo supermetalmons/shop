@@ -30,6 +30,8 @@ Framed rendering remains the default.
 
 Both presets render by default. `--background white` is accepted for existing
 commands. Category-local 111k IDs use the raw source cache when available.
+The [animated source checksums](animated-source-sha256.json) pin the 102 approved
+MP4 sources independently of testnet release artifacts.
 Local inputs require an explicit output directory. With no selection, videos
 use IDs 10–12, animated items use 3, 27 and 102, and knives use 1–4.
 

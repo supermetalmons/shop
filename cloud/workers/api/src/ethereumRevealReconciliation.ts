@@ -16,7 +16,7 @@ export async function reconcileEthereumReveals(env: RevealReconciliationEnvironm
   try {
     const namespace = env.ETHEREUM_REVEAL;
     if (!namespace) return summary;
-    const rows = await env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE catalog_version=? ORDER BY updated_at_ms ASC LIMIT 100`)
+    const rows = await env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE catalog_version=? AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100`)
       .bind(ETHEREUM_REVEAL_CATALOG_VERSION).all<Record<string, unknown>>();
     let failed = false;
     for (let offset = 0; offset < rows.results.length; offset += 4) {
@@ -26,7 +26,7 @@ export async function reconcileEthereumReveals(env: RevealReconciliationEnvironm
         try {
           await namespace.getByName(`${deployment.chainId}:${deployment.contractAddress}`).watchdog(deployment);
         } finally {
-          await env.OPS_DB.prepare('UPDATE ethereum_reveal_deployments SET updated_at_ms=? WHERE deployment_id=?')
+          await env.OPS_DB.prepare('UPDATE ethereum_reveal_deployments SET updated_at_ms=? WHERE deployment_id=? AND retired_at_ms IS NULL')
             .bind(Date.now(), deployment.deploymentId).run();
         }
       }));

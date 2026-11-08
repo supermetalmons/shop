@@ -110,9 +110,8 @@ def prepare_media(collection, ids, inputs):
         from knife_sources import numbered_models
         return numbered_models(ids)
     if collection == "animated":
-        manifest = ROOT / "releases/111k-sepolia-v14/animated-media-validation.json"
-        records = json.loads(manifest.read_text())["results"]
-        hashes = {r["id"]: r["sha256"] for r in records if r["mime"] == "video/mp4"}
+        manifest = HERE.parent / "animated-source-sha256.json"
+        hashes = {int(i): digest for i, digest in json.loads(manifest.read_text()).items()}
         directory = CACHE / "animated/sources"
     else:
         hashes = {**SOURCE_HASHES["videos"], **{int(i): h for i, h in SAMPLES["video_sha256"].items()}}

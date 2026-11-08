@@ -70,6 +70,7 @@ test('both deployment networks require the complete seven-kind publication befor
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', import.meta.url), 'utf8'));
+  database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', import.meta.url), 'utf8'));
   for (const [network, chainId, root] of [['sepolia', 11155111, '111k-sepolia'], ['mainnet', 1, '111k']] as const) {
     await t.test(network, async t => {
       const deploymentId = `${network}-relics-test`;

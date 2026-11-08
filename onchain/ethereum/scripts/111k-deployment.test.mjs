@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { createServer } from 'node:net';
 import os from 'node:os';
@@ -10,9 +11,10 @@ import { fileURLToPath } from 'node:url';
 import { decode } from '@metamask/abi-utils';
 import {
   NFT111K_SEPOLIA, confirm111kTransaction, nft111kAction, nft111kDeploymentGas,
-  parse111kDeploymentArgs, run111kDeployment, validateSigned111kTransaction,
+  parse111kDeploymentArgs, resolve111kPredecessor, run111kDeployment, run111kReplacementFinalization, validateSigned111kTransaction,
 } from './111k-deployment.mjs';
 import { load111kVerification, verify111kDeployment } from './111k-verification.mjs';
+import { record111kReleaseLocation } from '../../../scripts/shared/ethereum111kReleaseLocations.ts';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const json = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -41,12 +43,75 @@ function signedFixture(action = 'reserve') {
 test('the deployment runner admits only explicit Sepolia operations', () => {
   assert.equal(NFT111K_SEPOLIA.chainId, 11155111);
   assert.equal(NFT111K_SEPOLIA.previousContract, '0xe665d1043f72886f49894006ea196450b33f0f89');
-  assert.equal(parse111kDeploymentArgs(['prepare']).directory, path.join(project, '.local', '111k-sepolia-v16'));
+  assert.throws(() => parse111kDeploymentArgs(['prepare']), /explicit fresh --deployment-id/);
+  assert.equal(parse111kDeploymentArgs(['prepare', '--deployment-id', 'v99']).directory, path.join(project, '.local', '111k-sepolia-v99'));
   assert.ok(parse111kDeploymentArgs(['prepare', '--network', 'sepolia', '--deployment-id', 'runner-test', '--directory', '/tmp/runner-test']));
+  assert.equal(parse111kDeploymentArgs(['finalize', '--directory', '/tmp/runner-test']).command, 'finalize');
   for (const argv of [
     ['prepare', '--network', 'mainnet'], ['prepare', '--network', '1'], ['refund'], ['withdraw'], ['release-all'],
     ['prepare', '--deployment-id', '../escape'], ['prepare', '--unknown'],
+    ['verify', '--previous-directory', '/tmp/old-release'],
   ]) assert.throws(() => parse111kDeploymentArgs(argv));
+});
+
+test('the predecessor resolver matches live and repository identity even while the storefront is paused', async () => {
+  const configured = { chainId: '11155111', contractAddress: `0x${'98'.repeat(20)}`,
+    metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v98/' };
+  const readConfiguration = async () => configured;
+  const resolved = await resolve111kPredecessor({ readConfiguration,
+    readLiveConfiguration: async () => ({ ...configured, chainId: 11155111, enabled: false }) });
+  assert.deepEqual(resolved, { ...configured, chainId: 11155111, deploymentId: 'v98' });
+  for (const change of [{ chainId: 1 }, { contractAddress: `0x${'97'.repeat(20)}` },
+    { metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v97/' }]) {
+    await assert.rejects(resolve111kPredecessor({ readConfiguration, readLiveConfiguration: async () => ({ ...configured, ...change }) }));
+  }
+});
+
+test('preparation refuses a directory containing signing material or unrelated files', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), '111k-occupied-release-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const wallet = path.join(directory, 'wallet.json');
+  fs.writeFileSync(wallet, JSON.stringify({ crypto: { ciphertext: 'protected' } }));
+  await assert.rejects(run111kDeployment(['prepare', '--deployment-id', 'new-release', '--directory', directory], {
+    rpc: async method => { assert.equal(method, 'eth_chainId'); return '0xaa36a7'; },
+    resolvePredecessor: async () => { throw new Error('Must reject occupied directory before resolving ownership'); },
+  }), /fresh release directory/);
+  assert.equal(JSON.parse(fs.readFileSync(wallet, 'utf8')).crypto.ciphertext, 'protected');
+  assert.equal(fs.existsSync(path.join(directory, 'manifest.json')), false);
+});
+
+test('replacement finalization reads its bound completion journal instead of subprocess output', t => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), '111k-finalization-result-')));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const manifest = { chainId: 11155111, deploymentId: 'next', contractAddress: `0x${'33'.repeat(20)}`,
+    previousContract: `0x${'22'.repeat(20)}`, metadataBaseURI: 'https://cdn.mons.shop/111k-sepolia/next/' };
+  const body = `${JSON.stringify(manifest, null, 2)}\n`;
+  fs.writeFileSync(path.join(directory, 'manifest.json'), body);
+  const journalPath = path.join(directory, 'cleanup-finalization.json');
+  const journal = { version: 2, kind: '111k-replacement-cleanup', complete: true,
+    release: { ...manifest, releaseDirectory: directory, metadataBaseUri: manifest.metadataBaseURI,
+      manifestSha256: createHash('sha256').update(body).digest('hex') },
+    oldDeployment: { deploymentId: 'old', contractAddress: manifest.previousContract },
+    newDeployment: { contractAddress: manifest.contractAddress }, artifacts: { report: { complete: true } },
+    metadataDeletedAtMs: 1_000, verifiedAtMs: 301_000 };
+  const save = value => fs.writeFileSync(journalPath, JSON.stringify(value));
+  save(journal);
+  const execute = (file, args, options) => {
+    assert.equal(file, process.execPath);
+    assert.deepEqual(args, ['--import', 'tsx', 'scripts/ops/cleanupEthereum111k.ts', 'finalize', '--release-directory', directory, '--write']);
+    assert.deepEqual(options.stdio, ['ignore', 'ignore', 'inherit']);
+    return '⎔ Establishing remote connection...\n{"complete":true}\n';
+  };
+  assert.equal(run111kReplacementFinalization({ releaseDirectory: directory }, execute).complete, true);
+  for (const change of [{ complete: false }, { kind: 'other' }, { version: 1 }, { verifiedAtMs: 300_000 },
+    { release: { ...journal.release, manifestSha256: '0'.repeat(64) } },
+    { release: { ...journal.release, previousContract: manifest.contractAddress } },
+    { artifacts: { report: { complete: false } } }]) {
+    save({ ...journal, ...change });
+    assert.throws(() => run111kReplacementFinalization({ releaseDirectory: directory }, execute));
+  }
+  save(journal);
+  assert.throws(() => run111kReplacementFinalization({ releaseDirectory: directory }, () => { throw new Error('Child failed'); }), /Child failed/);
 });
 
 test('the npm deployment command cannot invoke the reservation deployment as a prehook', t => {
@@ -194,7 +259,7 @@ test('preparation rejects the wrong RPC chain before creating deployment artifac
 });
 
 async function anvilFixture(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), '111k-runner-test-'));
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), '111k-runner-test-')));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const port = await new Promise((done, reject) => {
     const server = createServer();
@@ -253,7 +318,7 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
     '(address,uint16,uint16,uint16)[]', 'uint256'];
   const initialReceiver = '0x5555555555555555555555555555555555555555';
   const oldArguments = cast(['abi-encode', `constructor(${constructorTypes.join(',')})`, f.owner,
-    NFT111K_SEPOLIA.quoteSigner, initialReceiver, 'https://cdn.mons.shop/111k-sepolia/runner-old/', `0x${'0'.repeat(64)}`,
+    NFT111K_SEPOLIA.quoteSigner, initialReceiver, 'https://cdn.mons.shop/111k-sepolia/v98/', `0x${'0'.repeat(64)}`,
     `[${proceeds.mintRecipients.join(',')}]`, `[${proceeds.mintSharesBps.join(',')}]`, '[]', '5555']);
   const send = async (to, data, value = '0x0', from = f.owner) => {
     const transaction = { from, ...(to ? { to } : {}), data, value };
@@ -270,11 +335,23 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
   };
   const old = await send(null, artifact.bytecode.object + oldArguments.slice(2));
   await send(old.contractAddress, cast(['calldata', 'setSaleActive(bool)', 'true']));
+  const oldDirectory = path.join(f.directory, 'custom-old-release');
+  fs.mkdirSync(oldDirectory, { mode: 0o700 });
+  fs.writeFileSync(path.join(oldDirectory, 'manifest.json'), JSON.stringify({ version: 1, network: 'sepolia',
+    chainId: 11155111, deploymentId: 'v98', contractAddress: old.contractAddress,
+    metadataBaseURI: 'https://cdn.mons.shop/111k-sepolia/v98/' }));
+  const releaseLocationOptions = { registryDirectory: path.join(f.directory, 'locations') };
+  const oldLocation = await record111kReleaseLocation(oldDirectory, { chainId: 11155111, deploymentId: 'v98',
+    contractAddress: old.contractAddress, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v98/' }, releaseLocationOptions);
   const releaseDirectory = path.join(f.directory, 'release');
+  const alias = path.join(f.directory, 'root-alias');
+  fs.symlinkSync(f.directory, alias, 'dir');
   const manifestPath = path.join(releaseDirectory, 'manifest.json');
   const journalPath = path.join(releaseDirectory, 'transactions.private.json');
-  const baseArgs = ['--network', 'sepolia', '--directory', releaseDirectory];
+  const baseArgs = ['--network', 'sepolia', '--directory', path.join(alias, 'release')];
   let sends = 0;
+  const cleanupCalls = [];
+  let cleanupOutcome = 'failure';
   let loseResponse = true;
   let interruptBeforeBroadcast = false;
   const injectedRpc = async (method, params = []) => {
@@ -293,18 +370,34 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
     if (loseResponse) { loseResponse = false; throw new Error('Simulated lost broadcast response'); }
     return hash;
   };
-  const overrides = { configuration: { deployer: f.owner, owner: f.owner },
-    rpc: injectedRpc, cast: f.cast, sleep: async () => {}, maxReceiptPolls: 2 };
+  const overrides = { configuration: { deployer: f.owner, owner: f.owner }, releaseLocationOptions,
+    rpc: injectedRpc, cast: f.cast, sleep: async () => {}, maxReceiptPolls: 2,
+    resolvePredecessor: async () => ({ chainId: 11155111, contractAddress: old.contractAddress,
+      metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v98/' }),
+    cleanupReplacement: async options => {
+      assert.deepEqual(options, { releaseDirectory });
+      assert.ok(json(journalPath).actions.open?.receipt, 'Opening must be journaled before cleanup');
+      cleanupCalls.push(options);
+      if (cleanupOutcome === 'failure') throw new Error('Fixture cleanup interruption');
+      return { complete: cleanupOutcome === 'complete' };
+    } };
   const invoke = action => run111kDeployment([action, ...baseArgs, '--keystore', 'fixture-keystore', '--password-file', 'fixture-password'], overrides);
   const startingNonce = BigInt(await f.rpc('eth_getTransactionCount', [f.owner, 'latest']));
-  await run111kDeployment(['prepare', ...baseArgs, '--deployment-id', 'runner-local', '--previous-contract', old.contractAddress], overrides);
+  await assert.rejects(run111kDeployment(['prepare', ...baseArgs, '--deployment-id', 'v99',
+    '--previous-contract', NFT111K_SEPOLIA.previousContract], overrides), /Explicit predecessor/);
+  await assert.rejects(run111kDeployment(['prepare', ...baseArgs, '--deployment-id', 'v98'], overrides), /must differ/);
+  await run111kDeployment(['prepare', ...baseArgs, '--deployment-id', 'v99'], overrides);
+  overrides.resolvePredecessor = async () => { throw new Error('Frozen release resumes must not resolve current predecessor'); };
   const manifest = json(manifestPath);
   assert.equal(manifest.previousContract, old.contractAddress);
+  assert.equal(manifest.previousReleaseDirectory, oldLocation.directory);
+  assert.equal(manifest.previousReleaseManifestSha256, oldLocation.manifestSha256);
+  assert.equal(json(path.join(releaseLocationOptions.registryDirectory, 'v99.json')).directory, releaseDirectory);
   const args = decode(constructorTypes, manifest.constructorArgs);
   assert.equal(args[0], f.owner.toLowerCase());
   assert.equal(args[1], NFT111K_SEPOLIA.quoteSigner);
   assert.equal(args[2], initialReceiver);
-  assert.equal(args[3], 'https://cdn.mons.shop/111k-sepolia/runner-local/');
+  assert.equal(args[3], 'https://cdn.mons.shop/111k-sepolia/v99/');
   assert.deepEqual(args[5], proceeds.mintRecipients.map(address => address.toLowerCase()));
   assert.equal(args[5].length, 14);
   assert.deepEqual(args[6], [2750n, 2600n, 500n, 500n, 500n, 500n, 100n, 100n, 100n, 100n, 500n, 583n, 583n, 584n]);
@@ -386,13 +479,36 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
   assert.equal(reserved.totalMintReleased, released);
   assert.equal(reserved.contractBalanceWei, 0n);
   assert.equal(reserved.mintRecipients.reduce((sum, recipient) => sum + recipient.released, 0n), released);
+  await assert.rejects(invoke('finalize'), /Confirm sale opening/);
+  assert.equal(cleanupCalls.length, 0);
   await assert.rejects(invoke('open'), /previous|old|pause/i);
   await invoke('pause-old');
   await invoke('pause-old');
   assert.equal(sends, 4);
   assert.deepEqual(await read(old.contractAddress, 'saleActive()', ['bool']), [false]);
   assert.deepEqual(await read(old.contractAddress, 'redemptionsPaused()', ['bool']), [true]);
-  await invoke('open');
+  await assert.rejects(invoke('open'), /Replacement cleanup is incomplete/);
+  const durableOpen = structuredClone(json(journalPath).actions.open);
+  assert.ok(durableOpen.receipt);
+  assert.equal(sends, 5);
+  cleanupOutcome = 'incomplete';
+  await assert.rejects(invoke('finalize'), /Replacement cleanup is incomplete/);
+  assert.equal(sends, 5);
+  cleanupOutcome = 'complete';
+  const replayedOpen = await invoke('open');
+  assert.equal(replayedOpen.cleanup.complete, true);
+  assert.equal(replayedOpen.transactions[0].alreadySatisfied, true);
+  assert.equal(json(journalPath).actions.open.raw, durableOpen.raw);
+  assert.equal(json(journalPath).actions.open.hash, durableOpen.hash);
+  await assert.rejects(run111kDeployment(['finalize', ...baseArgs, '--previous-directory', releaseDirectory], overrides),
+    /Previous release directory belongs to another contract/);
+  fs.unlinkSync(path.join(releaseLocationOptions.registryDirectory, 'v98.json'));
+  const finalized = await run111kDeployment(['finalize', ...baseArgs, '--previous-directory', oldDirectory], overrides);
+  assert.equal(json(path.join(releaseLocationOptions.registryDirectory, 'v98.json')).directory, oldDirectory);
+  assert.deepEqual(finalized.transactions, []);
+  assert.equal(finalized.cleanup.complete, true);
+  assert.equal(cleanupCalls.length, 4);
+  assert.equal(sends, 5);
   const opened = await verifyStage('open');
   assert.equal(opened.totalMintReleased, released);
   assert.equal(opened.contractBalanceWei, 0n);
@@ -440,11 +556,42 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
     assert.ok(BigInt(await f.rpc('eth_blockNumber')) - BigInt(record.receipt.blockNumber) + 1n >= 3n);
   }
   assert.equal(fs.statSync(journalPath).mode & 0o077, 0);
+  const recordedLocation = path.join(releaseLocationOptions.registryDirectory, 'v99.json');
+  fs.unlinkSync(recordedLocation);
   const verified = await run111kDeployment(['verify', ...baseArgs], overrides);
   assert.equal(verified.verified, true);
   assert.equal(verified.transactions.length, 7);
   assert.equal(verified.state.artworksMinted, '40');
   assert.equal(verified.state.totalMintReceived, '18200000000000000');
+  assert.equal(cleanupCalls.length, 4, 'Verification must not invoke cleanup');
+  assert.equal(fs.existsSync(recordedLocation), false, 'Verification must not write release-location metadata');
+  const verifiedJournal = fs.readFileSync(journalPath, 'utf8');
+  for (const mutate of [
+    journal => { journal.actions.deploy.raw = '0x01'; },
+    journal => { journal.actions.deploy.action = 'open'; },
+    journal => { journal.actions.deploy.from = old.contractAddress; },
+    journal => { journal.actions.deploy.contractAddress = old.contractAddress; },
+    journal => { journal.actions.deploy.data = '0x00'; },
+    journal => { journal.actions.deploy.valueWei = '1'; },
+    journal => { journal.actions.deploy.nonce = (BigInt(journal.actions.deploy.nonce) + 1n).toString(); },
+    journal => { delete journal.actions.deploy.raw; },
+    journal => { journal.actions.unknown = journal.actions.deploy; },
+  ]) {
+    const changed = JSON.parse(verifiedJournal);
+    mutate(changed);
+    const content = JSON.stringify(changed);
+    fs.writeFileSync(journalPath, content);
+    await assert.rejects(run111kDeployment(['verify', ...baseArgs], overrides), /journal|nonce/i);
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), content, 'Verification must not rewrite signed evidence');
+  }
+  const withoutQa = JSON.parse(verifiedJournal);
+  delete withoutQa.actions['mint-qa'];
+  delete withoutQa.actions['unpack-qa'];
+  fs.writeFileSync(journalPath, JSON.stringify(withoutQa));
+  assert.equal((await run111kDeployment(['verify', ...baseArgs], overrides)).transactions.length, 5);
+  fs.writeFileSync(journalPath, verifiedJournal);
+  assert.equal(sends, 7, 'Verification must not broadcast transactions');
+  assert.equal(cleanupCalls.length, 4, 'Verification must not run retirement');
   await assert.rejects(run111kDeployment(['verify', ...baseArgs, '--previous-contract', `0x${'77'.repeat(20)}`], overrides), /previousContract/);
   assert.equal(await f.rpc('evm_revert', [beforeQaMint]), true);
   fs.writeFileSync(journalPath, interruptedJournal);

@@ -57,7 +57,12 @@ export async function runEthereum111kControl(argv: string[], overrides: { query?
   const args = parseEthereum111kControlArgs(argv);
   const query = overrides.query ?? queryRemoteCommerceD1;
   const control = await readEthereum111kControl(query);
-  if (args.command === 'status') return { control };
+  if (args.command === 'status') {
+    const pending = await query(`SELECT deployment_id AS deploymentId,expected_revision AS expectedRevision,
+      replacement_deployment_id AS replacementDeploymentId,expected_replacement_revision AS expectedReplacementRevision
+      FROM ethereum_111k_retirements WHERE state='pending'`);
+    return { control, pendingRetirement: pending[0] ?? null };
+  }
   const sql = buildEthereum111kControlMutation(args, control);
   if (!args.write) return { dryRun: true, command: args.command, control, targetScope: args.scope, sql };
   try {

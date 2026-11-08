@@ -1,0 +1,299 @@
+{
+  "version": 1,
+  "createdAt": "2026-11-08T08:08:49.680Z",
+  "current": {
+    "deploymentId": "v16",
+    "chainId": 11155111,
+    "contractAddress": "0x938b6a488951b2797b29284d6939dd70efe146a0",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v16/",
+    "deploymentBlock": 12087015,
+    "catalogVersion": "111k-v5"
+  },
+  "snapshot": {
+    "currentRevision": 3,
+    "commerceRevision": 46,
+    "targets": [
+      {
+        "deploymentId": "sepolia-8b4044db",
+        "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/",
+        "catalogVersion": "111k-v1",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v7",
+        "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v7/",
+        "catalogVersion": "111k-v1",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v8",
+        "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v8/",
+        "catalogVersion": "111k-v1",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v9",
+        "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v9/",
+        "catalogVersion": "111k-v1",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v10",
+        "contractAddress": "0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v10/",
+        "catalogVersion": "111k-v1",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v11",
+        "contractAddress": "0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v11/",
+        "catalogVersion": "111k-v1",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v12",
+        "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v12/",
+        "catalogVersion": "111k-v1",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v13",
+        "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v13/",
+        "catalogVersion": "111k-v2",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v14",
+        "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v14/",
+        "catalogVersion": "111k-v3",
+        "revision": 4
+      },
+      {
+        "deploymentId": "v15",
+        "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+        "chainId": 11155111,
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v15/",
+        "catalogVersion": "111k-v4",
+        "revision": 4
+      }
+    ]
+  },
+  "inventory": {
+    "111k-sepolia/": {
+      "objectCount": 344948,
+      "totalBytes": 71250271,
+      "sha256": "7ca251cc149897c1fc4597e3989694ee6c2e1206e481dfe16855e8b1e83b79f3"
+    },
+    "111k-sepolia/v7/": {
+      "objectCount": 344978,
+      "totalBytes": 71183401,
+      "sha256": "e6728023c831356b959839913550b9259e15d8012cc30b9cb58265da87310cba"
+    },
+    "111k-sepolia/v8/": {
+      "objectCount": 344966,
+      "totalBytes": 71172115,
+      "sha256": "706b87967f5e2ccb3e15b1ef59e0ed90ee06e0e2acf8f0ce0d9e53cc9b3cfd41"
+    },
+    "111k-sepolia/v9/": {
+      "objectCount": 344984,
+      "totalBytes": 71182636,
+      "sha256": "d3c0cfb8cc7906e0ad9421687ea9d169bd8431c4f55868f7bd521f33b1723940"
+    },
+    "111k-sepolia/v10/": {
+      "objectCount": 344984,
+      "totalBytes": 71176030,
+      "sha256": "79e0357320cc41c18f042f5cb26875f02b40b3412e0d9f93b00c94284f07c087"
+    },
+    "111k-sepolia/v11/": {
+      "objectCount": 344984,
+      "totalBytes": 71193618,
+      "sha256": "b7bcbded42f2a4c1d2a03357e01bf26e101f5cfe39aafb1e8ece2bf4af23c86d"
+    },
+    "111k-sepolia/v12/": {
+      "objectCount": 344984,
+      "totalBytes": 71224760,
+      "sha256": "ed270ddcd74fed505a6fc4c4bde511407c77a5cb5572b64472c1a645937a8d99"
+    },
+    "111k-sepolia/v13/": {
+      "objectCount": 344984,
+      "totalBytes": 71211427,
+      "sha256": "03091fba3b81081e59b378a273294856e137cf5f7b8b4860c1ab0462b577ab69"
+    },
+    "111k-sepolia/v14/": {
+      "objectCount": 344984,
+      "totalBytes": 71362639,
+      "sha256": "c37b319cc9d39ef8d53774574460d568b02177cb2c437667a338167cf7000d4c"
+    },
+    "111k-sepolia/v15/": {
+      "objectCount": 344984,
+      "totalBytes": 71182053,
+      "sha256": "dcf766e35ec902d97960b22c9d67efb50967d206270071564495e366c54c8a8f"
+    },
+    "111k-sepolia/reliquaries-v1/": {
+      "objectCount": 30,
+      "totalBytes": 5862,
+      "sha256": "bf6e7a8bf9ef83034095b65c2a9b839c7dcc13642a59319546c2f6b9a27b9a0f"
+    },
+    "111k-sepolia/v16/": {
+      "objectCount": 344984,
+      "totalBytes": 88552395,
+      "sha256": "39289d3e6f6fea8f36566514a196fe8d65cc009009143b4eded0f91843df566c"
+    }
+  },
+  "currentArtworkSha256": {
+    "1.json": "a522262f18264ff896609be275f06dc4630739b8fcdb7cda00cbe4ee58c0d4ba",
+    "2.json": "9e4c6d0dbc32b029de6ce2736ebc808adc3f25459d955507e1189172e57bd123",
+    "3.json": "e4dcc3563c03863f0f70ada8efb3fc54b172b52c06d0bfa728c2150baa34c245",
+    "4.json": "a4d6d90fd2430ccf7150007758c975970f0509561974587e55bc268a967487fa",
+    "5.json": "cd04a07ec11915c39c06e6e7409937f8a2a5f6e070f095037e014833c1aae6f3",
+    "6.json": "dd7440c6a74cc1ae09b857edab5740f8d1455e81c16c6ba1fdaafe642ca613b0",
+    "7.json": "1181e4cc055d0bfab8a50f365a18c142f6846b2cbd543730c00dedfd9eac3b90",
+    "8.json": "bdcc3c73815f774b35b3a9aa2532741bc100b143ba5b87ac576aecafcaf50a07",
+    "9.json": "c8b5e303544b7b715535d764b741e4ed84475ce7483d3cea03516f78c6cee6ad",
+    "10.json": "5b41f367eeefc88176c4a2fcbf90aaaacb2e98def1ac4711ea2bd009b0adf513",
+    "11.json": "ef46e1b662377d9fd2326c917d24805bd1a953788de13b4233597595c96be3e5",
+    "12.json": "bad363238084e1b1710e9e7e2fc8e3a7bc27415f3f3e7510156cc872d1a4c90e",
+    "13.json": "b6d6fbea0a688ee6144ac6a6f1e90689cb4efd50d6f74280e32af3414b1bc8df",
+    "14.json": "dbcd7c0e156abfe8681ffc88895ebe9a0549e4209f79dcc2353e30e93e55680f",
+    "15.json": "865356b0fdca96f2bb533a42b61df4f2f7e441475bff46be0e62a63bc0a49e95",
+    "16.json": "3e6349666605bc1515119502ba3262dc317053c51512187a9ba1e9f51638adbd",
+    "17.json": "3cb03d6929878aac20dcf3cf2e316bb13352624ac2392e2f03a6ea5809e866e4",
+    "18.json": "ba880cffdbdeb464944620683abc77bd3cd8fefaf2138bf885df998623b8ace8",
+    "19.json": "ed7248e09d267c92efea21810ab56fa20c04cd8cf340016c1ea0cfea8d3dfcbe",
+    "20.json": "af49f9d0032ec6c3b92d66904493dea8134fd5e6d2ba3b630de61091d88de82b"
+  },
+  "receipts": {
+    "sepolia-8b4044db": {
+      "deploymentId": "sepolia-8b4044db",
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v7": {
+      "deploymentId": "v7",
+      "chainId": 11155111,
+      "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v7/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v8": {
+      "deploymentId": "v8",
+      "chainId": 11155111,
+      "contractAddress": "0xab705be519d707a56f43abd63f0869e88fc882b7",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v8/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v9": {
+      "deploymentId": "v9",
+      "chainId": 11155111,
+      "contractAddress": "0x4d127fceeaa8b652744c4cb1f62f1101290180a8",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v9/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v10": {
+      "deploymentId": "v10",
+      "chainId": 11155111,
+      "contractAddress": "0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v10/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v11": {
+      "deploymentId": "v11",
+      "chainId": 11155111,
+      "contractAddress": "0xef5ffe06eb0d94a575656eb6ffcd97b8e2121b1c",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v11/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v12": {
+      "deploymentId": "v12",
+      "chainId": 11155111,
+      "contractAddress": "0x320cf00a3606350821ed90ea435e93955b180874",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v12/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v13": {
+      "deploymentId": "v13",
+      "chainId": 11155111,
+      "contractAddress": "0x8ef2789bc22098749a8ca746263fd85442949eff",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v13/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v14": {
+      "deploymentId": "v14",
+      "chainId": 11155111,
+      "contractAddress": "0x6d194e6cc762424e408b84907c25d60f0db29d12",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v14/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    },
+    "v15": {
+      "deploymentId": "v15",
+      "chainId": 11155111,
+      "contractAddress": "0xe665d1043f72886f49894006ea196450b33f0f89",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v15/",
+      "revision": 4,
+      "storageEmpty": true,
+      "alarmCleared": true,
+      "purged": true
+    }
+  },
+  "completedPrefixes": [
+    "111k-sepolia/v13/",
+    "111k-sepolia/v12/",
+    "111k-sepolia/v9/",
+    "111k-sepolia/v10/",
+    "111k-sepolia/v7/",
+    "111k-sepolia/v8/",
+    "111k-sepolia/v11/",
+    "111k-sepolia/reliquaries-v1/",
+    "111k-sepolia/",
+    "111k-sepolia/v14/",
+    "111k-sepolia/v15/"
+  ],
+  "startedAt": "2026-11-08T08:25:31.454Z",
+  "verifiedAt": "2026-11-08T09:18:06.176Z"
+}

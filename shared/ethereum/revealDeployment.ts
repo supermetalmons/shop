@@ -24,6 +24,8 @@ export type EthereumRevealDeployment = {
   activatedAtMs: number | null;
   provisionedAtMs: number | null;
   lastError: string | null;
+  retiredAtMs?: number | null;
+  replacementDeploymentId?: string | null;
 };
 
 type RegistryStatement = {
@@ -53,6 +55,14 @@ export function parseEthereumRevealDeployment(row: Record<string, unknown>): Eth
     row.last_error !== null && typeof row.last_error !== 'string') throw new Error('Invalid reveal deployment.');
   const chainId = integer(row.chain_id, 1);
   const metadataBaseUri = ethereumMetadataBaseUri(row.metadata_base_uri, chainId);
+  const retiredAtMs = row.retired_at_ms == null ? null : integer(row.retired_at_ms, 1);
+  const replacementDeploymentId = row.replacement_deployment_id ?? null;
+  if ((retiredAtMs === null) !== (replacementDeploymentId === null) ||
+    replacementDeploymentId !== null && (typeof replacementDeploymentId !== 'string' ||
+      !ETHEREUM_REVEAL_DEPLOYMENT_ID.test(replacementDeploymentId) || replacementDeploymentId === row.deployment_id) ||
+    retiredAtMs !== null && (chainId !== 11155111 || row.drop_id !== '111k_devnet' || row.state !== 'paused')) {
+    throw new Error('Invalid reveal retirement.');
+  }
   const template: unknown = JSON.parse(row.template_json);
   if (!template || typeof template !== 'object' || Array.isArray(template) ||
     !('name' in template) || typeof template.name !== 'string' || !('description' in template) || typeof template.description !== 'string' ||
@@ -66,6 +76,7 @@ export function parseEthereumRevealDeployment(row: Record<string, unknown>): Eth
     state: row.state as EthereumRevealDeployment['state'], revision: integer(row.revision, 1),
     createdAtMs: integer(row.created_at_ms), updatedAtMs: integer(row.updated_at_ms),
     activatedAtMs: timestamp(row.activated_at_ms), provisionedAtMs: timestamp(row.provisioned_at_ms), lastError: row.last_error as string | null,
+    ...(retiredAtMs !== null ? { retiredAtMs, replacementDeploymentId: replacementDeploymentId as string } : {}),
   };
 }
 

@@ -37,12 +37,17 @@ also verifies the exact contract and constructor arguments.
 
 ## Replacement and validation
 
-V15 sales, redemptions, commerce, and reveal admission are paused. Its guarded
-commerce reset created a private backup and removed one reconciliation cursor;
-there were no orders or claims to remove. Historical NFTs, published metadata,
-and reveal ledgers remain preserved. Obsolete local snapshots were removed from
-the checkout; the [archive manifest](archived-snapshots.json) records their
-original Git revision.
+The original cutover paused v15 sales, redemptions, commerce, and reveal admission.
+Its guarded commerce reset created a private backup and removed one reconciliation
+cursor; there were no orders or claims to remove. Historical NFTs, published
+metadata, and reveal ledgers were preserved at that checkpoint. Obsolete local
+snapshots were removed from the checkout; the [archive manifest](archived-snapshots.json)
+records their original Git revision.
+
+The subsequent [November 8 testnet cleanup](../111k-testnet-cleanup-2026-11-08/README.md)
+removed earlier testnet metadata, reveal ledgers, release artifacts, and obsolete
+local backups while preserving v16 and onchain records. Backend retirement and
+local pruning are verified, including the final scheduler recheck.
 
 [Predeployment checks](validation-predeployment.json) passed 4,994 application
 tests, 3,079 API unit tests, 58 native runtime tests, 266 Solidity tests, 125

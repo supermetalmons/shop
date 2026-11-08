@@ -1,5 +1,28 @@
 Avoid code comments except for TODOs or essential context.
 
+## 111k testnet replacements
+
+Every replacement of the 111k testnet includes purging the superseded deployment
+in the same task. Start that cleanup immediately after the replacement is active
+and verified, with the required writer fences and drain periods. Remove the old
+backend data and obsolete repo/local artifacts and verify their absence before
+reporting the replacement complete. Never defer cleanup to a later deployment.
+
+Follow `scripts/docs/111k_reveal_ops.md#superseded-testnet-retirement`. The release
+runner's `open` command automatically verifies the replacement and finalizes
+cleanup, including same-catalog replacements. Retry interrupted cleanup with
+`finalize` against the same frozen release directory; `verify` stays read-only.
+Deploy the retirement migration and Worker support before cutover. Pausing alone
+is not retirement; use the irreversible per-deployment marker and writer drain.
+Never falsify catalog identity or bump the catalog solely to permit deletion.
+
+Keep the replacement's required assets and signed release evidence, immutable
+ownership tombstones, Git history, and a minimal cleanup record. Remove obsolete
+release trees, generated caches, and old backups; do not retain a legacy archive
+unless explicitly requested. Preserve mainnet, pre111k, shared media, profiles,
+and unrelated drops. Verify the replacement stays healthy and retired data does
+not reappear after a scheduler interval before completing the task.
+
 ## Canvas artwork rendering
 
 When asked to render paintings or artworks on canvases, use the approved A Light

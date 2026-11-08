@@ -45,6 +45,7 @@ export { StripeChargebackMaintenance } from './stripeChargebackMaintenance.js';
 export { EthereumRevealObject } from './ethereumRevealObject.js';
 export { EthereumRevealVerifierObject } from './ethereumRevealVerifierObject.js';
 export { EthereumRevealPublisherObject } from './ethereumRevealPublisherObject.js';
+export { EthereumRevealMaintenance } from './ethereumRevealMaintenance.js';
 
 type RequestExecution = {
   defer: DeferredWork;

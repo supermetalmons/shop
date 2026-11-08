@@ -29,7 +29,7 @@ export async function ethereumReveal(request: Request, context: EthereumContext,
   const contractAddress = normalizeEthereumAddress(body.contractAddress)!;
   const deployment = await readEthereumRevealDeployment(context.env.OPS_DB, { chainId: body.chainId, contractAddress });
   if (!deployment) throw new EthereumApiError('not-found', 'Reveal is not configured for this collection.');
-  if (deployment.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) {
+  if (deployment.retiredAtMs != null || deployment.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) {
     throw new EthereumApiError('failed-precondition', 'Reveal is retired for this collection.');
   }
   const namespace = context.env.ETHEREUM_REVEAL;
