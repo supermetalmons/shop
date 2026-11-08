@@ -161,6 +161,15 @@ and request limits are unchanged. Painting alts and video posters are variants
 of those artworks, not extra tokens. Videos include 16:9, 427:240, and 54:31
 ratios; use the returned ratio instead of assuming a fixed widescreen frame.
 
+New assignments use a soft cap of eight eggs per crate, including the final
+31-artwork crate. Once the current allocation reaches eight eggs, additional
+draws use non-egg categories while any have free inventory. Eggs can exceed the
+cap when free non-egg inventory is exhausted; assets reserved by other crates
+are unavailable. Eligible categories retain their original catalog weights.
+Existing reservations and revealed artwork are preserved, even if they already
+exceed the cap. Historical frozen assignments outside the current unpack's token
+range do not count toward its limit.
+
 Cache media by `(chainId, contractAddress, tokenId)`. Revealed artwork stays unchanged through reorgs and remints. Use inventory data for ownership.
 
 Metadata JSON addresses follow the collection's configured base URI plus the decimal token ID and `.json`. The JSON address itself is predictable before minting; it contains only the placeholder until reveal. Use the methods above to establish reveal status and obtain media immediately, without waiting for CDN or marketplace refreshes.

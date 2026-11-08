@@ -197,6 +197,7 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
     const singleCrateMs = performance.now() - baselineStarted;
     assert.equal(baseline.status, 'revealed');
     assert.equal(baseline.artworks.length, 20);
+    assert.ok(baseline.artworks.filter(artwork => artwork.category === 'egg').length <= 8);
     const singleCrateRpcCalls = rpcCalls.length - baselineRpc;
     const tampered = '{"image":"https://example.invalid/tampered.webp"}\n';
     const batchRpc = rpcCalls.length;
@@ -234,6 +235,7 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
       assert.equal(response.status, 'revealed');
       assert.equal(response.artworks.length, 20);
       assert.ok(response.artworks.every(artwork => artwork.crateTokenId === String(111113 + offset)));
+      assert.ok(response.artworks.filter(artwork => artwork.category === 'egg').length <= 8);
     }
     const revealTotalMs = performance.now() - batchStarted;
     const concurrentRpcCalls = rpcCalls.length - batchRpc;

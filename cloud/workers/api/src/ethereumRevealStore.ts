@@ -26,6 +26,8 @@ export type RevealPublicationJob = {
 export type RevealPublicationResult = { job: RevealPublicationJob; status: 'published' | 'conflict' | 'retry' };
 export type RevealSearchRange = { fromBlock: number; toBlock?: number };
 
+const REVEAL_CRATE_EGG_LIMIT = 8;
+
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), deployment_json TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS reveal_migrations (name TEXT PRIMARY KEY)`,
@@ -187,7 +189,7 @@ export class EthereumRevealStore {
     this.sql.exec('UPDATE pools SET available=available+1 WHERE category=?', reservation.category);
   }
 
-  private takeAsset(crateTokenId: string, slot: number, reclaim: boolean): ReservationRow | undefined {
+  private takeAsset(crateTokenId: string, slot: number, reclaim: boolean, frozenEggs = 0): ReservationRow | undefined {
     let pools = this.pools().filter(pool => pool.available > 0);
     if (!pools.length && reclaim) {
       const donor = this.sql.exec<ReservationRow>(`SELECT a.category,a.asset_id,a.crate_token_id,a.slot FROM assignments a
@@ -197,6 +199,11 @@ export class EthereumRevealStore {
       pools = this.pools().filter(pool => pool.available > 0);
     }
     if (!pools.length) return undefined;
+    const privateEggs = this.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments
+      WHERE crate_token_id=? AND token_id IS NULL AND category='egg'`, crateTokenId).toArray()[0].count;
+    if (privateEggs + frozenEggs >= REVEAL_CRATE_EGG_LIMIT && pools.some(pool => pool.category !== 'egg')) {
+      pools = pools.filter(pool => pool.category !== 'egg');
+    }
     let selection = this.randomInteger(pools.reduce((sum, pool) => sum + pool.total, 0));
     const pool = pools.find(value => { selection -= value.total; return selection < 0; })!;
     const index = this.randomInteger(pool.available);
@@ -244,7 +251,7 @@ export class EthereumRevealStore {
       tokens.some(id => !/^[1-9]\d*$/.test(id) || Number(id) > REVEAL_ARTWORK_COUNT) ||
       crates.some(crate => crate.tokenIds.length !== revealCrateSize(crate.crateTokenId))) throw new Error('Invalid verified reveal ranges.');
     return this.transaction(() => {
-      const existing = new Set(this.frozen(tokens).map(artwork => artwork.tokenId));
+      const existing = new Map(this.frozen(tokens).map(artwork => [artwork.tokenId, artwork]));
       for (const crate of crates) {
         this.sql.exec('INSERT OR IGNORE INTO crates(crate_token_id) VALUES(?)', crate.crateTokenId);
         for (let slot = 0; slot < crate.tokenIds.length; slot++) {
@@ -254,10 +261,11 @@ export class EthereumRevealStore {
         }
       }
       for (const crate of crates) {
+        let frozenEggs = crate.tokenIds.filter(tokenId => existing.get(tokenId)?.category === 'egg').length;
         for (let slot = 0; slot < crate.tokenIds.length; slot++) {
           const tokenId = crate.tokenIds[slot];
           if (existing.has(tokenId)) continue;
-          const reservation = this.privateSlot(crate.crateTokenId, slot) || this.takeAsset(crate.crateTokenId, slot, true);
+          const reservation = this.privateSlot(crate.crateTokenId, slot) || this.takeAsset(crate.crateTokenId, slot, true, frozenEggs);
           if (!reservation) throw new Error('Reveal inventory invariant failed.');
           const value = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: crate.crateTokenId,
             category: reservation.category, assetId: reservation.asset_id, observation });
@@ -265,6 +273,7 @@ export class EthereumRevealStore {
             WHERE category=? AND asset_id=? AND token_id IS NULL`, tokenId, JSON.stringify(value.artwork), value.metadataJson,
             value.placeholderJson, now, reservation.category, reservation.asset_id);
           this.sql.exec('INSERT INTO publication(token_id) VALUES(?)', tokenId);
+          if (reservation.category === 'egg') frozenEggs++;
         }
         this.sql.exec(`INSERT OR IGNORE INTO observations(transaction_hash,block_hash,crate_token_id,block_number,token_ids_json)
           VALUES(?,?,?,?,?)`, observation.transactionHash, observation.blockHash, crate.crateTokenId, observation.blockNumber, JSON.stringify(crate.tokenIds));

@@ -66,6 +66,30 @@ function conservation(database: DatabaseSync, expectedFrozen?: number) {
     ON a.category=f.category AND a.asset_id=f.asset_id`).get()!.count, 0);
 }
 
+function eggFirstRandom() {
+  let call = 0;
+  return (maximum: number) => call++ % 2 === 0 ? Math.min(3421, maximum - 1) : 0;
+}
+
+function limitFreePools(database: DatabaseSync, limits: Partial<Record<keyof typeof REVEAL_CATEGORY_COUNTS, number>>) {
+  for (const category of Object.keys(REVEAL_CATEGORY_COUNTS)) {
+    const available = limits[category as keyof typeof limits] ?? 0;
+    database.prepare('DELETE FROM free_slots WHERE category=? AND slot>=?').run(category, available);
+    database.prepare('UPDATE pools SET available=? WHERE category=?').run(available, category);
+  }
+}
+
+function reserveEggSlots(database: DatabaseSync, crateTokenId: string, slots: number[]) {
+  database.prepare('INSERT OR IGNORE INTO crates(crate_token_id) VALUES(?)').run(crateTokenId);
+  for (const slot of slots) {
+    const available = Number(database.prepare("SELECT available FROM pools WHERE category='egg'").get()!.available);
+    const assetId = Number(database.prepare("SELECT asset_id FROM free_slots WHERE category='egg' AND slot=?").get(available - 1)!.asset_id);
+    database.prepare("DELETE FROM free_slots WHERE category='egg' AND slot=?").run(available - 1);
+    database.prepare("UPDATE pools SET available=available-1 WHERE category='egg'").run();
+    database.prepare("INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('egg',?,?,?)").run(assetId, crateTokenId, slot);
+  }
+}
+
 test('catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
   validateRevealCatalog();
   assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 76642, painting: 30990, video: 58 });
@@ -201,6 +225,131 @@ test('category selection uses initial weights while asset draws use current rema
     ['3d', '3d', 'animated', 'animated', 'egg', 'egg', 'painting', 'painting', 'video', 'video']);
   assert.deepEqual(maxima.slice(0, 20), [111111, 3000, 111111, 2999, 111111, 421, 111111, 420,
     111111, 76642, 111111, 76641, 111111, 30990, 111111, 30989, 111111, 58, 111111, 57]);
+});
+
+for (const reserveFirst of [false, true]) test(`egg cap applies independently to normal and bonus crates with ${reserveFirst ? 'private reservations' : 'direct confirmation'}`, t => {
+  const { database, store, rows, reopen } = fixture(t, eggFirstRandom());
+  const crates = [
+    { crateTokenId: crateId(0), tokenIds: ids(1) },
+    { crateTokenId: crateId(1), tokenIds: ids(21) },
+    { crateTokenId: '116666', tokenIds: ids(41, 31) },
+  ];
+  if (reserveFirst) {
+    store.reserve(crates.map(crate => crate.crateTokenId));
+    const reserved = rows('SELECT * FROM assignments ORDER BY crate_token_id,slot');
+    reopen().reserve(crates.map(crate => crate.crateTokenId));
+    assert.deepEqual(rows('SELECT * FROM assignments ORDER BY crate_token_id,slot'), reserved);
+  }
+  const restored = reopen();
+  restored.freeze(deployment, observation(1), crates, 1);
+  for (const crate of crates) {
+    const artworks = restored.frozen(crate.tokenIds);
+    assert.equal(artworks.length, crate.tokenIds.length);
+    assert.equal(artworks.filter(artwork => artwork.category === 'egg').length, 8);
+    assert.deepEqual(artworks.slice(0, 8).map(artwork => artwork.category), Array(8).fill('egg'));
+  }
+  conservation(database, 71);
+});
+
+test('egg cap preserves original category weights among every eligible non-egg category', t => {
+  const choices = [0, 2999, 3000, 3420, 3421, 34410, 34411, 34468];
+  const maxima: number[] = [];
+  let call = 0;
+  const { database, store } = fixture(t, maximum => {
+    maxima.push(maximum);
+    const index = call++;
+    return index % 2 ? 0 : index < 16 ? 3421 : choices[index / 2 - 8] ?? 0;
+  });
+  store.reserve([crateId(0)]);
+  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+  assert.deepEqual(store.frozen(ids(9, 8)).map(artwork => artwork.category),
+    ['3d', '3d', 'animated', 'animated', 'painting', 'painting', 'video', 'video']);
+  assert.deepEqual(maxima.filter((_, index) => index % 2 === 0), [...Array(8).fill(111111), ...Array(12).fill(34469)]);
+  assert.deepEqual(maxima.slice(16, 32), [34469, 3000, 34469, 2999, 34469, 421, 34469, 420,
+    34469, 30990, 34469, 30989, 34469, 58, 34469, 57]);
+  conservation(database, 20);
+});
+
+for (const reserveFirst of [false, true]) for (const paintings of [0, 3, 12]) {
+  test(`egg cap fills a crate with ${paintings} free non-eggs through ${reserveFirst ? 'reservation' : 'direct confirmation'}`, t => {
+    const { database, store } = fixture(t, eggFirstRandom());
+    limitFreePools(database, { egg: 40, painting: paintings });
+    if (reserveFirst) store.reserve([crateId(0)]);
+    store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+    const artworks = store.frozen(ids(1));
+    assert.equal(artworks.length, 20);
+    assert.equal(artworks.filter(artwork => artwork.category === 'painting').length, paintings);
+    assert.equal(artworks.filter(artwork => artwork.category === 'egg').length, 20 - paintings);
+    assert.equal(new Set(artworks.map(artwork => artwork.image)).size, 20);
+    assert.equal(database.prepare("SELECT available FROM pools WHERE category='painting'").get()!.available, 0);
+    if (paintings) assert.deepEqual(artworks.slice(8, 8 + paintings).map(artwork => artwork.category), Array(paintings).fill('painting'));
+  });
+}
+
+test('egg cap does not borrow privately reserved alternatives while free eggs remain', t => {
+  let call = 0;
+  const { database, store, rows } = fixture(t, maximum => call++ % 2 ? 0 : maximum - 1);
+  limitFreePools(database, { egg: 40, painting: 20 });
+  store.reserve([crateId(0)]);
+  const reserved = rows(`SELECT * FROM assignments WHERE crate_token_id='${crateId(0)}' ORDER BY slot`);
+  assert.ok(reserved.every(row => row.category === 'painting'));
+  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(1), tokenIds: ids(1) }], 1);
+  assert.equal(store.frozen(ids(1)).filter(artwork => artwork.category === 'egg').length, 20);
+  assert.deepEqual(rows(`SELECT * FROM assignments WHERE crate_token_id='${crateId(0)}' ORDER BY slot`), reserved);
+  assert.equal(database.prepare("SELECT available FROM pools WHERE category='egg'").get()!.available, 20);
+});
+
+for (const legacyEggs of [10, 20]) test(`egg cap preserves ${legacyEggs} legacy private eggs and excludes historical frozen eggs on remint`, t => {
+  const { database, rows, reopen } = fixture(t, eggFirstRandom());
+  reserveEggSlots(database, crateId(0), Array.from({ length: legacyEggs }, (_, index) => index));
+  const reserved = rows(`SELECT category,asset_id,slot FROM assignments WHERE crate_token_id='${crateId(0)}' ORDER BY slot`);
+  const restored = reopen();
+  restored.reserve([crateId(0)]);
+  assert.deepEqual(rows(`SELECT category,asset_id,slot FROM assignments WHERE crate_token_id='${crateId(0)}' AND slot<${legacyEggs} ORDER BY slot`), reserved);
+  restored.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+  assert.equal(restored.frozen(ids(1)).filter(artwork => artwork.category === 'egg').length, legacyEggs);
+  const original = rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id');
+  restored.reserve([crateId(0)]);
+  restored.freeze(deployment, observation(2), [{ crateTokenId: crateId(0), tokenIds: ids(21) }], 2);
+  assert.equal(restored.frozen(ids(21)).filter(artwork => artwork.category === 'egg').length, 8);
+  assert.deepEqual(rows('SELECT * FROM assignments WHERE CAST(token_id AS INTEGER)<=20 ORDER BY token_id'), original);
+  conservation(database, 40);
+});
+
+test('egg cap combines current frozen tokens with later private slots after releasing reused-token reservations', t => {
+  const { database, store, rows } = fixture(t, eggFirstRandom());
+  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+  const original = rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id');
+  reserveEggSlots(database, crateId(1), [0, 1, 16, 17]);
+  const reserved = rows(`SELECT asset_id FROM assignments WHERE crate_token_id='${crateId(1)}' AND slot IN (16,17) ORDER BY slot`);
+  const tokenIds = [...ids(1, 4), ...ids(21, 16)];
+  store.freeze(deployment, observation(2), [{ crateTokenId: crateId(1), tokenIds }], 2);
+  const artworks = store.frozen(tokenIds);
+  assert.equal(artworks.filter(artwork => artwork.category === 'egg').length, 8);
+  assert.deepEqual(artworks.slice(4, 6).map(artwork => artwork.category), ['egg', 'egg']);
+  assert.deepEqual(rows(`SELECT asset_id FROM assignments WHERE crate_token_id='${crateId(1)}' AND slot IN (16,17) ORDER BY slot`), reserved);
+  assert.deepEqual(rows('SELECT * FROM assignments WHERE CAST(token_id AS INTEGER)<=20 ORDER BY token_id'), original);
+  conservation(database, 36);
+});
+
+test('egg cap permits exhaustion recovery that moves a later private egg within the same crate', t => {
+  const { database, store, rows } = fixture(t, eggFirstRandom());
+  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+  const original = rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id');
+  reserveEggSlots(database, crateId(1), [0]);
+  reserveEggSlots(database, crateId(2), Array.from({ length: 9 }, (_, index) => index + 1));
+  const donor = rows(`SELECT asset_id FROM assignments WHERE crate_token_id='${crateId(1)}'`)[0].asset_id;
+  const moved = rows(`SELECT asset_id FROM assignments WHERE crate_token_id='${crateId(2)}' AND slot=9`)[0].asset_id;
+  limitFreePools(database, {});
+  const tokenIds = [...ids(21, 10), ...ids(1, 10)];
+  store.freeze(deployment, observation(2), [{ crateTokenId: crateId(2), tokenIds }], 2);
+  assert.equal(store.frozen(tokenIds).length, 20);
+  assert.equal(store.frozen(tokenIds).filter(artwork => artwork.category === 'egg').length, 18);
+  assert.equal(rows("SELECT asset_id FROM assignments WHERE token_id='21'")[0].asset_id, moved);
+  assert.equal(rows("SELECT asset_id FROM assignments WHERE token_id='30'")[0].asset_id, donor);
+  assert.deepEqual(rows('SELECT * FROM assignments WHERE CAST(token_id AS INTEGER)<=20 ORDER BY token_id'), original);
+  assert.equal(store.summary().reserved, 0);
+  assert.equal(store.summary().available, 0);
 });
 
 test('all 111111 assets remain unique through depletion, reordering, reused token IDs and reservation reclamation', { timeout: 120_000 }, t => {
