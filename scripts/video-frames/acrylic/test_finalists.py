@@ -36,14 +36,14 @@ class FinalistTests(unittest.TestCase):
             root = Path(tmp)
             output, files = self.invoke(root, "--samples")
             self.assertEqual(output, root / "output/acrylic/finalists")
-            self.assertEqual(len(set(files)), 20)
+            self.assertEqual(len(set(files)), 18)
             self.assertIn(Path("01-soft-clear-white.mp4"), files)
             self.assertTrue(all(p.name.endswith("-white.mp4") for p in files))
             self.assertTrue(all(p.parent == Path(".") and p.suffix == ".mp4" for p in files))
             filtered, knives = self.invoke(root, "--samples", "--collection", "knives",
                                            "--background", "white", "--variant", "15-high-key")
             self.assertEqual(filtered, output)
-            self.assertEqual(knives, [Path(f"{i:02}-high-key-white.mp4") for i in range(6, 11)])
+            self.assertEqual(knives, [Path(f"{i:02}-high-key-white.mp4") for i in range(5, 10)])
             self.assertEqual(run.sample_filename("3d", 904, "15-high-key"), knives[0])
 
     def test_explicit_and_local_sources_cannot_alias_other_exports(self):

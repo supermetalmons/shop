@@ -3573,8 +3573,8 @@ for (const category of ['video', '3d', 'animated'] as const) test(`artwork metad
   const f = fixture();
   try {
     const directory = category === 'video' ? 'videos' : category;
-    const metadata = { name: '1', image: `https://wip.lil.org/111k/${directory}/1.webp`,
-      animation_url: `https://wip.lil.org/111k/${directory}/1.${category === '3d' ? 'glb' : 'mp4'}`,
+    const metadata = { name: '1', image: `https://cdn.lil.org/nft/111k/${directory}/1.${category === 'video' ? 'webp' : 'png'}`,
+      animation_url: `https://cdn.lil.org/nft/111k/${directory}/1.${category === '3d' ? 'glb' : 'mp4'}`,
       aspectRatio: category === 'video' ? { width: 16, height: 9 } : category === 'animated' ? { width: 466, height: 503 } : { width: 1, height: 1 },
       category, revealStatus: 'revealed' as const };
     f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}1.json`, metadata);
@@ -4706,7 +4706,7 @@ test('relic token information and numbered metadata are available throughout the
     for (const displayId of [1, 18]) {
       const tokenId = String(117171 + displayId);
       const metadata = { name: `Relic #${displayId}`, description: '',
-        image: `https://wip.lil.org/111k/relics/${displayId}.webp`, attributes: [{ trait_type: 'type', value: 'relic' }] };
+        image: `https://cdn.lil.org/nft/111k/relics/${displayId}.webp`, attributes: [{ trait_type: 'type', value: 'relic' }] };
       f.state.tokens.set(tokenId, { kind: 6, displayId, owner: WALLET });
       f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
       const infos = await ethereumTokenInfos(readContext(f), [tokenId]);

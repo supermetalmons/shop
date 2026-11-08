@@ -17,14 +17,14 @@ OUTPUT = ROOT / "output" / "video-frames"
 MAX_MOVIE_BYTES = 15_000_000
 SOURCE_HASHES = {
     "videos": {
-        10: "2c87274bbf432a46cd4b062c9f2b5c8cbbe25c62bb91824e4f086280f372f3c4",
-        11: "259182c66bbf6f092dacffc695a734ab7c4081393617628cb3edc8f3bf7cbaef",
-        12: "3d52f686a7fbe17b2ba207ab22d53917bd3a923ccc1cda560f22d0b4748594ef",
+        10: "f223160813d5966f46ec4769dc27a92a57b0fd1096da313fabffc6976102c0f8",
+        11: "2009e41de7d992f06dc21af41adaa87e36d98e71d168c28a38a2f042b6f3bb3d",
+        12: "4c3f19dd895ca158b17e0d1e77c1d433765b7ed4ec3aee1bd6f8e8e437048fd7",
     },
     "animated": {
-        3: "395e21b5f31b4ae99dc2b2c457a9f9ec5305f63100ea5af8cf855349124d2aab",
-        27: "5a07d56aa4616f02500031d1e37b14ad7fc0af2e029b6e36e0f6798bb07c13e9",
-        102: "2c3c9d3fc8024d7934699d24dcfc1a4a222ada25a020c01e9d4f45cd742d8389",
+        3: "81b6834c02db80420633948a66c67f78f4be53702f92f769d2e3233e22b71b92",
+        27: "4fd85839fec9395ed0ee204cd98f9e0c19e59c6b568539939fee2a81120fb735",
+        102: "c11f25beb176d4933ea53024aa0e6c541c1b21d86c264b26e455ce2d958cc80d",
     },
 }
 
@@ -67,7 +67,7 @@ def prepare_sources(directory, collection, hashes, extension):
             continue
         with tempfile.TemporaryDirectory(dir=directory) as temporary:
             incoming = Path(temporary) / path.name
-            url = f"https://wip.lil.org/111k/{collection}/{path.name}"
+            url = f"https://cdn.lil.org/nft/111k/{collection}/{path.name}"
             subprocess.run(["curl", "-fsSL", "--retry", "2", "--max-time", "120",
                             "--output", incoming, url], check=True)
             if not valid_source(incoming, digest):

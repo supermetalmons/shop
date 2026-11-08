@@ -13,9 +13,10 @@ polished lacquer, and pearl glaze. Use `--ids` and `--output` to select other eg
 npm run render:eggs -- --ids 29,277 --output output/eggs/selection
 ```
 
-The runner downloads `https://wip.lil.org/111k/eggs/{id}.webp` into
-`.cache/egg-render/sources/`. For the five study IDs it checks the artwork's
-SHA-256 against `samples.json`. A cache mismatch triggers one fresh download,
+The runner downloads `https://cdn.lil.org/nft/111k/eggs/{id}.webp` into
+`.cache/egg-render/sources/cdn-lil-111k/`, separate from earlier WIP inputs.
+For the five study IDs it checks the CDN artwork's SHA-256 against `samples.json`.
+A cache mismatch triggers one fresh download,
 which must match before it replaces the cached file. `shell.py` defines the shape
 and artwork projection. `studio.py` fixes the materials, lighting, camera and
 final contrast curve shared by all four finishes.

@@ -847,8 +847,9 @@ try {
       const confirmed = await api<EthereumTransactionConfirmResponse>(ETHEREUM_API_PATHS.transactionsConfirm,
         { transactionHash: claimed.transactionHash });
       assert.equal(confirmed.status, 'confirmed');
+      const expectedMetadata = await readTestMetadata(`${metadataBaseURI}${117171 + id}.json`);
       assert.deepEqual(confirmed.items.map(item => [item.tokenId, item.kind, item.displayId, item.image]), [
-        [String(117171 + id), 'relic', id, `https://wip.lil.org/111k/relics/${id}.webp`],
+        [String(117171 + id), 'relic', id, expectedMetadata.image],
       ]);
     }
     const claimedStatus = await relicStatus();

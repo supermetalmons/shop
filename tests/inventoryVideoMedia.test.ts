@@ -13,8 +13,8 @@ const preference = '(prefers-reduced-motion: reduce)';
 const item = ethereumInventoryView({
   id: 'ethereum:11155111:1', tokenId: '1', displayId: 1, kind: 'artwork', chainId: 11155111,
   contractAddress: `0x${'11'.repeat(20)}`, owner: `0x${'22'.repeat(20)}`,
-  name: 'Artwork 1', image: 'https://wip.lil.org/111k/videos/1.webp',
-  animation_url: 'https://wip.lil.org/111k/videos/1.mp4',
+  name: 'Artwork 1', image: 'https://cdn.lil.org/nft/111k/videos/1.webp',
+  animation_url: 'https://cdn.lil.org/nft/111k/videos/1.mp4',
   category: 'video', revealStatus: 'revealed', aspectRatio: { width: 16, height: 9 },
 });
 

@@ -18,6 +18,10 @@ Render 111k painting asset IDs:
 npm run render:canvases -- --ids 1,3,7 --output output/canvas
 ```
 
+Numbered paintings accept IDs 1–30990 and use the original PNGs at
+`https://cdn.lil.org/nft/111k/paintings/{id}.png`. Their source resolution may
+differ from the earlier WIP images; the approved canvas settings stay fixed.
+
 Render local images or a directory:
 
 ```sh
@@ -44,8 +48,9 @@ The equivalent direct entrypoint is `node scripts/painting-canvas/render.mjs`.
 Use `--help` for all input and export options. Canvas geometry, materials, lighting,
 and render sampling remain fixed to the approved setup.
 
-The ten IDs used when approving this look were
+The ten historical WIP IDs used when approving this look were
 `1,3,7,79,275,336,1883,12345,64000,85556`.
+These recorded approval IDs are independent of the current CDN catalog.
 
 ## Numbered image URLs
 
@@ -111,6 +116,8 @@ Using `--verify --output` with a custom destination requires `--overwrite` to
 replace existing files, just like a normal render.
 Export options cannot be combined with `--verify`; verification always uses the
 original full-size, white-background PNG settings and approved fixture.
+The bundled source and its recorded WIP URL retain their original provenance;
+verification does not download or substitute the newer CDN artwork.
 
 ## Requirements and fixed settings
 
@@ -137,7 +144,9 @@ Each run writes `<id>.png` or `<id>.webp`, `render-report.json`, and `render.log
 Reports include source/output hashes, preset/code hashes, Blender/device details,
 export settings, and per-image timing. Record `width`/`height` describe the actual
 output; `source_width`/`source_height` describe the upright source artwork.
-Catalog downloads are cached under `.cache/painting-canvas/sources/`.
+Catalog downloads are cached under `.cache/painting-canvas/sources/cdn-lil-111k/`.
+Earlier WIP cache entries are not reused. Downloads validate PNG or WebP signatures
+before entering the cache.
 The cache and default generated output are ignored by Git.
 Image intermediates are kept beside the outputs and removed after each render.
 Cancellation stops the batch without publishing the interrupted frame, preserves

@@ -2,7 +2,7 @@
 
 ## Display
 
-Show **Relic #1–#18** using `https://wip.lil.org/111k/relics/{id}.webp`. Always show all eighteen choices; the allocated supply limits total claims, not selectable IDs. No metadata, stats, or inventory API is needed for this page.
+Show **Relic #1–#18** using `https://cdn.lil.org/nft/111k/relics/{id}.webp`. Always show all eighteen choices; the allocated supply limits total claims, not selectable IDs. No metadata, stats, or inventory API is needed for this page.
 
 ## Read availability and wallet allowance
 

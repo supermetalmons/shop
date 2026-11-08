@@ -17,7 +17,7 @@ from media import CACHE, OUTPUT, ROOT, SOURCE_HASHES, prepare_sources, publish, 
 VARIANTS = ("08-soft-clear", "15-high-key")
 PRESETS = HERE / "presets"
 PRESET_FILES = ("plate.png", "mask-0.png", "screens.json", "outline.json", "frame.blend")
-LIMITS = {"videos": 3333, "animated": 102, "3d": 1000}
+LIMITS = {"videos": 58, "animated": 421, "3d": 3000}
 SAMPLES = json.loads((HERE / "samples.json").read_text())
 SAMPLE_ORDER = [(category, str(i)) for category in ("videos", "3d") for i in SAMPLES["groups"][category]]
 
@@ -112,10 +112,10 @@ def prepare_media(collection, ids, inputs):
     if collection == "animated":
         manifest = HERE.parent / "animated-source-sha256.json"
         hashes = {int(i): digest for i, digest in json.loads(manifest.read_text()).items()}
-        directory = CACHE / "animated/sources"
+        directory = CACHE / "animated/sources/cdn-lil-111k"
     else:
         hashes = {**SOURCE_HASHES["videos"], **{int(i): h for i, h in SAMPLES["video_sha256"].items()}}
-        directory = CACHE / "sources"
+        directory = CACHE / "sources/cdn-lil-111k"
     prepare_sources(directory, collection, {i: hashes.get(i) for i in ids}, "mp4")
     return [directory / f"{i}.mp4" for i in ids]
 
@@ -160,7 +160,7 @@ def main():
     parser = argparse.ArgumentParser(description="Render framed 111k media or standalone 16:9 knife animations.")
     parser.add_argument("--collection", choices=["videos", "animated", "knives", "3d"])
     selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--samples", action="store_true", help="render the five selected videos and five selected knives")
+    selection.add_argument("--samples", action="store_true", help="render the four selected videos and five selected knives")
     selection.add_argument("--ids", help="comma-separated category-local IDs")
     selection.add_argument("--input", action="append", type=Path, default=[], help="local MP4, or a GLB for knives")
     selection.add_argument("--verify", action="store_true", help="check both saved acrylic presets against their approved hashes")

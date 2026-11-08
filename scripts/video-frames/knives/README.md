@@ -36,9 +36,9 @@ This option is restricted to knives/3d and cannot be combined with `--variant`,
 and both approved acrylic presets remain unchanged. `--verify` continues to
 check those acrylic assets.
 
-Numbered models use IDs 1–1000 and come from
-`https://wip.lil.org/111k/3d/{id}.glb`. Matching cached files in
-`.cache/video-frames/knives/sources/` also work offline. Repeat `--input`
+Numbered models use IDs 1–3000 and come from
+`https://cdn.lil.org/nft/111k/3d/{id}.glb`. Matching cached files in
+`.cache/video-frames/knives/sources/cdn-lil-111k/` also work offline. Repeat `--input`
 to render several local GLBs with distinct filename stems.
 
 ## Compatible models

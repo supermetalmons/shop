@@ -18,7 +18,7 @@ export const ETHEREUM_CONTAINER_MEDIA = {
   relic: {
     label: 'Relic',
     pluralLabel: 'Relics',
-    src: 'https://wip.lil.org/111k/relics/1.webp',
+    src: 'https://cdn.lil.org/nft/111k/relics/1.webp',
     width: 1400,
     height: 1400,
     aspectRatio: 1,

@@ -8,6 +8,7 @@ import { finished } from 'node:stream/promises';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const supportedExtensions = new Set(['.webp', '.png', '.jpg', '.jpeg']);
+const maximumPaintingId = 30_990;
 const help = `Render artwork with the approved A Light canvas setup, entirely headlessly.
 
 Usage:
@@ -19,7 +20,7 @@ Usage:
   node scripts/painting-canvas/render.mjs --verify
 
 Choose exactly one input mode: --ids, --input, --manifest, or --verify.
-  --ids         Comma-separated 111k painting asset IDs, from 1 through 85556.
+  --ids         Comma-separated 111k painting asset IDs, from 1 through ${maximumPaintingId}.
   --input       Local image or directory; may be repeated. Directories are not recursive.
   --manifest    JSON {"samples":[{"id":"name","path":"image.webp"}]}.
                 Relative image paths resolve against the manifest directory.
@@ -63,8 +64,11 @@ function fileId(path) {
     .replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 128) || 'artwork';
 }
 
-function hasWebpHeader(data) {
-  return data.length >= 16 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP';
+function hasCatalogImageHeader(data) {
+  return data.length >= 16 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP'
+    || data.length >= 33 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      && data.readUInt32BE(8) === 13 && data.toString('ascii', 12, 16) === 'IHDR'
+      && data.readUInt32BE(16) > 0 && data.readUInt32BE(20) > 0;
 }
 
 function writeReport(path, report) {
@@ -81,13 +85,13 @@ export async function prepareCatalogSources(samples) {
     while (!controller.signal.aborted && next < samples.length) {
       const sample = samples[next++];
       try {
-        if (existsSync(sample.path) && hasWebpHeader(readFileSync(sample.path))) continue;
+        if (existsSync(sample.path) && hasCatalogImageHeader(readFileSync(sample.path))) continue;
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(45000)]);
         const response = await fetch(sample.source_url, { signal });
         if (!response.ok) throw new Error(`Artwork ${sample.id} download failed: HTTP ${response.status}`);
         const data = Buffer.from(await response.arrayBuffer());
         controller.signal.throwIfAborted();
-        if (!hasWebpHeader(data)) throw new Error(`Artwork ${sample.id} did not return a WebP image`);
+        if (!hasCatalogImageHeader(data)) throw new Error(`Artwork ${sample.id} did not return a PNG or WebP image`);
         const pending = `${sample.path}.pending-${process.pid}`;
         try {
           writeFileSync(pending, data);
@@ -139,9 +143,9 @@ async function main() {
     for (const value of values.ids.split(',')) {
       if (!/^\d+$/.test(value.trim())) throw new Error(`Invalid painting ID: ${value}`);
       const id = Number(value.trim());
-      if (!Number.isSafeInteger(id) || id < 1 || id > 85556) throw new Error(`Painting ID ${id} is outside 1–85556`);
-      samples.push({ id, path: join(root, '.cache/painting-canvas/sources', `${id}.webp`),
-        source_url: `https://wip.lil.org/111k/paintings/${id}.webp` });
+      if (!Number.isSafeInteger(id) || id < 1 || id > maximumPaintingId) throw new Error(`Painting ID ${id} is outside 1–${maximumPaintingId}`);
+      samples.push({ id, path: join(root, '.cache/painting-canvas/sources/cdn-lil-111k', `${id}.png`),
+        source_url: `https://cdn.lil.org/nft/111k/paintings/${id}.png` });
     }
   } else if (values.input) {
     for (const input of values.input) {

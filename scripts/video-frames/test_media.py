@@ -1,12 +1,36 @@
+import hashlib
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from media import publish, valid_source
+from media import prepare_sources, publish, valid_source
 
 
 class MediaTests(unittest.TestCase):
+    def test_pinned_source_refresh_preserves_cache_on_bad_cdn_download(self):
+        current = b"validated CDN movie"
+        digest = hashlib.sha256(current).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cached = root / "10.mp4"
+            cached.write_bytes(b"earlier source")
+            downloads = iter([b"incomplete download", current])
+
+            def download(command, check):
+                self.assertEqual(command[-1], "https://cdn.lil.org/nft/111k/videos/10.mp4")
+                Path(command[command.index("--output") + 1]).write_bytes(next(downloads))
+
+            with patch("media.subprocess.run", side_effect=download) as fetch:
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    prepare_sources(root, "videos", {10: digest}, "mp4")
+                self.assertEqual(cached.read_bytes(), b"earlier source")
+                prepare_sources(root, "videos", {10: digest}, "mp4")
+                prepare_sources(root, "videos", {10: digest}, "mp4")
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(cached.read_bytes(), current)
+
     def test_unpinned_fast_start_video_with_truncated_media_is_invalid(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "3.mp4"

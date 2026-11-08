@@ -73,7 +73,7 @@ def verify_frameless(movie):
 
 
 def numbered_models(ids):
-    directory = CACHE / "knives" / "sources"
+    directory = CACHE / "knives" / "sources" / "cdn-lil-111k"
     records = json.loads((KNIVES / "alignments.json").read_text())
     hashes = {record["id"]: record["source_sha256"] for record in records}
     prepare_sources(directory, "3d", {i: hashes.get(i) for i in ids}, "glb")

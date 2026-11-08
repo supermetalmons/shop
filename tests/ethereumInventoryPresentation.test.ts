@@ -454,8 +454,8 @@ test('viewer hydration retains the session and source snapshot while updating it
   const view = renderHook(useEthereumInventoryPresentation, { initialProps: initial });
   act(() => { view.result.current.openViewer(original); });
   const before = view.result.current.overlay!;
-  const updated = { ...original, category: '3d' as const, animation_url: 'https://wip.lil.org/111k/3d/1.glb',
-    image: 'https://wip.lil.org/111k/3d/1.webp', aspectRatio: { width: 1, height: 1 } };
+  const updated = { ...original, category: '3d' as const, animation_url: 'https://cdn.lil.org/nft/111k/3d/1.glb',
+    image: 'https://cdn.lil.org/nft/111k/3d/1.png', aspectRatio: { width: 1, height: 1 } };
   view.rerender({ ...initial, applyArtwork: () => updated });
   assert.equal(view.result.current.overlay?.session, before.session);
   assert.equal(view.result.current.overlay?.items[0], original);

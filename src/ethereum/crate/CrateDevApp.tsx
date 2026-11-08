@@ -18,11 +18,12 @@ function fixtureItems(count: number, failure: boolean): EthereumInventoryItem[] 
     const category = (['painting', 'egg', 'video', '3d', 'animated'] as const)[index % 5];
     const directory = { painting: 'paintings', egg: 'eggs', video: 'videos', '3d': '3d', animated: 'animated' }[category];
     const assetId = Math.floor(index / 5) + 1;
+    const imageExtension = category === 'egg' || category === 'video' ? 'webp' : 'png';
     return { ...crate, id: `fixture-artwork-${index}`, tokenId: String(index + 1), displayId: index + 1,
       kind: 'artwork', name: `Artwork #${index + 1}`, category,
-      image: failure && index === count - 1 ? '/111k/intentionally-missing.webp' : `https://wip.lil.org/111k/${directory}/${assetId}.webp`,
-      ...(category === 'video' || category === 'animated' ? { animation_url: `https://wip.lil.org/111k/${directory}/${assetId}.mp4` }
-        : category === '3d' ? { animation_url: `https://wip.lil.org/111k/3d/${assetId}.glb` } : {}),
+      image: failure && index === count - 1 ? '/111k/intentionally-missing.webp' : `https://cdn.lil.org/nft/111k/${directory}/${assetId}.${imageExtension}`,
+      ...(category === 'video' || category === 'animated' ? { animation_url: `https://cdn.lil.org/nft/111k/${directory}/${assetId}.mp4` }
+        : category === '3d' ? { animation_url: `https://cdn.lil.org/nft/111k/3d/${assetId}.glb` } : {}),
     };
   });
 }

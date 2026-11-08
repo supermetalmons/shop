@@ -11,7 +11,7 @@ import sampleHashes from './samples.json' with { type: 'json' };
 
 const scripts = fileURLToPath(new URL('.', import.meta.url));
 const root = resolve(scripts, '../..');
-const sourceDir = join(root, '.cache/egg-render/sources');
+const sourceDir = join(root, '.cache/egg-render/sources/cdn-lil-111k');
 
 async function main() {
   const { values } = parseArgs({ options: {
@@ -32,7 +32,7 @@ async function main() {
   });
   if (new Set(ids).size !== ids.length) throw new Error('Duplicate egg IDs.');
   const samples = ids.map(id => ({
-    id, path: join(sourceDir, `${id}.webp`), source_url: `https://wip.lil.org/111k/eggs/${id}.webp`,
+    id, path: join(sourceDir, `${id}.webp`), source_url: `https://cdn.lil.org/nft/111k/eggs/${id}.webp`,
   }));
   await prepareEggSources(samples, sampleHashes);
 

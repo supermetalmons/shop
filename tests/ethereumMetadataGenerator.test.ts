@@ -30,7 +30,7 @@ test('the editable templates produce the approved metadata format', async () => 
   const { templates } = await loadMetadataTemplates();
   for (const example of examples) {
     assert.deepEqual(renderMetadata(example.kind, 1, templates), {
-      name: example.name, description: '', image: `${example.kind === 'relic' ? 'https://wip.lil.org/111k/' : 'https://cdn.lil.org/nft/111k/'}${example.image}`,
+      name: example.name, description: '', image: `https://cdn.lil.org/nft/111k/${example.image}`,
       attributes: [{ trait_type: 'type', value: example.type }],
       ...(example.kind === 'relic' ? {} : { aspectRatio: example.kind === 'crate' ? { width: 4, height: 3 } :
         example.kind === 'warehouse' ? { width: 3, height: 2 } : { width: 466, height: 503 } }),
@@ -49,7 +49,7 @@ test('all eighteen relics use their individual images and reject numbers outside
   const { templates } = await loadMetadataTemplates();
   for (let displayId = 1; displayId <= 18; displayId++) {
     assert.deepEqual(renderMetadata('relic', displayId, templates), {
-      name: `Relic #${displayId}`, description: '', image: `https://wip.lil.org/111k/relics/${displayId}.webp`,
+      name: `Relic #${displayId}`, description: '', image: `https://cdn.lil.org/nft/111k/relics/${displayId}.webp`,
       attributes: [{ trait_type: 'type', value: 'relic' }],
     });
   }

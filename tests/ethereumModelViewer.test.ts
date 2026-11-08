@@ -115,10 +115,10 @@ function model() {
 function flush() {
   act(() => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); });
 }
-const src = 'https://wip.lil.org/111k/3d/1.glb';
+const src = 'https://cdn.lil.org/nft/111k/3d/1.glb';
 const nft: EthereumInventoryItem = { id: 'model', chainId: 11155111, contractAddress: `0x${'11'.repeat(20)}`,
   owner: `0x${'22'.repeat(20)}`, tokenId: '1', displayId: 1, kind: 'artwork', name: '1', category: '3d',
-  image: 'https://wip.lil.org/111k/3d/1.webp', animation_url: src, aspectRatio: { width: 1, height: 1 } };
+  image: 'https://cdn.lil.org/nft/111k/3d/1.png', animation_url: src, aspectRatio: { width: 1, height: 1 } };
 
 test('model rendering fits bounds, supports keyboard orbit and zoom, and stays idle between changes', async () => {
   let ready = 0;

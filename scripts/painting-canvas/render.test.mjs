@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -119,6 +119,21 @@ test('invalid export options fail before output creation or Blender startup', t 
   ]) {
     const result = run(blender, ['--input', artwork, '--output', output, ...options]);
     assert.equal(result.status, 1, options.join(' '));
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(output), false);
+  }
+});
+
+test('painting IDs outside the current CDN catalog fail before downloading', t => {
+  const { directory, marker, blender } = workspace(t);
+  const preload = join(directory, 'no-download.mjs');
+  writeFileSync(preload, "globalThis.fetch = () => { throw new Error('Unexpected download'); };\n");
+  for (const id of ['0', '30991', '85556']) {
+    const output = join(directory, id);
+    const result = spawnSync(process.execPath, ['--import', preload, script, '--ids', id,
+      '--output', output, '--blender', blender], { encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /outside 1–30990/);
     assert.equal(existsSync(marker), false);
     assert.equal(existsSync(output), false);
   }
@@ -257,16 +272,79 @@ test('a download failure aborts in-flight requests and does not schedule the res
   assert.deepEqual(readdirSync(join(directory, 'sources')), []);
 });
 
-test('successful downloads are cached without pending files', async t => {
+test('PNG and WebP downloads are cached without pending files', async t => {
   const { directory } = workspace(t);
-  const data = readFileSync(artwork);
-  const samples = [1, 2].map(id => ({ id, path: join(directory, 'sources', `${id}.webp`),
-    source_url: `https://example.test/${id}` }));
+  const data = [readFileSync(artwork), readFileSync(approved)];
+  const samples = ['webp', 'png'].map((extension, index) => ({ id: index + 1,
+    path: join(directory, 'sources', `${index + 1}.${extension}`), source_url: `https://example.test/${index + 1}` }));
   let requests = 0;
-  t.mock.method(globalThis, 'fetch', async () => { requests++; return new Response(data); });
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests++;
+    return new Response(data[Number(new URL(url).pathname.slice(1)) - 1]);
+  });
   await prepareCatalogSources(samples);
   await prepareCatalogSources(samples);
   assert.equal(requests, 2);
-  assert.deepEqual(readdirSync(join(directory, 'sources')).sort(), ['1.webp', '2.webp']);
-  for (const sample of samples) assert.deepEqual(readFileSync(sample.path), data);
+  assert.deepEqual(readdirSync(join(directory, 'sources')).sort(), ['1.webp', '2.png']);
+  for (const [index, sample] of samples.entries()) assert.deepEqual(readFileSync(sample.path), data[index]);
+});
+
+test('invalid image signatures are never published and a bad cache is refreshed', async t => {
+  const { directory } = workspace(t);
+  const png = readFileSync(approved);
+  const badDimensions = Buffer.from(png);
+  badDimensions.writeUInt32BE(0, 16);
+  const sample = { id: 1, path: join(directory, 'source.png'), source_url: 'https://example.test/1.png' };
+  let upstream;
+  const fetch = t.mock.method(globalThis, 'fetch', async () => new Response(upstream));
+  for (const invalid of [Buffer.from('<html>not an image</html>'), png.subarray(0, 20), badDimensions]) {
+    upstream = invalid;
+    await assert.rejects(prepareCatalogSources([sample]), /did not return a PNG or WebP image/);
+    assert.equal(existsSync(sample.path), false);
+    assert.equal(readdirSync(directory).some(name => name.includes('.pending-')), false);
+  }
+  writeFileSync(sample.path, '<html>stale error response</html>');
+  upstream = png;
+  await prepareCatalogSources([sample]);
+  assert.deepEqual(readFileSync(sample.path), png);
+  assert.equal(fetch.mock.callCount(), 4);
+});
+
+test('numbered paintings download CDN PNGs without reusing the WIP cache', t => {
+  const { directory, marker, blender } = workspace(t);
+  const runnerDirectory = join(directory, 'scripts', 'painting-canvas');
+  mkdirSync(runnerDirectory, { recursive: true });
+  const runner = join(runnerDirectory, 'render.mjs');
+  copyFileSync(script, runner);
+  const sources = join(directory, '.cache', 'painting-canvas', 'sources');
+  mkdirSync(sources, { recursive: true });
+  copyFileSync(artwork, join(sources, '30990.webp'));
+  const requests = join(directory, 'requests.txt');
+  const preload = join(directory, 'fetch.mjs');
+  writeFileSync(preload, `import assert from 'node:assert/strict';
+import { appendFileSync, readFileSync } from 'node:fs';
+globalThis.fetch = async url => {
+  assert.equal(url, 'https://cdn.lil.org/nft/111k/paintings/30990.png');
+  appendFileSync(${JSON.stringify(requests)}, url + '\\n');
+  return new Response(readFileSync(${JSON.stringify(approved)}));
+};
+`);
+  writeFileSync(blender, `#!/usr/bin/env node
+const fs = require('node:fs'), path = require('node:path');
+const args = process.argv.slice(2), value = key => args[args.indexOf(key) + 1];
+fs.writeFileSync(${JSON.stringify(marker)}, fs.readFileSync(value('--manifest')));
+fs.writeFileSync(path.join(value('--output'), 'render-report.json'), JSON.stringify({status:'complete',records:[]}));
+console.log('CANVAS_READY');
+`, { mode: 0o755 });
+  for (const output of ['first', 'second']) {
+    const result = spawnSync(process.execPath, ['--import', preload, runner, '--ids', '30990',
+      '--output', join(directory, output), '--blender', blender], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const sample = JSON.parse(readFileSync(marker, 'utf8')).samples[0];
+  assert.equal(sample.path, realpathSync(join(sources, 'cdn-lil-111k', '30990.png')));
+  assert.equal(sample.source_url, 'https://cdn.lil.org/nft/111k/paintings/30990.png');
+  assert.deepEqual(readFileSync(sample.path), readFileSync(approved));
+  assert.deepEqual(readFileSync(join(sources, '30990.webp')), readFileSync(artwork));
+  assert.equal(readFileSync(requests, 'utf8').trim().split('\n').length, 1);
 });

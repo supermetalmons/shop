@@ -13,7 +13,7 @@ Knife rendering also requires macOS, Swift and Metal. The encoder reads the
 approved plates directly from the repository.
 
 ```sh
-npm run render:video-frames -- --ids 1,371
+npm run render:video-frames -- --ids 1,12
 npm run render:video-frames -- --collection animated --ids 21 --variant 08-soft-clear
 npm run render:knives -- --ids 904 --variant 15-high-key
 npm run render:video-frames -- --input /path/to/clip.mp4 --output /path/to/export
@@ -29,9 +29,16 @@ by default. See the [knife model guide](knives/README.md) for local inputs and s
 Framed rendering remains the default.
 
 Both presets render by default. `--background white` is accepted for existing
-commands. Category-local 111k IDs use the raw source cache when available.
-The [animated source checksums](animated-source-sha256.json) pin the 102 approved
-MP4 sources independently of testnet release artifacts.
+commands. Category-local 111k IDs download from `https://cdn.lil.org/nft/111k/`.
+Videos use `videos/{id}.mp4` and animated works use `animated/{id}.mp4`.
+The CDN catalog contains video IDs 1–58, animated IDs 1–421 and knife IDs 1–3000.
+Their caches are `.cache/video-frames/sources/cdn-lil-111k/` and
+`.cache/video-frames/animated/sources/cdn-lil-111k/`, respectively. The CDN
+cache directories keep earlier WIP downloads from being reused.
+The [animated source checksums](animated-source-sha256.json) pin the first 102 CDN
+MP4 sources independently of testnet release artifacts. Pinned video and
+animation sources were fully decoded before recording their checksums. Other
+numbered sources are validated before entering the cache.
 Local inputs require an explicit output directory. With no selection, videos
 use IDs 10–12, animated items use 3, 27 and 102, and knives use 1–4.
 
@@ -58,15 +65,21 @@ identifies the approved copies. To rebuild a scene for inspection, run the
 
 ## Samples and playback
 
-Use `npm run render:video-frames -- --samples` to generate 20 MP4s on demand
+Use `npm run render:video-frames -- --samples` to generate 18 MP4s on demand
 in `output/video-frames/acrylic/finalists/`. Source numbers stay stable when
 filtering by collection or preset. Each item produces a pair, such as
 `01-soft-clear-white.mp4` and `01-high-key-white.mp4`.
 
 | Sample numbers | Collection | 111k IDs in filename order |
 | --- | --- | --- |
-| 01–05 | Videos | 1, 371, 1112, 2222, 2963 |
-| 06–10 | Knives | 904, 906, 909, 942, 986 |
+| 01–04 | Videos | 8, 12, 34, 19 |
+| 05–09 | Knives | 904, 906, 909, 942, 986 |
+
+The four video samples preserve the exact bytes of the earlier WIP IDs
+1, 371, 2222 and 2963, mapped to their current CDN IDs by SHA-256. The earlier
+1112 sample has no matching CDN source and is omitted. If the default finalists
+folder contains the earlier 20-file set, select a fresh `--output` directory;
+the sample numbering has changed and existing generated files are left intact.
 
 The compositor centers the complete source image using neutral dark bars when
 needed. It checks playback timestamps, source audio, color transfer, file size,

@@ -26,18 +26,19 @@ async function mediaRoots(): Promise<URL[]> {
   return [...new Set(roots)].map(root => new URL(root));
 }
 
-function mediaUrl(value: unknown, kind: Media['kind'], roots: URL[]): Media {
+function mediaUrl(value: unknown, kind: Media['kind'], roots: URL[], legacyRelics: boolean): Media {
   if (!isEthereumMetadataImage(value) || !value.startsWith('https://') || /[\\%\u0000-\u0020\u007f]/.test(value)) throw new Error('Replacement metadata contains an unsafe media URL.');
   const url = new URL(value);
+  const legacyRelic = legacyRelics && kind === 'image' && /^https:\/\/wip\.lil\.org\/111k\/relics\/(?:[1-9]|1[0-8])\.webp$/.test(value);
   if (url.href !== value || url.username || url.password || url.port || url.search || url.hash
-    || !roots.some(root => root.origin === url.origin && url.pathname.startsWith(root.pathname))
+    || !legacyRelic && !roots.some(root => root.origin === url.origin && url.pathname.startsWith(root.pathname))
     || !(kind === 'image' ? /\.(?:png|webp|jpe?g|gif|avif|svg)$/i : /\.(?:mp4|glb)$/i).test(url.pathname)) {
     throw new Error('Replacement metadata media must use the current approved HTTPS catalog or template roots.');
   }
   return { url: url.href, kind };
 }
 
-function metadataMedia(value: unknown, roots: URL[]): Media[] {
+function metadataMedia(value: unknown, roots: URL[], legacyRelics: boolean): Media[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid public replacement metadata.');
   const row = value as Record<string, unknown>;
   if (typeof row.name !== 'string' || !row.name.trim() || row.description !== undefined && typeof row.description !== 'string'
@@ -51,7 +52,7 @@ function metadataMedia(value: unknown, roots: URL[]): Media[] {
     if (!ratio || typeof ratio !== 'object' || !Number.isSafeInteger(ratio.width) || !Number.isSafeInteger(ratio.height)
       || ratio.width! < 1 || ratio.height! < 1) throw new Error('Invalid public replacement metadata aspect ratio.');
   }
-  return [mediaUrl(row.image, 'image', roots), ...(row.animation_url === undefined ? [] : [mediaUrl(row.animation_url, 'animation', roots)])];
+  return [mediaUrl(row.image, 'image', roots, legacyRelics), ...(row.animation_url === undefined ? [] : [mediaUrl(row.animation_url, 'animation', roots, legacyRelics)])];
 }
 
 async function concurrent<T>(items: readonly T[], work: (value: T) => Promise<void>): Promise<void> {
@@ -76,6 +77,7 @@ export async function verify111kReplacementPublicSamples(scope: Scope, expected:
   const fetcher = options.fetch ?? fetch;
   const wait = options.wait ?? (async ms => { await delay(ms); });
   const roots = await mediaRoots();
+  const legacyRelics = scope.chainId === 11155111 && base === 'https://cdn.mons.shop/111k-sepolia/v16/';
   const media = new Map<string, Media>();
   const retry = async (operation: () => Promise<void>) => {
     for (let attempt = 0; ; attempt++) {
@@ -118,7 +120,7 @@ export async function verify111kReplacementPublicSamples(scope: Scope, expected:
     let value: unknown;
     try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
     catch { throw new Error(`Public replacement metadata is not valid JSON: ${url}`); }
-    for (const item of metadataMedia(value, roots)) {
+    for (const item of metadataMedia(value, roots, legacyRelics)) {
       const previous = media.get(item.url);
       if (previous && previous.kind !== item.kind) throw new Error('Replacement media is used with incompatible metadata kinds.');
       media.set(item.url, item);

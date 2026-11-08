@@ -159,7 +159,7 @@ test('registration reads an unrevealed immutable template and control arguments 
   const manifest = join(directory, 'deployment.json');
   await writeFile(manifest, JSON.stringify(registration));
   assert.equal((await loadEthereumRevealRegistration(manifest)).templateJson, templateJson);
-  await writeFile(join(directory, 'template.json'), JSON.stringify({ ...JSON.parse(templateJson), animation_url: 'https://wip.lil.org/111k/videos/1.mp4' }));
+  await writeFile(join(directory, 'template.json'), JSON.stringify({ ...JSON.parse(templateJson), animation_url: 'https://cdn.lil.org/nft/111k/videos/1.mp4' }));
   await writeFile(manifest, JSON.stringify({ ...registration, templateFile: 'template.json' }));
   await assert.rejects(loadEthereumRevealRegistration(manifest), /unrevealed/);
   assert.equal(parseEthereumRevealControlArgs(['register', '--manifest', manifest]).write, false);

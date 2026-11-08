@@ -57,6 +57,64 @@ test('a public CDN body mismatch is rejected before fetching its media', async (
   assert.deepEqual(calls, ['GET']);
 });
 
+test('frozen v16 relic images remain verifiable alongside newly published CDN relics', async () => {
+  for (const [metadataScope, root] of [
+    [{ chainId: 11155111, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v16/' }, 'https://wip.lil.org/111k/'],
+    [scope, 'https://cdn.lil.org/nft/111k/'],
+  ] as const) {
+    const bodies = Object.fromEntries(Array.from({ length: 18 }, (_, index) => [`${117172 + index}.json`, metadata(index + 1,
+      { name: `Relic #${index + 1}`, image: `${root}relics/${index + 1}.webp`, attributes: [{ trait_type: 'type', value: 'relic' }] })]));
+    const images: string[] = [];
+    await verify111kReplacementPublicSamples(metadataScope,
+      Object.fromEntries(Object.entries(bodies).map(([file, body]) => [file, sha256(body)])), {
+        fetch: (async (input, init) => {
+          const url = String(input);
+          if (init?.method === 'GET') return new Response(bodies[url.slice(metadataScope.metadataBaseUri.length)], { headers: jsonHeaders });
+          images.push(url);
+          return new Response(null, { headers: { ...mediaHeaders(url), 'Content-Type': 'image/webp' } });
+        }) as typeof fetch,
+      });
+    assert.deepEqual(images.sort(), Array.from({ length: 18 }, (_, index) => `${root}relics/${index + 1}.webp`).sort());
+  }
+});
+
+test('legacy relic compatibility stays scoped to v16 and exact image URLs', async () => {
+  const legacyScope = { chainId: 11155111, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v16/' };
+  const image = 'https://wip.lil.org/111k/relics/1.webp';
+  const cases = [
+    { metadataScope: scope, extra: { image } },
+    { metadataScope: { chainId: 1, metadataBaseUri: 'https://cdn.mons.shop/111k/v16/' }, extra: { image } },
+    ...['0.webp', '19.webp', '01.webp', '1.png', '1.webp?version=1', '1.webp#preview'].map(file => ({
+      metadataScope: legacyScope, extra: { image: `https://wip.lil.org/111k/relics/${file}` },
+    })),
+    { metadataScope: legacyScope, extra: { image: 'https://wip.lil.org/111k/paintings/1.webp' } },
+    { metadataScope: legacyScope, extra: { animation_url: image } },
+    { metadataScope: legacyScope, extra: { animation_url: 'https://wip.lil.org/111k/relics/1.mp4' } },
+  ];
+  for (const { metadataScope, extra } of cases) {
+    const body = metadata(1, extra);
+    let heads = 0;
+    await assert.rejects(verify111kReplacementPublicSamples(metadataScope, { '117172.json': sha256(body) }, {
+      fetch: (async (_input, init) => {
+        if (init?.method === 'HEAD') heads++;
+        return new Response(body, { headers: jsonHeaders });
+      }) as typeof fetch,
+    }), /approved HTTPS/);
+    assert.equal(heads, 0);
+  }
+});
+
+test('frozen v16 relic samples still require the recorded metadata hash before media requests', async () => {
+  const legacyScope = { chainId: 11155111, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v16/' };
+  const original = metadata(1, { image: 'https://wip.lil.org/111k/relics/1.webp' });
+  const changed = metadata(1, { image: 'https://wip.lil.org/111k/relics/2.webp' });
+  const calls: string[] = [];
+  await assert.rejects(verify111kReplacementPublicSamples(legacyScope, { '117172.json': sha256(original) }, {
+    fetch: (async (_input, init) => { calls.push(init!.method!); return new Response(changed, { headers: jsonHeaders }); }) as typeof fetch,
+  }), /differs from R2/);
+  assert.deepEqual(calls, ['GET']);
+});
+
 for (const failure of ['missing', 'redirect', 'html', 'empty', 'cors'] as const) {
   test(`public media ${failure} fails readiness`, async () => {
     const body = metadata(1);

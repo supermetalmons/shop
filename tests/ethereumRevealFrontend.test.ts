@@ -62,10 +62,10 @@ async function waitWithRenders(milliseconds: number) {
 function artwork(tokenId = '1', category: EthereumRevealedArtwork['category'] = 'painting'): EthereumRevealedArtwork {
   return { tokenId, crateTokenId: '111112', category, name: `Artwork ${tokenId}`,
     image: `https://wip.lil.org/reveal-test/${tokenId}.webp`, aspectRatio: { width: 1080, height: 1920 },
-    ...(category === 'animated' ? { image: `https://wip.lil.org/111k/animated/${tokenId}.webp`,
-      animation_url: `https://wip.lil.org/111k/animated/${tokenId}.mp4`, aspectRatio: { width: 466, height: 503 } } :
+    ...(category === 'animated' ? { image: `https://cdn.lil.org/nft/111k/animated/${tokenId}.png`,
+      animation_url: `https://cdn.lil.org/nft/111k/animated/${tokenId}.mp4`, aspectRatio: { width: 466, height: 503 } } :
       category === 'video' ? { animation_url: `https://wip.lil.org/reveal-test/${tokenId}.mp4` } :
-      category === '3d' ? { animation_url: `https://wip.lil.org/111k/3d/${tokenId}.glb`, aspectRatio: { width: 1, height: 1 } } : {}),
+      category === '3d' ? { animation_url: `https://cdn.lil.org/nft/111k/3d/${tokenId}.glb`, aspectRatio: { width: 1, height: 1 } } : {}),
     attributes: [{ trait_type: 'type', value: category }], observation: { transactionHash: hash, blockNumber: 101, blockHash } };
 }
 function item(tokenId = '1'): EthereumInventoryItem {
