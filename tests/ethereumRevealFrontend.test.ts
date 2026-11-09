@@ -928,6 +928,19 @@ test('published reveal metadata does not need token recovery on a fresh inventor
   assert.equal(view.result.current.applyArtwork(published).category, 'video');
 });
 
+test('refreshed revealed inventory exposes enriched traits while placeholders retain their reveal overlay', async t => {
+  const frozen = artwork('1', 'video');
+  const placeholder = item();
+  t.mock.method(ethereumRevealApi, 'tokens', async () => ({ ...responseScope, artworks: [frozen], unresolved: [], retryAfterMs: 0 }));
+  const view = harness({ items: [placeholder] });
+  await waitFor(() => assert.equal(view.result.current.applyArtwork(placeholder).image, frozen.image));
+  const attributes = [{ trait_type: 'collection block', value: 'clips' }, ...frozen.attributes!, { trait_type: 'Frames', value: 12 }];
+  const published = { ...placeholder, ...frozen, attributes, revealStatus: 'revealed' as const };
+  view.update({ items: [published] });
+  assert.deepEqual(view.result.current.applyArtwork(published).attributes, attributes);
+  assert.deepEqual(view.result.current.applyArtwork(placeholder).attributes, frozen.attributes);
+});
+
 test('published artwork remains fixed across stale inventory and later reveal responses without retaining ownership', async t => {
   const mocks = mockPending(t);
   const published = parseEthereumInventoryItem({ ...item(), ...artwork('1', 'video'),
@@ -975,12 +988,14 @@ test('published inventory media remains isolated by chain and contract', async t
 test('local inventory verifies media against its own ledger even when shared CDN metadata is revealed', async t => {
   const localConfig = resolveEthereum111kConfig({ chainId: 31337, contractAddress: contract });
   const localScope = ethereumInventoryScope(localConfig, owner)!;
-  const localItem = { ...item(), ...artwork(), chainId: 31337, id: ethereumAssetId(31337, contract, '1'), revealStatus: 'revealed' as const };
+  const localItem = { ...item(), ...artwork(), chainId: 31337, id: ethereumAssetId(31337, contract, '1'), revealStatus: 'revealed' as const,
+    attributes: [{ trait_type: 'collection block', value: 'remote' }] };
   const localArtwork = { ...artwork(), image: 'https://wip.lil.org/reveal-test/local.webp' };
   const recovery = t.mock.method(ethereumRevealApi, 'tokens', async () => ({ ...responseScope, chainId: 31337,
     artworks: [localArtwork], unresolved: [], retryAfterMs: 0 }));
   const view = harness({ config: localConfig, scope: localScope, items: [localItem] });
   await waitFor(() => assert.equal(view.result.current.applyArtwork(localItem).image, localArtwork.image));
+  assert.deepEqual(view.result.current.applyArtwork(localItem).attributes, localArtwork.attributes);
   assert.equal(recovery.mock.callCount(), 1);
 });
 

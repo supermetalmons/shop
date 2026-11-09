@@ -3,8 +3,8 @@ import { normalizeEthereumAddress } from '../../../../shared/ethereum/protocol.j
 import { ETHEREUM_REVEAL_CATALOG_VERSION, ETHEREUM_REVEAL_DEPLOYMENT_ID,
   ETHEREUM_REVEAL_DEPLOYMENTS_SQL, parseEthereumRevealDeployment,
   type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
-import type { EthereumRevealMaintenanceRequest, EthereumRevealReplacementRequest,
-  EthereumRevealRetirementRequest } from '../../../../shared/ethereum/revealMaintenance.js';
+import { isRevealArtworkTokenId, type EthereumRevealAttributeBackfillRequest, type EthereumRevealMaintenanceRequest,
+  type EthereumRevealReplacementRequest, type EthereumRevealRetirementRequest } from '../../../../shared/ethereum/revealMaintenance.js';
 
 export function parseRevealMaintenanceRequest(value: unknown): EthereumRevealMaintenanceRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid reveal maintenance request.');
@@ -23,6 +23,20 @@ export function parseRevealReplacementRequest(value: unknown): EthereumRevealRep
     row.frozenThroughMs !== undefined && (typeof row.frozenThroughMs !== 'number' || !Number.isSafeInteger(row.frozenThroughMs) ||
       row.frozenThroughMs < 0 || row.frozenThroughMs > Date.now())) throw new Error('Invalid frozen artwork cutoff.');
   return { ...request, ...(row.frozenThroughMs !== undefined ? { frozenThroughMs: row.frozenThroughMs as number } : {}) };
+}
+
+export function parseRevealAttributeBackfillRequest(value: unknown): EthereumRevealAttributeBackfillRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid reveal attribute backfill request.');
+  const row = value as Record<string, unknown>;
+  const scope = parseRevealMaintenanceRequest({ deploymentId: row.deploymentId, expectedRevision: row.expectedRevision });
+  if (Object.keys(row).some(key => !['deploymentId', 'expectedRevision', 'write', 'afterTokenId', 'retryBlocked', 'recheckTokenId'].includes(key)) ||
+    row.retryBlocked !== undefined && typeof row.retryBlocked !== 'boolean' || typeof row.write !== 'boolean' ||
+    row.afterTokenId !== null && !isRevealArtworkTokenId(row.afterTokenId) ||
+    row.recheckTokenId !== undefined && (!isRevealArtworkTokenId(row.recheckTokenId) || row.retryBlocked || row.afterTokenId !== null)) {
+    throw new Error('Invalid reveal attribute backfill request.');
+  }
+  return { ...scope, afterTokenId: row.afterTokenId, write: row.write, ...(row.retryBlocked === true && { retryBlocked: true }),
+    ...(row.recheckTokenId !== undefined && { recheckTokenId: row.recheckTokenId }) };
 }
 
 export function parseRevealRetirementRequest(value: unknown): EthereumRevealRetirementRequest {
@@ -65,20 +79,30 @@ export async function requireRetiredRevealDeployment(env: Env, value: unknown,
   return deployment;
 }
 
-export async function requireRevealReplacement(env: Env, value: unknown): Promise<EthereumRevealDeployment> {
-  const request = parseRevealReplacementRequest(value);
+async function requireActiveRevealScope(env: Env, request: EthereumRevealMaintenanceRequest, operation: 'Replacement' | 'Backfill') {
   const deployment = await readRevealMaintenanceDeployment(env, request.deploymentId);
   const control = parseEthereum111kControl(await env.COMMERCE_DB.prepare(ETHEREUM_111K_CONTROL_SQL).first());
   if (deployment.revision !== request.expectedRevision || deployment.chainId !== 11155111 || deployment.dropId !== '111k_devnet' ||
-    deployment.state !== 'active' || deployment.retiredAtMs != null || deployment.lastError !== null ||
+    deployment.state !== 'active' || deployment.retiredAtMs != null ||
     deployment.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION ||
     deployment.provisionedAtMs === null || Number(env.ETHEREUM_111K_CHAIN_ID) !== deployment.chainId ||
     normalizeEthereumAddress(env.ETHEREUM_111K_CONTRACT_ADDRESS) !== deployment.contractAddress ||
     env.ETHEREUM_111K_METADATA_BASE_URI !== deployment.metadataBaseUri || Number(env.ETHEREUM_111K_DEPLOYMENT_BLOCK) !== deployment.deploymentBlock ||
-    control.paused || control.resetGuardId !== null || control.chainId !== deployment.chainId || control.contractAddress !== deployment.contractAddress) {
-    throw new Error('Replacement reveal deployment must be active and match the live API and commerce scope.');
+    control.resetGuardId !== null || control.chainId !== deployment.chainId || control.contractAddress !== deployment.contractAddress) {
+    throw new Error(`${operation} reveal deployment must be active and match the live API and commerce scope.`);
+  }
+  if (operation === 'Replacement' && (deployment.lastError !== null || control.paused)) {
+    throw new Error('Replacement reveal deployment must be healthy with active commerce.');
   }
   return deployment;
+}
+
+export function requireRevealReplacement(env: Env, value: unknown): Promise<EthereumRevealDeployment> {
+  return requireActiveRevealScope(env, parseRevealReplacementRequest(value), 'Replacement');
+}
+
+export function requireAttributeBackfillDeployment(env: Env, request: EthereumRevealAttributeBackfillRequest): Promise<EthereumRevealDeployment> {
+  return requireActiveRevealScope(env, request, 'Backfill');
 }
 
 export async function requireRevealRetirementPair(env: Env, value: unknown) {

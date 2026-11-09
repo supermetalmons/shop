@@ -8,6 +8,7 @@ import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 import type { EthereumRevealResult, EthereumRevealTokensResponse, EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
 import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumRevealStore, type RevealSql, type RevealReceiptClaim, type RevealScanClaim } from '../src/ethereumRevealStore.ts';
+import { backfillRevealAttributePage } from '../src/ethereumRevealAttributeBackfill.ts';
 import type { RevealVerificationResult, RevealVerificationScope, RevealVerificationWork } from '../src/ethereumRevealVerification.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
@@ -68,6 +69,7 @@ type InternalObject = {
   validateReceiptWork(scope: RevealVerificationScope, work: RevealVerificationWork): Promise<boolean>;
   recordReceiptPresence(scope: RevealVerificationScope, work: RevealVerificationWork): Promise<boolean>;
   runPublications(deployment: EthereumRevealDeployment): Promise<void>;
+  runEnrichment(deployment: EthereumRevealDeployment): Promise<void>;
   receipts: Map<string, { active: boolean; promise: Promise<void> }>;
   scans: Map<string, { claim: RevealScanClaim; promise: Promise<void> }>;
 };
@@ -90,15 +92,15 @@ async function abortable<T>(work: Promise<T>, signal?: AbortSignal | null): Prom
   } finally { if (abort) signal.removeEventListener('abort', abort); }
 }
 
-function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
+function fixture(t: TestContext, catalogVersion = deployment.catalogVersion, registered = deployment) {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys=ON');
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', 'utf8'));
   database.prepare(`INSERT INTO ethereum_reveal_deployments(deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,
     deployment_block,catalog_version,template_json,template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
-    VALUES(?,?,?,?,?,?,?,?,?,'active',3,1,3,2,3)`).run(deployment.deploymentId, deployment.dropId, deployment.chainId, CONTRACT,
-    deployment.metadataBaseUri, deployment.deploymentBlock, catalogVersion, templateJson, deployment.templateSha256);
+    VALUES(?,?,?,?,?,?,?,?,?,'active',3,1,3,2,3)`).run(registered.deploymentId, registered.dropId, registered.chainId, CONTRACT,
+    registered.metadataBaseUri, registered.deploymentBlock, catalogVersion, templateJson, registered.templateSha256);
   const sql: RevealSql = { exec(query, ...bindings) {
     const statement = database.prepare(query);
     const parameters = bindings.map(entry => entry instanceof ArrayBuffer ? new Uint8Array(entry) : entry);
@@ -115,6 +117,8 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
       media.reads++;
       const body = published.get(key);
       return body === undefined ? null : { size: Buffer.byteLength(body), text: async () => body,
+        httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' },
+        arrayBuffer: async () => new TextEncoder().encode(body).buffer,
         etag: createHash('sha256').update(body).digest('hex') };
     },
     async put(key: string, body: string, options?: { onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string } }) {
@@ -129,7 +133,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
     },
   };
   const context = {
-    id: { toString: () => `${deployment.chainId}:${CONTRACT}`, equals: (other: DurableObjectId) => other.toString() === `${deployment.chainId}:${CONTRACT}` },
+    id: { toString: () => `${registered.chainId}:${CONTRACT}`, equals: (other: DurableObjectId) => other.toString() === `${registered.chainId}:${CONTRACT}` },
     storage: { sql, transactionSync<T>(action: () => T) {
       database.exec('BEGIN');
       try { const result = action(); database.exec('COMMIT'); return result; }
@@ -142,12 +146,20 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
   };
   let current: InternalObject;
   const verifiers = new Map<string, InstanceType<typeof EthereumRevealVerifierObject>>();
-  let publisher: InstanceType<typeof EthereumRevealPublisherObject>;
-  const env = { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545',
+  const publishers = new Map<string, InstanceType<typeof EthereumRevealPublisherObject>>();
+  const env = { ETHEREUM_111K_CHAIN_ID: String(registered.chainId), ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545',
     ALCHEMY_MI_NOTE_API_KEY: '', ETHEREUM_REVEAL_METADATA: metadata, OPS_DB: d1Database(database),
     ETHEREUM_REVEAL: { getByName: () => current,
       idFromName: (name: string) => ({ toString: () => name }) },
-    ETHEREUM_REVEAL_PUBLISHER: { getByName: () => publisher,
+    ETHEREUM_REVEAL_PUBLISHER: { getByName(name: string) {
+      let publisher = publishers.get(name);
+      if (!publisher) {
+        const id = { toString: () => name, equals: (other: DurableObjectId) => other.toString() === name };
+        publisher = new EthereumRevealPublisherObject({ ...context, id } as unknown as DurableObjectState, env as unknown as Env);
+        publishers.set(name, publisher);
+      }
+      return publisher;
+    },
       idFromName: (name: string) => ({ toString: () => name }) },
     ETHEREUM_REVEAL_VERIFIER: { getByName(name: string) {
       let verifier = verifiers.get(name);
@@ -158,15 +170,14 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
       return verifier;
     } },
   };
-  publisher = new EthereumRevealPublisherObject(context as unknown as DurableObjectState, env as unknown as Env);
   const make = () => {
     current = new EthereumRevealObject(context as unknown as DurableObjectState, env as unknown as Env) as unknown as InternalObject;
-    if (catalogVersion === deployment.catalogVersion) current.configure(deployment);
+    if (catalogVersion === registered.catalogVersion) current.configure(registered);
     return current;
   };
   const object = make();
-  const store = catalogVersion === deployment.catalogVersion ? object.store : new EthereumRevealStore(sql, context.storage.transactionSync);
-  store.configure({ ...deployment, catalogVersion });
+  const store = catalogVersion === registered.catalogVersion ? object.store : new EthereumRevealStore(sql, context.storage.transactionSync);
+  store.configure({ ...registered, catalogVersion });
   while (!store.initializeChunk()) {}
   while (!store.migrationReady()) store.migrateChunk(Date.now(), 128);
   const state = { head: 1000, minted: 0, receipts: new Map<string, Receipt | Promise<Receipt | null>>(),
@@ -177,7 +188,8 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
     logGate: null as Promise<void> | null, runningScans: 0, peakScans: 0,
   };
   t.mock.method(console, 'log', () => {});
-  t.mock.method(globalThis, 'fetch', async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  t.mock.method(globalThis, 'fetch', async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(url).startsWith('https://cdn.lil.org/nft/111k/')) return Response.json({ 'collection block': 'Fixture', attributes: [] });
     const { id, method, params } = JSON.parse(String(init?.body));
     state.calls.push(method);
     if (state.failedMethods.has(method)) throw new Error('RPC unavailable');
@@ -198,7 +210,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
     } else if (method === 'eth_getCode') result = params[1].blockHash === hash(99) ? '0x' : '0x60006000';
     else if (method === 'eth_call') {
       const data = String(params[0].data);
-      if (data.slice(0, 10) === encodeCall('baseURI()', [], [])) result = encodeAbi(['string'], [deployment.metadataBaseUri]);
+      if (data.slice(0, 10) === encodeCall('baseURI()', [], [])) result = encodeAbi(['string'], [registered.metadataBaseUri]);
       else if (data.slice(0, 10) === encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, [], [])) {
         const [tokenIds] = decodeReturn(['uint256[]'], `0x${data.slice(10)}`) as [bigint[]];
         result = encodeAbi(['(uint8,uint256,address)[]'], [tokenIds.map(tokenId => [2, tokenId - 111111n, OWNER])]);
@@ -234,12 +246,12 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion) {
     assert.equal(tasks.size, 0, 'Background work must yield with a durable retry instead of spinning.');
   };
   t.after(async () => { await settle(); database.close(); });
-  const freeze = (transactionHash: string, first = 1, crateTokenId = '111112', all = true) => store.freeze(deployment,
+  const freeze = (transactionHash: string, first = 1, crateTokenId = '111112', all = true) => store.freeze(registered,
     { transactionHash, blockNumber: 101, blockHash: hash(101) }, [{ crateTokenId, tokenIds: ids(first) }], Date.now(), all);
   return { object, store, database, sql, env, state, published, metadata, media, firstBatch: firstBatch.promise,
     pending, freeze, settle, reopen: make, getAlarm: () => alarm, setAlarm: context.storage.setAlarm,
     storage: context.storage, tasks,
-    verifier: (transactionHash: string) => env.ETHEREUM_REVEAL_VERIFIER.getByName(`${deployment.chainId}:${CONTRACT}:${transactionHash}`),
+    verifier: (transactionHash: string) => env.ETHEREUM_REVEAL_VERIFIER.getByName(`${registered.chainId}:${CONTRACT}:${transactionHash}`),
     rows: (query: string) => database.prepare(query).all() };
 }
 
@@ -292,6 +304,185 @@ test('new transaction and token work require admission without chain or storage 
   assert.deepEqual(f.state.calls, []);
   assert.equal(f.media.reads, 0);
   assert.equal(f.rows('SELECT COUNT(*) AS count FROM receipt_work')[0].count, 0);
+});
+
+test('slow trait reads consume only enrichment slots while later reveals and base media publish', async t => {
+  const f = fixture(t);
+  const original = globalThis.fetch;
+  const release = Promise.withResolvers<void>();
+  let started = 0;
+  t.mock.method(globalThis, 'fetch', async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (!String(url).startsWith('https://cdn.lil.org/nft/111k/')) return original(url, init);
+    started++;
+    await abortable(release.promise, init?.signal);
+    return Response.json({ 'collection block': 'First block', attributes: [{ trait_type: 'Count', value: 7 }] });
+  });
+  f.freeze(hash(1));
+  await f.object.runPublications(deployment);
+  assert.equal(f.published.size, 20);
+  assert.equal(started, 0);
+  const run = f.object.alarm();
+  try {
+    await waitFor(() => started === 4);
+    f.freeze(hash(2), 21, '111113');
+    await completesWithin(f.object.runPublications(deployment), 1000);
+    const response = value(await f.object.revealTokens(deployment, ['21']));
+    assert.equal(response.artworks.length, 1);
+    assert.equal(f.published.size, 40);
+    assert.equal(started, 4);
+  } finally { release.resolve(); await run; await f.settle(); }
+  const finished = f.rows("SELECT token_id,target_json FROM reveal_enrichment WHERE status='published'");
+  assert.equal(finished.length, f.rows("SELECT token_id FROM assignments WHERE token_id IS NOT NULL AND category!='egg'").length);
+  for (const row of finished) {
+    assert.equal(f.published.get(`111k-sepolia/${row.token_id}.json`), row.target_json);
+    assert.equal(JSON.parse(String(row.target_json)).attributes[0].value, 'First block');
+  }
+});
+
+test('a slow source occupies one slot while its peers keep enriching other tokens', async t => {
+  const f = fixture(t);
+  const release = Promise.withResolvers<void>();
+  let active = 0, maximum = 0, started = 0;
+  t.mock.method(globalThis, 'fetch', async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    started++;
+    maximum = Math.max(maximum, ++active);
+    try {
+      if (started === 1) await abortable(release.promise, init?.signal);
+      return Response.json({ 'collection block': 'Fixture', attributes: [] });
+    } finally { active--; }
+  });
+  f.freeze(hash(1));
+  await f.object.runPublications(deployment);
+  const total = () => f.rows('SELECT token_id FROM reveal_enrichment').length;
+  const published = () => f.rows("SELECT token_id FROM reveal_enrichment WHERE status='published'").length;
+  const first = f.object.runEnrichment(deployment);
+  try {
+    assert.ok(total() > 4);
+    await waitFor(() => published() === total() - 1);
+    assert.equal(started, total());
+    f.freeze(hash(2), 21, '111113');
+    await f.object.runPublications(deployment);
+    await completesWithin(f.object.runEnrichment(deployment), 1000);
+    assert.equal(published(), total() - 1);
+    assert.equal(started, total());
+    assert.ok(maximum <= 4);
+  } finally { release.resolve(); await first; await f.settle(); }
+  assert.equal(published(), total());
+});
+
+test('an enrichment turn drains beyond one batch and bounds additional dispatch', async t => {
+  const f = fixture(t);
+  for (let crate = 0; crate < 7; crate++) {
+    f.freeze(hash(crate + 1), 20 * crate + 1, String(111112 + crate));
+  }
+  await f.object.runPublications(deployment);
+  const total = f.rows('SELECT token_id FROM reveal_enrichment').length;
+  assert.ok(total > 64);
+  const completed = () => f.rows("SELECT token_id FROM reveal_enrichment WHERE status='published'").length;
+  await f.object.runEnrichment(deployment);
+  assert.ok(completed() > 4 && completed() <= 64);
+  await f.object.runEnrichment(deployment);
+  assert.equal(completed(), total);
+});
+
+for (const fault of ['wrong digest', 'changed acknowledged target', 'missing acknowledged target', 'missing conflict target'] as const) {
+  test(`enrichment rejects ${fault} before R2 and can resume with restored staged bytes`, async t => {
+    const f = fixture(t);
+    f.freeze(hash(1));
+    const base = f.rows("SELECT token_id,metadata_json FROM assignments WHERE category!='egg' LIMIT 1")[0];
+    const tokenId = String(base.token_id);
+    const key = `111k-sepolia/${tokenId}.json`;
+    const approved = JSON.stringify({ ...JSON.parse(String(base.metadata_json)), attributes: [{ trait_type: 'collection block', value: 'A' }] });
+    const digest = (body: string) => createHash('sha256').update(body).digest('hex');
+    f.store.publicationComplete(tokenId);
+    f.published.set(key, String(base.metadata_json));
+    const setTarget = f.database.prepare("UPDATE reveal_enrichment SET target_json=?,target_sha256=? WHERE token_id=?");
+    const retry = () => backfillRevealAttributePage(f.sql, { afterTokenId: null, write: true, retryBlocked: true });
+    if (fault === 'wrong digest') {
+      setTarget.run(approved, digest('other'), tokenId);
+    } else {
+      if (fault !== 'missing conflict target') {
+        setTarget.run(approved, digest(approved), tokenId);
+        f.database.exec("UPDATE reveal_enrichment SET status='published'");
+        assert.equal(backfillRevealAttributePage(f.sql, { afterTokenId: null, write: true, recheckTokenId: tokenId }).requeued, 1);
+      }
+      const changed = '{"attributes":[]}';
+      if (fault === 'changed acknowledged target') setTarget.run(changed, digest(changed), tokenId);
+      else setTarget.run(null, null, tokenId);
+      f.database.exec("UPDATE reveal_enrichment SET status='conflict',last_error='conflict'");
+      assert.equal(retry().requeued, 1);
+    }
+    const source = t.mock.method(globalThis, 'fetch', async () => Response.json({ 'collection block': 'new', attributes: [] }));
+    await f.object.runEnrichment(deployment);
+    assert.equal(f.rows('SELECT status FROM reveal_enrichment')[0].status, 'conflict');
+    assert.equal(f.published.get(key), base.metadata_json);
+    assert.equal(f.media.reads, 0);
+    assert.equal(f.media.writes, 0);
+    setTarget.run(approved, digest(approved), tokenId);
+    assert.equal(retry().requeued, 1);
+    await f.object.runEnrichment(deployment);
+    assert.equal(f.rows('SELECT status FROM reveal_enrichment')[0].status, 'published');
+    assert.equal(f.published.get(key), approved);
+    assert.equal(source.mock.callCount(), 0);
+  });
+}
+
+test('restarting after an unacknowledged enriched write uses staged bytes without refetching or duplicating traits', async t => {
+  const f = fixture(t);
+  f.freeze(hash(1));
+  const base = f.rows("SELECT token_id,metadata_json FROM assignments WHERE category!='egg' LIMIT 1")[0];
+  const key = `111k-sepolia/${base.token_id}.json`;
+  f.published.set(key, String(base.metadata_json));
+  f.store.publicationComplete(String(base.token_id));
+  let fetches = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    fetches++;
+    return Response.json({ 'collection block': 'A', attributes: [{ trait_type: 'Size', value: 2 }] });
+  });
+  t.mock.method(f.store.enrichment, 'complete', () => { throw new Error('simulated interrupted acknowledgement'); });
+  await assert.rejects(f.object.runEnrichment(deployment), /interrupted acknowledgement/);
+  const staged = f.rows('SELECT status,target_json,target_sha256 FROM reveal_enrichment')[0];
+  assert.equal(staged.status, 'pending');
+  assert.equal(staged.target_sha256, createHash('sha256').update(String(staged.target_json)).digest('hex'));
+  assert.equal(f.published.get(key), staged.target_json);
+  f.database.exec('UPDATE reveal_enrichment SET next_check_ms=0');
+  await f.reopen().runEnrichment(deployment);
+  assert.equal(f.rows('SELECT status FROM reveal_enrichment')[0].status, 'published');
+  assert.equal(f.published.get(key), staged.target_json);
+  assert.equal(fetches, 1);
+  assert.equal(f.media.writes, 1);
+});
+
+test('a source read completed after retirement cannot stage bytes, publish, or acknowledge its claim', async t => {
+  const sepolia = { ...deployment, chainId: 11155111 };
+  const f = fixture(t, sepolia.catalogVersion, sepolia);
+  f.freeze(hash(1));
+  const base = f.rows("SELECT token_id,metadata_json FROM assignments WHERE category!='egg' LIMIT 1")[0];
+  const key = `111k-sepolia/${base.token_id}.json`;
+  f.published.set(key, String(base.metadata_json));
+  f.store.publicationComplete(String(base.token_id));
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  t.mock.method(globalThis, 'fetch', async () => {
+    entered.resolve();
+    await release.promise;
+    return Response.json({ 'collection block': 'A', attributes: [] });
+  });
+  const work = f.object.runEnrichment(sepolia);
+  try {
+    await completesWithin(entered.promise);
+    const canonical = f.rows('SELECT * FROM ethereum_reveal_deployments')[0];
+    t.mock.method(f.env.OPS_DB, 'prepare', () => {
+      const statement = { bind: () => statement, first: async () => ({ ...canonical, state: 'paused',
+        retired_at_ms: Date.now(), replacement_deployment_id: 'replacement' }) };
+      return statement as unknown as D1PreparedStatement;
+    });
+  } finally { release.resolve(); await work; }
+  const job = f.rows('SELECT status,target_json,claim_id FROM reveal_enrichment')[0];
+  assert.equal(job.status, 'pending');
+  assert.equal(job.target_json, null);
+  assert.ok(job.claim_id);
+  assert.equal(f.published.get(key), base.metadata_json);
+  assert.equal(f.media.writes, 0);
 });
 
 for (const kind of ['transaction', 'tokens'] as const) {
@@ -995,7 +1186,10 @@ test('verifier throttling pauses dispatch without losing watches or delaying fro
   const f = fixture(t);
   f.freeze(hash(10));
   const provider = globalThis.fetch;
+  let rpcCalls = 0;
   const throttle = t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (!init?.body) return provider(input, init);
+    rpcCalls++;
     const { method } = JSON.parse(String(init?.body));
     if (method === 'eth_getTransactionReceipt') return new Response('throttled', { status: 429, headers: { 'Retry-After': '5' } });
     return provider(input, init);
@@ -1008,12 +1202,12 @@ test('verifier throttling pauses dispatch without losing watches or delaying fro
   assert.equal(f.store.dispatchState(now).pauseUntilMs, now + 5_000);
   assert.equal(f.store.knownTransaction(hash(1)), true);
   assert.equal(f.published.size, 20);
-  const calls = throttle.mock.callCount();
+  const calls = rpcCalls;
   assert.equal(value(await f.object.revealTransaction(deployment, hash(10))).status, 'revealed');
   now += 4_999;
   await f.object.watchdog(deployment);
   await f.settle();
-  assert.equal(throttle.mock.callCount(), calls);
+  assert.equal(rpcCalls, calls);
   throttle.mock.restore();
   f.state.receipts.set(hash(1), receipt(hash(1), 1000, [{ crateTokenId: '111113', first: 21 }]));
   now++;

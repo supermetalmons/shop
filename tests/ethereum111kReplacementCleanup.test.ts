@@ -10,7 +10,7 @@ import { execute111kReplacementCleanup, run111kReplacementCleanup, parseReplacem
   type ReplacementCleanupDependencies, type ReplacementCleanupJournal, type ReplacementDeployment, type ReplacementRelease,
   type ReplacementSnapshot } from '../scripts/shared/ethereum111kReplacementCleanup.ts';
 import { deleteCleanupPrefix as deleteScopedPrefix, type CleanupObject, type CleanupStorage } from '../scripts/shared/ethereum111kCleanupStorage.ts';
-import { verify111kReplacementPublicSamples } from '../scripts/shared/ethereum111kReplacementPublicVerification.ts';
+import { PublicMetadataHashMismatch, read111kReplacementPublicSamples } from '../scripts/shared/ethereum111kReplacementPublicVerification.ts';
 import type { EthereumRevealReplacementInspection, EthereumRevealRetirementResult } from '../shared/ethereum/revealMaintenance.ts';
 
 const CDN = 'https://cdn.mons.shop/';
@@ -23,6 +23,7 @@ const NEW_PREFIX = `${ROOT}v99/`;
 const CURRENT_KEYS = FILES.map(file => `${NEW_PREFIX}${file}`);
 const HASH = 'a'.repeat(64);
 const ETAG = `"${'b'.repeat(32)}"`;
+const mediaAvailable = async () => {};
 const object = (key: string): CleanupObject => ({ key, bytes: 1, etag: ETAG });
 const release = (): ReplacementRelease => ({ releaseDirectory: '/private/new-release', manifestSha256: HASH,
   chainId: 11155111, deploymentId: 'v99', contractAddress: NEW_ADDRESS, previousContract: OLD_ADDRESS,
@@ -85,6 +86,7 @@ function fixture() {
       calls.push('public-samples');
       assert.equal(deployment.contractAddress, NEW_ADDRESS);
       assert.equal(sampleHashes['87.json'], baseline.frozenSamples[0]?.metadataSha256);
+      return mediaAvailable;
     },
     storage: async policy => { assert.equal(policy.mayDeletePrefix(NEW_PREFIX), false); assert.equal(policy.mayDeletePrefix(OLD_PREFIX), true); return storage; },
     maintenance: async work => work({
@@ -347,6 +349,46 @@ test('lost retirement responses replay the original revision idempotently', asyn
   assert.equal(f.transitions(), 1);
 });
 
+for (const timing of ['writer drain', 'post-drain CDN verification']) test(`a replacement conflict during ${timing} blocks purge`, async () => {
+  const f = fixture();
+  if (timing === 'writer drain') {
+    const wait = f.deps.wait;
+    f.deps.wait = async ms => { await wait(ms); f.replacementUnhealthy(); };
+  } else {
+    const publicSamples = f.deps.publicSamples;
+    f.deps.publicSamples = async (...args) => {
+      const media = await publicSamples(...args);
+      if (f.journal()?.retirement) f.replacementUnhealthy();
+      return media;
+    };
+  }
+  await assert.rejects(f.run(), /deployment is unhealthy/);
+  assert.ok(f.journal().retirement);
+  assert.equal(f.calls.includes('purge'), false);
+  assert.equal(f.objects.size, 2);
+});
+
+for (const resumed of [false, true]) test(`recheck sampled bytes immediately before deleting old metadata (resume=${resumed})`, async () => {
+  const f = fixture();
+  if (resumed) {
+    f.partialDeleteOnce();
+    await assert.rejects(f.run(), /incomplete/);
+    const publicSamples = f.deps.publicSamples;
+    f.deps.publicSamples = async (deployment, hashes) => {
+      const media = await publicSamples(deployment, hashes);
+      f.corruptNew();
+      return media;
+    };
+  } else {
+    const save = f.deps.saveJournal;
+    f.deps.saveJournal = async (path, journal) => { await save(path, journal); if (journal.deletionInventory) f.corruptNew(); };
+  }
+  const remaining = f.objects.size;
+  await assert.rejects(f.run(), /not published correctly/);
+  assert.ok(f.journal().purge);
+  assert.equal(f.objects.size, remaining);
+});
+
 test('finishing old publications may grow discovery metadata before retirement is sealed, including after a lost reply', async () => {
   const f = fixture(); f.failRetirementOnce();
   await assert.rejects(f.run(), /retirement response lost/);
@@ -522,8 +564,9 @@ for (const timing of ['verification', 'after-checkpoint'] as const) {
     if (timing === 'verification') {
       const verify = f.deps.publicSamples;
       f.deps.publicSamples = async (deployment, samples) => {
-        await verify(deployment, samples);
+        const media = await verify(deployment, samples);
         f.snapshot.commerceRevision += 2;
+        return media;
       };
     } else {
       const save = f.deps.saveJournal;
@@ -572,8 +615,9 @@ for (const timing of ['first-public-audit', 'final-public-audit', 'final-artifac
       const publicSamples = f.deps.publicSamples;
       let audits = 0;
       f.deps.publicSamples = async (deployment, samples) => {
-        await publicSamples(deployment, samples);
-        if (++audits === (timing === 'first-public-audit' ? 2 : 3)) f.snapshot.newDeployment.revision += 2;
+        const media = await publicSamples(deployment, samples);
+        if (f.journal().metadataDeletedAtMs && ++audits === (timing === 'first-public-audit' ? 1 : 2)) f.snapshot.newDeployment.revision += 2;
+        return media;
       };
     }
     await assert.rejects(f.run(), /revisions changed/);
@@ -609,6 +653,30 @@ test('post-cleanup recreation fails the scheduler observation audit', async () =
   assert.equal(f.journal().artifacts.report?.complete, true);
 });
 
+for (const timing of ['final media check', 'final artifact check']) test(`a replacement conflict during the ${timing} blocks completion`, async () => {
+  const f = fixture();
+  if (timing === 'final media check') {
+    const publicSamples = f.deps.publicSamples;
+    f.deps.publicSamples = async (...args) => {
+      const media = await publicSamples(...args);
+      return async () => {
+        await media();
+        if (f.journal()?.artifacts.report?.complete) f.replacementUnhealthy();
+      };
+    };
+  } else {
+    const artifacts = f.deps.artifacts;
+    f.deps.artifacts = async context => {
+      const result = await artifacts(context);
+      if (!context.write && f.journal()?.artifacts.report?.complete) f.replacementUnhealthy();
+      return result;
+    };
+  }
+  await assert.rejects(f.run(), /deployment is unhealthy/);
+  assert.equal(f.journal().artifacts.report?.complete, true);
+  assert.equal(f.journal().complete, undefined);
+});
+
 test('local artifact recreation during the observation interval blocks final completion', async () => {
   const f = fixture(); f.recreateArtifacts();
   await assert.rejects(f.run(), /local artifacts were recreated/);
@@ -629,6 +697,149 @@ test('new frozen metadata or ledger changes stop resume before old deletion', as
   assert.equal(g.calls.includes('retire'), false);
 });
 
+test('resume accepts a staged revision published between R2 and CDN reads, preserves the original proof and rejects a downgrade', async () => {
+  const f = fixture();
+  await f.run(false);
+  const original = structuredClone(f.journal());
+  const file = '87.json', key = `${NEW_PREFIX}${file}`, target = 'frozen metadata with appended attributes', sha = sha256(target);
+  let body = key, upgraded = false;
+  const openStorage = f.deps.storage;
+  f.deps.storage = async policy => {
+    const storage = await openStorage(policy);
+    return { ...storage, get: objectKey => objectKey === key ? Promise.resolve(Buffer.from(body)) : storage.get(objectKey) };
+  };
+  f.deps.publicSamples = async (_deployment, hashes) => {
+    if (!upgraded) {
+      upgraded = true;
+      f.baseline.frozenSamples = [{ ...f.baseline.frozenSamples[0], enrichment: { version: 'v0', sha256: sha, published: false } }];
+      body = target;
+      throw new PublicMetadataHashMismatch({ [file]: sha });
+    }
+    assert.equal(hashes[file], sha);
+    return mediaAvailable;
+  };
+  f.failRetirementOnce();
+  await assert.rejects(f.run(), /retirement response lost/);
+  assert.deepEqual(f.journal().replacementBaseline, original.replacementBaseline);
+  assert.deepEqual(f.journal().metadataSamples, original.metadataSamples);
+  assert.equal(f.journal().enrichmentCheckpoint?.metadataSamples[file], sha);
+  body = key;
+  await assert.rejects(f.run(), /samples changed/);
+  assert.equal(f.calls.includes('delete'), false);
+  body = target;
+  f.baseline.frozenSamples[0].enrichment!.published = true;
+  assert.equal((await f.run()).complete, true);
+  assert.equal(f.journal().enrichmentCheckpoint?.frozenSamples[0].enrichment?.published, true);
+  f.baseline.frozenSamples[0].enrichment!.published = false;
+  await assert.rejects(f.run(), /baseline changed/);
+});
+
+test('a published enrichment requires the recorded target before the first journal is created', async () => {
+  const f = fixture();
+  f.baseline.frozenSamples[0].enrichment = { version: 'v0', sha256: sha256('recorded revision'), published: true };
+  await assert.rejects(f.run(false), /frozen metadata/);
+  assert.equal(f.journal(), null);
+});
+
+test('every enrichment observed in a concurrent CDN check fences the following R2 read', async () => {
+  const f = fixture();
+  const files = ['87.json', '88.json'];
+  f.baseline.frozenArtworks = files.length;
+  f.baseline.frozenSamples = files.map(file => ({ tokenId: file.split('.')[0], metadataSha256: sha256(NEW_PREFIX + file),
+    enrichment: { version: 'v0', sha256: sha256('enriched ' + file), published: false } }));
+  let verifiedCdn = false;
+  const storage = f.deps.storage;
+  f.deps.storage = async policy => {
+    const db = await storage(policy);
+    return { ...db, get: async key => verifiedCdn && key === NEW_PREFIX + files[0] ? Buffer.from('enriched ' + files[0]) : db.get(key) };
+  };
+  f.deps.publicSamples = async (scope, hashes) => {
+    assert.equal(verifiedCdn, false, 'The second token downgraded before the next public check.');
+    verifiedCdn = true;
+    return read111kReplacementPublicSamples(scope, Object.fromEntries(files.map(file => [file, hashes[file]])), {
+      fetch: async url => new Response('enriched ' + String(url).split('/').at(-1), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' },
+      }),
+    });
+  };
+  await assert.rejects(f.run(), /samples changed/);
+  assert.equal(verifiedCdn, true);
+  assert.equal(f.calls.includes('retire'), false);
+});
+
+for (const downgraded of [true, false]) test(`a sample refresh rechecks a published sibling before retirement (downgrade=${downgraded})`, async () => {
+  const f = fixture();
+  const keyA = `${NEW_PREFIX}87.json`, keyB = `${NEW_PREFIX}88.json`;
+  const targetA = 'enriched A', targetB = 'enriched B';
+  const a = { tokenId: '87', metadataSha256: sha256(keyA),
+    enrichment: { version: 'v0' as const, sha256: sha256(targetA), published: false } };
+  const b = { tokenId: '88', metadataSha256: sha256(keyB) };
+  f.baseline.frozenArtworks = 2;
+  f.baseline.frozenSamples = [a, b];
+  let readsA = 0;
+  const storage = f.deps.storage;
+  f.deps.storage = async policy => {
+    const db = await storage(policy);
+    return { ...db, async get(key) {
+      if (key === keyA) return Buffer.from(++readsA === 1 || downgraded ? keyA : targetA);
+      if (key === keyB) {
+        f.baseline.frozenSamples = [
+          { ...a, enrichment: { ...a.enrichment, published: true } },
+          { ...b, enrichment: { version: 'v0', sha256: sha256(targetB), published: true } },
+        ];
+        return Buffer.from(targetB);
+      }
+      return db.get(key);
+    } };
+  };
+  f.deps.publicSamples = async (_scope, hashes) => {
+    assert.equal(hashes['87.json'], sha256(downgraded ? keyA : targetA));
+    assert.equal(hashes['88.json'], sha256(targetB));
+    return mediaAvailable;
+  };
+  if (downgraded) {
+    await assert.rejects(f.run(), /not published correctly for token 87/);
+    assert.equal(f.journal(), null);
+    assert.equal(f.calls.includes('retire'), false);
+    assert.equal(f.calls.includes('delete'), false);
+  } else {
+    assert.equal((await f.run()).complete, true);
+    assert.equal(f.journal().metadataSamples['87.json'], sha256(targetA));
+  }
+  assert.ok(readsA >= 2);
+});
+
+for (const rpcFailure of [false, true]) test(`resume checkpoints verified enrichment before later fallible checks (RPC failure=${rpcFailure})`, async () => {
+  const f = fixture();
+  await f.run(false);
+  const original = structuredClone(f.journal());
+  const file = '87.json', key = `${NEW_PREFIX}${file}`, target = 'staged attributes visible on R2 and CDN';
+  f.baseline.frozenSamples = [{ ...f.baseline.frozenSamples[0], enrichment: { version: 'v0', sha256: sha256(target), published: false } }];
+  let body = target;
+  const storage = f.deps.storage;
+  f.deps.storage = async policy => {
+    const db = await storage(policy);
+    return { ...db, get: objectKey => objectKey === key ? Promise.resolve(Buffer.from(body)) : db.get(objectKey) };
+  };
+  f.deps.publicSamples = async (_scope, hashes) => { assert.equal(hashes[file], sha256(body)); return mediaAvailable; };
+  if (rpcFailure) {
+    const verifyChain = f.deps.verifyChain;
+    let reads = 0;
+    f.deps.verifyChain = async (...args) => {
+      if (++reads === 2) throw new Error('Temporary chain read failure');
+      return verifyChain(...args);
+    };
+    await assert.rejects(f.run(), /Temporary chain read failure/);
+  } else assert.equal((await f.run(false)).planned, true);
+  assert.deepEqual(f.journal().metadataSamples, original.metadataSamples);
+  assert.deepEqual(f.journal().replacementBaseline, original.replacementBaseline);
+  assert.equal(f.journal().enrichmentCheckpoint?.metadataSamples[file], sha256(target));
+  body = key;
+  await assert.rejects(f.run(), /samples changed/);
+  assert.equal(f.calls.includes('retire'), false);
+  assert.equal(f.calls.includes('delete'), false);
+});
+
 test('missing replacement metadata and old open-chain state fail before retirement', async () => {
   const f = fixture(); f.omitCurrent('117189.json');
   await assert.rejects(f.run(), /coverage/);
@@ -638,6 +849,86 @@ test('missing replacement metadata and old open-chain state fail before retireme
   assert.equal(g.calls.includes('artifacts-plan'), false);
 });
 
+for (const resumed of [false, true]) for (const sibling of ['unavailable', 'advanced'] as const)
+  test(`an individually verified enrichment survives a sibling GET ${sibling} (resume=${resumed})`, async () => {
+    const f = fixture();
+    const base = JSON.stringify({ name: 'Sample', image: 'https://cdn.lil.org/nft/111k/paintings/1.png', attributes: [] });
+    const target = JSON.stringify({ ...JSON.parse(base), attributes: [{ trait_type: 'collection block', value: 'Sample' }] });
+    const sha = sha256(target);
+    let artwork = base, fail = false;
+    const storage = f.deps.storage;
+    const fileName = (key: string) => key.split('/').at(-1)!;
+    const body = (file: string) => file === '1.json' || file === '3.json' ? artwork : base;
+    f.deps.storage = async policy => ({ ...await storage(policy), get: async key => Buffer.from(body(fileName(key))) });
+    f.baseline.frozenArtworks = 3;
+    f.baseline.frozenSamples = ['1', '2', '3'].map(tokenId => ({ tokenId, metadataSha256: sha256(base) }));
+    const save = f.deps.saveJournal;
+    let writing = false;
+    f.deps.saveJournal = async (...args) => {
+      assert.equal(writing, false);
+      writing = true;
+      await new Promise(done => setImmediate(done));
+      await save(...args);
+      writing = false;
+    };
+    f.deps.publicSamples = async (deployment, hashes, options) => read111kReplacementPublicSamples(deployment, hashes, {
+      ...options, wait: async () => {}, fetch: async (url, init) => {
+        const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+        if (init?.method === 'HEAD') return new Response(null, { headers: { ...headers, 'Content-Type': 'image/png' } });
+        const file = fileName(String(url));
+        if (fail && file === '3000018.json' && sibling === 'unavailable') return new Response(null, { status: 503 });
+        if (fail && file === '2.json' && sibling === 'advanced') return new Response(target, { headers });
+        return new Response(body(file), { headers });
+      },
+    });
+    if (resumed) await f.run(false);
+    for (const sample of f.baseline.frozenSamples) sample.enrichment = { version: 'v0', sha256: sha, published: false };
+    artwork = target;
+    fail = true;
+    await assert.rejects(f.run(), sibling === 'unavailable' ? /GET returned HTTP 503/ : /samples changed/);
+    const progress = f.journal()?.enrichmentCheckpoint ?? f.journal();
+    assert.equal(progress?.metadataSamples['1.json'], sha);
+    assert.equal(progress?.metadataSamples['3.json'], sha);
+    fail = false;
+    artwork = base;
+    await assert.rejects(f.run(), /metadata samples changed/);
+    assert.equal(f.calls.includes('retire'), false);
+    assert.equal(f.objects.size, 2);
+    artwork = target;
+    assert.equal((await f.run()).complete, true);
+  });
+
+for (const resumed of [false, true]) test(`confirmed metadata survives a failed media check (resume=${resumed})`, async () => {
+  const f = fixture(), file = '87.json';
+  const metadata = { name: '87', image: 'https://cdn.lil.org/nft/111k/eggs/87.png', attributes: [] };
+  const base = JSON.stringify(metadata), target = JSON.stringify({ ...metadata, attributes: [{ trait_type: 'type', value: 'painting' }] });
+  const targetSha = sha256(target);
+  let current = base;
+  const body = (key: string) => key.endsWith('/' + file) ? current : base;
+  const storage = f.deps.storage;
+  f.deps.storage = async policy => ({ ...await storage(policy), get: async key => Buffer.from(body(key)) });
+  f.deps.publicSamples = (deployment, hashes) => read111kReplacementPublicSamples(deployment, hashes, {
+    wait: async () => {},
+    fetch: async (url, init) => {
+      if (init?.method === 'GET') return new Response(body(String(url)), { headers: {
+        'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
+      if (current === base) return new Response(null, { headers: { 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' } });
+      const proof = f.journal().enrichmentCheckpoint ?? f.journal();
+      assert.equal(proof.metadataSamples[file], targetSha);
+      return new Response(null, { status: 503 });
+    },
+  });
+  f.baseline.frozenSamples = [{ tokenId: '87', metadataSha256: sha256(base) }];
+  if (resumed) await f.run(false);
+  f.baseline.frozenSamples[0].enrichment = { version: 'v0', sha256: targetSha, published: false };
+  current = target;
+  await assert.rejects(f.run(), /HEAD returned HTTP 503/);
+  current = base;
+  await assert.rejects(f.run(), /metadata samples changed/);
+  assert.equal(f.calls.includes('retire'), false);
+  assert.equal(f.objects.size, 2);
+});
+
 for (const failure of ['cdn', 'media'] as const) {
   test(`a failed public replacement ${failure} check blocks retirement`, async () => {
     const f = fixture();
@@ -645,7 +936,7 @@ for (const failure of ['cdn', 'media'] as const) {
     f.baseline.frozenSamples[0].metadataSha256 = sha256(body);
     const createStorage = f.deps.storage;
     f.deps.storage = async policy => ({ ...await createStorage(policy), get: async () => Buffer.from(body) });
-    f.deps.publicSamples = (deployment, hashes) => verify111kReplacementPublicSamples(deployment, hashes, {
+    f.deps.publicSamples = (deployment, hashes) => read111kReplacementPublicSamples(deployment, hashes, {
       fetch: (async (_input, init) => {
         if (failure === 'cdn' || init?.method === 'HEAD') return new Response(null, { status: 404 });
         return new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
@@ -658,6 +949,21 @@ for (const failure of ['cdn', 'media'] as const) {
     assert.equal(f.calls.includes('artifacts-write'), false);
   });
 }
+
+for (const boundary of ['purge', 'delete']) test(`an unavailable replacement image blocks ${boundary}`, async () => {
+  const f = fixture(), read = f.deps.publicSamples;
+  f.deps.publicSamples = async (...args) => {
+    await read(...args);
+    return async () => {
+      const checkpoint = f.journal();
+      if (boundary === 'purge' ? checkpoint.retirement : checkpoint.purge) throw new Error('Image unavailable.');
+    };
+  };
+  await assert.rejects(f.run(), /Image unavailable/);
+  assert.equal(f.calls.includes('purge'), boundary === 'delete');
+  assert.equal(f.calls.includes('delete'), false);
+  assert.equal(f.objects.size, 2);
+});
 
 test('wrong scopes, current-target deletion and control drift are rejected', async () => {
   for (const mutation of [(value: ReplacementSnapshot) => { value.oldDeployment.contractAddress = NEW_ADDRESS; },

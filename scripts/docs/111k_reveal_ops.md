@@ -99,7 +99,7 @@ Generic publishers renew OPS leases through bounded asynchronous queries. Every 
 
 Confirmed assignments and metadata bytes are frozen before publication. The `ETHEREUM_REVEAL_PUBLISHER` object performs R2 reads and conditional writes independently of the allocation ledger and receipt verifier. It accepts batches of at most eight and coalesces matching in-flight token writes. The coordinator claims up to 64 jobs at a time, executes them in batches of eight, and commits completed outcomes together in the ledger; undispatched claims are released. The larger claim window does not increase the eight-operation R2 concurrency limit.
 
-All batches in a claim window share a 25-second deadline within the coordinator's 60-second publication lease; an expired read cannot start a new write. If R2 I/O stalls until the deadline, the stateless publisher resets itself so abandoned requests cannot accumulate alongside later batches. The allocation ledger remains intact, and its durable outbox retries through a fresh publisher instance. A remotely completed conditional write is reconciled against the same frozen bytes on retry. Bounded batches continue through alarms without requiring a browser to remain open. An existing object must match either the approved placeholder or the exact frozen metadata; other content is quarantined as a conflict.
+All batches in a claim window share a 25-second deadline within the coordinator's 60-second publication lease; an expired read cannot start a new write. If R2 I/O stalls until the deadline, the stateless publisher resets itself so abandoned requests cannot accumulate alongside later batches. The allocation ledger remains intact, and its durable outbox retries through a fresh publisher instance. A remotely completed conditional write is reconciled against the same frozen bytes on retry. Bounded batches continue through alarms without requiring a browser to remain open. During this initial media publication, an existing object must match the approved placeholder or the exact frozen base metadata. Unexpected bytes are quarantined as a conflict.
 
 Each publication run drains successive claim windows until five seconds or 512 jobs have been claimed, then schedules any remaining work. While active receipt inspections are running, publication batch starts are spaced by at least 100 ms to prioritize artwork availability while continuing metadata updates. Full publication throughput resumes when active inspections finish. There is no alarm delay between batches within a run. The ledger's one-time recovery repair rechecks previously admitted work and preserves frozen assignments and publication records; it reconstructs crate scope only from retained transaction-associated evidence.
 
@@ -128,6 +128,25 @@ Provider throttling pauses new receipt and discovery dispatch for the cooldown p
 Migration advances at most 128 evidence associations per turn, with frozen reads and publication available throughout. The watchdog's `ethereum_reveal_recovery_health` logs report migration progress, active/background due work, oldest due age, and watch-capacity usage at most once per minute per object.
 
 The lifecycle upgrade uses the same resumable migration path to restore lost admission reservations, recompute receipt deadlines, and remove obsolete token interests in batches of at most 128 rows. Already accepted unresolved watches count toward capacity immediately, including before their rows are repaired. If corrected usage exceeds 10,000, existing work stays admitted and new admission waits for capacity. Crates without receipt candidates wait on their discovery schedule. An unminted result closes token-only receipt interests; independent transaction and crate recovery continue. Polling respects the two-second discovery retry floor, while saved split ranges remain eligible for immediate continuation.
+
+## Artwork attributes and Sepolia backfill
+
+A successful media publication enrolls each painting, video, 3D model and animated work in the deployment’s durable attribute queue. Alarms dispatch up to four concurrent enrichment jobs. A dedicated publisher fetches `{family}/json/v0/{assetId}.json` from the 111k media CDN using the assigned asset ID. As each job finishes, its slot can take another token while slower requests continue. The first attribute is the source’s `collection block`, followed by the frozen base attributes and the source attributes in their original order. Eggs keep their base traits.
+
+The coordinator saves the enriched JSON and SHA-256 before a dedicated publisher conditionally replaces the exact base object in R2. A retry verifies the stored JSON content type, unencoded body and no-store cache policy on matching enriched bytes. It conditionally repairs incorrect headers before completing the job. Transient source and storage errors retry with backoff. The watchdog’s `enrichment` counts and `ethereum_reveal_enrichment_error` events distinguish source failures, invalid input, write failures and object conflicts. Retirement drains both publisher instances. Replacement verification preserves the frozen assignment fingerprint and checks the recorded enriched checksum when a sample advances.
+
+For previously published artwork, run a read-only count against the intended active Sepolia deployment. The result includes its revision and counts for missing jobs, invalid trait sources and R2 conflicts. The `conflictRechecks` count tracks previously conflicted objects awaiting confirmation in R2, including rechecks delayed by storage errors.
+
+```sh
+target_manifest='<active-sepolia-reveal-manifest.json>'
+npm run ethereum-reveal-control -- backfill-attributes --manifest "$target_manifest"
+```
+
+To enqueue the missing jobs, add `--expected-revision <revision>` and `--write` to that command. Each page uses the same queue as new media publications. First attempts for new reveals take priority over historical jobs. Rerunning after an interruption skips existing jobs. The command reports enrollment counts. Publication continues in the background.
+
+After correcting a trait source or restoring a conflicted R2 object to the exact frozen base or staged enriched bytes, add `--retry-blocked` to preview recovery for the same deployment. Add `--expected-revision <revision>` and `--write` to requeue its eligible `invalid` and `conflict` jobs. The report’s `requeued` count covers those transitions. Invalid jobs without a staged target fetch the source again. Before retrying a staged write, the worker verifies the bytes against their stored SHA-256 and any prior acknowledgment. Inconsistent ledger evidence leaves the job in conflict and R2 untouched. Their conflict continues to block replacement verification through requeue and transient storage errors until the publisher confirms the exact enriched bytes. An object that still differs from both authorized versions is flagged again.
+
+If an already enriched token needs repair, use `--recheck-token <tokenId>` on the same backfill command. The preview reports whether that token has an acknowledged v0 target. With the expected revision and `--write`, the publisher checks the recorded bytes and headers, restores the exact target over the frozen base, and flags foreign or missing content as a conflict. A write-mode checksum failure records a conflict and reports `conflict: 1`, preserving the stored target and acknowledgment for investigation. Replacement cleanup waits for confirmation. This single-token operation retains the original acknowledgment and checksum.
 
 ## Pausing and replacement
 
@@ -217,12 +236,16 @@ npm run finalize:ethereum111k -- --release-directory "$release_dir" --write
 `cleanup-finalization.json` and `cleanup-artifacts.json` live beside the frozen
 release manifest. Keep them when resuming. The finalizer verifies complete new
 metadata key coverage and a stable cutoff of frozen artworks, so newer reveals
-can continue normally. Old publication may finish while paused; its deletion
+can continue normally. A known R2 conflict on any enriched artwork blocks
+retirement. Planning and write runs checkpoint each sampled artwork’s enrichment
+when its R2 and CDN bytes match, even if another request fails.
+Old publication may finish while paused; its deletion
 inventory is sealed only after retirement, draining, and verified storage purge.
 Each deletion window is acknowledged before advancing, and a fresh listing must
 prove the old prefix empty. The finalizer then verifies the replacement, prunes
 owned old artifacts, and repeats the retirement checks after five minutes.
-It reports `complete: true` only after every stage succeeds.
+After the final artifact check, it rechecks the replacement ledger and sampled
+metadata before recording `complete: true`.
 
 After retirement commits, `finalize` can recover from a pause/resume of the same
 replacement. It revalidates the replacement and frozen artwork before recording

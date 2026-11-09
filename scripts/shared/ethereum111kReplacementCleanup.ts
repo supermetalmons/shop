@@ -20,7 +20,7 @@ import { createCleanupStorage, deleteCleanupPrefix, inventoryCleanupPrefix, type
   type CleanupStorage, type MetadataCleanupPolicy } from './ethereum111kCleanupStorage.ts';
 import { withEthereumRevealMaintenance, type EthereumRevealMaintenanceTransport } from './ethereumRevealMaintenance.ts';
 import { cleanup111kReplacementArtifacts } from './ethereum111kReplacementArtifacts.ts';
-import { verify111kReplacementPublicSamples } from './ethereum111kReplacementPublicVerification.ts';
+import { PublicMetadataHashMismatch, read111kReplacementPublicSamples } from './ethereum111kReplacementPublicVerification.ts';
 
 const CHAIN = 11155111;
 const ROOT = '111k-sepolia/';
@@ -53,6 +53,8 @@ export type ReplacementCleanupJournal = {
   oldDeployment: ReplacementDeployment; newDeployment: ReplacementDeployment; commerceRevision: number;
   model: { objectCount: number; keysSha256: string }; oldInventory: CleanupInventory;
   replacementBaseline: EthereumRevealReplacementInspection; metadataSamples: Record<string, string>;
+  initialSamplesPending?: true;
+  enrichmentCheckpoint?: { frozenSamples: EthereumRevealReplacementInspection['frozenSamples']; metadataSamples: Record<string, string> };
   artifacts: { planPath: string; planSha256: string; report?: ReplacementArtifactReport };
   retirement?: EthereumRevealRetirementResult; purge?: EthereumRevealPurgeResult;
   recovery?: { replacementRevision: number; commerceRevision: number; retiredAtMs: number; verifiedAtMs: number };
@@ -66,7 +68,8 @@ export type ReplacementCleanupDependencies = {
   storage(policy: MetadataCleanupPolicy): Promise<CleanupStorage>;
   maintenance<T>(run: (transport: EthereumRevealMaintenanceTransport) => Promise<T>): Promise<T>;
   artifacts(context: ReplacementArtifactContext): Promise<ReplacementArtifactReport>;
-  publicSamples(deployment: ReplacementDeployment, samples: Readonly<Record<string, string>>): Promise<void>;
+  publicSamples(deployment: ReplacementDeployment, samples: Readonly<Record<string, string>>,
+    options?: { onVerified: (file: string) => Promise<void> }): Promise<() => Promise<void>>;
   oldLease(deployment: ReplacementDeployment, write: boolean, requireAbsent?: boolean): Promise<void>;
   loadJournal(path: string): Promise<unknown | null>;
   saveJournal(path: string, journal: ReplacementCleanupJournal): Promise<void>;
@@ -163,7 +166,9 @@ function validateBaseline(scope: ReplacementDeployment, value: EthereumRevealRep
     || !integer(value.frozenArtworks) || value.frozenArtworks > ARTWORK_IDS.size || !SHA.test(value.frozenMetadataSha256)
     || !Array.isArray(value.frozenSamples) || value.frozenSamples.length !== Math.min(8, value.frozenArtworks)
     || new Set(value.frozenSamples.map(sample => sample.tokenId)).size !== value.frozenSamples.length
-    || value.frozenSamples.some(sample => !ARTWORK_IDS.has(sample.tokenId) || !SHA.test(sample.metadataSha256))) {
+    || value.frozenSamples.some(sample => !ARTWORK_IDS.has(sample.tokenId) || !SHA.test(sample.metadataSha256)
+      || sample.enrichment !== undefined && (!sample.enrichment || sample.enrichment.version !== 'v0'
+        || !SHA.test(sample.enrichment.sha256) || typeof sample.enrichment.published !== 'boolean'))) {
     throw new Error('Replacement readiness or frozen artwork fingerprint was not verified.');
   }
 }
@@ -203,6 +208,20 @@ function validateJournal(value: unknown, release: ReplacementRelease): Replaceme
   }
   validateReplacementSnapshot(release, journal);
   validateBaseline(journal.newDeployment, journal.replacementBaseline);
+  if (journal.initialSamplesPending !== undefined && (journal.initialSamplesPending !== true || journal.enrichmentCheckpoint
+    || journal.retirement || journal.recovery || !Object.keys(journal.metadataSamples).length
+    || Object.entries(journal.metadataSamples).some(([file, hash]) =>
+      !journal.replacementBaseline.frozenSamples.some(s => file === `${s.tokenId}.json` && hash === s.enrichment?.sha256)))) {
+    throw new Error('Invalid partial replacement metadata evidence.');
+  }
+  if (journal.enrichmentCheckpoint) {
+    const current = journalBaseline(journal);
+    validateBaseline(journal.newDeployment, current);
+    unchangedBaseline(current, journal.replacementBaseline);
+    const observed = journal.enrichmentCheckpoint.metadataSamples;
+    if (!record(observed) || Object.values(observed).some(hash => !SHA.test(hash))) throw new Error('Invalid enrichment sample checkpoint.');
+    requireSampleProgress(current, observed, journal.metadataSamples);
+  }
   validateArtifacts({ ...journal.artifacts, complete: false });
   if (journal.retirement) validateRetirement(journal, journal.retirement);
   if (journal.recovery && (!integer(journal.recovery.replacementRevision, journal.newDeployment.revision)
@@ -246,7 +265,32 @@ function unchangedSnapshot(release: ReplacementRelease, snapshot: ReplacementSna
 }
 
 function unchangedBaseline(current: EthereumRevealReplacementInspection, original: EthereumRevealReplacementInspection): void {
-  if (!equal({ ...current, revision: original.revision }, original)) throw new Error('Replacement frozen artwork baseline changed.');
+  if (!equal({ ...current, revision: original.revision, frozenSamples: original.frozenSamples }, original)
+    || current.frozenSamples.length !== original.frozenSamples.length || current.frozenSamples.some((sample, i) => {
+      const before = original.frozenSamples[i];
+      return sample.tokenId !== before.tokenId || sample.metadataSha256 !== before.metadataSha256 || before.enrichment &&
+        (sample.enrichment?.sha256 !== before.enrichment.sha256 || sample.enrichment.version !== before.enrichment.version
+          || before.enrichment.published && !sample.enrichment.published);
+    })) throw new Error('Replacement frozen artwork baseline changed.');
+}
+
+function journalBaseline(journal: ReplacementCleanupJournal) {
+  return { ...journal.replacementBaseline, frozenSamples: journal.enrichmentCheckpoint?.frozenSamples ?? journal.replacementBaseline.frozenSamples };
+}
+
+function requireSampleProgress(baseline: EthereumRevealReplacementInspection, hashes: Record<string, string>, floor: Record<string, string>) {
+  if (!equal(Object.keys(hashes).sort(), Object.keys(floor).sort()) || Object.entries(floor).some(([file, old]) => {
+    if (hashes[file] === old) return false;
+    const sample = baseline.frozenSamples.find(item => `${item.tokenId}.json` === file);
+    return !sample || old !== sample.metadataSha256 || hashes[file] !== sample.enrichment?.sha256;
+  })) throw new Error('Replacement metadata samples changed.');
+}
+
+function checkpointSamples(journal: ReplacementCleanupJournal, { baseline, hashes }: { baseline: EthereumRevealReplacementInspection; hashes: Record<string, string> }) {
+  const current = journal.enrichmentCheckpoint ?? journal;
+  if (equal(baseline.frozenSamples, journalBaseline(journal).frozenSamples) && equal(hashes, current.metadataSamples)) return false;
+  journal.enrichmentCheckpoint = { frozenSamples: baseline.frozenSamples, metadataSamples: hashes };
+  return true;
 }
 
 function sampleFiles(baseline: EthereumRevealReplacementInspection): string[] {
@@ -268,10 +312,47 @@ async function samples(storage: CleanupStorage, current: ReplacementDeployment,
     const batch = await Promise.all(files.slice(index, index + 4).map(async file => [file, sha256(await storage.get(`${prefix(current)}${file}`))] as const));
     for (const [file, hash] of batch) result[file] = hash;
   }
-  for (const sample of baseline.frozenSamples) if (result[`${sample.tokenId}.json`] !== sample.metadataSha256) {
-    throw new Error(`Replacement frozen metadata is not published correctly for token ${sample.tokenId}.`);
-  }
   return result;
+}
+
+async function verifiedSamples(deps: ReplacementCleanupDependencies, storage: CleanupStorage, deployment: ReplacementDeployment,
+  initial: EthereumRevealReplacementInspection, journal: ReplacementCleanupJournal | undefined,
+  confirm: (baseline: EthereumRevealReplacementInspection, file: string, hash: string) => Promise<void>) {
+  let baseline = initial;
+  let floor = (journal?.enrichmentCheckpoint ?? journal)?.metadataSamples;
+  async function refresh() {
+    const current = await inspectNew(deps, deployment, baseline.frozenThroughMs);
+    unchangedBaseline(current, baseline);
+    baseline = current;
+  }
+  for (;;) {
+    const hashes = await samples(storage, deployment, baseline);
+    const unmatched = baseline.frozenSamples.filter(sample => {
+      const observed = hashes[`${sample.tokenId}.json`];
+      return observed !== sample.enrichment?.sha256 && (sample.enrichment?.published || observed !== sample.metadataSha256);
+    });
+    if (unmatched.length && unmatched.every(sample => !sample.enrichment)) await refresh();
+    for (const { tokenId } of unmatched) {
+      const sample = baseline.frozenSamples.find(item => item.tokenId === tokenId)!;
+      if (hashes[`${tokenId}.json`] !== sample.enrichment?.sha256) {
+        throw new Error(`Replacement frozen metadata is not published correctly for token ${tokenId}.`);
+      }
+    }
+    if (floor) requireSampleProgress(baseline, hashes, journal?.initialSamplesPending ? { ...hashes, ...floor } : floor);
+    if (unmatched.length) {
+      floor = hashes;
+      continue;
+    }
+    try {
+      const verifyMedia = await deps.publicSamples(deployment, hashes, { onVerified: file => confirm(baseline, file, hashes[file]) });
+      return { baseline, hashes, verifyMedia };
+    } catch (error) {
+      if (!(error instanceof PublicMetadataHashMismatch)) throw error;
+      if (baseline.frozenSamples.some(sample => !sample.enrichment && Object.hasOwn(error.observed, `${sample.tokenId}.json`))) await refresh();
+      floor = { ...hashes, ...error.observed };
+      requireSampleProgress(baseline, floor, hashes);
+    }
+  }
 }
 
 async function inspectNew(deps: ReplacementCleanupDependencies, current: ReplacementDeployment,
@@ -336,7 +417,6 @@ export async function execute111kReplacementCleanup(options: ReplacementCleanupO
     throw new Error('The bound local artifact cleanup plan changed.');
   }
   const baseline = await inspectNew(deps, initial.newDeployment, journal?.replacementBaseline.frozenThroughMs);
-  if (journal) unchangedBaseline(baseline, journal.replacementBaseline);
   const policy = replacementCleanupPolicy(initial);
   const storage = await deps.storage(policy);
   try {
@@ -344,32 +424,70 @@ export async function execute111kReplacementCleanup(options: ReplacementCleanupO
       inventoryCleanupPrefix(policy, storage, prefix(initial.oldDeployment), deps.progress),
       inventoryCleanupPrefix(policy, storage, prefix(initial.newDeployment), deps.progress),
     ]);
-    const metadataSamples = await samples(storage, initial.newDeployment, baseline);
-    await deps.publicSamples(initial.newDeployment, metadataSamples);
     if (journal) {
-      if (!equal(metadataSamples, journal.metadataSamples)) throw new Error('Replacement metadata samples changed.');
       const sealed = journal.deletionInventory;
       if (sealed && (oldInventory.objectCount > sealed.objectCount || oldInventory.totalBytes > sealed.totalBytes
           || !journal.deletionStartedAtMs && !equal(oldInventory, sealed))
         || journal.metadataDeletedAtMs && oldInventory.objectCount !== 0) throw new Error('Retired metadata inventory changed or was recreated after sealing.');
-    } else {
-      const old = { ...initial.oldDeployment };
-      if (old.retiredAtMs != null) { old.revision--; old.retiredAtMs = null; old.replacementDeploymentId = null; }
-      journal = { version: 2, kind: '111k-replacement-cleanup', createdAtMs: deps.now(), release, oldDeployment: old,
-        newDeployment: initial.newDeployment, commerceRevision: initial.commerceRevision,
-        model: { objectCount: EXPECTED_FILES.size, keysSha256: MODEL_HASH }, oldInventory,
-        replacementBaseline: baseline, metadataSamples,
-        artifacts: { planPath: artifactPlan.planPath, planSha256: artifactPlan.planSha256 } };
-      await deps.saveJournal(journalPath, journal);
     }
     const save = () => deps.saveJournal(journalPath, journal!);
+    const saveSamples = async (frozen: EthereumRevealReplacementInspection, hashes: Record<string, string>, partial: boolean) => {
+      if (!journal) {
+        const old = { ...initial.oldDeployment };
+        if (old.retiredAtMs != null) { old.revision--; old.retiredAtMs = null; old.replacementDeploymentId = null; }
+        journal = { version: 2, kind: '111k-replacement-cleanup', createdAtMs: deps.now(), release, oldDeployment: old,
+          newDeployment: initial.newDeployment, commerceRevision: initial.commerceRevision,
+          model: { objectCount: EXPECTED_FILES.size, keysSha256: MODEL_HASH }, oldInventory,
+          replacementBaseline: frozen, metadataSamples: hashes, ...(partial && { initialSamplesPending: true }),
+          artifacts: { planPath: artifactPlan.planPath, planSha256: artifactPlan.planSha256 } };
+      } else if (journal.initialSamplesPending) {
+        journal.replacementBaseline = { ...journal.replacementBaseline, frozenSamples: frozen.frozenSamples };
+        journal.metadataSamples = hashes;
+        if (!partial) delete journal.initialSamplesPending;
+      } else if (!checkpointSamples(journal, { baseline: frozen, hashes })) return;
+      await save();
+    };
+    let saving = Promise.resolve();
+    const confirm = (frozen: EthereumRevealReplacementInspection, file: string, hash: string) => {
+      if (!frozen.frozenSamples.some(sample => file === `${sample.tokenId}.json` && sample.enrichment?.sha256 === hash)) return Promise.resolve();
+      saving = saving.then(async () => {
+        const prior = (journal?.enrichmentCheckpoint ?? journal)?.metadataSamples;
+        if (prior?.[file] !== hash || !equal(journalBaseline(journal!).frozenSamples, frozen.frozenSamples)) {
+          await saveSamples(frozen, { ...prior, [file]: hash }, true);
+        }
+      });
+      return saving;
+    };
+    const verifyReplacement = async (deployment: ReplacementDeployment, inspection?: EthereumRevealReplacementInspection) => {
+      const frozen = inspection ?? await inspectNew(deps, deployment, journal!.replacementBaseline.frozenThroughMs);
+      if (journal) unchangedBaseline(frozen, journalBaseline(journal));
+      const verified = await verifiedSamples(deps, storage, deployment, frozen, journal, confirm);
+      await saveSamples(verified.baseline, verified.hashes, false);
+      return verified;
+    };
+    const verified = await verifyReplacement(initial.newDeployment, baseline);
+    await verified.verifyMedia();
+    const verifyStableReplacement = async (deployment: ReplacementDeployment, afterSamples?: () => Promise<void>) => {
+      let inspection = await inspectNew(deps, deployment, journal!.replacementBaseline.frozenThroughMs);
+      for (;;) {
+        const verified = await verifyReplacement(deployment, inspection);
+        await verified.verifyMedia();
+        await afterSamples?.();
+        unchangedSnapshot(release, await deps.snapshot(release), journal!);
+        inspection = await inspectNew(deps, deployment, inspection.frozenThroughMs);
+        unchangedBaseline(inspection, verified.baseline);
+        if (equal(inspection.frozenSamples, verified.baseline.frozenSamples)) return;
+      }
+    };
     const recovery = recovering ? { replacementRevision: initial.newDeployment.revision, commerceRevision: initial.commerceRevision,
       retiredAtMs: initial.oldDeployment.retiredAtMs!, verifiedAtMs: deps.now() } : journal.recovery;
     const beforeMutation = await deps.snapshot(release);
     unchangedSnapshot(release, beforeMutation, { ...journal, recovery });
-    if (!options.write) return { planned: true, complete: false, journalPath, oldDeployment: rpcIdentity(journal.oldDeployment),
-      newDeployment: rpcIdentity(beforeMutation.newDeployment), remainingObjects: oldInventory.objectCount, newObjectCount: EXPECTED_FILES.size,
-      artifactPlan: journal.artifacts };
+    if (!options.write) {
+      return { planned: true, complete: false, journalPath, oldDeployment: rpcIdentity(journal.oldDeployment),
+        newDeployment: rpcIdentity(beforeMutation.newDeployment), remainingObjects: oldInventory.objectCount, newObjectCount: EXPECTED_FILES.size,
+        artifactPlan: journal.artifacts };
+    }
     await deps.verifyChain(release, beforeMutation);
     if (recovering) {
       journal.recovery = recovery;
@@ -391,6 +509,7 @@ export async function execute111kReplacementCleanup(options: ReplacementCleanupO
     unchangedSnapshot(release, afterDrain, journal);
     await deps.verifyChain(release, afterDrain);
     const oldRequest = { deploymentId: journal.oldDeployment.deploymentId, expectedRevision: journal.retirement.revision };
+    if (!journal.purge) await verifyStableReplacement(afterDrain.newDeployment);
     await deps.maintenance(async transport => {
       if (journal!.purge) validatePurge(journal!, await transport.inspectRetired(oldRequest));
       else {
@@ -409,6 +528,7 @@ export async function execute111kReplacementCleanup(options: ReplacementCleanupO
         deletionLimit = journal.deletionInventory.objectCount;
         await save();
       }
+      await verifyStableReplacement(afterDrain.newDeployment);
       if (!journal.deletionStartedAtMs) {
         journal.deletionStartedAtMs = deps.now();
         await save();
@@ -418,23 +538,18 @@ export async function execute111kReplacementCleanup(options: ReplacementCleanupO
       journal.metadataDeletedAtMs = deps.now();
       await save();
     }
-    const audit = async (fullCoverage: boolean) => {
+    const audit = async (fullCoverage: boolean, afterSamples?: () => Promise<void>) => {
       const fresh = await deps.snapshot(release);
       unchangedSnapshot(release, fresh, journal!);
       await deps.verifyChain(release, fresh);
       await deps.oldLease(journal!.oldDeployment, false, true);
       await deps.maintenance(async transport => validatePurge(journal!, await transport.inspectRetired(oldRequest)));
-      const frozen = await inspectNew(deps, fresh.newDeployment, journal!.replacementBaseline.frozenThroughMs);
-      unchangedBaseline(frozen, journal!.replacementBaseline);
       const [old] = await Promise.all([
         inventoryCleanupPrefix(policy, storage, prefix(journal!.oldDeployment), deps.progress),
         ...(fullCoverage ? [inventoryCleanupPrefix(policy, storage, prefix(journal!.newDeployment), deps.progress)] : []),
       ]);
       if (old.objectCount !== 0) throw new Error('Retired metadata was recreated after cleanup.');
-      const currentSamples = await samples(storage, journal!.newDeployment, frozen);
-      if (!equal(currentSamples, journal!.metadataSamples)) throw new Error('Replacement metadata samples changed.');
-      await deps.publicSamples(journal!.newDeployment, currentSamples);
-      unchangedSnapshot(release, await deps.snapshot(release), journal!);
+      await verifyStableReplacement(fresh.newDeployment, afterSamples);
     };
     await audit(true);
     journal.backendVerifiedAtMs = deps.now();
@@ -446,20 +561,20 @@ export async function execute111kReplacementCleanup(options: ReplacementCleanupO
     journal.artifacts.report = artifactResult;
     await save();
     await waitUntil(deps, journal.metadataDeletedAtMs + OBSERVATION_MS, 'Observing retired metadata across a scheduler interval');
-    await audit(false);
-    const finalArtifacts = await deps.artifacts(context(false));
-    validateArtifacts(finalArtifacts);
-    if (!finalArtifacts.complete || finalArtifacts.planPath !== journal.artifacts.planPath
-      || finalArtifacts.planSha256 !== journal.artifacts.planSha256) throw new Error('Retired local artifacts were recreated or their cleanup proof changed.');
-    unchangedSnapshot(release, await deps.snapshot(release), journal);
-    journal.artifacts.report = finalArtifacts;
+    await audit(false, async () => {
+      const report = await deps.artifacts(context(false));
+      validateArtifacts(report);
+      if (!report.complete || report.planPath !== journal!.artifacts.planPath
+        || report.planSha256 !== journal!.artifacts.planSha256) throw new Error('Retired local artifacts were recreated or their cleanup proof changed.');
+      journal!.artifacts.report = report;
+    });
     journal.verifiedAtMs = deps.now();
     journal.complete = true;
     await save();
     return { complete: true, journalPath, retiredDeployment: rpcIdentity(journal.oldDeployment, journal.retirement.revision),
       replacementDeployment: rpcIdentity(journal.newDeployment, journal.recovery?.replacementRevision), deletedObjects: journal.deletionInventory!.objectCount,
       replacementObjectCount: EXPECTED_FILES.size, observationMs: journal.verifiedAtMs - journal.metadataDeletedAtMs,
-      artifacts: finalArtifacts };
+      artifacts: journal.artifacts.report };
   } finally { storage.close(); }
 }
 
@@ -582,7 +697,7 @@ export async function run111kReplacementCleanup(options: ReplacementCleanupOptio
   if (!options || typeof options.releaseDirectory !== 'string' || !options.releaseDirectory.trim()) throw new Error('A frozen replacement release directory is required.');
   const releaseDirectory = await realpath(resolve(options.releaseDirectory));
   const deps: ReplacementCleanupDependencies = { readRelease, snapshot: readSnapshot, verifyChain, storage: createCleanupStorage,
-    maintenance: withEthereumRevealMaintenance, oldLease, publicSamples: verify111kReplacementPublicSamples,
+    maintenance: withEthereumRevealMaintenance, oldLease, publicSamples: read111kReplacementPublicSamples,
     artifacts: options.cleanupArtifacts ?? (async context => cleanup111kReplacementArtifacts({ oldDeployment: context.oldDeployment,
       newDeployment: context.newDeployment, journalPath: context.journalPath }, { write: context.write })),
     loadJournal: async path => { try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; } },

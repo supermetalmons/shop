@@ -137,7 +137,7 @@ async function createCheckout(request: Request, context: EthereumContext): Promi
   const infos = (await ethereumTokenInfos(context, tokenIds, snapshot.blockHash)).filter(item => isEthereumDeliveryKind(item.kind));
   const items = await ethereumInventoryItems(context, infos);
   await verifyEthereumBlockSnapshot(context, snapshot);
-  const itemsJson = JSON.stringify(items);
+  const itemsJson = JSON.stringify(items.map(({ attributes: _attributes, ...preview }) => preview));
   if (new TextEncoder().encode(itemsJson).length > MAX_PREVIEW_BYTES) throw new EthereumApiError('invalid-argument', 'This selection is too large to preview. Choose fewer items.');
   await insertEthereumCheckout(context.env.COMMERCE_DB, {
     checkout_id: crypto.randomUUID(), request_id: body.requestId, origin, drop_id: body.dropId,

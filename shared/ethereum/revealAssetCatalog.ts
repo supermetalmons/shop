@@ -27,7 +27,7 @@ export type RevealAssetCatalog = {
 };
 export type RevealAssetCatalogDescriptor = { catalogVersion: string; manifestSha256: string };
 
-const CATEGORY_KEYS = { egg: 'eggs', painting: 'paintings', video: 'videos', '3d': '3d', animated: 'animated' } as const;
+export const REVEAL_ASSET_FAMILIES = { egg: 'eggs', painting: 'paintings', video: 'videos', '3d': '3d', animated: 'animated' } as const;
 const MEDIA_PATHS = {
   eggs: ['eggs/{id}.png'],
   paintings: ['paintings/{id}.png'],
@@ -140,8 +140,8 @@ export function validateRevealAssetCatalog(value: unknown, descriptor?: unknown)
 export function revealCatalogMedia(catalog: RevealAssetCatalog, category: EthereumArtworkCategory, assetId: number): {
   image: string; animation_url?: string; aspectRatio: { width: number; height: number };
 } {
-  if (!Object.hasOwn(CATEGORY_KEYS, category)) invalid('unknown artwork category');
-  const definition = catalog.categories[CATEGORY_KEYS[category]];
+  if (!Object.hasOwn(REVEAL_ASSET_FAMILIES, category)) invalid('unknown artwork category');
+  const definition = catalog.categories[REVEAL_ASSET_FAMILIES[category]];
   if (!Number.isSafeInteger(assetId) || assetId < 1 || assetId > definition.count) invalid('invalid asset ID');
   const pair = definition.aspectRatio ?? definition.aspectRatioPalette[definition.aspectRatioIndexById[assetId - 1]];
   const url = (path: string) => `${definition.baseUrl ?? catalog.baseUrl}${path.replace('{id}', String(assetId))}`;

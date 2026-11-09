@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { withRevealTraitFixture } from './revealTraitFixture.ts';
 import { createTestHarness } from 'wrangler';
 import { encodeAbi, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.ts';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from '../../../../scripts/shared/ethereum111kLocalReveal.ts';
@@ -73,6 +74,7 @@ test('native lifecycle repair upgrades deployed watches, orphan deadlines and st
   delete config.$schema; delete config.account_id; delete config.routes; delete config.secrets;
   process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false';
   process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
+  t.mock.method(globalThis, 'fetch', withRevealTraitFixture(fetch, () => new Response(null, { status: 503 })));
   const runtime = createTestHarness({ root: directory, workers: [{ config }] });
   try {
     await runtime.listen();

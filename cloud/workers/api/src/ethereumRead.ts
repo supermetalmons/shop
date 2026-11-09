@@ -9,6 +9,7 @@ import {
 } from '../../../../shared/ethereum/protocol.js';
 import { decode111kStats, minimum111kAllocatedCrates, valid111kDiscountUsage, valid111kRelicSupply } from '../../../../shared/ethereum/stats.js';
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
+import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
 import { EthereumApiError } from './ethereumError.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
@@ -58,11 +59,19 @@ export async function ethereumReceipt(context: EthereumContext, hash: string, al
   return { receipt: { ...row, logs } as EthereumReceipt, confirmations: Math.max(0, rpcInteger(headRaw) - block + 1) };
 }
 
+function metadataAspectRatio(value: unknown): EthereumMetadata['aspectRatio'] {
+  if (!value || typeof value !== 'object' || !('width' in value) || !('height' in value)) return;
+  const width = metadataNumber(value.width);
+  const height = metadataNumber(value.height);
+  if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) return { width, height };
+}
+
 function parseMetadata(value: unknown): EthereumMetadata {
   if (!value || typeof value !== 'object' || !('name' in value) || !('image' in value) ||
     typeof value.name !== 'string' || !isEthereumMetadataImage(value.image)) {
     throw new EthereumApiError('unavailable', 'Invalid Ethereum metadata.');
   }
+  const aspectRatio = 'aspectRatio' in value && metadataAspectRatio(value.aspectRatio);
   return { name: value.name, image: value.image,
     ...('category' in value && (value.category === 'egg' || value.category === 'painting' || value.category === 'video' ||
       value.category === '3d' || value.category === 'animated')
@@ -71,11 +80,7 @@ function parseMetadata(value: unknown): EthereumMetadata {
       ? { revealStatus: value.revealStatus } : {}),
     ...('animation_url' in value && typeof value.animation_url === 'string' && /^https:\/\//i.test(value.animation_url) &&
       isEthereumMetadataImage(value.animation_url) ? { animation_url: value.animation_url } : {}),
-    ...('aspectRatio' in value && value.aspectRatio && typeof value.aspectRatio === 'object' &&
-      'width' in value.aspectRatio && 'height' in value.aspectRatio &&
-      typeof value.aspectRatio.width === 'number' && Number.isFinite(value.aspectRatio.width) && value.aspectRatio.width > 0 &&
-      typeof value.aspectRatio.height === 'number' && Number.isFinite(value.aspectRatio.height) && value.aspectRatio.height > 0
-      ? { aspectRatio: { width: value.aspectRatio.width, height: value.aspectRatio.height } } : {}),
+    ...(aspectRatio ? { aspectRatio } : {}),
     ...('description' in value && typeof value.description === 'string' ? { description: value.description } : {}),
     ...('attributes' in value && Array.isArray(value.attributes) ? { attributes: value.attributes } : {}) };
 }
@@ -97,7 +102,7 @@ async function readMetadata(context: EthereumContext, tokenId: string): Promise<
     await cancelResponseBody(response);
     throw new EthereumApiError('unavailable', 'Ethereum metadata is temporarily unavailable.');
   }
-  return parseMetadata(await readBoundedResponseJson(response, { maxBytes: 128 * 1024, contentType: 'require-json', signal,
+  return parseMetadata(await readBoundedResponseJson(response, { maxBytes: 128 * 1024, contentType: 'require-json', parseJson: parseMetadataJson, signal,
     createError: () => new EthereumApiError('unavailable', 'Invalid Ethereum metadata.') }));
 }
 

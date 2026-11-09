@@ -7,6 +7,7 @@ import { encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 import { ETHEREUM_REVEAL_PATHS, type EthereumRevealedArtwork, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from '../../../../scripts/shared/ethereum111kLocalReveal.ts';
+import { withRevealTraitFixture } from './revealTraitFixture.ts';
 
 export async function runEthereumRevealE2E(input: {
   root: string; rpcUrl: string; contractAddress: string; deploymentBlock: number; metadataBaseUri: string; buyer: string;
@@ -31,6 +32,8 @@ export async function runEthereumRevealE2E(input: {
   process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
   const directory = await mkdtemp(join(tmpdir(), '111k-reveal-e2e-'));
   const runtime = createTestHarness({ root: directory, workers: [{ config }] });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = withRevealTraitFixture(originalFetch);
   try {
     await runtime.listen();
     const worker = runtime.getWorker<Env>('mons-shop-api');
@@ -108,12 +111,21 @@ export async function runEthereumRevealE2E(input: {
     assert.equal(await input.rpc<string>('eth_blockNumber'), receipt.blockNumber);
     assert.ok(revealed.artworks.every(artwork => artwork.observation.blockHash === receipt.blockHash));
     const publishedMetadata = new Map<string, string>();
-    for (const artwork of revealed.artworks.slice(0, forcedAssets.length)) {
+    for (const [index, asset] of forcedAssets.entries()) {
+      const artwork: EthereumRevealedArtwork = revealed.artworks[index];
+      const attributes = [{ trait_type: 'type', value: asset.category }];
+      const expectedAttributes = asset.category === 'egg' ? attributes : [
+        { trait_type: 'collection block', value: asset.path.split('/')[0] }, ...attributes,
+        { trait_type: 'asset ID', value: asset.assetId },
+      ];
       const key = `${new URL(input.metadataBaseUri).pathname.slice(1)}${artwork.tokenId}.json`;
       let published: string | null = null;
-      for (let attempt = 0; attempt < 80; attempt++) {
+      for (let attempt = 0; attempt < 150; attempt++) {
         const object = await env.ETHEREUM_REVEAL_METADATA.get(key);
-        if (object) { published = await object.text(); break; }
+        if (object) {
+          published = await object.text();
+          if (asset.category === 'egg' || JSON.parse(published).attributes[0]?.trait_type === 'collection block') break;
+        }
         await new Promise(done => setTimeout(done, 100));
       }
       assert.ok(published);
@@ -122,7 +134,7 @@ export async function runEthereumRevealE2E(input: {
       assert.equal(metadata.animation_url, artwork.animation_url);
       assert.equal(metadata.category, artwork.category);
       assert.equal(metadata.revealStatus, 'revealed');
-      assert.deepEqual(metadata.attributes, artwork.attributes);
+      assert.deepEqual(metadata.attributes, expectedAttributes);
       assert.deepEqual(metadata.aspectRatio, artwork.aspectRatio);
       publishedMetadata.set(key, published);
     }
@@ -150,10 +162,13 @@ export async function runEthereumRevealE2E(input: {
     assert.deepEqual(healed.unresolved, [{ tokenId: '111111', status: 'unminted' }]);
     return { deploymentId: deployment.deploymentId, contractAddress: input.contractAddress, transactionHash, recoveryHash,
       pendingMediaHidden: true, firstConfirmationArtworkCount: revealed.artworks.length, metadataStorage: 'isolated-local-r2',
-      deterministic3dReveal: true, deterministicAnimatedReveal: true, deterministicFiveCategoryReveal: true,
+      deterministic3dReveal: true, deterministicAnimatedReveal: true, deterministicFiveCategoryReveal: true, attributeEnrichment: true,
       immutableAfterReorg: true, tokenRecovery: true };
   } finally {
-    await runtime.close();
-    await rm(directory, { recursive: true, force: true });
+    try { await runtime.close(); }
+    finally {
+      globalThis.fetch = originalFetch;
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 }

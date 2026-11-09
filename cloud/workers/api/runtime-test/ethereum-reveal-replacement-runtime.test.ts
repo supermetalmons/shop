@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { withRevealTraitFixture } from './revealTraitFixture.ts';
 import { createTestHarness } from 'wrangler';
 import { encodeAbi } from '../../../../shared/ethereum/abi.ts';
 import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
@@ -20,7 +21,7 @@ type TestEnv = Omit<Env, 'ETHEREUM_REVEAL'> & { ETHEREUM_REVEAL: DurableObjectNa
 const oldContract = `0x${'11'.repeat(20)}`, replacementContract = `0x${'22'.repeat(20)}`;
 const hash = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
 
-test('native same-catalog replacement retires durably, drains callbacks, preserves a stable active snapshot and purges after 65 seconds', { timeout: 90_000 }, async () => {
+test('native same-catalog replacement retires durably, drains callbacks, preserves a stable active snapshot and purges after 65 seconds', { timeout: 90_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'ethereum-replacement-'));
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const rpc = createServer(async (request, response) => {
@@ -58,7 +59,7 @@ test('native same-catalog replacement retires durably, drains callbacks, preserv
     export class EthereumRevealObject extends Base {
       constructor(ctx, env) { super(ctx, env); offset = Number(env.REPLACEMENT_TEST_CLOCK || 0); }
       async seedReady(deployment) {
-        const store = new EthereumRevealStore(this.ctx.storage.sql, action => this.ctx.storage.transactionSync(action), () => 0);
+        const store = new EthereumRevealStore(this.ctx.storage.sql, action => this.ctx.storage.transactionSync(action), maximum => maximum - 1);
         store.configure(deployment);
         while (!store.ready()) store.initializeChunk();
         store.freeze(deployment, { transactionHash: ${JSON.stringify(hash(1))}, blockNumber: 201, blockHash: ${JSON.stringify(hash(201))} },
@@ -72,15 +73,17 @@ test('native same-catalog replacement retires durably, drains callbacks, preserv
           [{ crateTokenId: '111113', tokenIds: Array.from({ length: 20 }, (_, i) => String(i + 21)) }], Date.now());
       }
       async advanceTime(ms) { offset = ms; }
-      async runAlarm() { await this.alarm(); }
+      async alarm() { if (!this.testingPublicationHealth) await super.alarm(); }
+      async runAlarm() { await super.alarm(); }
       async setPublicationHealth(status, error) {
+        this.testingPublicationHealth = true;
         this.ctx.storage.sql.exec("UPDATE publication SET status=?,last_error=? WHERE token_id='9'", status, error);
       }
     }
   `);
   await writeFile(callerMain, `export default { async fetch(request, env) {
     const method = new URL(request.url).pathname.slice(1);
-    if (!['retireForReplacement','cancelRetirement','inspectReplacement','purgeRetired','inspectRetired'].includes(method)) return new Response(null,{status:404});
+    if (!['retireForReplacement','cancelRetirement','inspectReplacement','purgeRetired','inspectRetired','backfillAttributes'].includes(method)) return new Response(null,{status:404});
     try { return Response.json(await env.MAINTENANCE[method](await request.json())); }
     catch (error) { return Response.json({error:String(error.message || error)}, {status:409}); }
   } };`);
@@ -99,6 +102,7 @@ test('native same-catalog replacement retires durably, drains callbacks, preserv
     services: [{ binding: 'MAINTENANCE', service: 'mons-shop-api', entrypoint: 'EthereumRevealMaintenance', remote: false }] };
   process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false';
   process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
+  t.mock.method(globalThis, 'fetch', withRevealTraitFixture(fetch, () => new Response(null, { status: 503 })));
   const runtime = createTestHarness({ root: directory, workers: [{ config }, { config: callerConfig }] });
   try {
     await runtime.listen();
@@ -136,6 +140,21 @@ test('native same-catalog replacement retires durably, drains callbacks, preserv
     const cancelledScope = await register('cancel-native', `0x${'44'.repeat(20)}`, 150);
     await env.OPS_DB.prepare("UPDATE ethereum_reveal_deployments SET state='paused',revision=4 WHERE deployment_id='cancel-native'").run();
     await env.OPS_DB.prepare("UPDATE ethereum_reveal_deployments SET last_error='metadata-conflict' WHERE deployment_id='replacement-native'").run();
+    await newObject.setPublicationHealth('conflict', 'metadata-conflict');
+    const ledger = await worker.getDurableObjectStorage('ETHEREUM_REVEAL', { name: newName });
+    await ledger.exec("DELETE FROM reveal_enrichment WHERE version='v0' AND token_id='1'");
+    await env.COMMERCE_DB.prepare('UPDATE ethereum_111k_control SET paused=1,paused_at_ms=1,revision=revision+1').run();
+    const page = { ...replacementRequest, afterTokenId: null };
+    assert.deepEqual(await call('backfillAttributes', { ...page, write: false }), { eligible: 19, missing: 1, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0, nextCursor: null });
+    assert.deepEqual(await call('backfillAttributes', { ...page, write: true }), { eligible: 19, missing: 1, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 1, requeued: 0, nextCursor: null });
+    await ledger.exec("UPDATE reveal_enrichment SET status='invalid',last_error='invalid',claim_id=NULL WHERE token_id='19' AND version='v0'");
+    const blocked = { eligible: 19, missing: 0, invalid: 1, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0, nextCursor: null };
+    assert.deepEqual(await call('backfillAttributes', { ...page, write: true }), blocked);
+    assert.deepEqual(await call('backfillAttributes', { ...page, retryBlocked: true, write: false }), blocked);
+    assert.deepEqual(await call('backfillAttributes', { ...page, retryBlocked: true, write: true }), { ...blocked, requeued: 1 });
+    assert.deepEqual(await call('backfillAttributes', { ...page, retryBlocked: true, write: true }), { ...blocked, invalid: 0 });
+    await env.COMMERCE_DB.prepare('UPDATE ethereum_111k_control SET paused=0,paused_at_ms=NULL,revision=revision+1').run();
+    await newObject.setPublicationHealth('published', null);
     const cancelRequest = { deploymentId: cancelledScope.deploymentId, expectedRevision: 4,
       replacementDeploymentId: replacement.deploymentId, expectedReplacementRevision: 3 };
     assert.deepEqual(await call('cancelRetirement', cancelRequest), {
@@ -160,6 +179,57 @@ test('native same-catalog replacement retires durably, drains callbacks, preserv
         .first<{ retired_at_ms: number | null }>())?.retired_at_ms, null);
     }
     await newObject.setPublicationHealth('published', null);
+    assert.ok(before.frozenSamples.every(sample => sample.tokenId !== '9'));
+    const base = (await ledger.exec<{ metadata_json: string }>("SELECT metadata_json FROM assignments WHERE token_id='9'"))[0].metadata_json;
+    const target = JSON.parse(base);
+    target.attributes.unshift({ trait_type: 'collection block', value: 'Repair fixture' });
+    const repairedTarget = JSON.stringify(target) + '\n';
+    const repairedSha = createHash('sha256').update(repairedTarget).digest('hex');
+    assert.equal((await ledger.exec(`UPDATE reveal_enrichment SET status='published',last_error=NULL,claim_id=NULL,target_json=?,target_sha256=?
+      WHERE token_id='9' AND version='v0' RETURNING token_id`, repairedTarget, '0'.repeat(64))).length, 1);
+    await ledger.exec("INSERT INTO reveal_enrichment_acknowledgments(token_id,version,target_sha256) VALUES('9','v0',?)", repairedSha);
+    const readEvidence = () => ledger.exec(`SELECT e.*,ack.target_sha256 AS acknowledged_sha256 FROM reveal_enrichment e
+      JOIN reveal_enrichment_acknowledgments ack ON ack.token_id=e.token_id AND ack.version=e.version
+      WHERE e.token_id='9' AND e.version='v0'`);
+    const evidence = await readEvidence();
+    const targeted = { ...page, recheckTokenId: '9' };
+    await assert.rejects(call('backfillAttributes', { ...targeted, write: false }), /acknowledged enrichment checksum/);
+    assert.deepEqual(await readEvidence(), evidence);
+    const rejected = await call<{ conflict: number; requeued: number }>('backfillAttributes', { ...targeted, write: true });
+    assert.deepEqual([rejected.conflict, rejected.requeued], [1, 0]);
+    const [blockedEvidence] = await readEvidence();
+    assert.equal(blockedEvidence.status, 'conflict');
+    assert.equal(blockedEvidence.last_error, 'conflict');
+    assert.equal(blockedEvidence.target_json, repairedTarget);
+    assert.equal(blockedEvidence.target_sha256, '0'.repeat(64));
+    assert.equal(blockedEvidence.acknowledged_sha256, repairedSha);
+    assert.equal(await (await env.ETHEREUM_REVEAL_METADATA.get('111k-sepolia/replacement-native/9.json'))!.text(), base);
+    await assert.rejects(call('inspectReplacement', replacementRequest), /attribute publication has a metadata conflict/);
+    await assert.rejects(call('retireForReplacement', retirementRequest), /attribute publication has a metadata conflict/);
+    assert.equal((await env.OPS_DB.prepare("SELECT retired_at_ms FROM ethereum_reveal_deployments WHERE deployment_id='old-native'")
+      .first<{ retired_at_ms: number | null }>())?.retired_at_ms, null);
+    await ledger.exec("UPDATE reveal_enrichment SET target_sha256=? WHERE token_id='9' AND version='v0'", repairedSha);
+    const repairKey = '111k-sepolia/replacement-native/9.json';
+    await env.ETHEREUM_REVEAL_METADATA.put(repairKey, repairedTarget, { httpMetadata: { contentType: 'application/octet-stream' } });
+    const repair = await call<{ requeued: number }>('backfillAttributes', { ...page, write: true, retryBlocked: true });
+    assert.equal(repair.requeued, 1);
+    const rechecks = async () => (await call<{ conflictRechecks: number }>('backfillAttributes', { ...page, write: false })).conflictRechecks;
+    assert.equal(await rechecks(), 1);
+    await assert.rejects(call('inspectReplacement', replacementRequest), /attribute publication has a metadata conflict/);
+    await assert.rejects(call('retireForReplacement', retirementRequest), /attribute publication has a metadata conflict/);
+    await ledger.exec("UPDATE reveal_enrichment SET next_check_ms=? WHERE token_id!='9' AND status='pending'", Date.now() + 86_400_000);
+    await newObject.watchdog(replacement);
+    for (let attempt = 0; ; attempt++) {
+      if ((await ledger.exec<{ status: string }>("SELECT status FROM reveal_enrichment WHERE token_id='9'"))[0].status === 'published') break;
+      assert.ok(attempt < 300, 'Repaired metadata was not acknowledged');
+      await new Promise(done => setTimeout(done, 5));
+    }
+    const repaired = await env.ETHEREUM_REVEAL_METADATA.get(repairKey);
+    assert.ok(repaired);
+    assert.equal(await repaired.text(), repairedTarget);
+    assert.equal(repaired.httpMetadata?.contentType, 'application/json; charset=utf-8');
+    assert.equal(repaired.httpMetadata?.cacheControl, 'no-store');
+    assert.equal(await rechecks(), 0);
     let finished = false;
     const retiring = call<EthereumRevealRetirementResult>('retireForReplacement', retirementRequest).then(result => { finished = true; return result; });
     void retiring.catch(() => undefined);
@@ -235,6 +305,42 @@ test('native same-catalog replacement retires durably, drains callbacks, preserv
     assert.deepEqual(await env.COMMERCE_DB.prepare(fenceSql).first(), fence);
     assert.deepEqual(await call('inspectReplacement', { ...replacementRequest, expectedRevision: resumed.revision,
       frozenThroughMs: before.frozenThroughMs }), { ...before, revision: resumed.revision });
+    const storage = await worker.getDurableObjectStorage('ETHEREUM_REVEAL', { name: newName });
+    const sample = before.frozenSamples[0];
+    const [{ metadata_json }] = await storage.exec<{ metadata_json: string }>('SELECT metadata_json FROM assignments WHERE token_id=?', sample.tokenId);
+    const metadata = JSON.parse(metadata_json);
+    const enriched = JSON.stringify({ ...metadata, attributes: [{ trait_type: 'collection block', value: 'sample' }, ...metadata.attributes] }, null, 2) + '\n';
+    const sha256 = createHash('sha256').update(enriched).digest('hex');
+    await storage.exec(`UPDATE reveal_enrichment SET target_json=?,target_sha256=?,claim_id=NULL,next_check_ms=?
+      WHERE token_id=? AND version='v0'`, enriched, sha256, Date.now() + 86400000, sample.tokenId);
+    const inspect = () => call<EthereumRevealReplacementInspection>('inspectReplacement', {
+      ...replacementRequest, expectedRevision: resumed.revision, frozenThroughMs: before.frozenThroughMs });
+    for (const published of [false, true]) {
+      if (published) await storage.exec("UPDATE reveal_enrichment SET status='published' WHERE token_id=? AND version='v0'", sample.tokenId);
+      assert.deepEqual(await inspect(), { ...before, revision: resumed.revision, frozenSamples: [
+        { ...sample, enrichment: { version: 'v0', sha256, published } }, ...before.frozenSamples.slice(1)] });
+    }
+    const publishedProof = await inspect();
+    const key = `111k-sepolia/replacement-native/${sample.tokenId}.json`;
+    const recheck = (write: boolean) => call<{ eligible: number; requeued: number }>('backfillAttributes',
+      { ...page, expectedRevision: resumed.revision, recheckTokenId: sample.tokenId, write });
+    await newObject.setPublicationHealth('published', null);
+    assert.equal((await recheck(false)).eligible, 1);
+    assert.equal(await (await env.ETHEREUM_REVEAL_METADATA.get(key))!.text(), metadata_json);
+    assert.equal((await recheck(true)).requeued, 1);
+    assert.equal((await recheck(true)).requeued, 0);
+    await assert.rejects(inspect(), /metadata conflict/);
+    await storage.exec("UPDATE reveal_enrichment SET next_check_ms=? WHERE token_id!=? AND status='pending'", Date.now() + 86_400_000, sample.tokenId);
+    await newObject.watchdog(resumed);
+    for (let attempt = 0; ; attempt++) {
+      const [row] = await storage.exec<{ status: string; last_error: string | null }>(
+        "SELECT status,last_error FROM reveal_enrichment WHERE token_id=? AND version='v0'", sample.tokenId);
+      if (row.status === 'published' && row.last_error === null) break;
+      assert.ok(attempt < 300, 'Published token recheck did not finish');
+      await new Promise(done => setTimeout(done, 5));
+    }
+    assert.equal(await (await env.ETHEREUM_REVEAL_METADATA.get(key))!.text(), enriched);
+    assert.deepEqual(await inspect(), publishedProof);
     assert.equal((await env.COMMERCE_DB.prepare('SELECT contract_address FROM ethereum_111k_control WHERE singleton=1').first<{ contract_address: string }>())?.contract_address, replacementContract);
   } finally {
     release.resolve();

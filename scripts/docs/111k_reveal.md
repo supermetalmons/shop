@@ -174,6 +174,8 @@ Cache media by `(chainId, contractAddress, tokenId)`. Revealed artwork stays unc
 
 Metadata JSON addresses follow the collection's configured base URI plus the decimal token ID and `.json`. The JSON address itself is predictable before minting; it contains only the placeholder until reveal. Use the methods above to establish reveal status and obtain media immediately, without waiting for CDN or marketplace refreshes.
 
+After initial media publication, the token’s CDN JSON receives its artwork traits in a background update. Paintings, videos, 3D models and animated works list `collection block` first, then their original attributes, then the source traits. Eggs keep their original attributes. The reveal response continues to serve the frozen artwork immediately. Read the token URI for the enriched attributes.
+
 Published revealed metadata also contains `revealStatus: "revealed"`, which the
 shop uses to skip redundant recovery requests. Baseline placeholder metadata
 omits this field. It is a shop-specific metadata field, not an OpenSea requirement

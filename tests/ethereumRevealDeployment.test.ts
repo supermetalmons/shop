@@ -39,6 +39,62 @@ function registrationIdentity(value = registration) {
   return identity;
 }
 
+test('attribute backfill pins an explicit Sepolia deployment revision across pages and defaults to counting', async t => {
+  const { database, query, register } = await fixture(t);
+  register();
+  database.exec("UPDATE ethereum_reveal_deployments SET state='active',revision=3,provisioned_at_ms=2");
+  const args = ['backfill-attributes', '--deployment-id', registration.deploymentId];
+  const commands = [args, [...args, '--expected-revision', '3', '--write'], [...args, '--retry-blocked'],
+    [...args, '--retry-blocked', '--expected-revision', '3', '--write']];
+  for (const command of commands) {
+    const writes = command.includes('--write');
+    const retryBlocked = command.includes('--retry-blocked');
+    const cursors: Array<string | null> = [];
+    const result = await runEthereumRevealControl(command, { query, maintenance: async run => run({
+      purgeRetired: async () => assert.fail(), inspectRetired: async () => assert.fail(),
+      async backfillAttributes(request) {
+        assert.equal(request.write, writes);
+        assert.equal(request.retryBlocked === true, retryBlocked);
+        assert.equal(request.expectedRevision, 3);
+        assert.equal(request.deploymentId, registration.deploymentId);
+        cursors.push(request.afterTokenId);
+        return { nextCursor: request.afterTokenId === null ? '20' : null, eligible: 6, missing: 2, invalid: 1, conflict: 2, conflictRechecks: 1,
+          enqueued: writes && !retryBlocked ? 2 : 0, requeued: writes && retryBlocked ? 3 : 0 };
+      },
+    }) });
+    assert.deepEqual(cursors, [null, '20']);
+    assert.deepEqual(result, { command: 'backfill-attributes', dryRun: !writes, ...(retryBlocked && { retryBlocked: true }),
+      deploymentId: registration.deploymentId, revision: 3, eligible: 12, missing: 4, invalid: 2, conflict: 4, conflictRechecks: 2,
+      enqueued: writes && !retryBlocked ? 4 : 0, requeued: writes && retryBlocked ? 6 : 0 });
+  }
+  assert.throws(() => parseEthereumRevealControlArgs(['backfill-attributes', '--write']), /requires/);
+  assert.throws(() => parseEthereumRevealControlArgs([...args, '--write']), /revision/);
+  assert.throws(() => parseEthereumRevealControlArgs([...args, '--retry-blocked', '--write']), /revision/);
+  assert.throws(() => parseEthereumRevealControlArgs(['status', '--retry-blocked']), /requires backfill-attributes/);
+  for (const bad of [['--recheck-token', '0'], ['--recheck-token', '111112'], ['--recheck-token', '7', '--retry-blocked']]) {
+    assert.throws(() => parseEthereumRevealControlArgs([...args, ...bad]), /--recheck-token/);
+  }
+  assert.throws(() => parseEthereumRevealControlArgs([...args, '--recheck-token', '7', '--write']), /revision/);
+  for (const write of [false, true]) {
+    const result = await runEthereumRevealControl([...args, '--recheck-token', '7', ...(write ? ['--expected-revision', '3', '--write'] : [])],
+      { query, maintenance: async run => run({ purgeRetired: async () => assert.fail(), inspectRetired: async () => assert.fail(),
+        async backfillAttributes(request) {
+          assert.deepEqual(request, { deploymentId: registration.deploymentId, expectedRevision: 3, afterTokenId: null, recheckTokenId: '7', write });
+          return { eligible: 1, missing: 0, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: Number(write), nextCursor: null };
+        } }) });
+    assert.ok('recheckTokenId' in result && result.recheckTokenId === '7');
+    assert.equal(result.requeued, Number(write));
+  }
+  await assert.rejects(runEthereumRevealControl([...args, '--expected-revision', '2', '--write'], { query,
+    maintenance: async () => assert.fail() }), /expected revision/);
+  const registered = query('SELECT * FROM ethereum_reveal_deployments')[0];
+  for (const override of [{ chain_id: 1, metadata_base_uri: 'https://cdn.mons.shop/111k/mainnet/' }, { state: 'paused' },
+    { drop_id: 'pre111k' }, { catalog_version: '111k-v4' }]) {
+    await assert.rejects(runEthereumRevealControl(args, { query: () => [{ ...registered, ...override }],
+      maintenance: async () => assert.fail() }), /active Sepolia/);
+  }
+});
+
 async function controlManifest(t: TestContext, value: Record<string, unknown>): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'reveal-control-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

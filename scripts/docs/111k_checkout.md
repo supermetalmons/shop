@@ -51,7 +51,7 @@ VVV can read the sanitized result from its browser or backend:
 GET https://api.mons.shop/ethereum/111k/checkout/status?checkoutId=<checkout-id>
 ```
 
-The response includes `checkoutId`, `dropId`, `chainId`, `contractAddress`, `tokenIds`, item previews, `wallet`, `status`, `orderId`, `transactionHash`, confirmation counts, and the current attempt. The state is one of:
+The response includes `checkoutId`, `dropId`, `chainId`, `contractAddress`, `tokenIds`, item previews, `wallet`, `status`, `orderId`, `transactionHash`, confirmation counts, and the current attempt. New checkout previews omit the attributes array. The token URI serves the full artwork traits. The state is one of:
 
 - `ready`: no signed delivery has been prepared.
 - `prepared`: the delivery quote and address snapshot have been saved.

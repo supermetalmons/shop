@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { requireRetiredRevealDeployment } from '../src/ethereumRevealMaintenanceSupport.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
@@ -55,7 +56,7 @@ function fixture() {
 test('private reveal maintenance accepts only explicit identities and revisions', async () => {
   const f = fixture();
   assert.deepEqual(Object.getOwnPropertyNames(EthereumRevealMaintenance.prototype).sort(),
-    ['cancelRetirement', 'constructor', 'inspectReplacement', 'inspectRetired', 'purgeRetired', 'retireForReplacement']);
+    ['backfillAttributes', 'cancelRetirement', 'constructor', 'inspectReplacement', 'inspectRetired', 'purgeRetired', 'retireForReplacement']);
   for (const value of [null, {}, { ...request, expectedRevision: 0 }, { ...request, expectedRevision: '4' },
     { ...request, deploymentId: '../old' }, { ...request, contractAddress: currentContract }]) {
     await assert.rejects(f.maintenance.purgeRetired(value), /Invalid reveal maintenance/);
@@ -106,6 +107,39 @@ test('the coordinator checks the fresh registry and receiving object before touc
   f.registry.row!.revision = 5;
   await assert.rejects(object.purgeRetired(request), /expected retired/);
   assert.equal(reads, 0);
+});
+
+test('a cold coordinator counts historical attributes without schema writes or alarms and rechecks the revision each page', async t => {
+  const f = fixture();
+  Object.assign(f.registry.row!, { catalog_version: '111k-v5', state: 'active', last_error: 'metadata-conflict' });
+  Object.assign(f.control, { contract_address: oldContract, paused: 1, paused_at_ms: 1 });
+  Object.assign(f.env, { ETHEREUM_111K_CONTRACT_ADDRESS: oldContract, ETHEREUM_111K_METADATA_BASE_URI: row.metadata_base_uri,
+    ETHEREUM_111K_DEPLOYMENT_BLOCK: String(row.deployment_block) });
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  db.exec(`CREATE TABLE settings(id INTEGER, deployment_json TEXT, ready INTEGER);
+    CREATE TABLE publication(token_id TEXT PRIMARY KEY,status TEXT);
+    CREATE TABLE assignments(token_id TEXT PRIMARY KEY,category TEXT);
+    INSERT INTO assignments VALUES('1','painting'),('2','egg'),('3','video');
+    INSERT INTO publication VALUES('1','published'),('2','published'),('3','conflict');`);
+  const saved = { deploymentId: identity.deploymentId, chainId: identity.chainId,
+    contractAddress: identity.contractAddress, metadataBaseUri: identity.metadataBaseUri };
+  db.prepare('INSERT INTO settings VALUES(1,?,1)').run(JSON.stringify(saved));
+  db.exec('PRAGMA query_only=ON');
+  const context = { id: { equals: () => true }, storage: { sql: { exec(statement: string, ...args: Array<string | number>) {
+    return { toArray: () => db.prepare(statement).all(...args) };
+  } } } };
+  const object = new EthereumRevealObject(context as unknown as DurableObjectState, f.env);
+  const query = { ...request, afterTokenId: null, write: false };
+  Object.assign(f.object, { backfillAttributes: object.backfillAttributes.bind(object) });
+  assert.deepEqual(await f.maintenance.backfillAttributes(query), { eligible: 1, missing: 1, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0, nextCursor: null });
+  await assert.rejects(f.maintenance.inspectReplacement(request), /Replacement reveal deployment/);
+  f.control.reset_guard_id = 'resetting';
+  await assert.rejects(f.maintenance.backfillAttributes(query), /Backfill reveal deployment/);
+  f.control.reset_guard_id = null;
+  f.registry.row!.revision = 5;
+  await assert.rejects(object.backfillAttributes({ ...query, write: true }), /Backfill reveal deployment/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='reveal_enrichment'").get()?.n, 0);
 });
 
 test('a failed storage purge can retry without changing the permanent registration', async () => {

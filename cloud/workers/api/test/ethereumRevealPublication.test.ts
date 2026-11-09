@@ -206,3 +206,60 @@ test('publication claim migration preserves legacy work while legacy results can
   assert.deepEqual(row('2'), pending);
   assert.deepEqual(assignments(), before);
 });
+
+test('only newly committed non-egg publications are automatically enrolled, including across store restarts', t => {
+  const { database, store, reopen } = fixture(t);
+  const candidates = database.prepare("SELECT token_id FROM assignments WHERE category!='egg' ORDER BY token_id").all();
+  const legacy = String(candidates[0].token_id);
+  database.exec('DROP TRIGGER enqueue_reveal_enrichment; DROP TABLE reveal_enrichment');
+  store.publicationComplete(legacy);
+  const restored = reopen();
+  assert.equal(restored.enrichment.claim(NOW).length, 0);
+  const jobs = restored.claimPublications(NOW, 20);
+  restored.completePublications(jobs.map(job => ({ job, status: 'published' })), NOW + 1);
+  const enrolled = database.prepare('SELECT token_id FROM reveal_enrichment ORDER BY token_id').all();
+  assert.deepEqual(enrolled, candidates.slice(1));
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM reveal_enrichment WHERE version='v0'").get()?.count, enrolled.length);
+  restored.publicationComplete(legacy);
+  assert.deepEqual(database.prepare('SELECT token_id FROM reveal_enrichment ORDER BY token_id').all(), enrolled);
+});
+
+test('enrichment staging, leases and retries preserve the first target and never update frozen assignments', t => {
+  const { database, store, assignments, reopen } = fixture(t);
+  const before = assignments();
+  const tokenId = String(database.prepare("SELECT token_id FROM assignments WHERE category!='egg' LIMIT 1").get()!.token_id);
+  store.publicationComplete(tokenId);
+  const [first] = store.enrichment.claim(NOW);
+  assert.equal(first.token_id, tokenId);
+  assert.equal(store.enrichment.claim(NOW + 59_999).length, 0);
+  const restored = reopen();
+  const [current] = restored.enrichment.claim(NOW + 60_000);
+  assert.notEqual(current.claim_id, first.claim_id);
+  assert.equal(store.enrichment.stage(first, 'stale', 'd'.repeat(64)), false);
+  assert.equal(store.enrichment.complete(first, 'invalid', NOW + 60_001), false);
+  assert.equal(restored.enrichment.stage(current, 'approved', 'a'.repeat(64)), true);
+  assert.equal(restored.enrichment.stage(current, 'changed', 'd'.repeat(64)), false);
+  assert.equal(restored.enrichment.complete(current, 'publication-unavailable', NOW + 60_002), true);
+  assert.equal(restored.enrichment.nextWake(NOW, false), NOW + 64_002);
+  const [retry] = reopen().enrichment.claim(NOW + 64_002);
+  assert.equal(retry.target_json, 'approved');
+  assert.equal(restored.enrichment.complete(retry, 'published', NOW + 64_003), true);
+  assert.equal(restored.enrichment.complete(current, 'conflict', NOW + 64_004), false);
+  assert.equal(restored.enrichment.nextWake(NOW, false), null);
+  assert.deepEqual(restored.enrichment.summary(), { published: 1 });
+  assert.deepEqual(assignments(), before);
+});
+
+test('base publication and its attribute enrollment commit atomically', t => {
+  const { database, store, row } = fixture(t);
+  const tokenId = String(database.prepare("SELECT token_id FROM assignments WHERE category!='egg' LIMIT 1").get()!.token_id);
+  database.exec("CREATE TRIGGER reject_enrichment BEFORE INSERT ON reveal_enrichment BEGIN SELECT RAISE(ABORT,'failed enrollment'); END");
+  const jobs = store.claimPublications(NOW, 20);
+  const outcomes: RevealPublicationResult[] = jobs.map(job => ({ job, status: 'published' }));
+  assert.throws(() => store.completePublications(outcomes, NOW), /failed enrollment/);
+  assert.equal(row(tokenId)?.status, 'pending');
+  assert.deepEqual(store.enrichment.claim(NOW), []);
+  database.exec('DROP TRIGGER reject_enrichment');
+  assert.deepEqual(store.completePublications(outcomes, NOW), outcomes);
+  assert.equal(store.enrichment.claim(NOW).length, 4);
+});

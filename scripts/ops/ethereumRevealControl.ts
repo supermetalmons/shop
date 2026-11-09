@@ -11,6 +11,8 @@ import { ETHEREUM_REVEAL_CATALOG_VERSION, ETHEREUM_REVEAL_CATALOG_VERSION_PATTER
   parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
 import { normalizeEthereumAddress } from '../../shared/ethereum/protocol.ts';
 import { createAsyncD1MaintenanceQuery } from '../shared/asyncD1MaintenanceQuery.ts';
+import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenance.ts';
+import { isRevealArtworkTokenId, type EthereumRevealAttributeBackfillPage } from '../../shared/ethereum/revealMaintenance.ts';
 import { acquireMetadataPublicationLease } from '../ethereum-metadata/publicationLease.ts';
 import { verifyMetadata } from '../ethereum-metadata/remote.ts';
 import { COMMERCE_D1_NOW_MS_SQL, sqlString, type CommerceAuthorityQuery } from '../shared/commerceD1Maintenance.ts';
@@ -18,15 +20,17 @@ import { COMMERCE_D1_NOW_MS_SQL, sqlString, type CommerceAuthorityQuery } from '
 const DEFAULT_TEMPLATE = new URL('../ethereum-metadata/templates/artwork.json', import.meta.url);
 const RPC_ENV_FILES = [new URL('../../.env.local', import.meta.url), new URL('../../.env', import.meta.url)];
 
-type Args = { command: 'status' | 'register' | 'activate' | 'pause'; write: boolean; deploymentId?: string; expectedRevision?: number; manifest?: string };
+type Args = { command: 'status' | 'register' | 'activate' | 'pause' | 'backfill-attributes'; write: boolean; retryBlocked?: boolean; recheckTokenId?: string;
+  deploymentId?: string; expectedRevision?: number; manifest?: string };
 
 export function parseEthereumRevealControlArgs(argv: string[]): Args {
   const { values, positionals, tokens } = parseArgs({ args: argv, allowPositionals: true, tokens: true, options: {
     write: { type: 'boolean', default: false }, manifest: { type: 'string' }, 'deployment-id': { type: 'string' }, 'expected-revision': { type: 'string' },
+    'retry-blocked': { type: 'boolean' }, 'recheck-token': { type: 'string' },
   } });
   const command = positionals[0] as Args['command'];
-  if (positionals.length !== 1 || !['status', 'register', 'activate', 'pause'].includes(command)) {
-    throw new Error('Usage: ethereumRevealControl.ts <status|register|activate|pause> [--manifest FILE | --deployment-id ID] [--expected-revision N] [--write]');
+  if (positionals.length !== 1 || !['status', 'register', 'activate', 'pause', 'backfill-attributes'].includes(command)) {
+    throw new Error('Usage: ethereumRevealControl.ts <status|register|activate|pause|backfill-attributes> [--manifest FILE | --deployment-id ID] [--expected-revision N] [--write] [--retry-blocked | --recheck-token ID]');
   }
   const seen = new Set<string>();
   for (const token of tokens) {
@@ -35,16 +39,26 @@ export function parseEthereumRevealControlArgs(argv: string[]): Args {
     seen.add(token.name);
   }
   const deploymentId = values['deployment-id'];
+  if (values['retry-blocked'] && command !== 'backfill-attributes') throw new Error('--retry-blocked requires backfill-attributes.');
+  const recheckTokenId = values['recheck-token'];
+  if (recheckTokenId !== undefined && (command !== 'backfill-attributes' || values['retry-blocked'] || !isRevealArtworkTokenId(recheckTokenId))) {
+    throw new Error('--recheck-token requires backfill-attributes and a single artwork token ID, without --retry-blocked.');
+  }
   const expectedRevision = values['expected-revision'] === undefined ? undefined : Number(values['expected-revision']);
   if (deploymentId !== undefined && !ETHEREUM_REVEAL_DEPLOYMENT_ID.test(deploymentId)) throw new Error('Invalid deployment ID.');
   if (values.manifest !== undefined && !values.manifest.trim()) throw new Error('Invalid manifest path.');
   if (values.manifest !== undefined && deploymentId !== undefined) throw new Error('Choose either --manifest or --deployment-id, not both.');
   if (command === 'status' && (values.write || expectedRevision !== undefined)) throw new Error('Status only accepts --manifest or --deployment-id.');
   if (command === 'register' && (!values.manifest || deploymentId || expectedRevision !== undefined)) throw new Error('Register requires only --manifest and optional --write.');
+  if (command === 'backfill-attributes' && (!deploymentId && !values.manifest ||
+    (expectedRevision !== undefined || values.write) && (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 1))) {
+    throw new Error('Attribute backfill requires --deployment-id or --manifest. Writes also require --expected-revision.');
+  }
   if ((command === 'activate' || command === 'pause') && ((!deploymentId && !values.manifest) || !Number.isSafeInteger(expectedRevision) || expectedRevision! < 1)) {
     throw new Error('A transition requires --manifest or --deployment-id, and --expected-revision.');
   }
-  return { command, write: values.write, deploymentId, expectedRevision, manifest: values.manifest };
+  return { command, write: values.write, deploymentId, expectedRevision, manifest: values.manifest,
+    ...(values['retry-blocked'] && { retryBlocked: true }), ...(recheckTokenId && { recheckTokenId }) };
 }
 
 type Registration = Omit<EthereumRevealDeployment, 'state' | 'revision' | 'createdAtMs' | 'updatedAtMs' | 'activatedAtMs' | 'provisionedAtMs' | 'lastError' | 'retiredAtMs' | 'replacementDeploymentId'>;
@@ -158,6 +172,7 @@ export function buildEthereumRevealTransition(command: 'activate' | 'pause', cur
 
 export async function runEthereumRevealControl(argv: string[], overrides: {
   query?: CommerceAuthorityQuery; verifyPublication?: typeof verifyMetadata; verifyDeployment?: (value: Registration) => Promise<void>;
+  maintenance?: typeof withEthereumRevealMaintenance;
 } = {}) {
   const args = parseEthereumRevealControlArgs(argv);
   const query = overrides.query ?? createAsyncD1MaintenanceQuery('ops');
@@ -201,6 +216,37 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
   if (args.command === 'status') return { deployments };
   if (deployments.length !== 1) throw new Error('Reveal deployment not found.');
   const current = deployments[0];
+  if (args.command === 'backfill-attributes') {
+    const revision = args.expectedRevision ?? current.revision;
+    if (current.chainId !== 11155111 || current.dropId !== '111k_devnet' || current.state !== 'active' ||
+      current.retiredAtMs != null || current.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION || current.revision !== revision) {
+      throw new Error('Attribute backfill requires the active Sepolia deployment at the expected revision.');
+    }
+    const totals = await (overrides.maintenance ?? withEthereumRevealMaintenance)(async transport => {
+      if (!transport.backfillAttributes) throw new Error('The reveal maintenance binding does not support attribute backfill.');
+      const counts = { eligible: 0, missing: 0, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0 };
+      let afterTokenId: string | null = null;
+      do {
+        const page: EthereumRevealAttributeBackfillPage = await transport.backfillAttributes({
+          deploymentId: current.deploymentId, expectedRevision: revision, afterTokenId, write: args.write,
+          ...(args.retryBlocked && { retryBlocked: true }), ...(args.recheckTokenId && { recheckTokenId: args.recheckTokenId }),
+        });
+        if (page.nextCursor !== null && (args.recheckTokenId || !isRevealArtworkTokenId(page.nextCursor) ||
+          page.nextCursor <= (afterTokenId ?? ''))) throw new Error('Attribute backfill returned an invalid cursor.');
+        counts.eligible += page.eligible;
+        counts.missing += page.missing;
+        counts.invalid += page.invalid;
+        counts.conflict += page.conflict;
+        counts.conflictRechecks += page.conflictRechecks;
+        counts.enqueued += page.enqueued;
+        counts.requeued += page.requeued;
+        afterTokenId = page.nextCursor;
+      } while (afterTokenId !== null);
+      return counts;
+    });
+    return { command: args.command, dryRun: !args.write, ...(args.retryBlocked && { retryBlocked: true }),
+      ...(args.recheckTokenId && { recheckTokenId: args.recheckTokenId }), deploymentId: current.deploymentId, revision, ...totals };
+  }
   const sql = buildEthereumRevealTransition(args.command, current, args.expectedRevision!);
   if (!args.write) return { dryRun: true, command: args.command, deployment: current, sql };
   const updated = await query(sql);

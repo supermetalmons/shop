@@ -52,7 +52,7 @@ async function request(path: string, config: RevealConfig,
   const payload: EthereumRevealTransactionRequest | EthereumRevealTokensRequest = {
     chainId: config.chainId, contractAddress: config.contractAddress, ...body,
   };
-  const { response, value } = await requestEthereumJson(path, { body: payload, signal });
+  const { response, value } = await requestEthereumJson(path, { body: payload, signal, preserveTraitNumbers: true });
   if (!response.ok) {
     const detail = record(value) && record(value.error) ? value.error : value;
     const retry = response.headers.get('Retry-After');

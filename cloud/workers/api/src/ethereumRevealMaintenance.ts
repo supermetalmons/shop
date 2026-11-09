@@ -1,16 +1,22 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
+import type { EthereumRevealAttributeBackfillPage, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealReplacementInspection, EthereumRevealRetirementResult,
   EthereumRevealRetirementCancellation } from '../../../../shared/ethereum/revealMaintenance.js';
 import type { EthereumRevealObject } from './ethereumRevealObject.js';
-import { parseRevealMaintenanceRequest, parseRevealReplacementRequest, parseRevealRetirementRequest,
-  requireRetiredRevealDeployment, requireRevealReplacement, requireRevealRetirementPair, requireRevealCancellationPair,
+import { parseRevealAttributeBackfillRequest, parseRevealMaintenanceRequest, parseRevealReplacementRequest, parseRevealRetirementRequest,
+  requireAttributeBackfillDeployment, requireRetiredRevealDeployment, requireRevealReplacement, requireRevealRetirementPair, requireRevealCancellationPair,
   revealMaintenanceIdentity } from './ethereumRevealMaintenanceSupport.js';
 import { acquireRevealCommerceFence, requireCancelableRevealFence, resolveRevealCommerceFence } from './ethereumRevealCommerceFence.js';
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import { verifyRevealDeployment } from './ethereumRevealChain.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async backfillAttributes(value: unknown): Promise<EthereumRevealAttributeBackfillPage> {
+    const request = parseRevealAttributeBackfillRequest(value);
+    const deployment = await requireAttributeBackfillDeployment(this.env, request);
+    return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).backfillAttributes(request);
+  }
+
   async purgeRetired(value: unknown): Promise<EthereumRevealPurgeResult> {
     return this.#run(value, (object, request) => object.purgeRetired(request));
   }

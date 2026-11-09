@@ -259,6 +259,25 @@ test('Ethereum inventory isolates chain, contract and owner, without changing NF
   await assert.rejects(ethereumApi.inventory(config, owner, null));
 });
 
+test('inventory and confirmation keep exact numeric trait display values without changing unrelated fields', async t => {
+  const artwork = { ...item('1'), description: '"value":9007199254740993 [{"attributes":[]}]', attributes: '__traits__' };
+  const traits = '[{"value":9007199254740993,"trait_type":"seed","extra":{"value":1.20}},' +
+    '{"trait_type":"ratio","value":1.234567890123456789},{"trait_type":"tiny","v\\u0061lue":1e-999},' +
+    '{"trait_type":"count","value":27},{"trait_type":"label","value":"0042"}]';
+  const json = JSON.stringify({ items: [artwork], nextCursor: null, observedBlock: 1, status: 'confirmed', confirmations: 3, burnedTokenIds: [] })
+    .replace('"__traits__"', traits);
+  const fetch = t.mock.method(globalThis, 'fetch', async () => new Response(json));
+  fetch.mock.mockImplementationOnce(async () => new Response(json.replaceAll('"value":', '"\\u0076alue":')));
+  for (const response of [await ethereumApi.inventory(config, owner, null), await ethereumApi.confirm(hash, config, owner)]) {
+    const [result] = response.items;
+    assert.equal(result.description, artwork.description);
+    assert.deepEqual(result.attributes, [{ trait_type: 'seed', value: '9007199254740993', extra: { value: 1.2 } },
+      { trait_type: 'ratio', value: '1.234567890123456789' }, { trait_type: 'tiny', value: '1e-999' },
+      { trait_type: 'count', value: 27 }, { trait_type: 'label', value: '0042' }]);
+    assert.equal(ethereumInventoryView(result).attributes?.[0].value, '9007199254740993');
+  }
+});
+
 test('Ethereum inventory and confirmations preserve metadata while container previews use dimensioned overrides', async t => {
   const artwork = { ...item('1'), name: 'Updated artwork #1', description: '',
     image: 'https://future-cdn.example/artwork.webp', attributes: [{ trait_type: 'type', value: 'artwork' }] };

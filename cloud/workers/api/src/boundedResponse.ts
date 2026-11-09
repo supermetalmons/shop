@@ -18,6 +18,7 @@ export type BoundedResponseOptions = Readonly<{
 
 export type BoundedJsonResponseOptions = BoundedResponseOptions & Readonly<{
   contentType: 'require-json' | 'ignore';
+  parseJson?: (text: string) => unknown;
 }>;
 
 function validateMaxBytes(maxBytes: number): void {
@@ -178,7 +179,7 @@ export async function readBoundedResponseJson(
   const text = await readBoundedResponseText(response, options);
   throwIfAborted(options.signal);
   try {
-    return JSON.parse(text);
+    return options.parseJson ? options.parseJson(text) : JSON.parse(text);
   } catch (error) {
     throwIfAborted(options.signal);
     throw options.createError('invalid-json', error);

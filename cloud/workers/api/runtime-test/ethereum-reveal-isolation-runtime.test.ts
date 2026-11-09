@@ -83,6 +83,7 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
     t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       const url = new URL(request.url);
+      if (url.origin === 'https://cdn.lil.org' && url.pathname.includes('/json/v0/')) return new Response(null, { status: 503 });
       try {
         assert.ok(['eth-sepolia.g.alchemy.com', 'eth-mainnet.g.alchemy.com'].includes(url.hostname), `Unexpected outbound request: ${url.origin}`);
         assert.equal(url.pathname, '/v2/isolation-test-only');

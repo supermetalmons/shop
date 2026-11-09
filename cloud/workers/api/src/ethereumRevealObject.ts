@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { createHash } from 'node:crypto';
-import type { EthereumRevealResult, EthereumRevealTokensResponse, EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
+import { REVEAL_ENRICHMENT_VERSION, type EthereumRevealResult, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
 import { ETHEREUM_REVEAL_CATALOG_VERSION, readEthereumRevealDeployment,
   type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumApiError } from './ethereumError.js';
@@ -9,9 +9,12 @@ import { validateRevealCatalog } from './ethereumRevealCatalog.js';
 import { EthereumRevealStore, type RevealReceiptClaim, type RevealScanClaim, type RevealPublicationJob,
   type RevealPublicationResult } from './ethereumRevealStore.js';
 import type { RevealVerificationResult, RevealVerificationScope, RevealVerificationWork } from './ethereumRevealVerification.js';
-import type { RevealPublicationOutcome } from './ethereumRevealPublisherObject.js';
-import type { EthereumRevealInspection, EthereumRevealPurgeResult, EthereumRevealReplacementInspection } from '../../../../shared/ethereum/revealMaintenance.js';
-import { parseRevealMaintenanceRequest, parseRevealReplacementRequest, requireRetiredRevealDeployment, requireRevealObjectIdentity, requireRevealReplacement,
+import type { PreparedAttributes, RevealPublicationOutcome } from './ethereumRevealPublisherObject.js';
+import { attributePublisherName } from './ethereumRevealAttributes.js';
+import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum, REVEAL_ENRICHMENT_SLOTS, type RevealEnrichmentClaim, type RevealEnrichmentOutcome } from './ethereumRevealEnrichmentStore.js';
+import type { EthereumRevealAttributeBackfillPage, EthereumRevealInspection, EthereumRevealPurgeResult, EthereumRevealReplacementInspection } from '../../../../shared/ethereum/revealMaintenance.js';
+import { backfillRevealAttributePage } from './ethereumRevealAttributeBackfill.js';
+import { parseRevealAttributeBackfillRequest, parseRevealMaintenanceRequest, parseRevealReplacementRequest, requireAttributeBackfillDeployment, requireRetiredRevealDeployment, requireRevealObjectIdentity, requireRevealReplacement,
   revealMaintenanceIdentity } from './ethereumRevealMaintenanceSupport.js';
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 
@@ -28,6 +31,8 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private readonly receiptWaiters = new Map<string, Set<() => void>>();
   private migrationRun: Promise<void> | null = null;
   private publicationRun: Promise<void> | null = null;
+  private readonly enrichmentLanes = new Set<Promise<void>>();
+  private readonly enrichmentStop = new AbortController();
   private lastPublicationStartMs = 0;
   private alarmUpdate: Promise<void> | null = null;
   private alarmPending: Promise<void> | null = null;
@@ -456,6 +461,76 @@ export class EthereumRevealObject extends DurableObject<Env> {
     return this.publicationRun;
   }
 
+  private async enrich(deployment: EthereumRevealDeployment, job: RevealEnrichmentClaim, deadlineMs: number): Promise<RevealEnrichmentOutcome> {
+    const timeout = createTimedAbortScope(this.enrichmentStop.signal, { timeoutMs: Math.max(0, deadlineMs - Date.now()),
+      timeoutMessage: 'Reveal attribute enrichment timed out.' });
+    let failure: RevealEnrichmentOutcome = 'source-unavailable';
+    try {
+      const scope = { deploymentId: deployment.deploymentId, chainId: deployment.chainId,
+        contractAddress: deployment.contractAddress, metadataBaseUri: deployment.metadataBaseUri };
+      const writer = this.env.ETHEREUM_REVEAL_PUBLISHER.getByName(attributePublisherName(scope));
+      let metadataJson = job.target_json;
+      if (metadataJson === null) {
+        if (job.target_sha256 !== null || job.acknowledged_sha256 !== null ||
+          job.last_error === 'conflict-recheck' || job.last_error === 'publication-unavailable') return 'conflict';
+        const target = await raceWithSignal<PreparedAttributes>(writer.prepareAttributes(scope, {
+          category: job.category, assetId: job.asset_id, baseJson: job.metadata_json,
+        }, deadlineMs), timeout.signal);
+        if (target.status !== 'prepared') return target.status;
+        await this.authorize(deployment, deadlineMs);
+        timeout.signal.throwIfAborted();
+        if (!this.store.enrichment.stage(job, target.metadataJson, target.metadataSha256)) return 'source-unavailable';
+        metadataJson = target.metadataJson;
+      } else if (!matchesEnrichmentChecksum(metadataJson, job.target_sha256, job.acknowledged_sha256)) return 'conflict';
+      failure = 'publication-unavailable';
+      timeout.signal.throwIfAborted();
+      const result = await raceWithSignal(writer.publishAttributes(scope, {
+        tokenId: job.token_id, baseJson: job.metadata_json, metadataJson,
+      }, deadlineMs), timeout.signal);
+      if (result.tokenId === job.token_id && (result.status === 'published' || result.status === 'conflict')) return result.status;
+      return failure;
+    } catch {
+      return failure;
+    } finally { timeout.dispose(); }
+  }
+
+  private runEnrichment(deployment: EthereumRevealDeployment): Promise<void> {
+    if (this.retiring || this.enrichmentLanes.size >= REVEAL_ENRICHMENT_SLOTS) return Promise.resolve();
+    const startedAt = Date.now();
+    const first = this.store.enrichment.claim(startedAt, REVEAL_ENRICHMENT_SLOTS - this.enrichmentLanes.size);
+    if (!first.length) return Promise.resolve();
+    const armed = this.arm();
+    let claimed = first.length;
+    const runLane = async (initial: RevealEnrichmentClaim) => {
+      await armed;
+      let job: RevealEnrichmentClaim | undefined = initial;
+      while (job && !this.retiring && Date.now() < startedAt + 25_000) {
+        const outcome = await this.enrich(deployment, job, startedAt + 25_000);
+        if (this.retiring || !await this.authorize(deployment, Date.now() + 5_000).catch(() => null)) return;
+        const updated = this.store.enrichment.complete(job, outcome, Date.now());
+        if (updated && outcome !== 'published' && (outcome === 'conflict' || outcome === 'invalid' || (job.attempts & (job.attempts - 1)) === 0)) {
+          console.error({ event: 'ethereum_reveal_enrichment_error', deploymentId: deployment.deploymentId,
+            tokenId: job.token_id, attempt: job.attempts, reason: outcome });
+        }
+        if (claimed >= 64 || Date.now() >= startedAt + 5_000) return;
+        [job] = this.store.enrichment.claim(Date.now(), 1);
+        if (job) claimed++;
+      }
+    };
+    const lanes = first.map(job => {
+      const lane = runLane(job).finally(async () => {
+        this.enrichmentLanes.delete(lane);
+        await this.arm();
+      });
+      this.enrichmentLanes.add(lane);
+      return lane;
+    });
+    return Promise.allSettled(lanes).then(results => {
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    });
+  }
+
   private arm(): Promise<void> {
     if (this.retiring) return Promise.resolve();
     if (this.alarmPending) return this.alarmPending;
@@ -467,7 +542,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
         if (!identity || !await this.canContinue(identity)) return;
         const current = await this.ctx.storage.getAlarm();
         if (this.retiring) return;
-        const next = this.store.nextWake(Date.now());
+        const next = this.store.nextWake(Date.now(), this.enrichmentLanes.size >= REVEAL_ENRICHMENT_SLOTS);
         if (next !== null && (current === null || current > next)) await this.ctx.storage.setAlarm(next);
       } finally { if (this.alarmUpdate === update) this.alarmUpdate = null; }
     });
@@ -483,6 +558,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
     if (deployment.state === 'provisioning') { await this.initialize(deployment); return; }
     if (!this.store.ready()) throw unavailable();
     await this.startBackground(deployment);
+    this.ctx.waitUntil(this.runEnrichment(deployment));
     await this.runPublications(deployment);
     if (this.retiring) return;
     if (Date.now() - this.lastHealthReportMs >= 60_000) {
@@ -517,9 +593,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
     }
   }
 
-  async inspectReplacement(value: unknown): Promise<EthereumRevealReplacementInspection> {
-    const request = parseRevealReplacementRequest(value);
-    const deployment = await requireRevealReplacement(this.env, request);
+  private requireMaintenanceInventory(deployment: EthereumRevealDeployment): void {
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
     if (this.retiring || !this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='settings'").toArray().length) {
       throw new Error('Replacement reveal inventory is not provisioned.');
@@ -532,7 +606,25 @@ export class EthereumRevealObject extends DurableObject<Env> {
       identity.chainId !== deployment.chainId || identity.metadataBaseUri !== deployment.metadataBaseUri) {
       throw new Error('Replacement reveal inventory identity does not match its registration.');
     }
-    this.requireHealthyPublication();
+  }
+
+  async backfillAttributes(value: unknown): Promise<EthereumRevealAttributeBackfillPage> {
+    const request = parseRevealAttributeBackfillRequest(value);
+    const deployment = await requireAttributeBackfillDeployment(this.env, request);
+    this.requireMaintenanceInventory(deployment);
+    if (!request.write) return backfillRevealAttributePage(this.ctx.storage.sql, request);
+    this.configure(deployment);
+    const page = this.ctx.storage.transactionSync(() => backfillRevealAttributePage(this.ctx.storage.sql, request));
+    await this.arm();
+    return page;
+  }
+
+  async inspectReplacement(value: unknown): Promise<EthereumRevealReplacementInspection> {
+    const request = parseRevealReplacementRequest(value);
+    const deployment = await requireRevealReplacement(this.env, request);
+    this.requireMaintenanceInventory(deployment);
+    const hasEnrichment = this.hasEnrichmentLedger();
+    this.requireHealthyPublication(hasEnrichment);
     const frozenThroughMs = request.frozenThroughMs ?? Math.max(0, Date.now() - 1);
     const digest = createHash('sha256');
     const frozenSamples: EthereumRevealReplacementInspection['frozenSamples'] = [];
@@ -541,19 +633,40 @@ export class EthereumRevealObject extends DurableObject<Env> {
       FROM assignments WHERE token_id IS NOT NULL AND frozen_at_ms<=? ORDER BY length(token_id),token_id`, frozenThroughMs)) {
       frozenArtworks++;
       digest.update(JSON.stringify([row.token_id, row.metadata_json]) + '\n');
-      if (frozenSamples.length < 8) frozenSamples.push({ tokenId: row.token_id,
-        metadataSha256: createHash('sha256').update(row.metadata_json).digest('hex') });
+      if (frozenSamples.length < 8) {
+        const sample: typeof frozenSamples[number] = { tokenId: row.token_id,
+          metadataSha256: createHash('sha256').update(row.metadata_json).digest('hex') };
+        const target = hasEnrichment && this.ctx.storage.sql.exec<{ version: string; target_sha256: string; target_json: string; status: string }>(
+          'SELECT version,target_sha256,target_json,status FROM reveal_enrichment WHERE token_id=? AND target_sha256 IS NOT NULL', row.token_id).toArray()[0];
+        if (target) {
+          const acknowledged = acknowledgedEnrichmentHash(this.ctx.storage.sql, row.token_id, target.version);
+          if (target.version !== REVEAL_ENRICHMENT_VERSION || !matchesEnrichmentChecksum(target.target_json, target.target_sha256, acknowledged)) {
+            throw new Error('Replacement enrichment revision is invalid.');
+          }
+          sample.enrichment = { version: target.version, sha256: target.target_sha256, published: target.status === 'published' || acknowledged !== undefined };
+        }
+        frozenSamples.push(sample);
+      }
     }
     await requireRevealReplacement(this.env, request);
-    this.requireHealthyPublication();
+    this.requireHealthyPublication(this.hasEnrichmentLedger());
     return { ...revealMaintenanceIdentity(deployment), ready: true, frozenThroughMs, frozenArtworks,
       frozenMetadataSha256: digest.digest('hex'), frozenSamples };
   }
 
-  private requireHealthyPublication(): void {
+  private hasEnrichmentLedger(): boolean {
+    return this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
+  }
+
+  private requireHealthyPublication(hasEnrichment: boolean): void {
     if (this.ctx.storage.sql.exec(`SELECT 1 FROM publication
       WHERE status='conflict' OR (status='pending' AND last_error IS NOT NULL) LIMIT 1`).toArray().length) {
       throw new Error('Replacement reveal publication is unhealthy.');
+    }
+    if (hasEnrichment && this.ctx.storage.sql.exec(`SELECT 1 FROM reveal_enrichment WHERE version=?
+        AND (status='conflict' OR last_error='conflict-recheck') LIMIT 1`,
+      REVEAL_ENRICHMENT_VERSION).toArray().length) {
+      throw new Error('Replacement attribute publication has a metadata conflict.');
     }
   }
 
@@ -573,16 +686,19 @@ export class EthereumRevealObject extends DurableObject<Env> {
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
     if (this.quiesceRun) return this.quiesceRun;
     this.retiring = true;
+    this.enrichmentStop.abort();
     const operation = async (): Promise<{ quiesced: true }> => {
       const timeout = createTimedAbortScope(undefined, { timeoutMs: 50_000, timeoutMessage: 'Retired reveal drain timed out.' });
       try {
-        await raceWithSignal(this.env.ETHEREUM_REVEAL_PUBLISHER
-          .getByName(`${deployment.chainId}:${deployment.contractAddress}`).drainRetired(request), timeout.signal);
+        const writers = [`${deployment.chainId}:${deployment.contractAddress}`, attributePublisherName(deployment)];
+        await raceWithSignal(Promise.all(writers.map(name => this.env.ETHEREUM_REVEAL_PUBLISHER
+          .getByName(name).drainRetired(request))), timeout.signal);
         const tasks: Promise<unknown>[] = [...this.receipts.values(), ...this.scans.values()].map(entry => entry.promise);
         tasks.push(...this.overflow.values());
         if (this.alarmUpdate) tasks.push(this.alarmUpdate);
         if (this.migrationRun) tasks.push(this.migrationRun);
         if (this.publicationRun) tasks.push(this.publicationRun);
+        tasks.push(...this.enrichmentLanes);
         await raceWithSignal(Promise.allSettled(tasks), timeout.signal);
         await raceWithSignal(requireRetiredRevealDeployment(this.env, request), timeout.signal);
         await this.ctx.storage.deleteAlarm();

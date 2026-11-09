@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { withRevealTraitFixture } from './revealTraitFixture.ts';
 import { createTestHarness } from 'wrangler';
 import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
@@ -102,6 +103,7 @@ test('native stable crate jobs preserve late candidates through chained reorgs a
   delete config.$schema; delete config.account_id; delete config.routes; delete config.secrets;
   process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false';
   process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
+  t.mock.method(globalThis, 'fetch', withRevealTraitFixture(fetch));
   const runtime = createTestHarness({ root: directory, workers: [{ config }] });
   try {
     await runtime.listen();

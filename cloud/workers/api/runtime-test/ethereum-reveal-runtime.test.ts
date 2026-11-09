@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { withRevealTraitFixture } from './revealTraitFixture.ts';
 import { createTestHarness } from 'wrangler';
 import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.ts';
 import { ethereumHexQuantity, ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
@@ -138,6 +139,7 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
   delete config.secrets;
   process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false';
   process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
+  context.mock.method(globalThis, 'fetch', withRevealTraitFixture(fetch));
   const runtime = createTestHarness({ root: directory, workers: [{ config }] });
   try {
     let apiUrl = (await runtime.listen()).url;

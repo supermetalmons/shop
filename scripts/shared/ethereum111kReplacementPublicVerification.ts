@@ -8,12 +8,18 @@ import { loadMetadataTemplates, sha256 } from '../ethereum-metadata/catalog.ts';
 import { cancelResponseBody, readBoundedResponseBytes } from '../../cloud/workers/api/src/boundedResponse.ts';
 
 type Scope = { chainId: number; metadataBaseUri: string };
-type Options = { fetch?: typeof fetch; wait?: (ms: number) => Promise<void> };
+type Options = { fetch?: typeof fetch; wait?: (ms: number) => Promise<void>; onVerified?: (file: string) => Promise<void> };
 type Media = { url: string; kind: 'image' | 'animation' };
 const ORIGIN = 'https://mons.shop';
 const HASH = /^[a-f0-9]{64}$/;
 
 class RetryablePublicRead extends Error {}
+
+export class PublicMetadataHashMismatch extends Error {
+  constructor(readonly observed: Record<string, string>) {
+    super(`Public replacement metadata differs from R2: ${Object.keys(observed).join(', ')}`);
+  }
+}
 
 async function mediaRoots(): Promise<URL[]> {
   validateRevealAssetCatalog(catalog, descriptor);
@@ -67,8 +73,8 @@ async function concurrent<T>(items: readonly T[], work: (value: T) => Promise<vo
   if (failed?.status === 'rejected') throw failed.reason;
 }
 
-export async function verify111kReplacementPublicSamples(scope: Scope, expected: Readonly<Record<string, string>>,
-  options: Options = {}): Promise<void> {
+export async function read111kReplacementPublicSamples(scope: Scope, expected: Readonly<Record<string, string>>,
+  options: Options = {}): Promise<() => Promise<void>> {
   const base = ethereumMetadataBaseUri(scope.metadataBaseUri, scope.chainId);
   const entries = Object.entries(expected);
   if (!entries.length || entries.length > 64 || entries.some(([file, hash]) => !/^[1-9]\d{0,77}\.json$/.test(file) || !HASH.test(hash))) {
@@ -104,7 +110,8 @@ export async function verify111kReplacementPublicSamples(scope: Scope, expected:
     }
     return response;
   };
-  await concurrent(entries, async ([file, expectedHash]) => retry(async () => {
+  const mismatches: Record<string, string> = {};
+  const readMetadata = async ([file, expectedHash]: [string, string]) => {
     const url = `${base}${file}`;
     const signal = AbortSignal.timeout(15_000);
     const response = await request(url, 'GET', signal);
@@ -116,7 +123,11 @@ export async function verify111kReplacementPublicSamples(scope: Scope, expected:
     const bytes = await readBoundedResponseBytes(response, { maxBytes: 128 * 1024, signal,
       createError: failure => failure === 'stream-failed' ? new RetryablePublicRead(`Public replacement metadata stream failed: ${url}`)
         : new Error(`Public replacement metadata response is invalid (${failure}): ${url}`) });
-    if (sha256(bytes) !== expectedHash) throw new Error(`Public replacement metadata differs from R2: ${url}`);
+    const observed = sha256(bytes);
+    if (observed !== expectedHash) {
+      mismatches[file] = observed;
+      return;
+    }
     let value: unknown;
     try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
     catch { throw new Error(`Public replacement metadata is not valid JSON: ${url}`); }
@@ -125,8 +136,13 @@ export async function verify111kReplacementPublicSamples(scope: Scope, expected:
       if (previous && previous.kind !== item.kind) throw new Error('Replacement media is used with incompatible metadata kinds.');
       media.set(item.url, item);
     }
-  }));
-  await concurrent([...media.values()], async item => retry(async () => {
+  };
+  await concurrent(entries, async entry => {
+    await retry(() => readMetadata(entry));
+    if (!Object.hasOwn(mismatches, entry[0])) await options.onVerified?.(entry[0]);
+  });
+  if (Object.keys(mismatches).length) throw new PublicMetadataHashMismatch(mismatches);
+  return () => concurrent([...media.values()], async item => retry(async () => {
     const response = await request(item.url, 'HEAD', AbortSignal.timeout(15_000));
     try {
       const type = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() ?? '';
@@ -136,4 +152,10 @@ export async function verify111kReplacementPublicSamples(scope: Scope, expected:
       if (!validType || length !== null && (!/^\d+$/.test(length) || Number(length) <= 0)) throw new Error(`Public replacement media is unavailable or has invalid headers: ${item.url}`);
     } finally { await cancelResponseBody(response); }
   }));
+}
+
+export async function verify111kReplacementPublicSamples(scope: Scope, expected: Readonly<Record<string, string>>,
+  options: Options = {}): Promise<void> {
+  const verifyMedia = await read111kReplacementPublicSamples(scope, expected, options);
+  await verifyMedia();
 }

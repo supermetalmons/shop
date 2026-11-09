@@ -259,7 +259,8 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
     if (!artwork) return item;
     return { ...item, name: artwork.name, description: artwork.description, image: artwork.image,
       animation_url: artwork.animation_url, aspectRatio: artwork.aspectRatio, category: artwork.category,
-      attributes: artwork.attributes, revealStatus: 'revealed' };
+      attributes: config.chainId !== 31337 && item.revealStatus === 'revealed' ? item.attributes ?? artwork.attributes : artwork.attributes,
+      revealStatus: 'revealed' };
   }, [media, config.chainId, config.contractAddress]);
   return { applyArtwork, isTracking };
 }

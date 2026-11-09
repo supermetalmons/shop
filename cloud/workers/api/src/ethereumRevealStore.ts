@@ -4,6 +4,7 @@ import { EthereumRevealRecoveryStore, type RevealDispatchState, type RevealRecei
 import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, EthereumRevealTransactionInspection } from './ethereumRevealChain.js';
 export type { RevealDispatchState, RevealReceiptClaim, RevealScanClaim, RevealWorkLane } from './ethereumRevealRecoveryStore.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
+import { EthereumRevealEnrichmentStore, REVEAL_ENRICHMENT_SCHEMA } from './ethereumRevealEnrichmentStore.js';
 import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, REVEAL_CATEGORY_COUNTS,
   revealCrateSize, revealRandomInteger } from './ethereumRevealCatalog.js';
 
@@ -87,6 +88,7 @@ const SCHEMA = [
     last_error TEXT,claim_id TEXT)`,
   `CREATE INDEX IF NOT EXISTS publication_due_numeric ON publication(status,next_check_ms,CAST(token_id AS INTEGER))`,
   `DROP INDEX IF EXISTS publication_due`,
+  ...REVEAL_ENRICHMENT_SCHEMA,
   `CREATE TABLE IF NOT EXISTS recovery_jobs (id TEXT PRIMARY KEY, token_ids_json TEXT NOT NULL, ranges_json TEXT NOT NULL,
     next_check_ms INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS recovery_due ON recovery_jobs(next_check_ms)`,
@@ -104,6 +106,7 @@ function immutableDeployment(deployment: EthereumRevealDeployment): string {
 }
 
 export class EthereumRevealStore {
+  readonly enrichment: EthereumRevealEnrichmentStore;
   private readonly transaction: <T>(action: () => T) => T;
   private readonly recovery: EthereumRevealRecoveryStore;
 
@@ -129,6 +132,7 @@ export class EthereumRevealStore {
         this.sql.exec('ALTER TABLE publication ADD COLUMN claim_id TEXT');
       }
     });
+    this.enrichment = new EthereumRevealEnrichmentStore(sql, this.transaction);
     this.recovery = new EthereumRevealRecoveryStore(sql, action => this.transaction(action), {
       freeze: (deployment, observation, crates, now, allCrates) => this.freezeRecords(deployment, observation, crates, now, allCrates),
       reserve: crates => this.reserve(crates),
@@ -433,10 +437,10 @@ export class EthereumRevealStore {
       .toArray().length ? 'publication-unavailable' : null;
   }
 
-  nextWake(now: number): number | null {
+  nextWake(now: number, enrichmentBusy = false): number | null {
     const recovery = this.recovery.nextWake(now);
     const publication = this.sql.exec<{ due: number | null }>("SELECT MIN(next_check_ms) AS due FROM publication WHERE status='pending'").toArray()[0]?.due;
-    const times = [recovery, publication].filter((value): value is number => value != null);
+    const times = [recovery, publication, this.enrichment.nextWake(now, enrichmentBusy)].filter((value): value is number => value != null);
     return times.length ? Math.max(now + 250, Math.min(...times)) : null;
   }
 
@@ -446,6 +450,7 @@ export class EthereumRevealStore {
     const publication = this.sql.exec<{ status: string; count: number }>('SELECT status,COUNT(*) AS count FROM publication GROUP BY status').toArray();
     return { ready: this.ready(), seeded: this.pools().reduce((sum, pool) => sum + pool.seeded, 0),
       available: this.pools().reduce((sum, pool) => sum + pool.available, 0), ...row,
-      publication: Object.fromEntries(publication.map(value => [value.status, value.count])), recovery: this.recovery.summary() };
+      publication: Object.fromEntries(publication.map(value => [value.status, value.count])), recovery: this.recovery.summary(),
+      enrichment: this.enrichment.summary() };
   }
 }

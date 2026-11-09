@@ -124,7 +124,7 @@ export const ethereumApi = {
         while (next < metadata.length) {
           combined.throwIfAborted();
           const index = next++;
-          const value = await request(`${ETHEREUM_API_PATHS.metadata}?${new URLSearchParams({ kind: 'relic', displayId: String(index + 1) })}`, { signal: combined });
+          const value = await request(`${ETHEREUM_API_PATHS.metadata}?${new URLSearchParams({ kind: 'relic', displayId: String(index + 1) })}`, { signal: combined, preserveTraitNumbers: true });
           if (!record(value) || typeof value.name !== 'string' || !hasValidEthereumMedia(value)) return invalid();
           metadata[index] = value as EthereumMetadata;
         }
@@ -170,7 +170,7 @@ export const ethereumApi = {
         const params = new URLSearchParams({ owner });
         if (cursor) params.set('cursor', cursor);
         else if (ids.length) params.set('expectedTokenIds', ids.join(','));
-        const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal });
+        const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal, preserveTraitNumbers: true });
         if (!record(value) || !Array.isArray(value.items) || value.items.length > 500 ||
           (value.nextCursor !== null && typeof value.nextCursor !== 'string') || !Number.isSafeInteger(value.observedBlock)) return invalid();
         return { items: value.items.map(item => parseEthereumInventoryItem(item, config, owner)), nextCursor: value.nextCursor as string | null, observedBlock: Number(value.observedBlock) };
@@ -233,7 +233,7 @@ export const ethereumApi = {
     return await request(ETHEREUM_API_PATHS.claimConfirm, { body: { claimId, transactionHash } satisfies EthereumClaimConfirmRequest, session }) as EthereumConfirmationResponse;
   },
   async confirm(transactionHash: string, config: Ethereum111kConfig, owner: string, signal?: AbortSignal, operation?: EthereumSubmission): Promise<EthereumTransactionConfirmResponse> {
-    const value = await request(ETHEREUM_API_PATHS.transactionsConfirm, { body: { transactionHash }, signal });
+    const value = await request(ETHEREUM_API_PATHS.transactionsConfirm, { body: { transactionHash }, signal, preserveTraitNumbers: true });
     if (!record(value) || !['pending', 'confirmed'].includes(String(value.status)) || !Number.isSafeInteger(value.confirmations) ||
       !Array.isArray(value.items) || !Array.isArray(value.burnedTokenIds) || !value.burnedTokenIds.every(id => typeof id === 'string' && normalizeEthereumTokenId(id) === id)) return invalid();
     if (value.status === 'confirmed' && operation && operation.action !== 'cancel') {

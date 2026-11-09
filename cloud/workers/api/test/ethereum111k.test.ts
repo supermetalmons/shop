@@ -415,6 +415,33 @@ test('checkout drafts are immutable, idempotent, unconnected previews with only 
   } finally { f.close(); }
 });
 
+test('50 trait-rich artworks fit in the checkout snapshot and keep their full token metadata', async () => {
+  const f = fixture();
+  try {
+    const tokenIds = Array.from({ length: 50 }, (_, i) => String(i + 1));
+    const metadata: EthereumMetadata = { name: 'Art', image: 'https://example.test/art.png', category: 'painting',
+      aspectRatio: { width: 3, height: 2 }, attributes: [{ trait_type: 'collection block', value: 'Block' },
+        { trait_type: 'Detail', value: 'x'.repeat(24 * 1024) }] };
+    for (const tokenId of tokenIds) {
+      f.state.tokens.set(tokenId, { kind: 1, displayId: Number(tokenId), owner: WALLET });
+      f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
+    }
+    const created = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.create,
+      { requestId: REQUEST_ID, dropId: '111k_devnet', tokenIds });
+    assert.equal(created.response.status, 200);
+    assert.equal(created.body.items.length, 50);
+    for (const item of created.body.items) {
+      assert.equal(item.image, metadata.image);
+      assert.deepEqual(item.aspectRatio, metadata.aspectRatio);
+      assert.equal(item.category, metadata.category);
+      assert.equal(item.attributes, undefined);
+    }
+    const saved = f.commerce.database.prepare('SELECT items_json FROM ethereum_delivery_checkouts WHERE checkout_id=?').get(created.body.checkoutId);
+    assert.deepEqual(JSON.parse(String(saved?.items_json)), created.body.items);
+    assert.deepEqual((await f.request(`${paths.metadata}?kind=artwork&displayId=1`)).body, metadata);
+  } finally { f.close(); }
+});
+
 test('checkout creation preserves every approved VVV path and callback result fields', async () => {
   const f = fixture();
   try {
@@ -3661,6 +3688,23 @@ test('all six metadata kinds preserve HTTPS images, empty descriptions and a sin
     }
     const items = await ethereumInventoryItems(readContext(f), infos);
     assert.deepEqual(items.map(({ name, description, image, attributes }) => ({ name, description, image, attributes })), metadata);
+  } finally { f.close(); }
+});
+
+test('metadata and inventory HTTP responses preserve trait number literals', async () => {
+  const f = fixture();
+  try {
+    const attributes = '[{"trait_type":"seed","value":9007199254740993,"weight":0.1234567890123456789}]';
+    const json = `{"name":"7","image":"https://example.test/7.png","aspectRatio":{"width":1e0,"height":2},"attributes":${attributes}}`;
+    f.metadata.fetch = async () => new Response(json, { headers: { 'Content-Type': 'application/json' } });
+    for (const [path, query] of [[paths.metadata, 'kind=artwork&displayId=7'], [paths.inventory, `owner=${WALLET}&expectedTokenIds=7`]]) {
+      const response = await handleEthereumRequest(new Request(`${ORIGIN}${path}?${query}`, { headers: { Origin: ORIGIN, 'CF-Connecting-IP': '127.0.0.1' } }),
+        f.env, path, { nowMs: () => NOW, fetch: f.providerFetch });
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      assert.ok(body.includes(`"attributes":${attributes}`), body);
+      assert.ok(body.includes('"aspectRatio":{"width":1,"height":2}'), body);
+    }
   } finally { f.close(); }
 });
 

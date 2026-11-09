@@ -1,10 +1,11 @@
 import { fileURLToPath } from 'node:url';
 import type { GetPlatformProxyOptions } from 'wrangler';
-import type { EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
+import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealRetirementRequest, EthereumRevealRetirementResult, EthereumRevealRetirementCancellation, EthereumRevealReplacementRequest,
   EthereumRevealReplacementInspection } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  backfillAttributes?(request: EthereumRevealAttributeBackfillRequest): Promise<EthereumRevealAttributeBackfillPage>;
   purgeRetired(request: EthereumRevealMaintenanceRequest): Promise<EthereumRevealPurgeResult>;
   inspectRetired(request: EthereumRevealMaintenanceRequest): Promise<EthereumRevealInspection>;
   retireForReplacement?(request: EthereumRevealRetirementRequest): Promise<EthereumRevealRetirementResult>;
@@ -40,7 +41,11 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async purgeRetired(request) {
+    return await run({ async backfillAttributes(request) {
+      const page = await call(() => proxy.env.REVEAL_MAINTENANCE.backfillAttributes!(request));
+      return { nextCursor: page.nextCursor, eligible: page.eligible, missing: page.missing,
+        invalid: page.invalid, conflict: page.conflict, conflictRechecks: page.conflictRechecks, enqueued: page.enqueued, requeued: page.requeued };
+    }, async purgeRetired(request) {
       const value = await call(() => proxy.env.REVEAL_MAINTENANCE.purgeRetired(request));
       return { ...inspection(value), purged: value.purged } as EthereumRevealPurgeResult;
     }, async inspectRetired(request) {
@@ -59,8 +64,11 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
       return { deploymentId: value.deploymentId, chainId: value.chainId, contractAddress: value.contractAddress,
         metadataBaseUri: value.metadataBaseUri, revision: value.revision, ready: value.ready, frozenThroughMs: value.frozenThroughMs,
         frozenArtworks: value.frozenArtworks, frozenMetadataSha256: value.frozenMetadataSha256,
-        frozenSamples: Array.from({ length: value.frozenSamples.length }, (_, index) => ({ tokenId: value.frozenSamples[index].tokenId,
-          metadataSha256: value.frozenSamples[index].metadataSha256 })) };
+        frozenSamples: Array.from({ length: value.frozenSamples.length }, (_, index) => {
+          const { tokenId, metadataSha256, enrichment } = value.frozenSamples[index];
+          return { tokenId, metadataSha256, ...(enrichment && { enrichment: {
+            version: enrichment.version, sha256: enrichment.sha256, published: enrichment.published } }) };
+        }) };
     } });
   } finally { await proxy.dispose(); }
 }
