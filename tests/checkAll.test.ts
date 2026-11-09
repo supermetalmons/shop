@@ -99,7 +99,7 @@ test('full validation includes extended and native suites without repeating root
   assert.deepEqual(calls.map(call => call.args[0] === 'run' ? call.args[1] : call.command === process.execPath
     ? call.args.filter(value => value.endsWith('.test.ts')) : call.command), [
     'check', 'check', ['tests/ethereum/local.test.ts'], 'test:invariants:extended', 'test:ethereum:e2e',
-    'anchor', 'cargo', 'test:mi-note-videos',
+    'test:pre111k:e2e', 'anchor', 'cargo', 'test:mi-note-videos',
   ]);
   assert.equal(calls[0].cwd, root);
   assert.notEqual(calls[1].cwd, join(root, 'onchain/ethereum'));

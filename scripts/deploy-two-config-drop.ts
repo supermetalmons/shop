@@ -17,12 +17,24 @@ import {
   MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS, SPL_NOOP_PROGRAM_ADDRESS,
 } from '../shared/solanaProgramAddresses.ts';
 import {
-  assertExistingConfigMatchesResume, bubblegumTreeConfigPda, buildCreateBubblegumTreeConfigV2Ix,
-  buildDiscountMerkleData, buildInitializeSplitPaymentsV1Ix, decodeMplCoreCollectionBase,
-  decodeMplCoreCollectionRoyalties, decodeMplCoreCollectionUpdateDelegates, decodeReceiptTreeState,
-  finalizeDiscountMerkleAndDeploymentRegistry, getConcurrentMerkleTreeAccountSize,
-  IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1, mplCorePluginUpdateDelegate,
-  readMplCoreCollectionPluginRecords, registerDeploymentCleanup, validateDiscountMerkleDatasetForDeploy,
+  decodeMplCoreCollectionBase,
+  decodeMplCoreCollectionRoyalties,
+  decodeMplCoreCollectionUpdateDelegates,
+  IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1,
+  mplCorePluginUpdateDelegate,
+  readMplCoreCollectionPluginRecords,
+} from './shared/mplCoreCollection.ts';
+import {
+  assertExistingConfigMatchesResume,
+  bubblegumTreeConfigPda,
+  buildCreateBubblegumTreeConfigV2Ix,
+  buildDiscountMerkleData,
+  buildInitializeSplitPaymentsV1Ix,
+  decodeReceiptTreeState,
+  finalizeDiscountMerkleAndDeploymentRegistry,
+  getConcurrentMerkleTreeAccountSize,
+  registerDeploymentCleanup,
+  validateDiscountMerkleDatasetForDeploy,
 } from './deploy-all-onchain.ts';
 import {
   acquireDeploymentRegistryMutationLock, normalizeAndValidateDropId, normalizeDeploymentDropForRegistry, readDeploymentDropRegistry,

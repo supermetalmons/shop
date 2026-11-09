@@ -103,7 +103,7 @@ export type CommerceD1BatchObservation = Readonly<{
   statements: readonly CommerceD1BatchStatementObservation[];
 }>;
 
-export type CommerceD1BatchObserver = (observation: CommerceD1BatchObservation) => void;
+export type CommerceD1BatchObserver = (observation: CommerceD1BatchObservation) => void | Promise<void>;
 
 export type CommerceD1CallObservation =
   | CommerceD1StatementObservation
@@ -169,6 +169,7 @@ export function d1Database(
   observeStatement?: CommerceD1StatementObserver,
   observeBatchAfterCommit?: CommerceD1BatchObserver,
   observeCall?: CommerceD1CallObserver,
+  observeBatchBeforeBegin?: CommerceD1BatchObserver,
 ): D1Database {
   return {
     prepare: (sql: string) => new PreparedStatement(
@@ -186,6 +187,7 @@ export function d1Database(
         statements: preparedStatements.map((statement) => statement.batchObservation()),
       };
       observeCall?.({ method: 'batch', ...observation });
+      if (observeBatchBeforeBegin) await observeBatchBeforeBegin(observation);
       const results: D1Result<T>[] = [];
       database.exec('BEGIN');
       try {
@@ -195,7 +197,7 @@ export function d1Database(
         database.exec('ROLLBACK');
         throw error;
       }
-      observeBatchAfterCommit?.(observation);
+      if (observeBatchAfterCommit) await observeBatchAfterCommit(observation);
       return results;
     },
   } as unknown as D1Database;
@@ -203,6 +205,7 @@ export function d1Database(
 
 export function createCommerceD1Harness(
   options: Readonly<{
+    observeBatchBeforeBegin?: CommerceD1BatchObserver;
     observeBatchAfterCommit?: CommerceD1BatchObserver;
     observeCall?: CommerceD1CallObserver;
     observeStatement?: CommerceD1StatementObserver;
@@ -297,6 +300,7 @@ export function createCommerceD1Harness(
       options.observeStatement,
       options.observeBatchAfterCommit,
       options.observeCall,
+      options.observeBatchBeforeBegin,
     ),
   };
 }

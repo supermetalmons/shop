@@ -3,10 +3,11 @@ import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.js';
 import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUri.js';
 import {
-  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_CRATES_PER_RELIC,
+  ETHEREUM_CRATES_PER_WAREHOUSE, ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS,
   ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
-  ethereumItemDisplayIdMaximum, ethereumMetadataTokenId, normalizeEthereumTokenId,
+  ethereumItemDisplayIdMaximum, ethereumMetadataTokenId, isPossibleArtworkMintCount, normalizeEthereumTokenId,
 } from '../../../../shared/ethereum/protocol.js';
+import { decode111kStats, minimum111kAllocatedCrates, valid111kDiscountUsage, valid111kRelicSupply } from '../../../../shared/ethereum/stats.js';
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
 import { EthereumApiError } from './ethereumError.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
@@ -208,38 +209,35 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
       throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
     }
     const statsData = await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]));
-    if (![12, 14, 15].some(words => statsData.length === 2 + 64 * words)) {
+    const stats = decode111kStats(statsData);
+    if (!stats || stats.discountCratePriceWei > stats.cratePriceWei ||
+      stats.warehousesMinted > ethereumItemDisplayIdMaximum('warehouse') || stats.artworksMinted > ethereumItemDisplayIdMaximum('artwork')) {
       throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid statistics.');
     }
-    const publicRelics = statsData.length === 2 + 64 * 15;
-    const capped = publicRelics || statsData.length === 2 + 64 * 14;
-    const values = decodeReturn(
-      ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256',
-        ...(capped ? ['uint256', 'uint256'] : []), ...(publicRelics ? ['uint256'] : [])], statsData);
-    const maxDiscountedMints = Number(values[12]);
-    const totalDiscountedMints = Number(values[13]);
-    if (capped && (![maxDiscountedMints, totalDiscountedMints].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 5555) ||
-      totalDiscountedMints > maxDiscountedMints || totalDiscountedMints > Number(values[0]))) {
+    if (!valid111kDiscountUsage(stats)) {
       throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid discount usage.');
     }
-    const allocatedCrates = Number(values[0]);
-    const relicsAllocated = Number(values[10]);
-    const relicsMinted = Number(values[11]);
-    const publicRelicsMinted = publicRelics ? Number(values[14]) : 0;
-    if (!Number.isSafeInteger(relicsAllocated) || relicsAllocated < 0 || relicsAllocated > ETHEREUM_MAX_RELICS ||
-      !Number.isSafeInteger(relicsMinted) || relicsMinted < 0 || relicsMinted > relicsAllocated ||
-      !Number.isSafeInteger(publicRelicsMinted) || publicRelicsMinted < 0 || relicsAllocated + publicRelicsMinted > ETHEREUM_MAX_RELICS ||
-      allocatedCrates < (relicsAllocated + publicRelicsMinted) * ETHEREUM_CRATES_PER_RELIC) {
+    if (!valid111kRelicSupply(stats)) {
       throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic supply.');
     }
+    const unclaimedRelics = stats.relicsAllocated - stats.relicsMinted;
+    if (stats.allocatedCrates < minimum111kAllocatedCrates(stats) ||
+      !isPossibleArtworkMintCount(stats.artworksMinted, stats.allocatedCrates, unclaimedRelics)) {
+      throw new EthereumApiError('unavailable', 'The Ethereum collection returned an invalid crate allocation.');
+    }
+    const allocatedCrates = Number(stats.allocatedCrates);
+    const remainingCrates = ethereumItemDisplayIdMaximum('crate') - allocatedCrates;
+    const relicsAllocated = Number(stats.relicsAllocated);
+    const relicsMinted = Number(stats.relicsMinted);
     return { chainId: context.config.chainId, contractAddress: requireEthereumContract(context), owner,
-      allocatedCrates, warehousesMinted: Number(values[1]), artworksMinted: Number(values[2]),
-      cratePriceWei: String(values[3]), warehousePriceWei: String(values[4]), saleActive: values[5],
-      remainingCrates: 5555 - allocatedCrates, remainingWarehouses: Math.floor((5555 - allocatedCrates) / 11),
-      discountMerkleRoot: values[6], discountCratePriceWei: String(values[7]),
-      discountAllowance: Number(values[8]), discountUsed: Number(values[9]),
-      ...(capped ? { maxDiscountedMints, totalDiscountedMints } : {}),
-      relicsAllocated, relicsMinted, publicRelicsMinted, remainingRelics: relicsAllocated - relicsMinted };
+      allocatedCrates, warehousesMinted: Number(stats.warehousesMinted), artworksMinted: Number(stats.artworksMinted),
+      cratePriceWei: String(stats.cratePriceWei), warehousePriceWei: String(stats.warehousePriceWei), saleActive: stats.saleActive,
+      remainingCrates, remainingWarehouses: Math.floor(remainingCrates / ETHEREUM_CRATES_PER_WAREHOUSE),
+      discountMerkleRoot: stats.discountMerkleRoot, discountCratePriceWei: String(stats.discountCratePriceWei),
+      discountAllowance: Number(stats.discountAllowance), discountUsed: Number(stats.discountUsed),
+      ...(stats.discountCap ? { maxDiscountedMints: Number(stats.discountCap.maxDiscountedMints),
+        totalDiscountedMints: Number(stats.discountCap.totalDiscountedMints) } : {}),
+      relicsAllocated, relicsMinted, publicRelicsMinted: Number(stats.publicRelicsMinted), remainingRelics: Number(unclaimedRelics) };
   }
   if (path.endsWith('/metadata')) {
     const kind = url.searchParams.get('kind') as EthereumItemKind;

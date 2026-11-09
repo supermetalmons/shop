@@ -57,7 +57,7 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
   assert.equal(new URL(urls[0], 'https://mons.shop').searchParams.get('owner'), owner);
   for (const changed of [
     { owner: other }, { owner: null }, { chainId: 31337 }, { contractAddress: other },
-    { discountMerkleRoot: '0x1234' }, { discountAllowance: 11 }, { discountUsed: -1 }, { discountCratePriceWei: '-1' },
+    { discountMerkleRoot: '0x1234' }, { discountAllowance: 0 }, { discountAllowance: 11 }, { discountUsed: -1 }, { discountCratePriceWei: '-1' },
     { maxDiscountedMints: 500 }, { totalDiscountedMints: 0 },
     ...[-1, 5556, 0.5, '500', null].map(maxDiscountedMints => ({ maxDiscountedMints, totalDiscountedMints: 0 })),
     ...[-1, 501, 0.5, '1', null].map(totalDiscountedMints => ({ maxDiscountedMints: 500, totalDiscountedMints })),

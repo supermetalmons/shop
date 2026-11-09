@@ -116,11 +116,12 @@ function fixture(controlActive = true) {
     deliveryConfigs: new Map<number, [string, string, bigint, bigint, bigint, bigint]>([
       [1, [DELIVERY_RECEIVER, ZERO, 0n, 0n, 0n, 0n]],
     ]),
-    allocatedCrates: 25, relicsAllocated: 0, relicsMinted: 0, relicInterface: true, relicLimit: 18,
+    allocatedCrates: 25, warehousesMinted: 2, artworksMinted: 20, relicsAllocated: 0, relicsMinted: 0, relicInterface: true, relicLimit: 18,
     claimedMask: 0n, relicMaskInterface: true, saleActive: true,
     publicRelicsMinted: null as number | null, publicRelicStats: null as unknown[] | null,
     freeMintAllowances: new Map<string, number[]>(),
-    discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
+    discountRoot: `0x${'ab'.repeat(32)}`, discountCratePriceWei: '50000000000000',
+    discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     discountTotals: [] as number[],
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 7, owner: WALLET }]]),
@@ -227,8 +228,8 @@ function fixture(controlActive = true) {
         const [owner] = decodeReturn(['address'], argumentsHex) as [string];
         return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256',
           ...state.discountTotals.map(() => 'uint256'), ...(state.publicRelicsMinted === null ? [] : ['uint256'])],
-          [state.allocatedCrates, 2, 20, '100000000000000', '1100000000000000', state.saleActive, state.discountRoot,
-            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.relicsAllocated, state.relicsMinted,
+          [state.allocatedCrates, state.warehousesMinted, state.artworksMinted, '100000000000000', '1100000000000000', state.saleActive, state.discountRoot,
+            state.discountCratePriceWei, state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.relicsAllocated, state.relicsMinted,
             ...state.discountTotals, ...(state.publicRelicsMinted === null ? [] : [state.publicRelicsMinted])]);
       }
     }
@@ -1546,7 +1547,7 @@ test('public stats verify the relic interface then read wallet discount usage wi
 test('stats expose total discounted usage and preserve free relic allowance reads', async () => {
   const f = fixture();
   try {
-    f.state.allocatedCrates = 500;
+    f.state.allocatedCrates = 633;
     f.state.discountTotals = [500, 499];
     for (const owner of [null, WALLET, OTHER_WALLET]) {
       const result = await f.request<EthereumStats>(`${paths.stats}${owner ? `?owner=${owner}` : ''}`);
@@ -1560,6 +1561,96 @@ test('stats expose total discounted usage and preserve free relic allowance read
     const relics = await f.request<EthereumRelicStatus>(relicPath(WALLET));
     assert.equal(relics.response.status, 200);
     assert.equal(relics.body.remainingAllowance, 1);
+    f.state.discountTotals = [500, 501];
+    assert.equal((await f.request(paths.stats)).response.status, 503);
+    assert.equal((await f.request(relicPath(WALLET))).response.status, 200);
+    f.state.discountTotals = [500, 0];
+    assert.equal((await f.request(`${paths.stats}?owner=${WALLET}`)).response.status, 503);
+    assert.equal((await f.request(relicPath(WALLET))).response.status, 200);
+  } finally { f.close(); }
+});
+
+test('stats reject out-of-range minted counts and wallet discounts independently of relic availability', async () => {
+  const f = fixture();
+  try {
+    f.state.allocatedCrates = 5555;
+    for (const [warehousesMinted, artworksMinted, discountAllowance, discountUsed, status] of [
+      [505, 111111, 10, 0, 200],
+      [504, 111111, 1, 0, 200],
+      [504, 111111, 0, 0, 503],
+      [504, 111111, 10, 10, 200],
+      [506, 111111, 10, 0, 503],
+      [504, 111112, 10, 10, 503],
+      [504, 111111, 11, 10, 503],
+      [504, 111111, 10, 11, 503],
+    ]) {
+      Object.assign(f.state, { warehousesMinted, artworksMinted, discountAllowance });
+      f.state.discountUsed.set(WALLET, discountUsed);
+      assert.equal((await f.request(`${paths.stats}?owner=${WALLET}`)).response.status, status);
+      assert.equal((await f.request(relicPath(WALLET))).response.status, 200);
+    }
+  } finally { f.close(); }
+});
+
+test('stats require enough allocated crates for warehouses, relics, and discounted mints together', async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.state, { warehousesMinted: 2, relicsAllocated: 1, relicsMinted: 1 });
+    f.state.discountUsed.set(WALLET, 2);
+    for (const [discountTotals, publicRelicsMinted, requiredCrates] of [
+      [[], null, 22 + 111 + 2], [[10, 3], null, 22 + 111 + 3], [[10, 3], 1, 22 + 222 + 3],
+    ] as const) {
+      f.state.discountTotals = [...discountTotals];
+      Object.assign(f.state, { publicRelicsMinted, allocatedCrates: requiredCrates });
+      const path = `${paths.stats}?owner=${WALLET}`;
+      assert.equal((await f.request(path)).response.status, 200);
+      f.state.allocatedCrates--;
+      assert.equal((await f.request(path)).response.status, 503);
+    }
+  } finally { f.close(); }
+});
+
+test('stats accept a discount equal to the regular price and reject a higher one', async () => {
+  const f = fixture();
+  try {
+    f.state.discountCratePriceWei = '100000000000000';
+    assert.equal((await f.request(paths.stats)).response.status, 200);
+    f.state.discountCratePriceWei = '100000000000001';
+    assert.equal((await f.request(paths.stats)).response.status, 503);
+    assert.equal((await f.request(relicPath())).response.status, 200);
+  } finally { f.close(); }
+});
+
+test('stats require artwork totals attainable by opening allocated crates', async () => {
+  const f = fixture();
+  try {
+    f.state.warehousesMinted = 0;
+    for (const [allocatedCrates, artworksMinted, status] of [
+      [0, 0, 200], [0, 111_111, 503], [1, 1, 503], [1, 20, 200], [1, 40, 503],
+      [5554, 111_080, 200], [5554, 111_100, 503], [5554, 31, 503],
+      [5555, 11, 503], [5555, 31, 200], [5555, 111_080, 200], [5555, 111_100, 503],
+      [5555, 111_111, 200], [5555, 111_112, 503],
+    ]) {
+      Object.assign(f.state, { allocatedCrates, artworksMinted });
+      assert.equal((await f.request(paths.stats)).response.status, status, JSON.stringify({ allocatedCrates, artworksMinted }));
+    }
+    assert.equal((await f.request(relicPath())).response.status, 200);
+  } finally { f.close(); }
+});
+
+test('stats exclude crates locked in unclaimed relics from artwork capacity', async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.state, { warehousesMinted: 0, relicsAllocated: 1 });
+    const maxWithUnclaimedRelic = (5555 - 111 - 1) * 20 + 31;
+    for (const [allocatedCrates, relicsMinted, artworksMinted, status] of [
+      [111, 0, 0, 200], [111, 0, 20, 503], [111, 1, 111 * 20, 200],
+      [112, 0, 20, 200], [112, 0, 40, 503],
+      [5555, 0, 31, 200], [5555, 0, maxWithUnclaimedRelic, 200], [5555, 0, maxWithUnclaimedRelic + 20, 503],
+    ]) {
+      Object.assign(f.state, { allocatedCrates, relicsMinted, artworksMinted });
+      assert.equal((await f.request(paths.stats)).response.status, status, JSON.stringify({ allocatedCrates, relicsMinted, artworksMinted }));
+    }
   } finally { f.close(); }
 });
 
@@ -4595,7 +4686,7 @@ test('relic status batches all state at one canonical latest block without metad
 test('public relic availability shares the issued mask while keeping reserved claims independent', async () => {
   const f = fixture();
   try {
-    Object.assign(f.state, { allocatedCrates: 1332, relicsAllocated: 10, relicsMinted: 1, publicRelicsMinted: 2,
+    Object.assign(f.state, { allocatedCrates: 1332, warehousesMinted: 0, relicsAllocated: 10, relicsMinted: 1, publicRelicsMinted: 2,
       claimedMask: 7n, discountTotals: [5555, 0], publicRelicStats: [5, 2, 1000, true, 3, 3, 1] });
     f.state.freeMintAllowances.set(WALLET, [0, 0, 3, 0, 0, 1]);
     const result = await f.request<EthereumRelicStatus>(relicPath(WALLET));
@@ -4736,6 +4827,8 @@ test('relic status rejects invalid identities, missing getters and inconsistent 
 test('relic availability uses reserved supply independently of remaining public crates', async () => {
   const f = fixture();
   try {
+    f.state.warehousesMinted = 0;
+    f.state.artworksMinted = 0;
     for (const [allocatedCrates, relicsAllocated, relicsMinted, expected] of [
       [0, 0, 0, 0], [1998, 18, 18, 0], [1998, 18, 17, 1], [5555, 2, 0, 2], [5555, 18, 17, 1], [222, 2, 1, 1],
     ]) {
@@ -4747,6 +4840,9 @@ test('relic availability uses reserved supply independently of remaining public 
       assert.equal(result.body.relicsMinted, relicsMinted);
       assert.equal(result.body.remainingCrates, 5555 - allocatedCrates);
     }
+    Object.assign(f.state, { allocatedCrates: 5556, relicsAllocated: 0, relicsMinted: 0 });
+    assert.equal((await f.request(paths.stats)).response.status, 503);
+    assert.equal((await f.request(relicPath())).response.status, 503);
   } finally { f.close(); }
 });
 

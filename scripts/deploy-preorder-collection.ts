@@ -33,7 +33,7 @@ import {
   decodeMplCoreCollectionUpdateDelegates,
   parseCollectionRoyaltyCreators,
   readMplCoreCollectionPluginRecords,
-} from './deploy-all-onchain.ts';
+} from './shared/mplCoreCollection.ts';
 import { assertReceiptPoolRpcGenesisHash } from './deploy-receipt-pool.ts';
 import { normalizeAndValidateDropId, resolveDropAssetUrl } from './shared/deploymentRegistry.ts';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';

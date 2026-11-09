@@ -47,9 +47,9 @@ import {
   type ReceiptPoolSpec,
 } from './shared/receiptPoolConfig.ts';
 import type { SolanaCluster } from './shared/newDropConfig.ts';
+import { buildCreateMplCoreCollectionV2Ix } from './shared/mplCoreCollection.ts';
 import {
   buildCreateBubblegumTreeConfigV2Ix,
-  buildCreateMplCoreCollectionV2Ix,
   getConcurrentMerkleTreeAccountSize,
   validateReceiptPoolDeploymentOnchain,
 } from './deploy-all-onchain.ts';

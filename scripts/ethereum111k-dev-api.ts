@@ -7,7 +7,8 @@ import { decodeReturn, encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
 import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
 import { ETHEREUM_CRATES_PER_RELIC, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_DELIVERY_CONFIGS, ETHEREUM_MAX_RELICS,
-  ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
+  ETHEREUM_MAX_UNBOX_QUANTITY, ethereumRelicClaimCount, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
+import { decode111kStats, valid111kDiscountUsage, valid111kRelicSupply } from '../shared/ethereum/stats.ts';
 import { parseInitialDeliveryReceiver, parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from './shared/ethereum111kLocalReveal.ts';
 
@@ -77,36 +78,25 @@ const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI, reli
 if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBaseURI)[0] !== deployment.metadataBaseURI) {
   throw new Error('The local collection metadata base URI does not match its deployment manifest.');
 }
-const publicRelics = typeof collectionStats === 'string' && collectionStats.length === 2 + 64 * 15;
-const cappedDiscounts = publicRelics || typeof collectionStats === 'string' && collectionStats.length === 2 + 64 * 14;
-const statsValues = typeof collectionStats === 'string' && (collectionStats.length === 2 + 64 * 12 || cappedDiscounts)
-  ? decodeReturn(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
-    'uint256', 'uint256', 'uint256', 'uint256', 'uint256', ...(cappedDiscounts ? ['uint256', 'uint256'] : []),
-    ...(publicRelics ? ['uint256'] : [])], collectionStats) : [];
-if (cappedDiscounts && (typeof statsValues[12] !== 'bigint' || statsValues[12] > 5555n ||
-  typeof statsValues[13] !== 'bigint' || statsValues[13] > statsValues[12] || statsValues[13] > (statsValues[0] as bigint))) {
+const stats = decode111kStats(collectionStats);
+if (stats && !valid111kDiscountUsage(stats)) {
   throw new Error('The local collection returned invalid discount usage.');
 }
-if (cappedDiscounts ? !Number.isSafeInteger(deployment.maxDiscountedMints) || deployment.maxDiscountedMints !== Number(statsValues[12]) :
-  deployment.maxDiscountedMints !== undefined) {
+const expectedDiscountCap = stats?.discountCap ? Number(stats.discountCap.maxDiscountedMints) : undefined;
+if (deployment.maxDiscountedMints !== expectedDiscountCap) {
   throw new Error('The local collection discount cap does not match its deployment manifest.');
 }
 const claimedMask = typeof relicClaimedMask === 'string' && relicClaimedMask.length === 66
   ? decodeReturn(['uint256'], relicClaimedMask)[0] as bigint : -1n;
-const claimedCount = claimedMask >= 0n ? claimedMask.toString(2).replaceAll('0', '').length : -1;
-const publicRelicsMinted = publicRelics ? statsValues[14] as bigint : 0n;
 if (claimedMask < 0n || claimedMask >= 1n << BigInt(ETHEREUM_MAX_RELICS) ||
-  typeof statsValues[11] !== 'bigint' || BigInt(claimedCount) !== statsValues[11] + publicRelicsMinted ||
+  !stats || BigInt(ethereumRelicClaimCount(Number(claimedMask))) !== stats.relicsMinted + stats.publicRelicsMinted ||
   typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
   typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
   typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0 ||
   typeof relicLimit !== 'string' || decodeReturn(['uint256'], relicLimit)[0] !== BigInt(ETHEREUM_MAX_RELICS) ||
   typeof relicCrates !== 'string' || decodeReturn(['uint256'], relicCrates)[0] !== BigInt(ETHEREUM_CRATES_PER_RELIC) ||
   typeof relicReceiptOffset !== 'string' || decodeReturn(['uint256'], relicReceiptOffset)[0] !== 3_000_000n ||
-  statsValues[9] !== 0n || typeof statsValues[10] !== 'bigint' || statsValues[10] > BigInt(ETHEREUM_MAX_RELICS) ||
-  statsValues[10] + publicRelicsMinted > BigInt(ETHEREUM_MAX_RELICS) ||
-  typeof statsValues[0] !== 'bigint' || statsValues[0] < (statsValues[10] + publicRelicsMinted) * BigInt(ETHEREUM_CRATES_PER_RELIC) ||
-  statsValues[11] > statsValues[10]) {
+  stats.discountUsed !== 0n || !valid111kRelicSupply(stats)) {
   throw new Error('The local collection does not implement the current relic claim availability interface. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
 

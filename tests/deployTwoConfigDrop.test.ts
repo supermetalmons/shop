@@ -19,7 +19,8 @@ import { resolveMiNoteCollectionDelegates } from '../scripts/shared/miNoteMintRe
 import { readDeploymentDropRegistry } from '../scripts/shared/deploymentRegistry.ts';
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards.ts';
 import { NEW_PREORDER_COLLECTION as DEVNET_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards_devnet.ts';
-import { bubblegumTreeConfigPda, decodeMplCoreCollectionUpdateDelegates } from '../scripts/deploy-all-onchain.ts';
+import { decodeMplCoreCollectionUpdateDelegates } from '../scripts/shared/mplCoreCollection.ts';
+import { bubblegumTreeConfigPda } from '../scripts/deploy-all-onchain.ts';
 import {
   buildTwoConfigDelegateUpdateInstruction, createTwoConfigDeploymentPlan, inspectTwoConfigJournalTransaction,
   parseTwoConfigDeploymentArgs, runTwoConfigDropDeployment, validateTwoConfigJournalTransaction,

@@ -66,7 +66,8 @@ dead-code checks, production bundles, and Worker startup validation.
 `dry-run:frontend` and `dry-run:api` validate deployment bundles without publishing.
 
 `check:all` adds Solidity and gas checks, nested Ethereum TypeScript tests,
-extended contract invariants, Ethereum E2E, Solana SBF, and native renderer tests.
+extended contract invariants, the 111K lifecycle and reveal E2E, the pre111K
+relic reservation E2E, Solana SBF, and native renderer tests.
 It requires the pinned root and Ethereum npm dependencies, Cargo, Anchor/Solana
 SBF tooling, Foundry (`forge` and `anvil`), and the
 [native renderer's pinned macOS runtime](scripts/mi-note-video/README.md#prerequisites).

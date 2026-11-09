@@ -10,24 +10,26 @@ import {
 } from '@solana/web3.js';
 import {
   assertMplCoreCollectionHasUpdateDelegates,
+  buildCreateMplCoreCollectionV2Ix,
+  decodeMplCoreCollectionUpdateDelegates,
+  parseCollectionRoyaltyCreators,
+} from '../scripts/shared/mplCoreCollection.ts';
+import {
   assertCollectionRoyaltyCreatorsUnchanged,
   assertExistingConfigMatchesResume,
   assertReceiptPoolCollectionUpdateDelegatePolicy,
   assertReceiptPoolCapacity,
   assertReceiptMetadataRange,
   commitDeploymentRegistry,
-  buildCreateMplCoreCollectionV2Ix,
   buildInitializeIx,
   buildInitializeSplitPaymentsV1Ix,
   buildSplitPaymentsV1CapabilityIx,
   decodeBoxMinterConfigForDeployPreflight,
   decodeReceiptTreeState,
-  decodeMplCoreCollectionUpdateDelegates,
   finalizeDiscountMerkleAndDeploymentRegistry,
   formatFreshProgramKeypairNotice,
   IX_INITIALIZE_SPLIT_PAYMENTS_V1,
   IX_SPLIT_PAYMENTS_V1_CAPABILITY,
-  parseCollectionRoyaltyCreators,
   prepareStripeCheckoutConfig,
   registerDeploymentCleanup,
   revalidateReusableProgramResolution,
@@ -420,31 +422,40 @@ test('collection royalty creators are parsed independently from payment routing'
   );
 });
 
-test('MPL Core collection creation encodes every collection.json creator', () => {
-  const first = pubkey(54);
-  const second = pubkey(55);
-  const instruction = buildCreateMplCoreCollectionV2Ix({
+test('MPL Core collection creation preserves its wire format and account order', () => {
+  const inputs = {
     collection: pubkey(56),
     updateAuthority: pubkey(57),
-    updateDelegates: [pubkey(58)],
+    updateDelegates: [pubkey(61), pubkey(58), pubkey(61)],
     payer: pubkey(59),
     systemProgram: pubkey(60),
     name: 'collection',
     uri: 'https://assets.example.com/collection.json',
     royaltiesBps: 500,
     royaltiesCreators: [
-      { address: first, percentage: 60 },
-      { address: second, percentage: 40 },
+      { address: pubkey(54), percentage: 60 },
+      { address: pubkey(55), percentage: 40 },
     ],
-  });
-  assert.notEqual(
-    instruction.data.indexOf(Buffer.concat([first.toBuffer(), u8(60)])),
-    -1,
-  );
-  assert.notEqual(
-    instruction.data.indexOf(Buffer.concat([second.toBuffer(), u8(40)])),
-    -1,
-  );
+  };
+  const beforeAuthority =
+    '150a000000636f6c6c656374696f6e2a00000068747470733a2f2f6173736574732e6578616d706c652e636f6d2f' +
+    '636f6c6c656374696f6e2e6a736f6e010300000000f40102000000363738393a3b3c3d3e3f404142434445464748' +
+    '494a4b4c4d4e4f5051525354553c3738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455562800';
+  const afterAuthority =
+    '0f0004020000003d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c' +
+    '3a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50515253545556575859000100000000';
+  const instruction = buildCreateMplCoreCollectionV2Ix(inputs);
+  assert.equal(instruction.programId.toBase58(), 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+  assert.deepEqual(instruction.keys, [
+    { pubkey: inputs.collection, isSigner: true, isWritable: true },
+    { pubkey: inputs.updateAuthority, isSigner: false, isWritable: false },
+    { pubkey: inputs.payer, isSigner: true, isWritable: true },
+    { pubkey: inputs.systemProgram, isSigner: false, isWritable: false },
+  ]);
+  assert.equal(instruction.data.toString('hex'), beforeAuthority +
+    '01033b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a' + afterAuthority);
+  const withoutAuthority = buildCreateMplCoreCollectionV2Ix({ ...inputs, royaltiesAuthority: null });
+  assert.equal(withoutAuthority.data.toString('hex'), beforeAuthority + '00' + afterAuthority);
 });
 
 test('receipt pool tree decoder reads Bubblegum V2 capacity and mint state', () => {

@@ -1,95 +1,50 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import {
-  createCommerceD1,
   createCommerceD1Harness,
   seedCommerceDocument,
 } from './commerceD1Harness.ts';
-import nacl from 'tweetnacl';
 import {
   PROFILE_ADDRESSES_PATH,
   handleProfileWriteRequest,
   type ProfileWritePath,
 } from '../src/profileWrites.ts';
-import { shipStationRateInputHash } from '../src/shipstation/rates.ts';
 import { setFulfillmentAddress } from '../src/fulfillmentAddressStore.ts';
 import type { FulfillmentStoreContext } from '../src/profileWriteCommerce.ts';
 import { claimShipStationRateRefresh } from '../src/shipstation/rateStore.ts';
 import { transitionFulfillmentShipStationLabelPurchase } from '../src/shipstation/labelStore.ts';
 import { createProfileAddressId } from '../../../../shared/profileD1.ts';
 import {
-  encryptAddressCipherText,
   decryptAddressCipherText,
   parseAddressCipherPayload,
-  serializeAddressCipherPayload,
 } from '../../../../shared/addressCipher.ts';
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
-import { ProfileReadError } from '../src/dataAccess.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../../../../shared/fulfillmentAccess.ts';
-import { decodeLegacyFirestoreFixtureFields } from './commerceD1Harness.ts';
 import {
+  CommerceUnitOfWork,
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeys,
-  isCommerceDeleteField,
-  isCommerceServerTimestamp,
-  isCommerceTimestamp,
+  type CommerceDocumentData,
   type CommerceDocumentKey,
-  type CommerceDocumentRecord,
-  type CommerceUnitOfWork,
   type CommerceUpdateValue,
 } from '../src/commerceRepository.ts';
 
-const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
-const FULFILLMENT_ORDER_ADDRESS_PATH = '/fulfillment/order-address';
-const FULFILLMENT_SHIPSTATION_LABEL_PATH = '/fulfillment/shipstation-label';
-const FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH = '/fulfillment/shipstation-label-purchase';
-const FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH = '/fulfillment/shipstation-label-void';
-const FULFILLMENT_SHIPSTATION_RATES_PATH = '/fulfillment/shipstation-rates';
-const FULFILLMENT_SHIPSTATION_SHIPMENT_PATH = '/fulfillment/shipstation-shipment';
+import {
+  OWNER, ADMIN, ADDRESS_VIEWING_ADMIN, OTHER, UID, NOW_MS, ADDRESS_ID, ADDRESS_KEY_PAIR, ADDRESS_SECRET,
+  SHIP_FROM, LABEL_PURCHASE_BODY, LABEL_VOID_BODY,
+  FULFILLMENT_ORDER_ADDRESS_PATH, FULFILLMENT_ORDER_STATUS_PATH, FULFILLMENT_SHIPSTATION_LABEL_PATH,
+  FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, FULFILLMENT_SHIPSTATION_RATES_PATH, FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
+  FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, d1Dependencies, request, fulfillmentSettings, decodeBase64, encryptedAddress, orderFixture,
+} from './profileWriteTestSupport.ts';
 
-const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
-const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
-const ADDRESS_VIEWING_ADMIN = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
-const OTHER = 'So11111111111111111111111111111111111111112';
-const UID = 'auth-user-one';
-const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
-const ADDRESS_ID = 'AbCdEfGhIjKlMnOpQrSt';
-const NOTIFICATION_JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
-const ADDRESS_KEY_PAIR = nacl.box.keyPair();
-const ADDRESS_SECRET = Buffer.from(ADDRESS_KEY_PAIR.secretKey).toString('base64');
-const SHIP_FROM = {
-  name: 'mons.shop',
-  address_line1: '1061 10th Street',
-  city_locality: 'West Pittsburg',
-  state_province: 'PA',
-  postal_code: '16160',
-  country_code: 'US',
-  address_residential_indicator: 'no',
-};
-const SHIP_TO = {
-  name: 'Ivan',
-  address_line1: '100 Main St',
-  city_locality: 'Istanbul',
-  state_province: 'IST',
-  postal_code: '34000',
-  country_code: 'TR',
-  address_residential_indicator: 'yes',
-};
-const LABEL_PURCHASE_BODY = {
-  dropId: 'card_nft_2',
-  deliveryId: 7,
-  rateId: 'rate-1',
-  expectedTotal: { currency: 'usd', amount: 10 },
-  requestId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
-};
-const LABEL_VOID_BODY = {
-  dropId: 'card_nft_2',
-  deliveryId: 7,
-  labelId: 'label-1',
-};
+const defaultCommerce = createCommerceD1Harness();
+after(() => defaultCommerce.database.close());
+const env = { COMMERCE_DB: defaultCommerce.db };
+const fulfillmentEnv = { ...fulfillmentSettings, ...env };
+
 const ETHEREUM_SHIPSTATION_REQUESTS: Array<[ProfileWritePath, object]> = [
   [FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: '111k_devnet', deliveryId: 7 }],
   [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, dropId: '111k_devnet' }],
@@ -97,218 +52,6 @@ const ETHEREUM_SHIPSTATION_REQUESTS: Array<[ProfileWritePath, object]> = [
   [FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: '111k_devnet', deliveryId: 7 }],
   [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: '111k_devnet', deliveryId: 7 }],
 ];
-
-const SHIPSTATION_RATE = {
-  rate_id: 'rate-1',
-  shipment_id: 'shipment-1',
-  carrier_id: 'carrier-1',
-  carrier_code: 'stamps_com',
-  carrier_friendly_name: 'USPS',
-  service_code: 'usps_priority_mail',
-  service_type: 'USPS Priority Mail',
-  validation_status: 'valid',
-  shipping_amount: { currency: 'usd', amount: 10 },
-  insurance_amount: { currency: 'usd', amount: 0 },
-  confirmation_amount: { currency: 'usd', amount: 0 },
-  other_amount: { currency: 'usd', amount: 0 },
-  warning_messages: [],
-  error_messages: [],
-};
-
-function stringValue(value: string) {
-  return { stringValue: value };
-}
-
-const TEST_DOCUMENT_PREFIX = 'projects/mons-shop/databases/(default)/documents/';
-const TEST_DOCUMENTS_URL = `https://commerce.googleapis.com/v1/${TEST_DOCUMENT_PREFIX.slice(0, -1)}`;
-
-function encodedValue(value: unknown, fieldPath: string): Record<string, unknown> {
-  if (value === null) return { nullValue: null };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') {
-    if (fieldPath.split('.').at(-1)?.endsWith('At')) return { timestampValue: new Date(value).toISOString() };
-    return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
-  }
-  if (Array.isArray(value)) return { arrayValue: { values: value.map((entry) => encodedValue(entry, fieldPath)) } };
-  const fields = Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .map(([key, entry]) => [key, encodedValue(entry, `${fieldPath}.${key}`)]));
-  return { mapValue: { fields } };
-}
-
-function setEncodedField(fields: Record<string, unknown>, fieldPath: string, value: unknown): void {
-  const parts = fieldPath.split('.');
-  let current = fields;
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    const existing = current[parts[index]] as { mapValue?: { fields?: Record<string, unknown> } } | undefined;
-    if (!existing?.mapValue?.fields) current[parts[index]] = { mapValue: { fields: {} } };
-    current = (current[parts[index]] as { mapValue: { fields: Record<string, unknown> } }).mapValue.fields;
-  }
-  current[parts.at(-1)!] = encodedValue(value, fieldPath);
-}
-
-function legacyFirestoreFixtureRepository(providerFetch: ProfileProviderFetch) {
-  const load = async (key: CommerceDocumentKey): Promise<CommerceDocumentRecord | null> => {
-    const response = await providerFetch(`${TEST_DOCUMENTS_URL}/${key.path}`, { method: 'GET' });
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error('Commerce fixture read failed');
-    const payload = await response.json() as { fields?: unknown; updateTime?: unknown };
-    const data = payload.fields === undefined ? {} : decodeLegacyFirestoreFixtureFields(payload.fields);
-    if (!data) throw new Error('Commerce fixture document is invalid');
-    return {
-      createTime: '',
-      data: data as never,
-      key,
-      processedAt: null,
-      updateTime: typeof payload.updateTime === 'string' ? payload.updateTime : '2026-08-18T12:00:00.000Z',
-      version: 1,
-    };
-  };
-  return {
-    get: load,
-    run: async <T>(_nowMs: number, operation: (unit: unknown) => Promise<T>) => {
-      const loaded = new Map<string, CommerceDocumentRecord | null>();
-      const updates = new Map<string, { key: CommerceDocumentKey; values: Record<string, CommerceUpdateValue> }>();
-      const unit = {
-        getNotificationOutbox: async () => null,
-        cancelNotificationOutbox: async () => null,
-        get: async (key: CommerceDocumentKey) => {
-          if (!loaded.has(key.path)) loaded.set(key.path, await load(key));
-          return loaded.get(key.path) || null;
-        },
-        update: async (key: CommerceDocumentKey, values: Record<string, CommerceUpdateValue>) => {
-          updates.set(key.path, { key, values });
-        },
-      };
-      const result = await operation(unit as never);
-      for (const { key, values } of updates.values()) {
-        const fields: Record<string, unknown> = {};
-        const fieldPaths: string[] = [];
-        const updateTransforms: Array<Record<string, unknown>> = [];
-        for (const [fieldPath, value] of Object.entries(values)) {
-          if (isCommerceServerTimestamp(value)) {
-            updateTransforms.push({ fieldPath, setToServerValue: 'REQUEST_TIME' });
-            continue;
-          }
-          if (isCommerceTimestamp(value)) {
-            const timestamp = new Date(value.value.seconds * 1000).toISOString().slice(0, 19);
-            setEncodedField(fields, fieldPath, `${timestamp}.${String(value.value.nanos).padStart(9, '0')}Z`);
-            const target = fields[fieldPath] as { stringValue?: unknown } | undefined;
-            if (target?.stringValue) fields[fieldPath] = { timestampValue: target.stringValue };
-            fieldPaths.push(fieldPath);
-            continue;
-          }
-          if (isCommerceDeleteField(value)) {
-            fieldPaths.push(fieldPath);
-            continue;
-          }
-          fieldPaths.push(fieldPath);
-          setEncodedField(fields, fieldPath, value);
-        }
-        const current = loaded.get(key.path);
-        const write: Record<string, unknown> = {
-          update: { name: `${TEST_DOCUMENT_PREFIX}${key.path}`, fields },
-          updateMask: { fieldPaths },
-          ...(updateTransforms.length ? { updateTransforms } : {}),
-          ...(current ? { currentDocument: { updateTime: current.updateTime } } : {}),
-        };
-        let response: Response | undefined;
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          try {
-            response = await providerFetch(`${TEST_DOCUMENTS_URL}:commit`, {
-              method: 'POST',
-              body: JSON.stringify({ writes: [write] }),
-            });
-          } catch (error) {
-            if (attempt === 0) continue;
-            throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-          }
-          if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === 1) break;
-        }
-        if (!response) throw new Error('Commerce fixture commit failed');
-        const payload = await response.json().catch(() => null) as { error?: { status?: unknown } } | null;
-        if (response.status === 400 || response.status === 409) {
-          const status = payload?.error?.status;
-          if (status === 'ALREADY_EXISTS') throw new CommerceWriteConflict('already-exists');
-          if (status === 'FAILED_PRECONDITION') throw new CommerceWriteConflict('failed-precondition');
-          throw new CommerceWriteConflict();
-        }
-        if (!response.ok) throw new Error('Commerce fixture commit failed');
-      }
-      return result;
-    },
-  };
-}
-
-function request(path: ProfileWritePath, body: unknown): Request {
-  return new Request(`https://api.mons.shop${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Origin: 'https://mons.shop',
-    },
-    body: JSON.stringify(body),
-  });
-}
-
-function profileWriteDependencies(
-  providerFetch: ProfileProviderFetch,
-  createCommerceRepository: NonNullable<Parameters<typeof handleProfileWriteRequest>[4]>['createCommerceRepository'],
-  overrides: Partial<Parameters<typeof handleProfileWriteRequest>[4]> = {},
-): Parameters<typeof handleProfileWriteRequest>[4] {
-  return {
-    autoId: () => ADDRESS_ID,
-    createCommerceRepository,
-    createNotificationJobId: () => NOTIFICATION_JOB_ID,
-    error: () => undefined,
-    log: () => undefined,
-    nowMs: () => NOW_MS,
-    providerFetch,
-    resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
-    saveProfileAddress: async (_db, address) => ({
-      id: address.id,
-      country: address.country,
-      ...(address.countryCode ? { countryCode: address.countryCode } : {}),
-      encrypted: address.encrypted,
-      hint: address.hint,
-      ...(address.email ? { email: address.email } : {}),
-    }),
-    timeoutMs: 500,
-    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
-    warn: () => undefined,
-    ...overrides,
-  };
-}
-
-function legacyFirestoreDependencies(
-  providerFetch: ProfileProviderFetch,
-  overrides: Partial<Parameters<typeof handleProfileWriteRequest>[4]> = {},
-): Parameters<typeof handleProfileWriteRequest>[4] {
-  return profileWriteDependencies(
-    providerFetch,
-    () => legacyFirestoreFixtureRepository(providerFetch) as never,
-    overrides,
-  );
-}
-
-function d1Dependencies(
-  providerFetch: ProfileProviderFetch,
-  overrides: Partial<Parameters<typeof handleProfileWriteRequest>[4]> = {},
-): Parameters<typeof handleProfileWriteRequest>[4] {
-  return profileWriteDependencies(
-    providerFetch,
-    (database) => new D1CommerceRepository(database),
-    overrides,
-  );
-}
-
-const env = { COMMERCE_DB: createCommerceD1() };
-const fulfillmentEnv = {
-  ...env,
-  ADDRESS_DECRYPTION_SECRET: ADDRESS_SECRET,
-  SHIPSTATION_API_KEY: 'shipstation-api-key',
-  SHIPSTATION_SHIP_FROM: JSON.stringify(SHIP_FROM),
-};
 
 function notificationQueue(send: Queue['send']): Queue {
   return {
@@ -319,50 +62,6 @@ function notificationQueue(send: Queue['send']): Queue {
     },
     metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
   };
-}
-
-function commerceValue(value: unknown): unknown {
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') {
-    return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
-  }
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(commerceValue) } };
-  if (value && typeof value === 'object') {
-    return {
-      mapValue: {
-        fields: Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, commerceValue(entry)])),
-      },
-    };
-  }
-  return { nullValue: null };
-}
-
-function orderDocument(fields: Record<string, unknown>, updateTime = '2026-08-18T12:00:00.000000Z') {
-  const normalizedFields = {
-    items: [{ kind: 'dude', refId: 1 }],
-    ...fields,
-  };
-  return {
-    name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
-    fields: Object.fromEntries(Object.entries(normalizedFields).map(([key, value]) => [key, commerceValue(value)])),
-    updateTime,
-  };
-}
-
-function decodeBase64(value: string): Uint8Array | null {
-  try {
-    return Uint8Array.from(Buffer.from(value, 'base64'));
-  } catch {
-    return null;
-  }
-}
-
-function encryptedAddress(full: string): string {
-  return serializeAddressCipherPayload(
-    encryptAddressCipherText(full, ADDRESS_KEY_PAIR.publicKey),
-    (value) => Buffer.from(value).toString('base64'),
-  );
 }
 
 test('profile writes preserve identity failure responses and rejected authentication outcomes', async (context) => {
@@ -866,133 +565,6 @@ test('address deadline defers one non-cooperative write and preserves its late c
   assert.equal(deferred.length, 1);
 });
 
-test('legacy Firestore fixtures preserve status update-mask compatibility', async () => {
-  const cases = [
-    {
-      body: { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' },
-      expectedFields: {
-        dropId: stringValue('card_nft_2'),
-        fulfillmentUpdatedBy: stringValue(OWNER),
-        fulfillmentStatus: stringValue('Preparing'),
-      },
-      expectedMask: ['dropId', 'fulfillmentUpdatedBy', 'fulfillmentStatus'],
-      expectedResponse: {
-        deliveryId: 7,
-        fulfillmentStatus: 'Preparing',
-        fulfillmentTrackingCode: 'https://tracking.example/old',
-      },
-    },
-    {
-      body: { dropId: 'card_nft_2', deliveryId: 7, status: 'Shipped', trackingCode: '  https://tracking.example/new  ' },
-      expectedFields: {
-        dropId: stringValue('card_nft_2'),
-        fulfillmentUpdatedBy: stringValue(OWNER),
-        fulfillmentStatus: stringValue('Shipped'),
-        fulfillmentTrackingCode: stringValue('https://tracking.example/new'),
-      },
-      expectedMask: ['dropId', 'fulfillmentUpdatedBy', 'fulfillmentStatus', 'fulfillmentTrackingCode'],
-      expectedResponse: {
-        deliveryId: 7,
-        fulfillmentStatus: 'Shipped',
-        fulfillmentTrackingCode: 'https://tracking.example/new',
-      },
-    },
-    {
-      body: { dropId: 'card_nft_2', deliveryId: 7, status: 'Shipped', trackingCode: '   ' },
-      expectedFields: {
-        dropId: stringValue('card_nft_2'),
-        fulfillmentUpdatedBy: stringValue(OWNER),
-        fulfillmentStatus: stringValue('Shipped'),
-      },
-      expectedMask: ['dropId', 'fulfillmentUpdatedBy', 'fulfillmentStatus', 'fulfillmentTrackingCode'],
-      expectedResponse: { deliveryId: 7, fulfillmentStatus: 'Shipped' },
-    },
-    {
-      body: { dropId: 'card_nft_2', deliveryId: 7, status: null },
-      expectedFields: {
-        dropId: stringValue('card_nft_2'),
-        fulfillmentUpdatedBy: stringValue(OWNER),
-      },
-      expectedMask: ['dropId', 'fulfillmentUpdatedBy', 'fulfillmentStatus'],
-      expectedResponse: {
-        deliveryId: 7,
-        fulfillmentStatus: '',
-        fulfillmentTrackingCode: 'https://tracking.example/old',
-      },
-    },
-  ] as const;
-  for (const entry of cases) {
-    let commit: { writes: Array<Record<string, unknown>> } | undefined;
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        assert.deepEqual(url.searchParams.getAll('mask.fieldPaths'), []);
-        return Response.json(orderDocument({ fulfillmentTrackingCode: ' https://tracking.example/old ' }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        commit = JSON.parse(String(init?.body));
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_ORDER_STATUS_PATH, entry.body),
-      env,
-      FULFILLMENT_ORDER_STATUS_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch),
-    );
-    assert.equal(result.response.status, 200);
-    assert.deepEqual(await result.response.json(), entry.expectedResponse);
-    assert.deepEqual(commit?.writes[0], {
-      update: {
-        name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
-        fields: entry.expectedFields,
-      },
-      updateMask: { fieldPaths: entry.expectedMask },
-      updateTransforms: [{ fieldPath: 'fulfillmentUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
-      currentDocument: { updateTime: '2026-08-18T12:00:00.000000Z' },
-    });
-  }
-});
-
-test('legacy Firestore fixture repository preserves mutation-like JSON values', async () => {
-  let commit: { writes: Array<Record<string, unknown>> } | undefined;
-  const repository = legacyFirestoreFixtureRepository(async (input, init) => {
-    const url = String(input);
-    if (url.endsWith('/drops/card_nft_2/deliveryOrders/7')) {
-      return Response.json({ fields: {}, updateTime: '2026-08-18T12:00:00.000000Z' });
-    }
-    if (url.endsWith('/documents:commit')) {
-      commit = JSON.parse(String(init?.body));
-      return Response.json({});
-    }
-    return assert.fail(`Unexpected fixture request: ${url}`);
-  });
-  const key = commerceKeys.deliveryOrder('card_nft_2', '7');
-  await repository.run(NOW_MS, async (unit) => {
-    const transaction = unit as {
-      get(key: CommerceDocumentKey): Promise<CommerceDocumentRecord | null>;
-      update(key: CommerceDocumentKey, values: Record<string, CommerceUpdateValue>): Promise<void>;
-    };
-    await transaction.get(key);
-    await transaction.update(key, {
-      payload: { kind: 'delete-field', label: 'kept' },
-    });
-  });
-  assert.deepEqual(
-    ((commit?.writes[0] as { update?: { fields?: Record<string, unknown> } })?.update?.fields || {}).payload,
-    {
-      mapValue: {
-        fields: {
-          kind: { stringValue: 'delete-field' },
-          label: { stringValue: 'kept' },
-        },
-      },
-    },
-  );
-});
-
 test('status route persists its behavior through the current D1 repository', async () => {
   const harness = createCommerceD1Harness();
   const key = commerceKeys.deliveryOrder('card_nft_2', '7');
@@ -1205,36 +777,339 @@ for (const queueFails of [false, true]) {
   });
 }
 
+test('ShipStation rejects an oversized valid JSON stream before authentication or side effects', async () => {
+  const body = JSON.stringify(LABEL_PURCHASE_BODY).padEnd(4097, ' ');
+  const chunks = [body.slice(0, 2048), body.slice(2048)];
+  let cancelled = false;
+  const input = new Request(`https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk) controller.enqueue(new TextEncoder().encode(chunk));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 }),
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+  const result = await handleProfileWriteRequest(
+    input,
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+    {},
+    {
+      verifyIdentity: async () => assert.fail('Oversized requests must not authenticate'),
+      createCommerceRepository: () => assert.fail('Oversized requests must not access Commerce'),
+      providerFetch: async () => assert.fail('Oversized requests must not contact ShipStation'),
+    },
+  );
+  assert.equal(result.response.status, 400);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'invalid-argument', message: 'Invalid request.' },
+  });
+  assert.equal(result.authOutcome, 'rejected');
+  assert.equal(cancelled, true);
+});
+
+test('write routes reject invalid payloads, unauthorized wallets, and missing orders without Commerce configuration', async t => {
+  const d1Access = t.mock.fn(() => assert.fail('Malformed request accessed D1'));
+  const db = new Proxy({} as D1Database, { get: d1Access });
+  const malformedEnv = { ...fulfillmentEnv, COMMERCE_DB: db, OPS_DB: db };
+  let upstreamCalls = 0;
+  const neverFetch: typeof fetch = async () => {
+    upstreamCalls += 1;
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  for (const body of [
+    { encrypted: 'cipher', country: 'US', hint: 'hint', extra: true },
+    { id: 'invalid', encrypted: 'cipher', country: 'US', hint: 'hint' },
+    { encrypted: 'cipher', country: 'US', hint: 'hint', email: 'not-an-email' },
+    { encrypted: 'x'.repeat(11 * 1024), country: 'US', hint: 'hint' },
+  ]) {
+    const result = await handleProfileWriteRequest(
+      request(PROFILE_ADDRESSES_PATH, body),
+      malformedEnv,
+      PROFILE_ADDRESSES_PATH,
+      {},
+      d1Dependencies(neverFetch),
+    );
+    assert.equal(result.response.status, 400);
+  }
+  for (const [path, body] of [
+    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address', extra: true }],
+    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'x'.repeat(2049) }],
+    [FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
+    [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, extra: true }],
+    [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, requestId: 'not-a-uuid' }],
+    [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, {
+      ...LABEL_PURCHASE_BODY,
+      expectedTotal: { currency: 'usd', amount: Number.POSITIVE_INFINITY },
+    }],
+    [FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7, addressPatch: {} }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { name: ' ' },
+    }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { address_line1: 'x'.repeat(51) },
+    }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { country_code: 'USA' },
+    }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { company_name: 'Private' },
+    }],
+  ] as const) {
+    const result = await handleProfileWriteRequest(
+      request(path, body),
+      malformedEnv,
+      path,
+      {},
+      d1Dependencies(neverFetch),
+    );
+    assert.equal(result.response.status, 400);
+  }
+  assert.equal(d1Access.mock.callCount(), 0);
+  assert.equal(upstreamCalls, 0);
+
+  const invalidToken = await handleProfileWriteRequest(
+    request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    {},
+    d1Dependencies(neverFetch, {
+      verifyIdentity: async () => {
+        throw new RequestIdentityError('invalid-token');
+      },
+    }),
+  );
+  assert.equal(invalidToken.response.status, 401);
+  assert.equal(upstreamCalls, 0);
+
+  const anonymousOnlyStaffWrite = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Preparing',
+    }),
+    env,
+    FULFILLMENT_ORDER_STATUS_PATH,
+    {},
+    d1Dependencies(neverFetch, {
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
+    }),
+  );
+  assert.equal(anonymousOnlyStaffWrite.response.status, 401);
+
+  const retiredSecret = await handleProfileWriteRequest(
+    request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    {},
+    d1Dependencies(neverFetch),
+  );
+  assert.equal(retiredSecret.response.status, 200);
+  assert.equal(upstreamCalls, 0);
+
+  const deniedOrder = orderFixture(t);
+  const before = deniedOrder.read();
+  const denied = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' }),
+    deniedOrder.env,
+    FULFILLMENT_ORDER_STATUS_PATH,
+    {},
+    d1Dependencies(neverFetch, {
+      resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OTHER }),
+    }),
+  );
+  assert.equal(denied.response.status, 403);
+  assert.deepEqual(deniedOrder.read(), before);
+
+  const emptyStore = orderFixture(t, null);
+  const missingOrder = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' }),
+    emptyStore.env,
+    FULFILLMENT_ORDER_STATUS_PATH,
+    {},
+    d1Dependencies(neverFetch),
+  );
+  assert.equal(missingOrder.response.status, 404);
+  assert.equal(upstreamCalls, 0);
+});
+
+test('writer failures stay generic and never expose request or credential material', async () => {
+  const providerFetch: typeof fetch = async () => assert.fail('Address writes must not contact providers');
+  const result = await handleProfileWriteRequest(
+    request(PROFILE_ADDRESSES_PATH, {
+      encrypted: 'private-cipher-text',
+      country: 'US',
+      hint: 'private-hint',
+      email: 'private@example.com',
+    }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    {},
+    d1Dependencies(providerFetch, {
+      saveProfileAddress: async () => {
+        throw new Error('private D1 writer-secret');
+      },
+    }),
+  );
+  assert.equal(result.response.status, 502);
+  const text = await result.response.text();
+  assert.deepEqual(JSON.parse(text), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Profile data is temporarily unavailable.' },
+  });
+  for (const secret of ['private-cipher-text', 'private-hint', 'private@example.com', 'private-writer-credential', 'writer-secret']) {
+    assert.equal(text.includes(secret), false);
+  }
+});
+
+
+test('generated Commerce auto IDs are cryptographic-compatible document IDs', () => {
+  const ids = Array.from({ length: 100 }, createProfileAddressId);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.every((id) => /^[A-Za-z0-9]{20}$/.test(id)));
+});
+
+function assertFulfillmentStoreInputTypes(common: FulfillmentStoreContext): void {
+  void setFulfillmentAddress({
+    common,
+    dropId: 'card_nft_binder',
+    deliveryId: 1,
+    full: 'Delivery address',
+    encrypted: 'ciphertext',
+    hint: 'Delivery address',
+    wallet: OWNER,
+    // @ts-expect-error Address persistence cannot apply arbitrary document patches.
+    updates: { owner: OTHER },
+  });
+  void claimShipStationRateRefresh({
+    common,
+    dropId: 'card_nft_binder',
+    deliveryId: 1,
+    expected: { shipmentId: 'shipment', labelIdentity: '', purchaseIdentity: '', claimId: null, claimedBy: null },
+    claimId: 'claim',
+    wallet: OWNER,
+    onWriteAttempt: () => undefined,
+    // @ts-expect-error Rate claims own their mutation logic inside the store.
+    build: () => ({ updates: { owner: OTHER } }),
+  });
+  void transitionFulfillmentShipStationLabelPurchase({
+    common,
+    dropId: 'card_nft_binder',
+    shipmentId: 'shipment',
+    body: { deliveryId: 1, rateId: 'rate', expectedTotal: { currency: 'usd', amount: 1 }, requestId: 'request' },
+    message: 'Provider result unavailable',
+    wallet: OWNER,
+    // @ts-expect-error Failure persistence cannot mark an unconfirmed purchase complete.
+    nextStatus: 'complete',
+  });
+  // @ts-expect-error Persistence contexts do not expose provider calls.
+  void common.providerFetch;
+}
+
+void assertFulfillmentStoreInputTypes;
+
+test('order fixture observes deletion as a write', async t => {
+  const fixture = orderFixture(t);
+  const events: string[] = [];
+  fixture.afterRead = () => { events.push('read'); };
+  fixture.beforeWrite = () => { events.push('beforeWrite'); };
+  fixture.afterWrite = () => { events.push('afterWrite'); };
+  await fixture.repository.run(NOW_MS, unit => unit.delete(fixture.key));
+  assert.deepEqual(events, ['read', 'beforeWrite', 'afterWrite']);
+  assert.equal(await fixture.repository.get(fixture.key), null);
+});
+
+test('a concurrent fixture patch preserves recovery and advances the order version and timestamp', async t => {
+  const receiptRecovery = { pendingSubmission: true };
+  const fixture = orderFixture(t, { receiptRecovery });
+  await fixture.repository.run(NOW_MS, unit => unit.update(fixture.key, { operatorNote: 'first' }));
+  const before = await fixture.repository.getRecoverySnapshot(fixture.key);
+  assert.ok(before?.state);
+  assert.equal(before.state.receiptRecoveryJson, JSON.stringify(receiptRecovery));
+
+  await fixture.patch({ operatorNote: 'second' });
+  const after = await fixture.repository.getRecoverySnapshot(fixture.key);
+  assert.ok(after);
+  assert.equal(after.order.data.operatorNote, 'second');
+  assert.equal(after.order.version, before.order.version + 1);
+  assert.equal(after.order.createTime, before.order.createTime);
+  assert.ok(Date.parse(after.order.updateTime) > Date.parse(before.order.updateTime));
+  assert.deepEqual(after.state, before.state);
+});
+
+function writeOrder(
+  fixture: ReturnType<typeof orderFixture>,
+  path: ProfileWritePath,
+  providerFetch: ProfileProviderFetch = async () => assert.fail('Unexpected provider call'),
+  body: object = { dropId: 'card_nft_2', deliveryId: 7 },
+  overrides: Partial<Parameters<typeof handleProfileWriteRequest>[4]> = {},
+) {
+  return handleProfileWriteRequest(request(path, body), fixture.env, path, {}, d1Dependencies(providerFetch, overrides));
+}
+
+function shipmentFields() {
+  return {
+    addressSnapshot: {
+      encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+      countryCode: 'TR',
+    },
+    items: [{ kind: 'box', refId: 1 }],
+  };
+}
+
+test('status edits preserve omitted tracking, replace supplied tracking, and remove cleared fields', async (t) => {
+  for (const entry of [
+    { body: { status: 'Preparing' }, status: 'Preparing', tracking: 'https://tracking.example/old' },
+    { body: { status: 'Shipped', trackingCode: '  https://tracking.example/new  ' }, status: 'Shipped', tracking: 'https://tracking.example/new' },
+    { body: { status: 'Shipped', trackingCode: '   ' }, status: 'Shipped', tracking: undefined },
+    { body: { status: null }, status: undefined, tracking: 'https://tracking.example/old' },
+  ]) {
+    const fixture = orderFixture(t, {
+      ...(entry.body.status === null ? { fulfillmentStatus: 'Preparing' } : {}),
+      fulfillmentTrackingCode: 'https://tracking.example/old',
+      sibling: 'keep',
+    });
+    const result = await writeOrder(fixture, FULFILLMENT_ORDER_STATUS_PATH, undefined, {
+      deliveryId: 7, dropId: 'card_nft_2', ...entry.body,
+    });
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(await result.response.json(), {
+      deliveryId: 7,
+      fulfillmentStatus: entry.status ?? '',
+      ...(entry.tracking ? { fulfillmentTrackingCode: entry.tracking } : {}),
+    });
+    assert.equal(fixture.read().fulfillmentStatus, entry.status);
+    assert.equal(fixture.read().fulfillmentTrackingCode, entry.tracking);
+    assert.equal(fixture.read().fulfillmentUpdatedBy, OWNER);
+    assert.equal(fixture.read().fulfillmentUpdatedAt, NOW_MS);
+    assert.equal(fixture.read().sibling, 'keep');
+  }
+});
+
 for (const wallet of [OWNER, ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES]) {
-  test(`fulfillment address edits by ${wallet} encrypt the address and clear stale ShipStation rates`, async () => {
-    let commit: { writes: Array<Record<string, unknown>> } | undefined;
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          addressSnapshot: {
-            label: 'Home',
-            email: 'owner@example.com',
-            phone: '+15555550123',
-            country: 'United States',
-            countryCode: 'US',
-          },
-          shipstation: {},
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        commit = JSON.parse(String(init?.body));
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
+  test(`fulfillment address edits by ${wallet} encrypt the address and clear stale ShipStation rates`, async (t) => {
+    const fixture = orderFixture(t, {
+      addressSnapshot: { label: 'Home', email: 'owner@example.com', phone: '+15555550123', country: 'United States', countryCode: 'US' },
+      shipstation: { rateQuotes: ['old'], ratesClaimId: 'old-claim', ratesClaimedAt: 1, ratesClaimedBy: OTHER, sibling: 'keep' },
+    });
     const full = '界'.repeat(2048);
     const result = await handleProfileWriteRequest(
       request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full }),
-      fulfillmentEnv,
+      fixture.env,
       FULFILLMENT_ORDER_ADDRESS_PATH,
       {},
-      legacyFirestoreDependencies(providerFetch, {
+      d1Dependencies(async () => assert.fail(), {
         verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
       }),
     );
@@ -1254,86 +1129,42 @@ for (const wallet of [OWNER, ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES]) {
     const cipher = parseAddressCipherPayload(payload.address.encrypted, decodeBase64);
     assert.ok(cipher);
     assert.equal(decryptAddressCipherText(cipher, ADDRESS_KEY_PAIR.secretKey), full);
-    const write = commit?.writes[0] as {
-      currentDocument: { updateTime: string };
-      update: { fields: {
-        addressSnapshot: { mapValue: { fields: Record<string, { stringValue: string }> } };
-        fulfillmentAddressUpdatedBy: { stringValue: string };
-      } };
-      updateMask: { fieldPaths: string[] };
-      updateTransforms: unknown[];
-    };
-    assert.equal(write.currentDocument.updateTime, '2026-08-18T12:00:00.000000Z');
-    assert.equal(write.update.fields.addressSnapshot.mapValue.fields.encrypted.stringValue, payload.address.encrypted);
-    assert.equal(write.update.fields.fulfillmentAddressUpdatedBy.stringValue, wallet);
-    assert.deepEqual(write.updateMask.fieldPaths, [
-      'addressSnapshot.encrypted',
-      'addressSnapshot.hint',
-      'fulfillmentAddressUpdatedBy',
-      'shipstation.rateQuotes',
-      'shipstation.ratesClaimId',
-      'shipstation.ratesClaimedAt',
-      'shipstation.ratesClaimedBy',
-    ]);
-    assert.deepEqual(write.updateTransforms, [
-      { fieldPath: 'fulfillmentAddressUpdatedAt', setToServerValue: 'REQUEST_TIME' },
-    ]);
+    assert.deepEqual(fixture.read().addressSnapshot, {
+      encrypted: payload.address.encrypted, hint: payload.address.hint, label: 'Home',
+      email: 'owner@example.com', phone: '+15555550123', country: 'United States', countryCode: 'US',
+    });
+    assert.equal(fixture.read().fulfillmentAddressUpdatedBy, wallet);
+    assert.equal(fixture.read().fulfillmentAddressUpdatedAt, NOW_MS);
+    assert.deepEqual(fixture.station(), { sibling: 'keep' });
   });
 }
 
-test('fulfillment address route retries the full read and validation after a Commerce precondition conflict', async () => {
-  let reads = 0;
-  let commits = 0;
-  const updateTimes: string[] = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      reads += 1;
-      return Response.json(orderDocument(
-        { addressSnapshot: {}, shipstation: {} },
-        `2026-08-18T12:00:0${reads}.000000Z`,
-      ));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commits += 1;
-      const body = JSON.parse(String(init?.body)) as { writes: Array<{ currentDocument: { updateTime: string } }> };
-      updateTimes.push(body.writes[0].currentDocument.updateTime);
-      if (commits === 1) {
-        return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 400 });
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:02Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
+test('fulfillment address route retries the full read and validation after a Commerce precondition conflict', async (t) => {
+  const fixture = orderFixture(t, { addressSnapshot: {}, shipstation: {} });
+  let attempts = 0;
+  fixture.beforeWrite = () => {
+    if (++attempts === 1) return fixture.patch({ addressSnapshot: { label: 'Concurrent label' } });
   };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_ORDER_ADDRESS_PATH, {
-      dropId: 'card_nft_2',
-      deliveryId: 7,
-      full: 'Ivan\n100 Main St\nIstanbul, 34000\nTurkey',
-    }),
-    fulfillmentEnv,
-    FULFILLMENT_ORDER_ADDRESS_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
+  const result = await writeOrder(fixture, FULFILLMENT_ORDER_ADDRESS_PATH, undefined, {
+    dropId: 'card_nft_2', deliveryId: 7, full: 'Ivan\n100 Main St\nIstanbul, 34000\nTurkey',
+  });
   assert.equal(result.response.status, 200);
-  assert.equal(reads, 2);
-  assert.equal(commits, 2);
-  assert.deepEqual(updateTimes, [
-    '2026-08-18T12:00:01.000000Z',
-    '2026-08-18T12:00:02.000000Z',
-  ]);
+  assert.equal(attempts, 2);
+  assert.equal((await result.response.json() as { address: { label: string } }).address.label, 'Concurrent label');
 });
 
-test('fulfillment address route preserves authorization and order-state guards', async () => {
+test('fulfillment address route preserves authorization and order-state guards', async (t) => {
   let providerCalls = 0;
   for (const wallet of [ADMIN, OTHER]) {
+    const fixture = orderFixture(t);
+    fixture.afterRead = () => assert.fail('Unauthorized address edit read Commerce');
+    fixture.beforeWrite = () => assert.fail('Unauthorized address edit wrote Commerce');
     const denied = await handleProfileWriteRequest(
       request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
-      fulfillmentEnv,
+      fixture.env,
       FULFILLMENT_ORDER_ADDRESS_PATH,
       {},
-      legacyFirestoreDependencies(async () => {
+      d1Dependencies(async () => {
         providerCalls += 1;
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }, {
@@ -1363,47 +1194,19 @@ test('fulfillment address route preserves authorization and order-state guards',
     [{ addressSnapshot: {}, shipstation: { claimedAt: NOW_MS - 1000 } }, 'aborted'],
     [{ addressSnapshot: {}, shipstation: {}, source: 'admin_irl_redeem' }, 'failed-precondition'],
   ] as const) {
-    const guarded = await handleProfileWriteRequest(
-      request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
-      fulfillmentEnv,
-      FULFILLMENT_ORDER_ADDRESS_PATH,
-      {},
-      legacyFirestoreDependencies(async (input) => {
-        const url = new URL(String(input));
-        if (url.pathname.endsWith('/deliveryOrders/7')) {
-          return Response.json(orderDocument(orderFields));
-        }
-        return Response.json({ error: 'unexpected' }, { status: 500 });
-      }),
-    );
+    const fixture = orderFixture(t, orderFields);
+    const guarded = await writeOrder(fixture, FULFILLMENT_ORDER_ADDRESS_PATH, undefined, {
+      dropId: 'card_nft_2', deliveryId: 7, full: 'address',
+    });
     assert.equal(guarded.response.status, 409);
     assert.equal((await guarded.response.json() as { error: { code: string } }).error.code, code);
   }
 });
 
-test('ShipStation shipment route returns an existing Commerce shipment without calling ShipStation', async () => {
-  let shipStationCalls = 0;
-  let commits = 0;
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    {},
-    legacyFirestoreDependencies(async (input) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        shipStationCalls += 1;
-        return Response.json({ error: 'unexpected' }, { status: 500 });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          shipstation: { shipmentId: 'shipment-1', createdAt: NOW_MS - 5_000 },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) commits += 1;
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    }),
-  );
+test('ShipStation shipment route returns an existing Commerce shipment without calling ShipStation', async (t) => {
+  const fixture = orderFixture(t, { shipstation: { shipmentId: 'shipment-1', createdAt: NOW_MS - 5_000 } });
+  fixture.beforeWrite = () => assert.fail('Existing shipment was modified');
+  const result = await writeOrder(fixture, FULFILLMENT_SHIPSTATION_SHIPMENT_PATH);
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
     deliveryId: 7,
@@ -1411,175 +1214,106 @@ test('ShipStation shipment route returns an existing Commerce shipment without c
     alreadyAdded: true,
     shipstationAddedAt: NOW_MS - 5_000,
   });
-  assert.equal(shipStationCalls, 0);
-  assert.equal(commits, 0);
 });
 
-test('ShipStation shipment route never cleans up a claim it did not acquire', async () => {
+test('ShipStation shipment route never cleans up a claim it did not acquire', async (t) => {
   for (const [orderFields, expectedCode] of [
     [{ shipstation: { claimedAt: NOW_MS - 1_000, claimedBy: OTHER } }, 'aborted'],
     [{ shipstation: {}, source: 'admin_irl_redeem' }, 'failed-precondition'],
   ] as const) {
-    let commits = 0;
-    let shipStationCalls = 0;
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-      {},
-      legacyFirestoreDependencies(async (input) => {
-        const url = new URL(String(input));
-        if (url.hostname === 'api.shipstation.com') {
-          shipStationCalls += 1;
-          return Response.json({ error: 'unexpected' }, { status: 500 });
-        }
-        if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(orderDocument(orderFields));
-        if (url.pathname.endsWith('/documents:commit')) commits += 1;
-        return Response.json({ error: 'unexpected' }, { status: 500 });
-      }),
-    );
+    const fixture = orderFixture(t, orderFields);
+    let writes = 0;
+    fixture.beforeWrite = () => { writes++; };
+    const providerFetch = t.mock.fn(async () => Response.error());
+    const result = await writeOrder(fixture, FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, providerFetch);
     assert.equal(result.response.status, 409);
     assert.equal((await result.response.json() as { error: { code: string } }).error.code, expectedCode);
-    assert.equal(commits, 0);
-    assert.equal(shipStationCalls, 0);
+    assert.equal(writes, 0);
+    assert.equal(providerFetch.mock.callCount(), 0);
+    assert.deepEqual(fixture.station(), orderFields.shipstation);
   }
 });
 
-test('ShipStation shipment route fails before claiming when provider configuration is missing', async () => {
-  for (const missingEnv of [
-    { ...fulfillmentEnv, SHIPSTATION_API_KEY: '' },
-    { ...fulfillmentEnv, SHIPSTATION_SHIP_FROM: '' },
-  ]) {
-    let orderReads = 0;
-    let commits = 0;
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      missingEnv,
-      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-      {},
-      legacyFirestoreDependencies(async (input) => {
-        const url = new URL(String(input));
-        if (url.pathname.endsWith('/deliveryOrders/7')) orderReads += 1;
-        if (url.pathname.endsWith('/documents:commit')) commits += 1;
-        return Response.json({ error: 'unexpected' }, { status: 500 });
-      }),
-    );
+test('ShipStation shipment route fails before claiming when provider configuration is missing', async (t) => {
+  for (const field of ['SHIPSTATION_API_KEY', 'SHIPSTATION_SHIP_FROM'] as const) {
+    const fixture = orderFixture(t);
+    fixture.env[field] = '';
+    fixture.afterRead = () => assert.fail('Missing configuration reached Commerce');
+    fixture.beforeWrite = () => assert.fail('Missing configuration started a claim');
+    const result = await writeOrder(fixture, FULFILLMENT_SHIPSTATION_SHIPMENT_PATH);
     assert.equal(result.response.status, 409);
     assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
     assert.equal(result.authOutcome, 'provider-failure');
-    assert.equal(orderReads, 0);
-    assert.equal(commits, 0);
   }
 });
 
-test('ShipStation shipment route safely releases a claim after its commit response is lost', async () => {
-  let claimId = '';
-  let orderReads = 0;
-  let claimCommitAttempts = 0;
-  let releaseCommits = 0;
-  let shipStationCalls = 0;
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    {},
-    legacyFirestoreDependencies(async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        shipStationCalls += 1;
-        return Response.json({ error: 'unexpected' }, { status: 500 });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        orderReads += 1;
-        return Response.json(orderDocument({
-          shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
-        }, `2026-08-18T12:00:0${orderReads}.000000Z`));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-        const write = commit.writes[0] as {
-          update?: {
-            fields?: {
-              shipstation?: {
-                mapValue?: { fields?: Record<string, { stringValue?: string }> };
-              };
-            };
-          };
-          updateMask?: { fieldPaths?: string[] };
-        };
-        const nextClaimId = write.update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue;
-        if (nextClaimId) {
-          claimCommitAttempts += 1;
-          claimId = nextClaimId;
-          if (claimCommitAttempts === 1) throw new Error('commit response lost');
-          return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 400 });
-        }
-        releaseCommits += 1;
-        assert.ok(write.updateMask?.fieldPaths?.includes('shipstation.claimId'));
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:03Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    }),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(claimCommitAttempts, 2);
-  assert.equal(releaseCommits, 1);
-  assert.equal(shipStationCalls, 0);
+test('ShipStation shipment route safely releases a claim after its commit response is lost', async (t) => {
+  for (const failure of ['transport', 'conflict'] as const) {
+    const fixture = orderFixture(t);
+    let lostClaim: unknown;
+    fixture.afterWrite = () => {
+      fixture.afterWrite = undefined;
+      lostClaim = fixture.station().claimId;
+      if (failure === 'conflict') throw new CommerceWriteConflict();
+      throw new Error('Lost D1 commit acknowledgement');
+    };
+    let providerCalls = 0;
+    const result = await writeOrder(fixture, FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, async () => {
+      providerCalls++;
+      return Response.error();
+    });
+    const expected = failure === 'conflict' ? { status: 409, code: 'aborted' } : { status: 500, code: 'internal' };
+    assert.equal(result.response.status, expected.status, failure);
+    assert.equal((await result.response.json() as { error: { code: string } }).error.code, expected.code);
+    assert.ok(lostClaim);
+    assert.equal(providerCalls, 0);
+    assert.equal(fixture.station().claimId, undefined);
+    assert.equal(fixture.station().claimFenceId, lostClaim);
+  }
 });
 
-test('ShipStation shipment route claims, decrypts, creates, and conditionally persists one shipment', async () => {
-  let claimId = '';
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
+test('ShipStation shipment route claims, decrypts, creates, and conditionally persists one shipment', async (t) => {
+  const fixture = orderFixture(t, {
+    addressSnapshot: {
+      encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+      countryCode: 'TR',
+      email: 'owner@example.com',
+      phone: '+905555555555',
+    },
+    items: [
+      { kind: 'box', refId: 1 },
+      { kind: 'dude', refId: 2 },
+      { kind: 'box', refId: 0 },
+      { kind: 'other', refId: 3 },
+    ],
+    shipstation: { lastError: 'previous' },
+  });
+  const commits: CommerceDocumentData[] = [];
+  fixture.afterWrite = () => { commits.push(fixture.station()); };
+  let claimId: unknown;
+  let creates = 0;
   let createBody: unknown;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
-      if (url.pathname === '/v2/shipments/external_shipment_id/mons-card_nft_2-7') {
-        return Response.json({}, { status: 404 });
-      }
-      if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
-        createBody = JSON.parse(String(init.body));
-        return Response.json({
-          shipments: [{
-            shipment_id: 'shipment-new',
-            packages: [{
-              weight: { value: 8, unit: 'ounce' },
-              dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
-            }],
+    assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
+    if (url.pathname === '/v2/shipments/external_shipment_id/mons-card_nft_2-7') {
+      return Response.json({}, { status: 404 });
+    }
+    if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
+      creates++;
+      claimId = fixture.station().claimId;
+      createBody = JSON.parse(String(init.body));
+      return Response.json({
+        shipments: [{
+          shipment_id: 'shipment-new',
+          packages: [{
+            weight: { value: 8, unit: 'ounce' },
+            dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
           }],
-        });
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+        }],
+      });
     }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-          email: 'owner@example.com',
-          phone: '+905555555555',
-        },
-        items: [
-          { kind: 'box', refId: 1 },
-          { kind: 'dude', refId: 2 },
-          { kind: 'box', refId: 0 },
-          { kind: 'other', refId: 3 },
-        ],
-        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const fields = (commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
-      }).update?.fields?.shipstation?.mapValue?.fields;
-      claimId = fields?.claimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
+    return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
@@ -1587,10 +1321,10 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
       deliveryId: 7,
       package: { length: 10, width: 8, height: 3, weight: 8 },
     }),
-    fulfillmentEnv,
+    fixture.env,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
     {},
-    legacyFirestoreDependencies(providerFetch),
+    d1Dependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
@@ -1599,8 +1333,9 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
     alreadyAdded: false,
     shipstationAddedAt: NOW_MS,
   });
-  assert.equal(commits.length, 2);
-  assert.match(claimId, /^[0-9a-f-]{36}$/);
+
+  assert.equal(creates, 1);
+  assert.match(String(claimId), /^[0-9a-f-]{36}$/);
   assert.deepEqual(createBody, {
     shipments: [{
       external_shipment_id: 'mons-card_nft_2-7',
@@ -1640,69 +1375,47 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
       shipment_status: 'pending',
     }],
   });
-  const finalWrite = commits[1].writes[0] as {
-    update: { fields: { shipstation: { mapValue: { fields: Record<string, unknown> } } } };
-    updateMask: { fieldPaths: string[] };
-    updateTransforms: unknown[];
-  };
-  const finalFields = finalWrite.update.fields.shipstation.mapValue.fields;
-  assert.deepEqual(finalFields.shipmentId, stringValue('shipment-new'));
-  assert.deepEqual(finalFields.externalShipmentId, stringValue('mons-card_nft_2-7'));
-  assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.claimId'));
-  assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.lastError'));
-  assert.deepEqual(finalWrite.updateTransforms, [
-    { fieldPath: 'shipstation.createdAt', setToServerValue: 'REQUEST_TIME' },
-  ]);
+  assert.equal(commits.length, 2);
+  const [claimed, saved] = commits;
+  assert.equal(claimed.claimId, claimId);
+  assert.equal(claimed.shipmentId, undefined);
+  assert.equal(saved.shipmentId, 'shipment-new');
+  assert.equal(saved.externalShipmentId, 'mons-card_nft_2-7');
+  const updated = await fixture.repository.get(fixture.key);
+  assert.ok(updated);
+  assert.equal(saved.createdAt, Date.parse(updated.updateTime));
+  assert.equal(saved.lastError, undefined);
+  assert.equal(saved.claimId, undefined);
+  assert.equal(saved.claimedAt, undefined);
+  assert.equal(saved.claimedBy, undefined);
 });
 
-test('ShipStation shipment route raises an international default parcel above declared net weight', async () => {
-  let claimId = '';
+test('ShipStation shipment route raises an international default parcel above declared net weight', async (t) => {
+  const fixture = orderFixture(t, shipmentFields(), 'little_swag_hoodies');
   let createBody: { shipments: Array<Record<string, unknown>> } | undefined;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
-      if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
-        createBody = JSON.parse(String(init.body)) as { shipments: Array<Record<string, unknown>> };
-        return Response.json({
-          shipments: [{
-            shipment_id: 'shipment-new',
-            packages: createBody.shipments[0].packages,
-          }],
-        });
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+    if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
+      createBody = JSON.parse(String(init.body)) as { shipments: Array<Record<string, unknown>> };
+      return Response.json({
+        shipments: [{
+          shipment_id: 'shipment-new',
+          packages: createBody.shipments[0].packages,
+        }],
+      });
     }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-        },
-        items: [{ kind: 'box', refId: 1 }],
-        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as {
-        writes: Array<{
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
-        }>;
-      };
-      claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
+    return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
       dropId: 'little_swag_hoodies',
       deliveryId: 7,
     }),
-    fulfillmentEnv,
+    fixture.env,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
     {},
-    legacyFirestoreDependencies(providerFetch),
+    d1Dependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(createBody?.shipments[0].packages, [{
@@ -2078,98 +1791,51 @@ test('ShipStation shipment route still requires a US postal code and exposes a r
   assert.equal(Object.hasOwn(fixture.shipments[0], 'customs'), false);
 });
 
-test('ShipStation shipment route retains its claim when final persistence conflicts after creation', async () => {
-  let claimId = '';
-  let finalPersistAttempts = 0;
-  let retained = false;
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    {},
-    legacyFirestoreDependencies(async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
-        return Response.json({ shipments: [{ shipment_id: 'shipment-new', packages: [] }] });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          addressSnapshot: {
-            encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-            countryCode: 'TR',
-          },
-          items: [{ kind: 'box', refId: 1 }],
-          shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as {
-          writes: Array<{
-            update?: {
-              fields?: {
-                shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-              };
-            };
-            updateTransforms?: Array<{ fieldPath: string }>;
-          }>;
-        };
-        const write = commit.writes[0];
-        const fields = write.update?.fields?.shipstation?.mapValue?.fields ?? {};
-        if (fields.shipmentId) {
-          finalPersistAttempts += 1;
-          return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 409 });
-        }
-        if (fields.lastError) {
-          retained = fields.claimId?.stringValue === claimId &&
-            Boolean(write.updateTransforms?.some((entry) => entry.fieldPath === 'shipstation.claimedAt'));
-          return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-        }
-        claimId = fields.claimId?.stringValue ?? claimId;
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    }, { timeoutMs: 2_000 }),
-  );
+test('ShipStation shipment route retains its claim when final persistence conflicts after creation', async (t) => {
+  const fixture = orderFixture(t, shipmentFields());
+  let persistenceAttempts = 0;
+  const update = CommerceUnitOfWork.prototype.update;
+  t.mock.method(CommerceUnitOfWork.prototype, 'update', async function (
+    this: CommerceUnitOfWork, key: CommerceDocumentKey, values: Readonly<Record<string, CommerceUpdateValue>>,
+  ) {
+    if (values['shipstation.shipmentId'] === 'shipment-new') await fixture.patch({ concurrent: ++persistenceAttempts });
+    return update.call(this, key, values);
+  });
+  let creates = 0;
+  let claimAtCreate: unknown;
+  const result = await writeOrder(fixture, FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, async (input, init) => {
+    if (String(input).includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+    assert.equal(init?.method, 'POST');
+    creates++;
+    claimAtCreate = fixture.station().claimId;
+    return Response.json({ shipments: [{ shipment_id: 'shipment-new', packages: [] }] });
+  }, undefined, { timeoutMs: 10_000 });
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(finalPersistAttempts, 6);
-  assert.equal(retained, true);
+  assert.equal(creates, 1);
+  assert.equal(persistenceAttempts, 6);
+  assert.ok(claimAtCreate);
+  assert.equal(fixture.station().claimId, claimAtCreate);
+  assert.equal(fixture.station().claimedBy, OWNER);
+  assert.ok(fixture.station().lastError);
 });
 
-test('ShipStation shipment route adopts an external-id match without creating a duplicate', async () => {
-  let claimId = '';
+test('ShipStation shipment route adopts an external-id match without creating a duplicate', async (t) => {
+  const fixture = orderFixture(t, { shipstation: { claimedAt: NOW_MS - 120_001, claimedBy: OTHER } });
   let mutationCalls = 0;
   const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (init?.method && init.method !== 'GET') mutationCalls += 1;
-      return Response.json({
-        shipment: {
-          shipment_id: 'shipment-adopted',
-          shipment_status: 'pending',
-          packages: [{
-            weight: { value: 12, unit: 'ounce' },
-            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-          }],
-        },
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: claimId
-          ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER }
-          : { claimedAt: NOW_MS - 120_001, claimedBy: OTHER },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as {
-        writes: Array<{ update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } } }>;
-      };
-      claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
+    assert.equal(new URL(String(input)).pathname, '/v2/shipments/external_shipment_id/mons-card_nft_2-7');
+    if (init?.method && init.method !== 'GET') mutationCalls += 1;
+    return Response.json({
+      shipment: {
+        shipment_id: 'shipment-adopted',
+        shipment_status: 'pending',
+        packages: [{
+          weight: { value: 12, unit: 'ounce' },
+          dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
+        }],
+      },
+    });
   };
   const result = await handleProfileWriteRequest(
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
@@ -2178,10 +1844,10 @@ test('ShipStation shipment route adopts an external-id match without creating a 
       package: { length: 10, width: 8, height: 3, weight: 8 },
       addressPatch: { state_province: 'PA' },
     }),
-    fulfillmentEnv,
+    fixture.env,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
     {},
-    legacyFirestoreDependencies(providerFetch),
+    d1Dependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
@@ -2193,112 +1859,60 @@ test('ShipStation shipment route adopts an external-id match without creating a 
   assert.equal(mutationCalls, 0);
 });
 
-test('ShipStation shipment route retains only its own claim after an ambiguous create failure', async () => {
-  for (const replacement of [false, true]) {
-    let claimId = '';
-    const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
-        return new Promise<Response>((_resolve, reject) => {
-          reject(new Error('network failed after sending a private address'));
-        });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          addressSnapshot: {
-            encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-            countryCode: 'TR',
-          },
-          items: [{ kind: 'box', refId: 1 }],
-          shipstation: claimId
-            ? replacement && commits.length === 1
-              ? { claimId: 'replacement-claim', claimedAt: NOW_MS, claimedBy: OTHER }
-              : { claimId, claimedAt: NOW_MS, claimedBy: OWNER }
-            : {},
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-        commits.push(commit);
-        const fields = (commit.writes[0] as {
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
-        }).update?.fields?.shipstation?.mapValue?.fields;
-        claimId = fields?.claimId?.stringValue ?? claimId;
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
+test('ShipStation shipment route retains only its own claim after an ambiguous create failure', async (t) => {
+  for (const replacement of [undefined, { claimId: 'replacement-claim', claimedBy: OTHER, claimedAt: NOW_MS }]) {
+    const fixture = orderFixture(t, shipmentFields());
+    let claim: unknown;
+    let creates = 0;
+    let cleanupWrites = 0;
+    const providerFetch: typeof fetch = async (input) => {
+      if (String(input).includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+      creates++;
+      claim = fixture.station().claimId;
+      if (replacement) await fixture.patch({ shipstation: replacement });
+      fixture.beforeWrite = () => { cleanupWrites++; };
+      throw new Error('network failed after sending a private address');
     };
     const result = await handleProfileWriteRequest(
       request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      fulfillmentEnv,
+      fixture.env,
       FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
       {},
-      legacyFirestoreDependencies(providerFetch),
+      d1Dependencies(providerFetch),
     );
     assert.equal(result.response.status, 409);
     const payload = await result.response.json() as { error: { code: string; message: string } };
     assert.equal(payload.error.code, 'aborted');
     assert.doesNotMatch(payload.error.message, /100 Main St|private address/);
-    assert.equal(commits.length, replacement ? 1 : 2);
-    if (!replacement) {
-      const transition = commits[1].writes[0] as {
-        update: { fields: { shipstation: { mapValue: { fields: Record<string, { stringValue?: string }> } } } };
-        updateTransforms: Array<{ fieldPath: string }>;
-      };
-      const fields = transition.update.fields.shipstation.mapValue.fields;
-      assert.equal(fields.claimId.stringValue, claimId);
-      assert.equal(fields.lastError.stringValue, 'Could not reach ShipStation');
-      assert.ok(transition.updateTransforms.some((entry) => entry.fieldPath === 'shipstation.claimedAt'));
+    assert.equal(creates, 1);
+    assert.ok(claim);
+    assert.equal(cleanupWrites, replacement ? 0 : 1);
+    if (replacement) {
+      assert.deepEqual(fixture.station(), replacement);
+      continue;
     }
+    const retained = fixture.station();
+    assert.equal(retained.claimId, claim);
+    assert.equal(retained.claimedBy, OWNER);
+    assert.equal(retained.lastError, 'Could not reach ShipStation');
+    const updated = await fixture.repository.get(fixture.key);
+    assert.ok(updated);
+    assert.equal(retained.claimedAt, Date.parse(updated.updateTime));
   }
 });
 
-test('ShipStation shipment disconnect retains its ambiguity claim before rethrowing cancellation', async () => {
+test('ShipStation shipment disconnect retains its ambiguity claim before rethrowing cancellation', async (t) => {
+  const fixture = orderFixture(t, shipmentFields());
   const client = new AbortController();
   const reason = new DOMException('Client disconnected', 'AbortError');
-  let claimId = '';
-  let retained = false;
+  let claimAtPost: CommerceDocumentData | undefined;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
-      client.abort(reason);
-      throw init?.signal?.reason ?? reason;
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-        },
-        items: [{ kind: 'box', refId: 1 }],
-        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as {
-        writes: Array<{
-          update?: {
-            fields?: {
-              shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-            };
-          };
-          updateTransforms?: Array<{ fieldPath: string }>;
-        }>;
-      };
-      const write = commit.writes[0];
-      const fields = write.update?.fields?.shipstation?.mapValue?.fields ?? {};
-      if (fields.lastError) {
-        retained = fields.claimId?.stringValue === claimId &&
-          Boolean(write.updateTransforms?.some((entry) => entry.fieldPath === 'shipstation.claimedAt'));
-      } else {
-        claimId = fields.claimId?.stringValue ?? claimId;
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
+    if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+    assert.equal(init?.method, 'POST');
+    claimAtPost = fixture.station();
+    client.abort(reason);
+    throw init?.signal?.reason ?? reason;
   };
   const disconnectedRequest = new Request(
     `https://api.mons.shop${FULFILLMENT_SHIPSTATION_SHIPMENT_PATH}`,
@@ -2313,54 +1927,38 @@ test('ShipStation shipment disconnect retains its ambiguity claim before rethrow
   await assert.rejects(
     handleProfileWriteRequest(
       disconnectedRequest,
-      fulfillmentEnv,
+      fixture.env,
       FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
       {},
-      legacyFirestoreDependencies(providerFetch),
+      d1Dependencies(providerFetch),
     ),
     (error) => error === reason,
   );
-  assert.equal(retained, true);
+  assert.ok(claimAtPost && typeof claimAtPost.claimId === 'string' && claimAtPost.claimId.length > 0);
+  const retained = fixture.station();
+  assert.equal(retained.claimId, claimAtPost.claimId);
+  assert.equal(retained.claimedBy, OWNER);
+  assert.ok(typeof claimAtPost.claimedAt === 'number' && typeof retained.claimedAt === 'number' && retained.claimedAt > claimAtPost.claimedAt);
+  assert.ok(retained.lastError);
 });
 
-test('ShipStation shipment route releases its claim after a definitive provider rejection', async () => {
-  let claimId = '';
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
+test('ShipStation shipment route releases its claim after a definitive provider rejection', async (t) => {
+  const fixture = orderFixture(t, shipmentFields());
+  let claim: unknown;
+  const providerFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
-      return Response.json({
-        errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
-      }, { status: 400 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-        },
-        items: [{ kind: 'box', refId: 1 }],
-        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const fields = (commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
-      }).update?.fields?.shipstation?.mapValue?.fields;
-      claimId = fields?.claimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
+    claim = fixture.station().claimId;
+    if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+    return Response.json({
+      errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
+    }, { status: 400 });
   };
   const result = await handleProfileWriteRequest(
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
+    fixture.env,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
     {},
-    legacyFirestoreDependencies(providerFetch),
+    d1Dependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   const payload = await result.response.json() as {
@@ -2382,78 +1980,56 @@ test('ShipStation shipment route releases its claim after a definitive provider 
       'country_code',
     ],
   });
-  assert.equal(commits.length, 2);
-  const release = commits[1].writes[0] as {
-    update: { fields: { shipstation: { mapValue: { fields: Record<string, { stringValue?: string }> } } } };
-    updateMask: { fieldPaths: string[] };
-  };
-  assert.equal(release.update.fields.shipstation.mapValue.fields.claimFenceId.stringValue, claimId);
-  assert.ok(release.updateMask.fieldPaths.includes('shipstation.claimedAt'));
+  assert.ok(claim);
+  assert.equal(fixture.station().claimFenceId, claim);
+  assert.equal(fixture.station().claimId, undefined);
+  assert.equal(fixture.station().claimedAt, undefined);
 });
 
-test('the new admin can correct a ShipStation address temporarily after rejection without editing the saved address', async () => {
-  let claimId = '';
+test('the new admin can correct a ShipStation address temporarily after rejection without editing the saved address', async (t) => {
+  const fixture = orderFixture(t, {
+    addressSnapshot: {
+      encrypted: encryptedAddress('Ivan\n100 Main St\nSuite 4\nIstanbul, 34000\nTurkey'),
+      countryCode: 'TR',
+      email: 'owner@example.com',
+      phone: '+905555555555',
+    },
+    items: [{ kind: 'box', refId: 1 }],
+  });
+  const initialAddress = fixture.read().addressSnapshot;
   let createCalls = 0;
   let correctedCreateBody: { shipments: Array<Record<string, unknown>> } | undefined;
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
-      if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
-        createCalls += 1;
-        if (createCalls === 1) {
-          return Response.json({
-            errors: [{
-              error_code: 'unspecified',
-              field_name: 'state_province',
-              field_value: 'Private subdivision',
-              message: 'Ivan at 100 Main St',
-            }],
-          }, { status: 500 });
-        }
-        correctedCreateBody = JSON.parse(String(init.body)) as { shipments: Array<Record<string, unknown>> };
+    if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+    if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
+      createCalls += 1;
+      if (createCalls === 1) {
         return Response.json({
-          shipments: [{
-            shipment_id: 'shipment-corrected',
-            packages: correctedCreateBody.shipments[0].packages,
+          errors: [{
+            error_code: 'unspecified',
+            field_name: 'state_province',
+            field_value: 'Private subdivision',
+            message: 'Ivan at 100 Main St',
           }],
-        });
+        }, { status: 500 });
       }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+      correctedCreateBody = JSON.parse(String(init.body)) as { shipments: Array<Record<string, unknown>> };
+      return Response.json({
+        shipments: [{
+          shipment_id: 'shipment-corrected',
+          packages: correctedCreateBody.shipments[0].packages,
+        }],
+      });
     }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nSuite 4\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-          email: 'owner@example.com',
-          phone: '+905555555555',
-        },
-        items: [{ kind: 'box', refId: 1 }],
-        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: ADDRESS_VIEWING_ADMIN } : {},
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const write = commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
-        updateMask?: { fieldPaths?: string[] };
-      };
-      if (write.updateMask?.fieldPaths?.includes('shipstation.claimId')) {
-        claimId = write.update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue ?? '';
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
+    return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
   };
   const run = (body: Record<string, unknown>) => handleProfileWriteRequest(
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, body),
-    fulfillmentEnv,
+    fixture.env,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
     {},
-    legacyFirestoreDependencies(providerFetch, {
+    d1Dependencies(providerFetch, {
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADDRESS_VIEWING_ADMIN }),
     }),
   );
@@ -2468,7 +2044,7 @@ test('the new admin can correct a ShipStation address temporarily after rejectio
     fields: ['state_province'],
   });
   assert.doesNotMatch(JSON.stringify(rejectedPayload), /Private subdivision|100 Main St/);
-  assert.equal(claimId, '');
+  assert.equal(fixture.station().claimId, undefined);
 
   const corrected = await run({
     dropId: 'card_nft_2',
@@ -2496,63 +2072,27 @@ test('the new admin can correct a ShipStation address temporarily after rejectio
     phone: '+905555555555',
   });
   assert.equal(Object.hasOwn(shipment ?? {}, 'customs'), false);
-  assert.equal(claimId, '');
-  for (const commit of commits) {
-    const fieldPaths = (commit.writes[0] as { updateMask?: { fieldPaths?: string[] } }).updateMask?.fieldPaths ?? [];
-    assert.equal(fieldPaths.some((field) => field.startsWith('addressSnapshot')), false);
-  }
+  assert.equal(fixture.station().claimId, undefined);
+  assert.deepEqual(fixture.read().addressSnapshot, initialAddress);
 });
 
-test('ShipStation shipment route preserves its sanitized provider error when claim cleanup fails', async () => {
-  let claimId = '';
+test('ShipStation shipment route preserves its sanitized provider error when claim cleanup fails', async (t) => {
+  const fixture = orderFixture(t, shipmentFields());
   let cleanupAttempts = 0;
   const logged: string[] = [];
   const originalConsoleError = console.error;
   console.error = (...values: unknown[]) => logged.push(values.map(String).join(' '));
   try {
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-      {},
-      legacyFirestoreDependencies(async (input, init) => {
-        const url = new URL(String(input));
-        if (url.hostname === 'api.shipstation.com') {
-          if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
-          return Response.json({
-            errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
-          }, { status: 400 });
-        }
-        if (url.pathname.endsWith('/deliveryOrders/7')) {
-          return Response.json(orderDocument({
-            addressSnapshot: {
-              encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-              countryCode: 'TR',
-            },
-            items: [{ kind: 'box', refId: 1 }],
-            shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
-          }));
-        }
-        if (url.pathname.endsWith('/documents:commit')) {
-          const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-          const write = commit.writes[0] as {
-            update?: {
-              fields?: {
-                shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-              };
-            };
-          };
-          const nextClaimId = write.update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue;
-          if (nextClaimId) {
-            claimId = nextClaimId;
-            return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-          }
-          cleanupAttempts += 1;
-          return Response.json({ error: { status: 'UNAVAILABLE' } }, { status: 503 });
-        }
-        return Response.json({ error: 'unexpected' }, { status: 500 });
-      }),
-    );
+    const result = await writeOrder(fixture, FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, async (input) => {
+      if (String(input).includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+      fixture.beforeWrite = () => {
+        cleanupAttempts++;
+        throw new Error('Storage unavailable');
+      };
+      return Response.json({
+        errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
+      }, { status: 400 });
+    });
     assert.equal(result.response.status, 409);
     const payload = await result.response.json() as { error: { code: string; message: string } };
     assert.equal(payload.error.code, 'failed-precondition');
@@ -2561,3320 +2101,8 @@ test('ShipStation shipment route preserves its sanitized provider error when cla
   } finally {
     console.error = originalConsoleError;
   }
-  assert.equal(cleanupAttempts, 2);
+  assert.equal(cleanupAttempts, 1);
   assert.equal(logged.length, 1);
   assert.match(logged[0], /fulfillment_shipstation_shipment_claim_transition_failed/);
   assert.doesNotMatch(logged[0], /100 Main St/);
 });
-
-test('ShipStation label route refreshes and conditionally persists an active stored label', async () => {
-  let orderReads = 0;
-  let commit: { writes: Array<Record<string, unknown>> } | undefined;
-  const storedLabel = {
-    labelId: 'label-1',
-    shipmentId: 'shipment-1',
-    status: 'processing',
-    trackingNumber: 'old-tracking',
-    purchasedAt: NOW_MS - 1000,
-  };
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      assert.equal(url.pathname, '/v2/labels/label-1');
-      assert.equal(url.searchParams.get('label_download_type'), 'url');
-      assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
-      return Response.json({
-        label: {
-          label_id: 'label-1',
-          shipment_id: 'shipment-1',
-          status: 'completed',
-          tracking_number: 'new-tracking',
-          created_at: '2026-08-18T11:59:00.000Z',
-          shipment_cost: { currency: 'usd', amount: 10 },
-          insurance_cost: { currency: 'usd', amount: 1 },
-          label_download: { pdf: 'https://labels.example/label-1.pdf' },
-        },
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      orderReads += 1;
-      return Response.json(orderDocument({
-        fulfillmentTrackingCode: 'old-tracking',
-        shipstation: { shipmentId: 'shipment-1', label: storedLabel, labelPurchase: { status: 'purchasing' } },
-      }, `2026-08-18T12:00:0${orderReads}.000000Z`));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commit = JSON.parse(String(init?.body));
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  const payload = await result.response.json() as {
-    deliveryId: number;
-    shipmentId: string;
-    label: { status: string; trackingNumber: string; totalCost: { currency: string; amount: number } };
-    labelDownloadUrl: string;
-  };
-  assert.equal(payload.deliveryId, 7);
-  assert.equal(payload.shipmentId, 'shipment-1');
-  assert.equal(payload.label.status, 'completed');
-  assert.equal(payload.label.trackingNumber, 'new-tracking');
-  assert.deepEqual(payload.label.totalCost, { currency: 'usd', amount: 11 });
-  assert.equal(payload.labelDownloadUrl, 'https://labels.example/label-1.pdf');
-  assert.equal(orderReads, 2);
-  const write = commit?.writes[0] as {
-    currentDocument: { updateTime: string };
-    update: { fields: Record<string, unknown> };
-    updateMask: { fieldPaths: string[] };
-  };
-  assert.equal(write.currentDocument.updateTime, '2026-08-18T12:00:02.000000Z');
-  assert.ok(write.updateMask.fieldPaths.includes('shipstation.labelPurchase'));
-  assert.ok(write.updateMask.fieldPaths.includes('fulfillmentTrackingCode'));
-  assert.ok(write.updateMask.fieldPaths.includes('shipstation.rateQuotes'));
-  assert.equal(write.updateMask.fieldPaths.includes('shipstation.ratesClaimId'), false);
-  assert.equal(write.updateMask.fieldPaths.includes('shipstation.ratesClaimedAt'), false);
-  assert.equal(write.updateMask.fieldPaths.includes('shipstation.ratesClaimedBy'), false);
-  assert.ok(Object.hasOwn(write.update.fields, 'fulfillmentTrackingCode'));
-});
-
-test('ShipStation label route adopts a discovered label and resolves an uncertain purchase', async () => {
-  let scenario: 'adopt' | 'unknown' = 'adopt';
-  let commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      assert.equal(url.pathname, '/v2/labels');
-      return Response.json({
-        labels: scenario === 'adopt'
-          ? [{
-              label_id: 'adopted-label',
-              shipment_id: 'shipment-1',
-              status: 'completed',
-              tracking_number: 'adopted-tracking',
-            }]
-          : [],
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(scenario === 'unknown'
-            ? { labelPurchase: { status: 'purchasing', requestId: 'request-1' } }
-            : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commits.push(JSON.parse(String(init?.body)));
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const adopted = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(adopted.response.status, 200);
-  assert.equal((await adopted.response.json() as { label: { labelId: string } }).label.labelId, 'adopted-label');
-  assert.equal(commits.length, 1);
-
-  scenario = 'unknown';
-  commits = [];
-  const unknown = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(unknown.response.status, 200);
-  assert.deepEqual(await unknown.response.json(), {
-    deliveryId: 7,
-    shipmentId: 'shipment-1',
-    purchaseUnknown: true,
-  });
-  const write = commits[0].writes[0] as {
-    updateMask: { fieldPaths: string[] };
-    updateTransforms: unknown[];
-  };
-  assert.deepEqual(write.updateMask.fieldPaths, [
-    'shipstation.labelPurchase.status',
-    'shipstation.labelPurchase.checkedBy',
-  ]);
-  assert.deepEqual(write.updateTransforms, [
-    { fieldPath: 'shipstation.labelPurchase.checkedAt', setToServerValue: 'REQUEST_TIME' },
-  ]);
-});
-
-test('ShipStation label adoption replaces stale metadata from the previous label', async () => {
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const staleLabel = {
-    labelId: 'old-label',
-    shipmentId: 'shipment-1',
-    status: 'voided',
-    trackingNumber: 'stale-tracking',
-    rateId: 'stale-rate',
-    totalCost: { currency: 'usd', amount: 99 },
-    purchasedBy: OWNER,
-    purchasedAt: NOW_MS - 1000,
-  };
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels/old-label') {
-        return Response.json({
-          label: {
-            label_id: 'old-label',
-            shipment_id: 'shipment-1',
-            status: 'voided',
-          },
-        });
-      }
-      assert.equal(url.pathname, '/v2/labels');
-      return Response.json({
-        labels: [{
-          label_id: 'adopted-label',
-          shipment_id: 'shipment-1',
-          status: 'processing',
-        }],
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        fulfillmentTrackingCode: 'stale-tracking',
-        shipstation: { shipmentId: 'shipment-1', label: staleLabel },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commits.push(JSON.parse(String(init?.body)));
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  assert.deepEqual((await result.response.json() as { label: Record<string, unknown> }).label, {
-    labelId: 'adopted-label',
-    shipmentId: 'shipment-1',
-    status: 'processing',
-    purchasedAt: NOW_MS,
-  });
-  assert.equal(commits.length, 2);
-  const adoptedWrite = commits[1].writes[0] as {
-    update: {
-      fields: {
-        shipstation: { mapValue: { fields: { label: { mapValue: { fields: Record<string, unknown> } } } } };
-      };
-    };
-    updateMask: { fieldPaths: string[] };
-  };
-  assert.ok(adoptedWrite.updateMask.fieldPaths.includes('shipstation.label'));
-  assert.ok(adoptedWrite.updateMask.fieldPaths.includes('fulfillmentTrackingCode'));
-  assert.equal(
-    adoptedWrite.updateMask.fieldPaths.some((field) => field.startsWith('shipstation.label.')),
-    false,
-  );
-  assert.deepEqual(Object.keys(adoptedWrite.update.fields.shipstation.mapValue.fields.label.mapValue.fields).sort(), [
-    'labelId',
-    'purchasedAt',
-    'recordedBy',
-    'shipmentId',
-    'status',
-  ]);
-  assert.equal(Object.hasOwn(adoptedWrite.update.fields, 'fulfillmentTrackingCode'), false);
-});
-
-test('ShipStation label route keeps a voided label terminal across stale provider reads', async () => {
-  let commits = 0;
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      const label = {
-        label_id: 'label-1',
-        shipment_id: 'shipment-1',
-        status: 'completed',
-        tracking_number: 'tracking-1',
-      };
-      return Response.json(url.pathname === '/v2/labels/label-1' ? { label } : { labels: [label] });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          label: {
-            labelId: 'label-1',
-            shipmentId: 'shipment-1',
-            status: 'voided',
-            trackingNumber: 'tracking-1',
-            purchasedAt: NOW_MS - 1000,
-          },
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) commits += 1;
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  assert.equal((await result.response.json() as { label: { status: string } }).label.status, 'voided');
-  assert.equal(commits, 0);
-});
-
-test('ShipStation label route does not overwrite a label created during adoption', async () => {
-  let orderReads = 0;
-  let commits = 0;
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      return Response.json({
-        labels: [{
-          label_id: 'adopted-label',
-          shipment_id: 'shipment-1',
-          status: 'completed',
-        }],
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      orderReads += 1;
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(orderReads > 1
-            ? { label: { labelId: 'newer-label', shipmentId: 'shipment-1', status: 'completed' } }
-            : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) commits += 1;
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(orderReads, 2);
-  assert.equal(commits, 0);
-});
-
-test('ShipStation label route rejects a label from another shipment before persisting it', async () => {
-  let commits = 0;
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      return Response.json({
-        label: {
-          label_id: 'label-1',
-          shipment_id: 'shipment-2',
-          status: 'completed',
-        },
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          label: { labelId: 'label-1', shipmentId: 'shipment-1', status: 'processing' },
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) commits += 1;
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(commits, 0);
-});
-
-test('ShipStation label route rejects a shipment change before transitioning purchase state', async () => {
-  let orderReads = 0;
-  let commits = 0;
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') return Response.json({ labels: [] });
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      orderReads += 1;
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: orderReads === 1 ? 'shipment-1' : 'shipment-2',
-          labelPurchase: { status: 'purchasing', requestId: 'request-1' },
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) commits += 1;
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(orderReads, 2);
-  assert.equal(commits, 0);
-});
-
-test('ShipStation label route fails closed for missing configuration and oversized provider responses', async () => {
-  const order = orderDocument({ shipstation: { shipmentId: 'shipment-1' } });
-  const commerceFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(order);
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const missing = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    { ...fulfillmentEnv, SHIPSTATION_API_KEY: '' },
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(commerceFetch),
-  );
-  assert.equal(missing.response.status, 409);
-  assert.equal((await missing.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
-  assert.equal(missing.authOutcome, 'provider-failure');
-
-  const rateLimited = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(async (input) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') return Response.json({}, { status: 429 });
-      return commerceFetch(input);
-    }),
-  );
-  assert.equal(rateLimited.response.status, 429);
-  assert.equal(rateLimited.authOutcome, 'provider-failure');
-
-  const oversized = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(async (input) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        return new Response('{}', { headers: { 'Content-Length': String(300 * 1024) } });
-      }
-      return commerceFetch(input);
-    }),
-  );
-  assert.equal(oversized.response.status, 502);
-  assert.equal((await oversized.response.json() as { error: { code: string } }).error.code, 'unavailable');
-
-  const malformed = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(async (input) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') return Response.json({});
-      return commerceFetch(input);
-    }),
-  );
-  assert.equal(malformed.response.status, 502);
-  assert.equal((await malformed.response.json() as { error: { code: string } }).error.code, 'unavailable');
-  assert.equal(malformed.authOutcome, 'provider-failure');
-
-  const malformedEntry = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(async (input) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') return Response.json({ labels: [{}] });
-      return commerceFetch(input);
-    }),
-  );
-  assert.equal(malformedEntry.response.status, 502);
-  assert.equal((await malformedEntry.response.json() as { error: { code: string } }).error.code, 'unavailable');
-  assert.equal(malformedEntry.authOutcome, 'provider-failure');
-
-  const timedOut = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    {},
-    legacyFirestoreDependencies(async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname !== 'api.shipstation.com') return commerceFetch(input);
-      return new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        const abort = () => reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
-        signal?.addEventListener('abort', abort, { once: true });
-        if (signal?.aborted) abort();
-      });
-    }, { timeoutMs: 25 }),
-  );
-  assert.equal(timedOut.response.status, 504);
-  assert.equal((await timedOut.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
-});
-
-test('ShipStation label void route persists the exact label and conditionally removes its tracking code', async () => {
-  const run = async (fulfillmentTrackingCode: string) => {
-    let putCalls = 0;
-    let commit: { writes: Array<Record<string, unknown>> } | undefined;
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        putCalls += 1;
-        assert.equal(url.pathname, '/v2/labels/label-1/void');
-        assert.equal(init?.method, 'PUT');
-        assert.equal(init?.body, undefined);
-        assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
-        return Response.json({ approved: true, message: 'Refund requested' });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          fulfillmentStatus: 'Shipped',
-          fulfillmentTrackingCode,
-          shipstation: {
-            shipmentId: 'shipment-1',
-            rateQuotes: [{ rateId: 'rate-1' }],
-            label: {
-              labelId: 'label-1',
-              shipmentId: 'shipment-1',
-              status: 'completed',
-              trackingNumber: 'tracking-1',
-              purchasedAt: NOW_MS - 1000,
-            },
-          },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        commit = JSON.parse(String(init?.body));
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch),
-    );
-    return { result, putCalls, commit };
-  };
-
-  const matching = await run('tracking-1');
-  assert.equal(matching.result.response.status, 200);
-  assert.deepEqual(await matching.result.response.json(), {
-    deliveryId: 7,
-    shipmentId: 'shipment-1',
-    label: {
-      labelId: 'label-1',
-      shipmentId: 'shipment-1',
-      status: 'voided',
-      trackingNumber: 'tracking-1',
-      purchasedAt: NOW_MS - 1000,
-    },
-  });
-  assert.equal(matching.putCalls, 1);
-  const matchingWrite = matching.commit?.writes[0] as {
-    update: {
-      fields: {
-        fulfillmentTrackingCode?: unknown;
-        fulfillmentStatus?: unknown;
-        shipstation: { mapValue: { fields: { label: { mapValue: { fields: Record<string, { stringValue?: string }> } } } } };
-      };
-    };
-    updateMask: { fieldPaths: string[] };
-  };
-  assert.equal(
-    matchingWrite.update.fields.shipstation.mapValue.fields.label.mapValue.fields.status.stringValue,
-    'voided',
-  );
-  assert.ok(matchingWrite.updateMask.fieldPaths.includes('shipstation.rateQuotes'));
-  assert.ok(matchingWrite.updateMask.fieldPaths.includes('fulfillmentTrackingCode'));
-  assert.equal(Object.hasOwn(matchingWrite.update.fields, 'fulfillmentTrackingCode'), false);
-  assert.equal(matchingWrite.updateMask.fieldPaths.includes('fulfillmentStatus'), false);
-  assert.equal(Object.hasOwn(matchingWrite.update.fields, 'fulfillmentStatus'), false);
-
-  const manual = await run('manual-tracking');
-  assert.equal(manual.result.response.status, 200);
-  const manualWrite = manual.commit?.writes[0] as { updateMask: { fieldPaths: string[] } };
-  assert.equal(manualWrite.updateMask.fieldPaths.includes('fulfillmentTrackingCode'), false);
-  assert.equal(manualWrite.updateMask.fieldPaths.includes('fulfillmentStatus'), false);
-});
-
-test('ShipStation label void route is idempotent and rejects stale or ineligible labels before calling ShipStation', async () => {
-  let providerCalls = 0;
-  let commits = 0;
-  let labelStatus: 'voided' | 'processing' | 'error' = 'voided';
-  let labelId = 'label-1';
-  let source: string | undefined;
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      providerCalls += 1;
-      return Response.json({ approved: true, message: 'ok' });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        ...(source ? { source } : {}),
-        shipstation: {
-          shipmentId: 'shipment-1',
-          label: { labelId, shipmentId: 'shipment-1', status: labelStatus, purchasedAt: NOW_MS - 1000 },
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) commits += 1;
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const run = (activeEnv = fulfillmentEnv) => handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
-    activeEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-
-  const idempotent = await run();
-  assert.equal(idempotent.response.status, 200);
-  assert.equal((await idempotent.response.json() as { label: { status: string } }).label.status, 'voided');
-  assert.equal(providerCalls, 0);
-  assert.equal(commits, 0);
-
-  labelStatus = 'processing';
-  assert.equal((await run()).response.status, 409);
-  labelStatus = 'error';
-  assert.equal((await run()).response.status, 409);
-  labelStatus = 'voided';
-  labelId = 'replacement-label';
-  assert.equal((await run()).response.status, 409);
-  labelId = 'label-1';
-  source = 'admin_irl_redeem';
-  assert.equal((await run()).response.status, 409);
-  const missingConfig = await run({ ...fulfillmentEnv, SHIPSTATION_API_KEY: '' });
-  assert.equal(missingConfig.response.status, 409);
-  assert.equal(providerCalls, 0);
-  assert.equal(commits, 0);
-});
-
-test('ShipStation label void route maps definite rejection without leaking provider messages', async () => {
-  let commits = 0;
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-    {},
-    legacyFirestoreDependencies(async (input) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        return Response.json({
-          approved: false,
-          message: 'Private 100 Main St secret-token',
-          reason_code: 'label_already_used',
-        });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          shipstation: {
-            shipmentId: 'shipment-1',
-            label: {
-              labelId: 'label-1',
-              shipmentId: 'shipment-1',
-              status: 'completed',
-              purchasedAt: NOW_MS - 1000,
-            },
-          },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) commits += 1;
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    }),
-  );
-  assert.equal(result.response.status, 409);
-  const payload = await result.response.json() as { error: { message: string } };
-  assert.match(payload.error.message, /already been used/);
-  assert.doesNotMatch(payload.error.message, /Private|100 Main|secret-token/);
-  assert.equal(commits, 0);
-});
-
-test('ShipStation label void route reconciles an ambiguous provider result with a fresh signal', async () => {
-  let voidCalls = 0;
-  let cleanupUsedFreshSignal = false;
-  let commit: { writes: Array<Record<string, unknown>> } | undefined;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname.endsWith('/void')) {
-        voidCalls += 1;
-        return Response.json({}, { status: 408 });
-      }
-      cleanupUsedFreshSignal = init?.signal?.aborted === false;
-      assert.equal(url.pathname, '/v2/labels/label-1');
-      return Response.json({
-        label: {
-          label_id: 'label-1',
-          shipment_id: 'shipment-1',
-          status: 'voided',
-          created_at: '2026-08-18T11:59:00.000Z',
-        },
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      cleanupUsedFreshSignal ||= voidCalls > 0 && init?.signal?.aborted === false;
-      return Response.json(orderDocument({
-        fulfillmentTrackingCode: 'tracking-1',
-        shipstation: {
-          shipmentId: 'shipment-1',
-          label: {
-            labelId: 'label-1',
-            shipmentId: 'shipment-1',
-            status: 'completed',
-            trackingNumber: 'tracking-1',
-            purchasedAt: NOW_MS - 1000,
-          },
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commit = JSON.parse(String(init?.body));
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  assert.equal((await result.response.json() as { label: { status: string } }).label.status, 'voided');
-  assert.equal(voidCalls, 1);
-  assert.equal(cleanupUsedFreshSignal, true);
-  assert.ok(commit);
-});
-
-test('ShipStation label void disconnect reconciles the provider mutation before rethrowing cancellation', async () => {
-  const client = new AbortController();
-  const reason = new DOMException('Client disconnected', 'AbortError');
-  let cleanupUsedFreshSignal = false;
-  let commits = 0;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname.endsWith('/void')) {
-        client.abort(reason);
-        throw init?.signal?.reason ?? reason;
-      }
-      cleanupUsedFreshSignal = init?.signal?.aborted === false;
-      return Response.json({
-        label: {
-          label_id: 'label-1',
-          shipment_id: 'shipment-1',
-          status: 'voided',
-          created_at: '2026-08-18T11:59:00.000Z',
-        },
-      });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          label: {
-            labelId: 'label-1',
-            shipmentId: 'shipment-1',
-            status: 'completed',
-            purchasedAt: NOW_MS - 1000,
-          },
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commits += 1;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const disconnectedRequest = new Request(
-    `https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
-      body: JSON.stringify(LABEL_VOID_BODY),
-      signal: client.signal,
-    },
-  );
-
-  await assert.rejects(
-    handleProfileWriteRequest(
-      disconnectedRequest,
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch),
-    ),
-    (error) => error === reason,
-  );
-  assert.equal(cleanupUsedFreshSignal, true);
-  assert.equal(commits, 1);
-});
-
-test('ShipStation label void route does not overwrite a replacement label after provider approval', async () => {
-  let orderReads = 0;
-  let commits = 0;
-  const logs: string[] = [];
-  const originalConsoleError = console.error;
-  console.error = (...values: unknown[]) => logs.push(values.map(String).join(' '));
-  try {
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-      {},
-      legacyFirestoreDependencies(async (input) => {
-        const url = new URL(String(input));
-        if (url.hostname === 'api.shipstation.com') {
-          return Response.json({ approved: true, message: 'Refund requested' });
-        }
-        if (url.pathname.endsWith('/deliveryOrders/7')) {
-          orderReads += 1;
-          const currentLabelId = orderReads === 1 ? 'label-1' : 'replacement-label';
-          return Response.json(orderDocument({
-            shipstation: {
-              shipmentId: 'shipment-1',
-              label: {
-                labelId: currentLabelId,
-                shipmentId: 'shipment-1',
-                status: 'completed',
-                purchasedAt: NOW_MS - 1000,
-              },
-            },
-          }));
-        }
-        if (url.pathname.endsWith('/documents:commit')) commits += 1;
-        return Response.json({ error: 'unexpected' }, { status: 500 });
-      }),
-    );
-    assert.equal(result.response.status, 409);
-    assert.match((await result.response.json() as { error: { message: string } }).error.message, /did not confirm/);
-  } finally {
-    console.error = originalConsoleError;
-  }
-  assert.equal(commits, 0);
-  assert.ok(orderReads >= 3);
-  assert.match(logs.join('\n'), /fulfillment_shipstation_label_void_reconcile_failed/);
-});
-
-test('ShipStation label purchase route claims, validates, purchases, and atomically persists a label', async () => {
-  let purchaseState: Record<string, unknown> | undefined;
-  let labelListCalls = 0;
-  let purchaseCalls = 0;
-  let orderReads = 0;
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
-      assert.equal(init?.redirect, 'manual');
-      if (url.pathname === '/v2/labels') {
-        labelListCalls += 1;
-        return Response.json({ labels: [] });
-      }
-      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
-      if (url.pathname === '/v2/labels/rates/rate-1') {
-        purchaseCalls += 1;
-        assert.equal(init?.method, 'POST');
-        assert.deepEqual(JSON.parse(String(init?.body)), {
-          label_format: 'pdf',
-          label_layout: '4x6',
-          label_download_type: 'url',
-        });
-        return Response.json({
-          label_id: 'label-1',
-          shipment_id: 'shipment-1',
-          status: 'completed',
-          tracking_number: 'tracking-1',
-          shipment_cost: { currency: 'usd', amount: 10 },
-          created_at: '2026-08-18T12:00:00.000Z',
-          label_download: { pdf: 'https://labels.example/label-1.pdf' },
-        });
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      orderReads += 1;
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }, `2026-08-18T12:00:0${orderReads}.000000Z`));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const purchaseFields = (commit.writes[0] as {
-        update?: {
-          fields?: {
-            shipstation?: {
-              mapValue?: {
-                fields?: {
-                  labelPurchase?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-                };
-              };
-            };
-          };
-        };
-      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase?.mapValue?.fields;
-      if (purchaseFields?.status?.stringValue === 'purchasing') {
-        purchaseState = {
-          status: 'purchasing',
-          requestId: purchaseFields.requestId?.stringValue,
-          rateId: purchaseFields.rateId?.stringValue,
-          claimedBy: purchaseFields.claimedBy?.stringValue,
-        };
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  assert.deepEqual(await result.response.json(), {
-    deliveryId: 7,
-    shipmentId: 'shipment-1',
-    label: {
-      labelId: 'label-1',
-      shipmentId: 'shipment-1',
-      status: 'completed',
-      rateId: 'rate-1',
-      trackingNumber: 'tracking-1',
-      carrierId: 'carrier-1',
-      carrierCode: 'stamps_com',
-      carrierName: 'USPS',
-      serviceCode: 'usps_priority_mail',
-      serviceName: 'USPS Priority Mail',
-      shipmentCost: { currency: 'usd', amount: 10 },
-      totalCost: { currency: 'usd', amount: 10 },
-      purchasedAt: NOW_MS,
-      purchasedBy: OWNER,
-    },
-    labelDownloadUrl: 'https://labels.example/label-1.pdf',
-    alreadyPurchased: false,
-  });
-  assert.equal(labelListCalls, 2);
-  assert.equal(purchaseCalls, 1);
-  assert.equal(orderReads, 4);
-  assert.equal(commits.length, 2);
-  const claim = commits[0].writes[0] as {
-    updateMask: { fieldPaths: string[] };
-    updateTransforms: Array<{ fieldPath: string }>;
-  };
-  assert.ok(claim.updateMask.fieldPaths.includes('shipstation.labelPurchase.requestId'));
-  assert.deepEqual(claim.updateTransforms, [
-    { fieldPath: 'shipstation.labelPurchase.claimedAt', setToServerValue: 'REQUEST_TIME' },
-  ]);
-  const persistence = commits[1].writes[0] as { updateMask: { fieldPaths: string[] } };
-  assert.ok(persistence.updateMask.fieldPaths.includes('shipstation.label'));
-  assert.ok(persistence.updateMask.fieldPaths.includes('shipstation.labelPurchase'));
-  assert.ok(persistence.updateMask.fieldPaths.includes('shipstation.rateQuotes'));
-});
-
-test('ShipStation label purchase route adopts an existing provider label without charging', async () => {
-  let purchaseCalls = 0;
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') {
-        return Response.json({
-          labels: [{
-            label_id: 'existing-label',
-            shipment_id: 'shipment-1',
-            status: 'completed',
-            tracking_number: 'existing-tracking',
-            label_download: { pdf: 'https://labels.example/existing.pdf' },
-          }],
-        });
-      }
-      if (init?.method === 'POST') purchaseCalls += 1;
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({ shipstation: { shipmentId: 'shipment-1' } }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commits.push(JSON.parse(String(init?.body)));
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  const payload = await result.response.json() as {
-    alreadyPurchased: boolean;
-    label: { labelId: string };
-    labelDownloadUrl: string;
-  };
-  assert.equal(payload.alreadyPurchased, true);
-  assert.equal(payload.label.labelId, 'existing-label');
-  assert.equal(payload.labelDownloadUrl, 'https://labels.example/existing.pdf');
-  assert.equal(purchaseCalls, 0);
-  assert.equal(commits.length, 1);
-});
-
-test('ShipStation label purchase route records definite failures and unresolved ambiguous purchases safely', async () => {
-  for (const mode of [
-    'definite',
-    'ambiguous',
-    'missing-status',
-    'unsupported-status',
-    'missing-status-voided',
-    'unsupported-status-voided',
-  ] as const) {
-    let purchaseState: Record<string, unknown> | undefined;
-    let labelListCalls = 0;
-    const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        if (url.pathname === '/v2/labels') {
-          labelListCalls += 1;
-          return Response.json({ labels: [] });
-        }
-        if (url.pathname === '/v2/rates/rate-1') {
-          return mode === 'definite'
-            ? Response.json({ errors: [{ error_code: 'invalid_rate', message: 'Private 100 Main St' }] }, { status: 400 })
-            : Response.json(SHIPSTATION_RATE);
-        }
-        if (url.pathname === '/v2/labels/rates/rate-1') {
-          if (mode === 'ambiguous') throw new TypeError('Private 100 Main St');
-          return Response.json({
-            label_id: 'label-1',
-            shipment_id: 'shipment-1',
-            ...(mode.startsWith('unsupported-status') ? { status: 'queued' } : {}),
-            ...(mode.endsWith('-voided') ? { voided: true } : {}),
-          });
-        }
-        return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          shipstation: {
-            shipmentId: 'shipment-1',
-            rateQuotes: [{
-              rateId: 'rate-1',
-              shipmentId: 'shipment-1',
-              totalAmount: { currency: 'usd', amount: 10 },
-            }],
-            ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-          },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-        commits.push(commit);
-        const purchaseFields = (commit.writes[0] as {
-          update?: {
-            fields?: {
-              shipstation?: {
-                mapValue?: {
-                  fields?: {
-                    labelPurchase?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-                  };
-                };
-              };
-            };
-          };
-        }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase?.mapValue?.fields;
-        if (purchaseFields?.status?.stringValue) {
-          purchaseState = {
-            status: purchaseFields.status.stringValue,
-            requestId: purchaseFields.requestId?.stringValue,
-            rateId: purchaseFields.rateId?.stringValue,
-          };
-        }
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch),
-    );
-    assert.equal(result.response.status, 409, mode);
-    const payload = await result.response.json() as { error: { code: string; message: string } };
-    assert.equal(payload.error.code, mode === 'definite' ? 'failed-precondition' : 'aborted');
-    assert.doesNotMatch(JSON.stringify(payload), /100 Main St|Private/);
-    if (mode !== 'definite') {
-      assert.match(payload.error.message, /Check purchase status or open ShipStation/);
-      assert.equal(labelListCalls, 3);
-    }
-    assert.equal(commits.length, 2, mode);
-    const transitionFields = (commits[1].writes[0] as {
-      update: {
-        fields: {
-          shipstation: {
-            mapValue: {
-              fields: {
-                labelPurchase: { mapValue: { fields: Record<string, { stringValue?: string }> } };
-              };
-            };
-          };
-        };
-      };
-    }).update.fields.shipstation.mapValue.fields.labelPurchase.mapValue.fields;
-    assert.equal(transitionFields.status.stringValue, mode === 'definite' ? 'failed' : 'unknown');
-    assert.doesNotMatch(transitionFields.lastError.stringValue || '', /100 Main St|Private/);
-  }
-});
-
-test('ShipStation purchase failures retain safe provider diagnostics after a successful retry', async () => {
-  for (const stage of ['label lookup', 'rate lookup', 'label purchase'] as const) {
-    const harness = createCommerceD1Harness();
-    const key = commerceKeys.deliveryOrder('card_nft_2', '7');
-    seedCommerceDocument(harness, { key, data: {
-      deliveryId: 7,
-      owner: OWNER,
-      status: 'ready_to_ship',
-      items: [{ kind: 'dude', refId: 1 }],
-      shipstation: {
-        shipmentId: 'shipment-1',
-        rateQuotes: [{
-          rateId: 'rate-1',
-          shipmentId: 'shipment-1',
-          totalAmount: { currency: 'usd', amount: 10 },
-        }],
-      },
-    } });
-    let reject = true;
-    const logs: string[] = [];
-    const providerFetch: typeof fetch = async (input) => {
-      const url = new URL(String(input));
-      assert.equal(url.hostname, 'api.shipstation.com');
-      const currentStage = url.pathname === '/v2/labels' ? 'label lookup'
-        : url.pathname === '/v2/rates/rate-1' ? 'rate lookup' : 'label purchase';
-      if (reject && currentStage === stage) {
-        return Response.json({
-          request_id: 'provider-request-123',
-          errors: [{
-            error_code: 'unspecified',
-            error_type: 'validation',
-            error_source: 'carrier',
-            field_name: 'ship_to.phone',
-            message: 'Invalid phone for Private 100 Main St Bearer secret-token shipstation-api-key',
-            field_value: 'private-phone',
-          }],
-        }, { status: 400 });
-      }
-      if (currentStage === 'label lookup') return Response.json({ labels: [] });
-      if (currentStage === 'rate lookup') return Response.json(SHIPSTATION_RATE);
-      assert.equal(url.pathname, '/v2/labels/rates/rate-1');
-      return Response.json({ label_id: 'label-1', shipment_id: 'shipment-1', status: 'completed' });
-    };
-    const run = (requestId: string) => handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, requestId }),
-      { ...fulfillmentEnv, COMMERCE_DB: harness.db },
-      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-      {},
-      d1Dependencies(providerFetch),
-    );
-    const originalConsoleError = console.error;
-    console.error = (...values: unknown[]) => logs.push(values.map(String).join(' '));
-    try {
-      const failed = await run(LABEL_PURCHASE_BODY.requestId);
-      assert.equal(failed.response.status, 409, stage);
-      const payload = await failed.response.json() as { error: { message: string } };
-      assert.match(payload.error.message, /phone/i);
-      assert.ok(payload.error.message.includes(stage));
-      assert.match(payload.error.message, /HTTP 400/);
-      assert.match(payload.error.message, /provider-request-123/);
-      assert.doesNotMatch(JSON.stringify(payload), /Private|100 Main|secret-token|shipstation-api-key|private-phone/);
-      assert.equal(logs.length, 1);
-      const diagnostic = JSON.parse(logs[0]);
-      assert.equal(diagnostic.event, 'fulfillment_shipstation_label_purchase_failed');
-      assert.equal(diagnostic.deliveryId, 7);
-      assert.equal(diagnostic.dropId, 'card_nft_2');
-      assert.equal(diagnostic.shipmentId, 'shipment-1');
-      assert.equal(diagnostic.rateId, 'rate-1');
-      assert.equal(diagnostic.purchaseRequestId, LABEL_PURCHASE_BODY.requestId);
-      assert.equal(diagnostic.purchaseAttempted, stage === 'label purchase');
-      assert.equal(diagnostic.provider.requestId, 'provider-request-123');
-      assert.equal(diagnostic.provider.status, 400);
-      assert.equal(diagnostic.provider.operation, stage === 'rate lookup' ? 'selected rate lookup' : stage);
-      assert.equal(diagnostic.provider.errors[0].source, 'carrier');
-      reject = false;
-      const success = await run('6ba7b811-9dad-11d1-80b4-00c04fd430c8');
-      assert.equal(success.response.status, 200, stage);
-      const stored = await new D1CommerceRepository(harness.db).get(key);
-      const shipstation = stored?.data.shipstation as Record<string, unknown>;
-      assert.equal(shipstation.labelPurchase, undefined);
-      assert.equal((shipstation.label as { labelId: string }).labelId, 'label-1');
-      assert.equal(logs.length, 1);
-      assert.doesNotMatch(logs[0], /Private|100 Main|Bearer|secret-token|shipstation-api-key|private-phone/);
-    } finally {
-      console.error = originalConsoleError;
-    }
-  }
-});
-
-test('ShipStation label purchase stays unknown after a successful charge and repeated Commerce conflicts', async () => {
-  let purchaseState: Record<string, unknown> | undefined;
-  let purchaseCalls = 0;
-  let persistenceConflicts = 0;
-  const transitionStatuses: string[] = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
-      if (url.pathname === '/v2/labels/rates/rate-1') {
-        purchaseCalls += 1;
-        return Response.json({
-          label_id: 'charged-label',
-          shipment_id: 'shipment-1',
-          status: 'completed',
-        });
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      const write = commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, unknown> } } } };
-        updateMask?: { fieldPaths?: string[] };
-      };
-      const purchaseFields = ((write.update?.fields?.shipstation?.mapValue?.fields?.labelPurchase as {
-        mapValue?: { fields?: Record<string, { stringValue?: string }> };
-      } | undefined)?.mapValue?.fields);
-      const status = purchaseFields?.status?.stringValue;
-      if (write.updateMask?.fieldPaths?.includes('shipstation.label')) {
-        persistenceConflicts += 1;
-        return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
-      }
-      if (status) {
-        transitionStatuses.push(status);
-        purchaseState = {
-          status,
-          requestId: purchaseFields?.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
-          rateId: purchaseFields?.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
-        };
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
-  );
-  assert.equal(result.response.status, 409);
-  const payload = await result.response.json() as { error: { code: string; message: string } };
-  assert.equal(payload.error.code, 'aborted');
-  assert.match(payload.error.message, /Check purchase status or open ShipStation/);
-  assert.equal(purchaseCalls, 1);
-  assert.equal(persistenceConflicts, 6);
-  assert.deepEqual(transitionStatuses, ['purchasing', 'unknown']);
-  assert.equal(purchaseState?.status, 'unknown');
-});
-
-test('ShipStation label purchase timeout uses a fresh cleanup signal and stores unknown', async () => {
-  let purchaseState: Record<string, unknown> | undefined;
-  let chargedPostStarted = false;
-  let chargedPostAborted = false;
-  let cleanupUsedFreshSignal = false;
-  const deferred: Promise<unknown>[] = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
-      if (url.pathname === '/v2/labels/rates/rate-1') {
-        chargedPostStarted = true;
-        return new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          const abort = () => {
-            chargedPostAborted = true;
-            reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
-          };
-          signal?.addEventListener('abort', abort, { once: true });
-          if (signal?.aborted) abort();
-        });
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (chargedPostAborted) cleanupUsedFreshSignal ||= init?.signal?.aborted === false;
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      const fields = (commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, unknown> } } } };
-      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase as {
-        mapValue?: { fields?: Record<string, { stringValue?: string }> };
-      } | undefined;
-      const purchaseFields = fields?.mapValue?.fields;
-      if (purchaseFields?.status?.stringValue) {
-        purchaseState = {
-          status: purchaseFields.status.stringValue,
-          requestId: purchaseFields.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
-          rateId: purchaseFields.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
-        };
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch, {
-      defer: (promise) => { deferred.push(promise); },
-      timeoutMs: 75,
-    }),
-  );
-  assert.equal(chargedPostStarted, true);
-  assert.equal(chargedPostAborted, true);
-  assert.equal(cleanupUsedFreshSignal, false);
-  assert.equal(result.response.status, 504);
-  assert.equal(
-    (await result.response.json() as { error: { code: string } }).error.code,
-    'deadline-exceeded',
-  );
-  assert.equal(deferred.length, 1);
-  await assert.rejects(
-    deferred[0],
-    (error: unknown) => error instanceof ProfileReadError && error.code === 'aborted',
-  );
-  assert.equal(purchaseState?.status, 'unknown');
-});
-
-test('ShipStation label purchase disconnect releases its claim after a cleanup conflict', async () => {
-  const client = new AbortController();
-  const abortReason = new DOMException('Client disconnected', 'AbortError');
-  let purchaseState: Record<string, unknown> | undefined;
-  let cleanupCommitAttempts = 0;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/rates/rate-1') {
-        client.abort(abortReason);
-        throw init?.signal?.reason ?? abortReason;
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      const purchaseFields = (commit.writes[0] as {
-        update?: {
-          fields?: {
-            shipstation?: {
-              mapValue?: {
-                fields?: {
-                  labelPurchase?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-                };
-              };
-            };
-          };
-        };
-      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase?.mapValue?.fields;
-      const status = purchaseFields?.status?.stringValue;
-      if (status === 'failed') {
-        cleanupCommitAttempts += 1;
-        if (cleanupCommitAttempts === 1) {
-          return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
-        }
-      }
-      if (status) {
-        purchaseState = {
-          status,
-          requestId: purchaseFields?.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
-          rateId: purchaseFields?.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
-        };
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const disconnectedRequest = new Request(
-    `https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
-      body: JSON.stringify(LABEL_PURCHASE_BODY),
-      signal: client.signal,
-    },
-  );
-  await assert.rejects(
-    handleProfileWriteRequest(
-      disconnectedRequest,
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
-    ),
-    (error) => error === abortReason,
-  );
-  assert.equal(cleanupCommitAttempts, 2);
-  assert.equal(purchaseState?.status, 'failed');
-});
-
-test('ShipStation label purchase disconnect reconciles an ambiguous charge before rethrowing cancellation', async () => {
-  const client = new AbortController();
-  const reason = new DOMException('Client disconnected', 'AbortError');
-  let purchaseState: Record<string, unknown> | undefined;
-  let cleanupUsedFreshSignal = false;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') {
-        cleanupUsedFreshSignal ||= client.signal.aborted && init?.signal?.aborted === false;
-        return Response.json({ labels: [] });
-      }
-      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
-      if (url.pathname === '/v2/labels/rates/rate-1') {
-        client.abort(reason);
-        throw init?.signal?.reason ?? reason;
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      const purchaseFields = (commit.writes[0] as {
-        update?: {
-          fields?: {
-            shipstation?: {
-              mapValue?: {
-                fields?: {
-                  labelPurchase?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-                };
-              };
-            };
-          };
-        };
-      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase?.mapValue?.fields;
-      const status = purchaseFields?.status?.stringValue;
-      if (status) {
-        purchaseState = {
-          status,
-          requestId: purchaseFields?.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
-          rateId: purchaseFields?.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
-        };
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const disconnectedRequest = new Request(
-    `https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
-      body: JSON.stringify(LABEL_PURCHASE_BODY),
-      signal: client.signal,
-    },
-  );
-
-  await assert.rejects(
-    handleProfileWriteRequest(
-      disconnectedRequest,
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
-    ),
-    (error) => error === reason,
-  );
-  assert.equal(cleanupUsedFreshSignal, true);
-  assert.equal(purchaseState?.status, 'unknown');
-});
-
-test('ShipStation label purchase cleanup failure keeps the claim blocked and logs only safe metadata', async () => {
-  let purchaseState: Record<string, unknown> | undefined;
-  let purchaseFailed = false;
-  let commitCount = 0;
-  const logs: string[] = [];
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
-      if (url.pathname === '/v2/labels/rates/rate-1') {
-        purchaseFailed = true;
-        throw new TypeError('Private 100 Main St Bearer secret-token shipstation-api-key');
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      if (purchaseFailed) {
-        return Response.json({ error: 'Private 100 Main St Bearer secret-token' }, { status: 500 });
-      }
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commitCount += 1;
-      purchaseState = {
-        status: 'purchasing',
-        requestId: LABEL_PURCHASE_BODY.requestId,
-        rateId: LABEL_PURCHASE_BODY.rateId,
-      };
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const originalConsoleError = console.error;
-  console.error = (...values: unknown[]) => logs.push(values.map(String).join(' '));
-  try {
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
-    );
-    assert.equal(result.response.status, 409);
-    const payload = await result.response.json() as { error: { code: string; message: string } };
-    assert.equal(payload.error.code, 'aborted');
-    assert.match(payload.error.message, /Check purchase status or open ShipStation/);
-  } finally {
-    console.error = originalConsoleError;
-  }
-  assert.equal(commitCount, 1);
-  assert.equal(purchaseState?.status, 'purchasing');
-  assert.match(logs.join('\n'), /fulfillment_shipstation_label_purchase_cleanup_failed/);
-  assert.doesNotMatch(logs.join('\n'), /Private|100 Main|Bearer|secret-token|shipstation-api-key/);
-});
-
-test('ShipStation label purchase route reconciles a label after an ambiguous charged request', async () => {
-  let purchaseState: Record<string, unknown> | undefined;
-  let labelListCalls = 0;
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') {
-        labelListCalls += 1;
-        return Response.json({
-          labels: labelListCalls === 3
-            ? [{
-                label_id: 'recovered-label',
-                shipment_id: 'shipment-1',
-                status: 'completed',
-                tracking_number: 'recovered-tracking',
-              }]
-            : [],
-        });
-      }
-      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
-      if (url.pathname === '/v2/labels/rates/rate-1') throw new TypeError('connection closed');
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const purchaseFields = (commit.writes[0] as {
-        update?: {
-          fields?: {
-            shipstation?: {
-              mapValue?: {
-                fields?: {
-                  labelPurchase?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
-                };
-              };
-            };
-          };
-        };
-      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase?.mapValue?.fields;
-      if (purchaseFields?.status?.stringValue === 'purchasing') {
-        purchaseState = {
-          status: 'purchasing',
-          requestId: purchaseFields.requestId?.stringValue,
-          rateId: purchaseFields.rateId?.stringValue,
-        };
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  const payload = await result.response.json() as {
-    alreadyPurchased: boolean;
-    label: { labelId: string; trackingNumber: string };
-  };
-  assert.equal(payload.alreadyPurchased, false);
-  assert.equal(payload.label.labelId, 'recovered-label');
-  assert.equal(payload.label.trackingNumber, 'recovered-tracking');
-  assert.equal(labelListCalls, 3);
-  assert.equal(commits.length, 2);
-  const persistence = commits[1].writes[0] as { updateMask: { fieldPaths: string[] } };
-  assert.ok(persistence.updateMask.fieldPaths.includes('shipstation.labelPurchase'));
-});
-
-test('ShipStation label purchase route never charges after its Commerce claim is replaced', async () => {
-  let purchaseState: Record<string, unknown> | undefined;
-  let purchaseCalls = 0;
-  let rateRead = false;
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/rates/rate-1') {
-        rateRead = true;
-        purchaseState = { status: 'purchasing', requestId: 'replacement-request', rateId: 'rate-2' };
-        return Response.json(SHIPSTATION_RATE);
-      }
-      if (url.pathname === '/v2/labels/rates/rate-1') purchaseCalls += 1;
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          rateQuotes: [{
-            rateId: 'rate-1',
-            shipmentId: 'shipment-1',
-            totalAmount: { currency: 'usd', amount: 10 },
-          }],
-          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      if (!rateRead) {
-        purchaseState = {
-          status: 'purchasing',
-          requestId: LABEL_PURCHASE_BODY.requestId,
-          rateId: LABEL_PURCHASE_BODY.rateId,
-        };
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(purchaseCalls, 0);
-  assert.equal(commits.length, 1);
-});
-
-test('ShipStation rates route refreshes a single package without replacing its ShipStation address', async () => {
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const shipStationCalls: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
-  const manuallyCorrectedShipTo = {
-    ...SHIP_TO,
-    name: 'Manually Corrected Recipient',
-    address_line1: '200 Corrected Ave',
-    address_line2: 'Suite 4',
-    instructions: 'Side door',
-  };
-  let claimId = '';
-  const currentOrder = () => orderDocument({
-    addressSnapshot: {
-      encrypted: 'stale-commerce-address',
-      email: 'owner@example.com',
-      phone: '+905551234567',
-      countryCode: 'TR',
-    },
-    shipstation: {
-      shipmentId: 'shipment-1',
-      package: { length: 12, width: 9, height: 2, weight: 4 },
-      packageCount: 1,
-      ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-    },
-  });
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      const method = init?.method || 'GET';
-      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
-      shipStationCalls.push({ method, path: `${url.pathname}${url.search}`, ...(body ? { body } : {}) });
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: {
-            ...manuallyCorrectedShipTo,
-            address_validation_status: 'verified',
-          },
-          packages: [{
-            weight: { value: 4, unit: 'ounce' },
-            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-          }],
-        });
-      }
-      if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: manuallyCorrectedShipTo,
-          packages: [{
-            weight: { value: 8, unit: 'ounce' },
-            dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
-          }],
-        });
-      }
-      if (url.pathname === '/v2/carriers') {
-        return Response.json({ carriers: [{ carrier_id: 'carrier-1', carrier_code: 'stamps_com', send_rates: true }] });
-      }
-      if (url.pathname === '/v2/rates') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          rate_request_id: 'request-1',
-          status: 'completed',
-          rates: [{
-            rate_id: 'rate-1',
-            shipment_id: 'shipment-1',
-            carrier_id: 'carrier-1',
-            carrier_code: 'stamps_com',
-            carrier_friendly_name: 'USPS',
-            service_code: 'usps_priority_mail',
-            service_type: 'USPS Priority Mail',
-            validation_status: 'valid',
-            shipping_amount: { currency: 'usd', amount: 10 },
-            insurance_amount: { currency: 'usd', amount: 1 },
-            confirmation_amount: { currency: 'usd', amount: 0 },
-            other_amount: { currency: 'usd', amount: 0.5 },
-            warning_messages: [],
-            error_messages: [],
-          }],
-          invalid_rates: [],
-          errors: [],
-        });
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(currentOrder());
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const write = commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
-      };
-      claimId = write.update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, {
-      dropId: 'card_nft_2',
-      deliveryId: 7,
-      package: { length: 10, width: 8, height: 3, weight: 8 },
-    }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  const payload = await result.response.json() as {
-    package: Record<string, number>;
-    packageCount: number;
-    rates: Array<{ rateId: string; totalAmount: { currency: string; amount: number } }>;
-  };
-  assert.deepEqual(payload.package, { length: 10, width: 8, height: 3, weight: 8 });
-  assert.equal(payload.packageCount, 1);
-  assert.equal(payload.rates[0].rateId, 'rate-1');
-  assert.deepEqual(payload.rates[0].totalAmount, { currency: 'usd', amount: 11.5 });
-  const shipmentUpdate = shipStationCalls.find((call) => call.method === 'PUT');
-  assert.deepEqual(shipmentUpdate?.body, {
-    ship_to: manuallyCorrectedShipTo,
-    ship_from: SHIP_FROM,
-    packages: [{
-      content_description: 'Printed collectible art card',
-      weight: { value: 8, unit: 'ounce' },
-      dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
-      products: [{
-        description: 'Printed collectible art card',
-        quantity: 1,
-        value: { amount: 14.67, currency: 'usd' },
-        weight: { value: 0.2, unit: 'ounce' },
-        harmonized_tariff_code: '4911.99',
-        country_of_origin: 'US',
-        sku: 'card-nft-2',
-      }],
-    }],
-    customs: {
-      contents: 'merchandise',
-      non_delivery: 'return_to_sender',
-      terms_of_trade_code: 'dap',
-    },
-  });
-  assert.equal(commits.length, 3);
-  const claim = commits[0].writes[0] as {
-    updateMask: { fieldPaths: string[] };
-    updateTransforms: unknown[];
-  };
-  assert.deepEqual(claim.updateMask.fieldPaths, [
-    'shipstation.rateQuotes',
-    'shipstation.ratesClaimId',
-    'shipstation.ratesClaimedBy',
-    'shipstation.ratesClaimFenceId',
-  ]);
-  assert.deepEqual(claim.updateTransforms, [
-    { fieldPath: 'shipstation.ratesClaimedAt', setToServerValue: 'REQUEST_TIME' },
-  ]);
-  const finalWrite = commits[2].writes[0] as {
-    update: { fields: { shipstation: { mapValue: { fields: Record<string, unknown> } } } };
-    updateMask: { fieldPaths: string[] };
-  };
-  const finalFields = finalWrite.update.fields.shipstation.mapValue.fields;
-  assert.ok(Object.hasOwn(finalFields, 'rateQuotes'));
-  assert.ok(Object.hasOwn(finalFields, 'ratesUpdatedBy'));
-  assert.ok(!Object.hasOwn(finalFields, 'ratesClaimedAt'));
-  assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.rateRequest'));
-  assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.ratesClaimId'));
-  assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.ratesClaimedAt'));
-});
-
-test('ShipStation rates route preserves manual declarations, repairs zeroed packages, and keeps domestic parcels', async () => {
-  const run = async (scenario: {
-    shipTo: Record<string, unknown>;
-    sourcePackage: Record<string, unknown>;
-    storedPackage: Record<string, number>;
-    customs?: Record<string, unknown>;
-    items?: Array<Record<string, unknown>>;
-  }) => {
-    let claimId = '';
-    let shipmentUpdate: Record<string, unknown> | undefined;
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        const method = init?.method || 'GET';
-        if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-        if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
-          return Response.json({
-            shipment_id: 'shipment-1',
-            ship_to: scenario.shipTo,
-            packages: [scenario.sourcePackage],
-            ...(scenario.customs ? { customs: scenario.customs } : {}),
-          });
-        }
-        if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') {
-          shipmentUpdate = JSON.parse(String(init?.body)) as Record<string, unknown>;
-          return Response.json({
-            shipment_id: 'shipment-1',
-            ship_to: shipmentUpdate.ship_to,
-            packages: shipmentUpdate.packages,
-          });
-        }
-        if (url.pathname === '/v2/carriers') {
-          return Response.json({ carriers: [{ carrier_id: 'carrier-1', carrier_code: 'stamps_com', send_rates: true }] });
-        }
-        if (url.pathname === '/v2/rates') {
-          return Response.json({
-            shipment_id: 'shipment-1',
-            rate_request_id: 'request-1',
-            status: 'completed',
-            rates: [SHIPSTATION_RATE],
-            invalid_rates: [],
-            errors: [],
-          });
-        }
-        return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          items: scenario.items ?? [{ kind: 'dude', refId: 1 }],
-          shipstation: {
-            shipmentId: 'shipment-1',
-            package: scenario.storedPackage,
-            packageCount: 1,
-            ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-          },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as {
-          writes: Array<{
-            update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
-          }>;
-        };
-        claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_RATES_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch),
-    );
-    assert.equal(result.response.status, 200);
-    return shipmentUpdate;
-  };
-
-  const manualProduct = {
-    description: 'Manual cotton art card case',
-    quantity: 2,
-    value: { amount: 91.25, currency: 'eur' },
-    weight: { value: 2, unit: 'ounce' },
-    harmonized_tariff_code: '4202.92',
-    country_of_origin: 'PT',
-    unit_of_measure: 'each',
-    sku: 'manual-case',
-    sku_description: 'Manual case correction',
-    mid_code: 'PTMANUAL123',
-    product_url: 'https://mons.shop/manual-case',
-    vat_rate: 0.2,
-  };
-  const manualCustoms = {
-    contents: 'gift',
-    non_delivery: 'treat_as_abandoned',
-    terms_of_trade_code: 'ddp',
-    declaration: 'Manual declaration',
-    pending_documents: true,
-  };
-  const manualUpdate = await run({
-    shipTo: { ...SHIP_TO, address_line1: '200 Manually Corrected Ave' },
-    sourcePackage: {
-      package_id: 'se-3',
-      package_code: 'package',
-      shipment_package_id: 'se-read-only',
-      package_name: 'Read only',
-      tracking_number: 'private-tracking',
-      weight: { value: 20, unit: 'ounce' },
-      dimensions: { length: 14, width: 10, height: 4, unit: 'inch' },
-      insured_value: { amount: 50, currency: 'usd' },
-      label_messages: { reference1: 'Manual reference', reference2: null, reference3: null },
-      external_package_id: 'parcel-7',
-      content_description: 'Manual corrected contents',
-      products: [manualProduct],
-    },
-    storedPackage: { length: 12, width: 9, height: 2, weight: 12 },
-    customs: manualCustoms,
-  });
-  assert.deepEqual(manualUpdate, {
-    ship_to: { ...SHIP_TO, address_line1: '200 Manually Corrected Ave' },
-    ship_from: SHIP_FROM,
-    packages: [{
-      package_id: 'se-3',
-      package_code: 'package',
-      insured_value: { amount: 50, currency: 'usd' },
-      label_messages: { reference1: 'Manual reference', reference2: null, reference3: null },
-      external_package_id: 'parcel-7',
-      content_description: 'Manual corrected contents',
-      products: [manualProduct],
-      weight: { value: 20, unit: 'ounce' },
-      dimensions: { length: 14, width: 10, height: 4, unit: 'inch' },
-    }],
-    customs: manualCustoms,
-  });
-
-  const repairedUpdate = await run({
-    shipTo: SHIP_TO,
-    sourcePackage: {
-      package_code: 'package',
-      shipment_package_id: 'se-read-only',
-      weight: { value: 0, unit: 'ounce' },
-      dimensions: { length: 0, width: 0, height: 0, unit: 'inch' },
-    },
-    storedPackage: { length: 12, width: 9, height: 2, weight: 12 },
-    items: [{ kind: 'box', refId: 1 }, { kind: 'dude', refId: 2 }],
-  });
-  assert.deepEqual(repairedUpdate, {
-    ship_to: SHIP_TO,
-    ship_from: SHIP_FROM,
-    packages: [{
-      package_code: 'package',
-      content_description: 'Printed collectible art card',
-      products: [{
-        description: 'Printed collectible art card',
-        quantity: 4,
-        value: { amount: 14.67, currency: 'usd' },
-        weight: { value: 0.2, unit: 'ounce' },
-        harmonized_tariff_code: '4911.99',
-        country_of_origin: 'US',
-        sku: 'card-nft-2',
-      }],
-      weight: { value: 12, unit: 'ounce' },
-      dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-    }],
-    customs: {
-      contents: 'merchandise',
-      non_delivery: 'return_to_sender',
-      terms_of_trade_code: 'dap',
-    },
-  });
-
-  const domesticShipTo = {
-    ...SHIP_TO,
-    city_locality: 'New York',
-    state_province: 'NY',
-    postal_code: '10001',
-    country_code: 'US',
-  };
-  const domesticUpdate = await run({
-    shipTo: domesticShipTo,
-    sourcePackage: {
-      package_code: 'package',
-      weight: { value: 15, unit: 'ounce' },
-      dimensions: { length: 13, width: 8, height: 3, unit: 'inch' },
-    },
-    storedPackage: { length: 12, width: 9, height: 2, weight: 12 },
-  });
-  assert.deepEqual(domesticUpdate, {
-    ship_to: domesticShipTo,
-    ship_from: SHIP_FROM,
-    packages: [{
-      package_code: 'package',
-      weight: { value: 15, unit: 'ounce' },
-      dimensions: { length: 13, width: 8, height: 3, unit: 'inch' },
-    }],
-  });
-});
-
-test('ShipStation rates route rejects a parcel lighter than its declared products', async () => {
-  let claimId = '';
-  let updateCalls = 0;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      const method = init?.method || 'GET';
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: SHIP_TO,
-          customs: {
-            contents: 'merchandise',
-            non_delivery: 'return_to_sender',
-            terms_of_trade_code: 'dap',
-          },
-          packages: [{
-            content_description: 'Manual cotton T-shirt',
-            weight: { value: 4, unit: 'ounce' },
-            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-            products: [{
-              description: 'Manual cotton T-shirt',
-              quantity: 1,
-              value: { amount: 144, currency: 'usd' },
-              weight: { value: 10, unit: 'ounce' },
-              harmonized_tariff_code: '6109.10',
-              country_of_origin: 'US',
-              sku: 'manual-shirt',
-            }],
-          }],
-        });
-      }
-      if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') updateCalls += 1;
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          package: { length: 12, width: 9, height: 2, weight: 4 },
-          packageCount: 1,
-          ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as {
-        writes: Array<{
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
-        }>;
-      };
-      claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 409);
-  assert.deepEqual(await result.response.json(), {
-    ok: false,
-    error: {
-      code: 'failed-precondition',
-      message: 'Package weight must be at least 10 oz for the customs items in this shipment.',
-    },
-  });
-  assert.equal(updateCalls, 0);
-});
-
-test('ShipStation rates route resumes and polls pending requests with exact delays', async () => {
-  const rate = {
-    rate_id: 'rate-1',
-    shipment_id: 'shipment-1',
-    carrier_id: 'carrier-1',
-    carrier_code: 'stamps_com',
-    carrier_friendly_name: 'USPS',
-    service_code: 'usps_priority_mail',
-    service_type: 'USPS Priority Mail',
-    validation_status: 'valid',
-    shipping_amount: { currency: 'usd', amount: 10 },
-    insurance_amount: { currency: 'usd', amount: 0 },
-    confirmation_amount: { currency: 'usd', amount: 0 },
-    other_amount: { currency: 'usd', amount: 0 },
-    warning_messages: [],
-    error_messages: [],
-  };
-  const run = async (mode: 'fresh' | 'resumed' | 'changed' | 'working') => {
-    const packageWeight = mode === 'resumed' ? 1616 : 4;
-    const product = {
-      description: 'Printed collectible art card',
-      quantity: 1,
-      value: { amount: 14.67, currency: 'usd' },
-      weight: { value: 0.2, unit: 'ounce' },
-      harmonized_tariff_code: '4911.99',
-      country_of_origin: 'US',
-      sku: 'card-nft-2',
-    };
-    const inputHash = await shipStationRateInputHash({
-      ship_to: SHIP_TO,
-      ship_from: SHIP_FROM,
-      packages: [{
-        content_description: 'Printed collectible art card',
-        products: [product],
-        weight: { value: packageWeight, unit: 'ounce' },
-        dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-      }],
-      customs: {
-        contents: 'merchandise',
-        non_delivery: 'return_to_sender',
-        terms_of_trade_code: 'dap',
-      },
-    });
-    let claimId = '';
-    let pollCalls = 0;
-    const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-    const delays: number[] = [];
-    const shipStationCalls: string[] = [];
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        const method = init?.method || 'GET';
-        shipStationCalls.push(`${method} ${url.pathname}`);
-        if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-        if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
-          return Response.json({
-            shipment_id: 'shipment-1',
-            ship_to: SHIP_TO,
-            customs: {
-              contents: 'merchandise',
-              non_delivery: 'return_to_sender',
-              terms_of_trade_code: 'dap',
-            },
-            packages: [{
-              content_description: 'Printed collectible art card',
-              weight: { value: packageWeight, unit: 'ounce' },
-              dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-              products: [product],
-            }],
-          });
-        }
-        if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') {
-          return Response.json({
-            shipment_id: 'shipment-1',
-            packages: [{
-              weight: { value: packageWeight, unit: 'ounce' },
-              dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-            }],
-          });
-        }
-        if (url.pathname === '/v2/carriers') {
-          return Response.json({ carriers: [{ carrier_id: 'carrier-1', carrier_code: 'stamps_com' }] });
-        }
-        if (url.pathname === '/v2/rates' && method === 'POST') {
-          return Response.json({
-            shipment_id: 'shipment-1',
-            rate_request_id: 'request-1',
-            created_at: '2026-08-19T00:00:00Z',
-            status: 'working',
-            rates: [],
-          });
-        }
-        if (url.pathname === '/v2/shipments/shipment-1/rates') {
-          pollCalls += 1;
-          const completed = mode === 'resumed' || mode === 'changed' || (mode === 'fresh' && pollCalls === 3);
-          return Response.json([{
-            shipment_id: 'shipment-1',
-            rate_request_id: 'request-1',
-            created_at: '2026-08-19T00:00:00Z',
-            status: completed ? 'completed' : 'working',
-            rates: completed ? [rate] : [],
-          }]);
-        }
-        return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          addressSnapshot: {
-            encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-            countryCode: 'TR',
-          },
-          shipstation: {
-            shipmentId: 'shipment-1',
-            package: { length: 12, width: 9, height: 2, weight: packageWeight },
-            packageCount: 1,
-            ...(mode === 'resumed' || mode === 'changed' ? {
-              rateRequest: {
-                requestId: 'request-1',
-                createdAt: '2026-08-19T00:00:00Z',
-                requestedAt: NOW_MS - 1_000,
-                shipmentId: 'shipment-1',
-                inputHash: mode === 'changed' ? '0'.repeat(64) : inputHash,
-                package: { length: 12, width: 9, height: 2, weight: packageWeight },
-              },
-            } : {}),
-            ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-          },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-        commits.push(commit);
-        const fields = (commit.writes[0] as {
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } } } };
-        }).update?.fields?.shipstation?.mapValue?.fields;
-        claimId = fields?.ratesClaimId?.stringValue ?? claimId;
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_RATES_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch, {
-        pauseForRatePoll: async (_signal, delayMs) => { delays.push(delayMs); },
-      }),
-    );
-    return { commits, delays, result, shipStationCalls };
-  };
-
-  const fresh = await run('fresh');
-  assert.equal(fresh.result.response.status, 200);
-  assert.deepEqual(fresh.delays, [400, 800, 1200]);
-  assert.equal(fresh.commits.length, 4);
-  assert.ok((fresh.commits[2].writes[0] as { updateMask: { fieldPaths: string[] } })
-    .updateMask.fieldPaths.includes('shipstation.rateRequest.requestId'));
-
-  const resumed = await run('resumed');
-  assert.equal(resumed.result.response.status, 200);
-  assert.deepEqual(resumed.delays, []);
-  assert.equal(resumed.shipStationCalls.some((call) => call === 'GET /v2/carriers'), false);
-  assert.equal(resumed.shipStationCalls.some((call) => call === 'POST /v2/rates'), false);
-
-  const changed = await run('changed');
-  assert.equal(changed.result.response.status, 200);
-  assert.equal(changed.shipStationCalls.some((call) => call === 'GET /v2/carriers'), true);
-  assert.equal(changed.shipStationCalls.some((call) => call === 'POST /v2/rates'), true);
-
-  const working = await run('working');
-  assert.equal(working.result.response.status, 502);
-  assert.equal((await working.result.response.json() as { error: { code: string } }).error.code, 'unavailable');
-  assert.deepEqual(working.delays, [400, 800, 1200]);
-  assert.deepEqual(
-    (working.commits.at(-1)?.writes[0] as { updateMask: { fieldPaths: string[] } }).updateMask.fieldPaths,
-    [
-      'shipstation.ratesClaimId',
-      'shipstation.ratesClaimedAt',
-      'shipstation.ratesClaimedBy',
-      'shipstation.ratesClaimFenceId',
-    ],
-  );
-});
-
-test('ShipStation rates route maps rate limits, timeouts, and oversized responses', async () => {
-  const run = async (mode: 'rate-limit' | 'timeout' | 'oversized') => {
-    let claimId = '';
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        const method = init?.method || 'GET';
-        if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-        if (url.pathname === '/v2/shipments/shipment-1') {
-          return Response.json({
-            shipment_id: 'shipment-1',
-            ship_to: SHIP_TO,
-            packages: [{
-              weight: { value: 4, unit: 'ounce' },
-              dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-            }],
-          });
-        }
-        if (url.pathname === '/v2/carriers') {
-          if (mode === 'rate-limit') return Response.json({ errors: [] }, { status: 429 });
-          if (mode === 'oversized') {
-            return new Response('{}', { headers: { 'Content-Length': String(513 * 1024) } });
-          }
-          return new Promise<Response>((_resolve, reject) => {
-            const abort = () => reject(init?.signal?.reason);
-            init?.signal?.addEventListener('abort', abort, { once: true });
-          });
-        }
-        return Response.json({ error: `unexpected ${method} ${url.pathname}` }, { status: 500 });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        return Response.json(orderDocument({
-          addressSnapshot: {
-            encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-            countryCode: 'TR',
-          },
-          shipstation: {
-            shipmentId: 'shipment-1',
-            package: { length: 12, width: 9, height: 2, weight: 4 },
-            packageCount: 1,
-            ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-          },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-        const fields = (commit.writes[0] as {
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } } } };
-        }).update?.fields?.shipstation?.mapValue?.fields;
-        claimId = fields?.ratesClaimId?.stringValue ?? claimId;
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
-    return handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_RATES_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch, { ...(mode === 'timeout' ? { timeoutMs: 50 } : {}) }),
-    );
-  };
-
-  for (const [mode, status, code] of [
-    ['rate-limit', 429, 'resource-exhausted'],
-    ['timeout', 504, 'deadline-exceeded'],
-    ['oversized', 502, 'unavailable'],
-  ] as const) {
-    const result = await run(mode);
-    assert.equal(result.response.status, status, mode);
-    assert.equal((await result.response.json() as { error: { code: string } }).error.code, code, mode);
-  }
-});
-
-test('ShipStation rates route rejects a fresh foreign claim before reading a multi-package shipment', async () => {
-  let shipmentReads = 0;
-  let commits = 0;
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1') {
-        shipmentReads += 1;
-        return Response.json({ shipment_id: 'shipment-1', packages: [{}, {}] });
-      }
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ratesClaimId: 'foreign-claim',
-          ratesClaimedAt: NOW_MS - 1_000,
-          ratesClaimedBy: OTHER,
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commits += 1;
-      return Response.json({ writeResults: [{}] });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal(shipmentReads, 0);
-  assert.equal(commits, 0);
-});
-
-test('ShipStation rates route rejects same-id label state changes', async () => {
-  let claimed = false;
-  let claimId = '';
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: SHIP_TO,
-          packages: [{
-            weight: { value: 4, unit: 'ounce' },
-            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-          }],
-        });
-      }
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-        },
-        shipstation: {
-          shipmentId: 'shipment-1',
-          label: {
-            labelId: 'label-1',
-            shipmentId: 'shipment-1',
-            status: claimed ? 'voided' : 'error',
-            trackingNumber: claimed ? 'new-tracking' : 'old-tracking',
-          },
-          ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const fields = (commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } } } };
-      }).update?.fields?.shipstation?.mapValue?.fields;
-      if (fields?.ratesClaimId?.stringValue) {
-        claimId = fields.ratesClaimId.stringValue;
-        claimed = true;
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(commits.length, 2);
-});
-
-test('ShipStation rates route stops when an updated shipment becomes multi-package', async () => {
-  let claimId = '';
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const shipStationPaths: string[] = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      const method = init?.method || 'GET';
-      shipStationPaths.push(`${method} ${url.pathname}`);
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: SHIP_TO,
-          packages: [{
-            weight: { value: 4, unit: 'ounce' },
-            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-          }],
-        });
-      }
-      if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') {
-        return Response.json({ shipment_id: 'shipment-1', packages: [{}, {}] });
-      }
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-        },
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const write = commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
-      };
-      claimId = write.update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  assert.deepEqual(await result.response.json(), {
-    deliveryId: 7,
-    shipmentId: 'shipment-1',
-    packageCount: 2,
-    rates: [],
-    invalidRates: [],
-  });
-  assert.equal(commits.length, 2);
-  const cleanup = commits[1].writes[0] as {
-    update: { fields: { shipstation: { mapValue: { fields: { packageCount: { integerValue: string } } } } } };
-    updateMask: { fieldPaths: string[] };
-  };
-  assert.equal(cleanup.update.fields.shipstation.mapValue.fields.packageCount.integerValue, '2');
-  assert.deepEqual(cleanup.updateMask.fieldPaths, [
-    'shipstation.packageCount',
-    'shipstation.package',
-    'shipstation.rateQuotes',
-    'shipstation.rateRequest',
-    'shipstation.ratesClaimId',
-    'shipstation.ratesClaimedAt',
-    'shipstation.ratesClaimedBy',
-  ]);
-  assert.equal(shipStationPaths.some((path) => path.includes('/v2/rates') || path.includes('/v2/carriers')), false);
-});
-
-test('ShipStation rates route rejects concurrent label, purchase, and claim changes', async () => {
-  for (const race of ['label', 'purchase', 'claim'] as const) {
-    let claimId = '';
-    let claimWritten = false;
-    const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-    const shipStationPaths: string[] = [];
-    const providerFetch: typeof fetch = async (input, init) => {
-      const url = new URL(String(input));
-      if (url.hostname === 'api.shipstation.com') {
-        const method = init?.method || 'GET';
-        shipStationPaths.push(`${method} ${url.pathname}`);
-        if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-        if (url.pathname === '/v2/shipments/shipment-1') {
-          return Response.json({
-            shipment_id: 'shipment-1',
-            ship_to: SHIP_TO,
-            packages: [{
-              weight: { value: 4, unit: 'ounce' },
-              dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-            }],
-          });
-        }
-        return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-      }
-      if (url.pathname.endsWith('/deliveryOrders/7')) {
-        const concurrentState = claimWritten
-          ? race === 'label'
-            ? { label: { labelId: 'label-new', shipmentId: 'shipment-1', status: 'completed', purchasedAt: NOW_MS } }
-            : race === 'purchase'
-              ? { labelPurchase: { status: 'purchasing', requestId: 'purchase-new' } }
-              : {}
-          : {};
-        return Response.json(orderDocument({
-          addressSnapshot: {
-            encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-            countryCode: 'TR',
-          },
-          shipstation: {
-            shipmentId: 'shipment-1',
-            ...(claimWritten
-              ? race === 'claim'
-                ? { ratesClaimId: 'claim-new', ratesClaimedAt: NOW_MS, ratesClaimedBy: OTHER }
-                : { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER }
-              : {}),
-            ...concurrentState,
-          },
-        }));
-      }
-      if (url.pathname.endsWith('/documents:commit')) {
-        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-        commits.push(commit);
-        const write = commit.writes[0] as {
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
-        };
-        const writtenClaimId = write.update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue;
-        if (writtenClaimId) {
-          claimId = writtenClaimId;
-          claimWritten = true;
-        }
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    };
-    const result = await handleProfileWriteRequest(
-      request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-      fulfillmentEnv,
-      FULFILLMENT_SHIPSTATION_RATES_PATH,
-      {},
-      legacyFirestoreDependencies(providerFetch),
-    );
-    assert.equal(result.response.status, 409, race);
-    assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted', race);
-    assert.equal(commits.length, race === 'claim' ? 1 : 2, race);
-    assert.equal(shipStationPaths.some((path) => path.includes('/v2/rates') || path.includes('/v2/carriers')), false);
-  }
-});
-
-test('ShipStation rates route preserves purchase, package-count, and refresh-claim guards', async () => {
-  let scenario: 'purchase' | 'multi' | 'claimed' = 'purchase';
-  let commits = 0;
-  let claimId = '';
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: SHIP_TO,
-          packages: scenario === 'multi'
-            ? [{ weight: {}, dimensions: {} }, { weight: {}, dimensions: {} }]
-            : [{
-                weight: { value: 4, unit: 'ounce' },
-                dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-              }],
-        });
-      }
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {},
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(scenario === 'purchase' ? { labelPurchase: { status: 'unknown' } } : {}),
-          ...(scenario === 'claimed' ? { ratesClaimedAt: NOW_MS - 1_000, ratesClaimedBy: OTHER } : {}),
-          ...(scenario === 'multi' && claimId
-            ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER }
-            : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commits += 1;
-      const commit = JSON.parse(String(init?.body)) as {
-        writes: Array<{
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
-        }>;
-      };
-      claimId = commit.writes[0]?.update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const invoke = () => handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  const purchase = await invoke();
-  assert.equal(purchase.response.status, 200);
-  assert.equal((await purchase.response.json() as { purchaseUnknown: boolean }).purchaseUnknown, true);
-  assert.equal(commits, 0);
-  scenario = 'multi';
-  claimId = '';
-  const multi = await invoke();
-  assert.equal(multi.response.status, 200);
-  assert.equal((await multi.response.json() as { packageCount: number }).packageCount, 2);
-  assert.equal(commits, 2);
-  scenario = 'claimed';
-  commits = 0;
-  const claimed = await invoke();
-  assert.equal(claimed.response.status, 409);
-  assert.equal((await claimed.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(commits, 0);
-  const missingOrigin = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    { ...fulfillmentEnv, SHIPSTATION_SHIP_FROM: '' },
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(missingOrigin.response.status, 409);
-  assert.equal((await missingOrigin.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
-  assert.equal(missingOrigin.authOutcome, 'provider-failure');
-});
-
-test('ShipStation rates route safely releases its own claim after an upstream failure', async () => {
-  let orderReads = 0;
-  let claimId = '';
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1' && (init?.method || 'GET') === 'GET') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: SHIP_TO,
-          packages: [{
-            weight: { value: 4, unit: 'ounce' },
-            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-          }],
-        });
-      }
-      if (url.pathname === '/v2/shipments/shipment-1' && init?.method === 'PUT') {
-        return Response.json({ errors: [{ error_code: 'server_error' }] }, { status: 503 });
-      }
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      orderReads += 1;
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-        },
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const write = commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
-      };
-      claimId = write.update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 502);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'unavailable');
-  assert.equal(commits.length, 2);
-  assert.deepEqual(
-    (commits[1].writes[0] as { updateMask: { fieldPaths: string[] } }).updateMask.fieldPaths,
-    [
-      'shipstation.ratesClaimId',
-      'shipstation.ratesClaimedAt',
-      'shipstation.ratesClaimedBy',
-      'shipstation.ratesClaimFenceId',
-    ],
-  );
-});
-
-test('ShipStation rates route releases a claim whose successful commit response was lost', async () => {
-  let currentClaimId = '';
-  let currentClaimedBy = '';
-  let claimCommitCalls = 0;
-  let released = false;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(currentClaimId ? {
-            ratesClaimId: currentClaimId,
-            ratesClaimedAt: NOW_MS,
-            ratesClaimedBy: currentClaimedBy,
-          } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as {
-        writes: Array<{
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } } } };
-          updateMask?: { fieldPaths?: string[] };
-        }>;
-      };
-      const write = commit.writes[0];
-      const fields = write.update?.fields?.shipstation?.mapValue?.fields;
-      const writtenClaimId = fields?.ratesClaimId?.stringValue;
-      if (writtenClaimId) {
-        claimCommitCalls += 1;
-        if (claimCommitCalls === 1) {
-          currentClaimId = writtenClaimId;
-          currentClaimedBy = fields?.ratesClaimedBy?.stringValue ?? '';
-          throw new TypeError('connection closed after commit');
-        }
-        return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 409 });
-      }
-      if (write.updateMask?.fieldPaths?.includes('shipstation.ratesClaimId')) {
-        released = true;
-        currentClaimId = '';
-        currentClaimedBy = '';
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-      }
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
-  );
-  assert.equal(result.response.status, 409);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(claimCommitCalls, 2);
-  assert.equal(released, true);
-  assert.equal(currentClaimId, '');
-});
-
-test('ShipStation rates route releases a claim that becomes visible during cleanup', async () => {
-  let pendingClaimId = '';
-  let pendingClaimedBy = '';
-  let currentClaimId = '';
-  let currentClaimedBy = '';
-  let claimCommitCalls = 0;
-  let claimFailed = false;
-  let cleanupReads = 0;
-  let released = false;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      const response = Response.json(orderDocument({
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(currentClaimId ? {
-            ratesClaimId: currentClaimId,
-            ratesClaimedAt: NOW_MS,
-            ratesClaimedBy: currentClaimedBy,
-          } : {}),
-        },
-      }));
-      if (claimFailed) {
-        cleanupReads += 1;
-        if (cleanupReads === 1) {
-          currentClaimId = pendingClaimId;
-          currentClaimedBy = pendingClaimedBy;
-        }
-      }
-      return response;
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as {
-        writes: Array<{
-          update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } } } };
-          updateMask?: { fieldPaths?: string[] };
-        }>;
-      };
-      const write = commit.writes[0];
-      const fields = write.update?.fields?.shipstation?.mapValue?.fields;
-      const writtenClaimId = fields?.ratesClaimId?.stringValue;
-      if (writtenClaimId) {
-        claimCommitCalls += 1;
-        pendingClaimId = writtenClaimId;
-        pendingClaimedBy = fields?.ratesClaimedBy?.stringValue ?? '';
-        if (claimCommitCalls === 2) claimFailed = true;
-        throw new TypeError('connection closed while commit was in flight');
-      }
-      if (fields?.ratesClaimFenceId?.stringValue) {
-        return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 409 });
-      }
-      if (write.updateMask?.fieldPaths?.includes('shipstation.ratesClaimId')) {
-        released = true;
-        currentClaimId = '';
-        currentClaimedBy = '';
-        return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-      }
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
-  );
-  assert.equal(result.response.status, 502);
-  assert.equal(cleanupReads, 2);
-  assert.equal(released, true);
-  assert.equal(currentClaimId, '');
-});
-
-test('ShipStation rates route never releases a replacement claim', async () => {
-  let currentClaimId = '';
-  let currentClaimedBy = '';
-  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === 'api.shipstation.com') {
-      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
-      if (url.pathname === '/v2/shipments/shipment-1' && (init?.method || 'GET') === 'GET') {
-        return Response.json({
-          shipment_id: 'shipment-1',
-          ship_to: SHIP_TO,
-          packages: [{
-            weight: { value: 4, unit: 'ounce' },
-            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-          }],
-        });
-      }
-      if (url.pathname === '/v2/shipments/shipment-1' && init?.method === 'PUT') {
-        currentClaimId = 'replacement-claim';
-        currentClaimedBy = OTHER;
-        return Response.json({ errors: [{ error_code: 'server_error' }] }, { status: 503 });
-      }
-    }
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
-          countryCode: 'TR',
-        },
-        shipstation: {
-          shipmentId: 'shipment-1',
-          ...(currentClaimId ? {
-            ratesClaimId: currentClaimId,
-            ratesClaimedAt: NOW_MS,
-            ratesClaimedBy: currentClaimedBy,
-          } : {}),
-        },
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      commits.push(commit);
-      const fields = (commit.writes[0] as {
-        update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } } } };
-      }).update?.fields?.shipstation?.mapValue?.fields;
-      if (fields?.ratesClaimId?.stringValue) {
-        currentClaimId = fields.ratesClaimId.stringValue;
-        currentClaimedBy = fields.ratesClaimedBy?.stringValue ?? '';
-      }
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_RATES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 502);
-  assert.equal(commits.length, 1);
-  assert.equal(currentClaimId, 'replacement-claim');
-  assert.equal(currentClaimedBy, OTHER);
-});
-
-test('ShipStation rejects an oversized valid JSON stream before authentication or side effects', async () => {
-  const body = JSON.stringify(LABEL_PURCHASE_BODY).padEnd(4097, ' ');
-  const chunks = [body.slice(0, 2048), body.slice(2048)];
-  let cancelled = false;
-  const input = new Request(`https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: new ReadableStream<Uint8Array>({
-      pull(controller) {
-        const chunk = chunks.shift();
-        if (chunk) controller.enqueue(new TextEncoder().encode(chunk));
-        else controller.close();
-      },
-      cancel() {
-        cancelled = true;
-      },
-    }, { highWaterMark: 0 }),
-    duplex: 'half',
-  } as RequestInit & { duplex: 'half' });
-  const result = await handleProfileWriteRequest(
-    input,
-    fulfillmentEnv,
-    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    {},
-    {
-      verifyIdentity: async () => assert.fail('Oversized requests must not authenticate'),
-      createCommerceRepository: () => assert.fail('Oversized requests must not access Commerce'),
-      providerFetch: async () => assert.fail('Oversized requests must not contact ShipStation'),
-    },
-  );
-  assert.equal(result.response.status, 400);
-  assert.deepEqual(await result.response.json(), {
-    ok: false,
-    error: { code: 'invalid-argument', message: 'Invalid request.' },
-  });
-  assert.equal(result.authOutcome, 'rejected');
-  assert.equal(cancelled, true);
-});
-
-test('write routes reject invalid payloads, unauthorized wallets, and missing orders without Commerce configuration', async () => {
-  let upstreamCalls = 0;
-  const neverFetch: typeof fetch = async () => {
-    upstreamCalls += 1;
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  for (const body of [
-    { encrypted: 'cipher', country: 'US', hint: 'hint', extra: true },
-    { id: 'invalid', encrypted: 'cipher', country: 'US', hint: 'hint' },
-    { encrypted: 'cipher', country: 'US', hint: 'hint', email: 'not-an-email' },
-    { encrypted: 'x'.repeat(11 * 1024), country: 'US', hint: 'hint' },
-  ]) {
-    const result = await handleProfileWriteRequest(
-      request(PROFILE_ADDRESSES_PATH, body),
-      env,
-      PROFILE_ADDRESSES_PATH,
-      {},
-      legacyFirestoreDependencies(neverFetch),
-    );
-    assert.equal(result.response.status, 400);
-  }
-  for (const [path, body] of [
-    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address', extra: true }],
-    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'x'.repeat(2049) }],
-    [FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
-    [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, extra: true }],
-    [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, requestId: 'not-a-uuid' }],
-    [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, {
-      ...LABEL_PURCHASE_BODY,
-      expectedTotal: { currency: 'usd', amount: Number.POSITIVE_INFINITY },
-    }],
-    [FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
-    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
-    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7, addressPatch: {} }],
-    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
-      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { name: ' ' },
-    }],
-    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
-      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { address_line1: 'x'.repeat(51) },
-    }],
-    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
-      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { country_code: 'USA' },
-    }],
-    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
-      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { company_name: 'Private' },
-    }],
-  ] as const) {
-    const result = await handleProfileWriteRequest(
-      request(path, body),
-      fulfillmentEnv,
-      path,
-      {},
-      legacyFirestoreDependencies(neverFetch),
-    );
-    assert.equal(result.response.status, 400);
-  }
-  assert.equal(upstreamCalls, 0);
-
-  const invalidToken = await handleProfileWriteRequest(
-    request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
-    env,
-    PROFILE_ADDRESSES_PATH,
-    {},
-    legacyFirestoreDependencies(neverFetch, {
-      verifyIdentity: async () => {
-        throw new RequestIdentityError('invalid-token');
-      },
-    }),
-  );
-  assert.equal(invalidToken.response.status, 401);
-  assert.equal(upstreamCalls, 0);
-
-  const anonymousOnlyStaffWrite = await handleProfileWriteRequest(
-    request(FULFILLMENT_ORDER_STATUS_PATH, {
-      dropId: 'card_nft_2',
-      deliveryId: 7,
-      status: 'Preparing',
-    }),
-    env,
-    FULFILLMENT_ORDER_STATUS_PATH,
-    {},
-    legacyFirestoreDependencies(neverFetch, {
-      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
-    }),
-  );
-  assert.equal(anonymousOnlyStaffWrite.response.status, 401);
-
-  const retiredSecret = await handleProfileWriteRequest(
-    request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
-    { COMMERCE_DB: createCommerceD1() },
-    PROFILE_ADDRESSES_PATH,
-    {},
-    legacyFirestoreDependencies(neverFetch),
-  );
-  assert.equal(retiredSecret.response.status, 200);
-  assert.equal(upstreamCalls, 0);
-
-  let commits = 0;
-  const deniedFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json({ fields: {} });
-    if (url.pathname.endsWith('/documents:commit')) commits += 1;
-    return Response.json({ writeResults: [] });
-  };
-  const denied = await handleProfileWriteRequest(
-    request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' }),
-    env,
-    FULFILLMENT_ORDER_STATUS_PATH,
-    {},
-    legacyFirestoreDependencies(deniedFetch, {
-      resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
-      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OTHER }),
-    }),
-  );
-  assert.equal(denied.response.status, 403);
-  assert.equal(commits, 0);
-
-  const missingOrderFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/deliveryOrders/7')) return new Response(null, { status: 404 });
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const missingOrder = await handleProfileWriteRequest(
-    request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' }),
-    env,
-    FULFILLMENT_ORDER_STATUS_PATH,
-    {},
-    legacyFirestoreDependencies(missingOrderFetch),
-  );
-  assert.equal(missingOrder.response.status, 404);
-});
-
-test('writer failures stay generic and never expose request or credential material', async () => {
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/documents:commit')) return Response.json({ error: 'writer-secret' }, { status: 403 });
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const result = await handleProfileWriteRequest(
-    request(PROFILE_ADDRESSES_PATH, {
-      encrypted: 'private-cipher-text',
-      country: 'US',
-      hint: 'private-hint',
-      email: 'private@example.com',
-    }),
-    { COMMERCE_DB: createCommerceD1() },
-    PROFILE_ADDRESSES_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch, {
-      saveProfileAddress: async () => {
-        throw new Error('private D1 writer-secret');
-      },
-    }),
-  );
-  assert.equal(result.response.status, 502);
-  const text = await result.response.text();
-  assert.deepEqual(JSON.parse(text), {
-    ok: false,
-    error: { code: 'unavailable', message: 'Profile data is temporarily unavailable.' },
-  });
-  for (const secret of ['private-cipher-text', 'private-hint', 'private@example.com', 'private-writer-credential', 'writer-secret']) {
-    assert.equal(text.includes(secret), false);
-  }
-});
-
-test('generated Commerce auto IDs are cryptographic-compatible document IDs', () => {
-  const ids = Array.from({ length: 100 }, createProfileAddressId);
-  assert.equal(new Set(ids).size, ids.length);
-  assert.ok(ids.every((id) => /^[A-Za-z0-9]{20}$/.test(id)));
-});
-
-function assertFulfillmentStoreInputTypes(common: FulfillmentStoreContext): void {
-  void setFulfillmentAddress({
-    common,
-    dropId: 'card_nft_binder',
-    deliveryId: 1,
-    full: 'Delivery address',
-    encrypted: 'ciphertext',
-    hint: 'Delivery address',
-    wallet: OWNER,
-    // @ts-expect-error Address persistence cannot apply arbitrary document patches.
-    updates: { owner: OTHER },
-  });
-  void claimShipStationRateRefresh({
-    common,
-    dropId: 'card_nft_binder',
-    deliveryId: 1,
-    expected: { shipmentId: 'shipment', labelIdentity: '', purchaseIdentity: '', claimId: null, claimedBy: null },
-    claimId: 'claim',
-    wallet: OWNER,
-    onWriteAttempt: () => undefined,
-    // @ts-expect-error Rate claims own their mutation logic inside the store.
-    build: () => ({ updates: { owner: OTHER } }),
-  });
-  void transitionFulfillmentShipStationLabelPurchase({
-    common,
-    dropId: 'card_nft_binder',
-    shipmentId: 'shipment',
-    body: { deliveryId: 1, rateId: 'rate', expectedTotal: { currency: 'usd', amount: 1 }, requestId: 'request' },
-    message: 'Provider result unavailable',
-    wallet: OWNER,
-    // @ts-expect-error Failure persistence cannot mark an unconfirmed purchase complete.
-    nextStatus: 'complete',
-  });
-  // @ts-expect-error Persistence contexts do not expose provider calls.
-  void common.providerFetch;
-}
-
-void assertFulfillmentStoreInputTypes;

@@ -48,6 +48,7 @@ export async function runAllChecks(root = projectRoot, run = runValidationComman
   await withValidationWorkspace(root, 'ethereum', directory => run(npm, ['run', 'test:invariants:extended'],
     { cwd: join(directory, 'onchain/ethereum'), label: 'Extended Ethereum invariant campaign' }));
   await run(npm, ['run', 'test:ethereum:e2e'], { cwd: root, label: 'Local Ethereum lifecycle and reveal E2E' });
+  await run(npm, ['run', 'test:pre111k:e2e'], { cwd: root, label: 'Local pre111K relic reservation E2E' });
   await runSbfChecks(root, run);
   await run(npm, ['run', 'test:mi-note-videos'], { cwd: root, label: 'Pinned native renderer tests' });
 }

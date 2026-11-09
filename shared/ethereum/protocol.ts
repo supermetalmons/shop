@@ -3,9 +3,12 @@ import type { EthereumArtworkAspectRatio, EthereumArtworkCategory } from './reve
 export const ETHEREUM_111K_DROP_ID = '111k_devnet' as const;
 const ARTWORK_COUNT = 111_111;
 const CRATE_COUNT = 5_555;
+const ARTWORKS_PER_STANDARD_CRATE = 20;
+const ARTWORKS_IN_FINAL_CRATE = 31;
 const WAREHOUSE_COUNT = 505;
 export const ETHEREUM_MAX_RELICS = 18;
 export const ETHEREUM_CRATES_PER_RELIC = 111;
+export const ETHEREUM_CRATES_PER_WAREHOUSE = 11;
 
 export function ethereumRelicClaimCount(mask: number): number {
   let count = 0;
@@ -17,6 +20,7 @@ const ARTWORK_RECEIPT_OFFSET = 1_000_000n;
 const CRATE_RECEIPT_OFFSET = 2_000_000n;
 const RELIC_RECEIPT_OFFSET = 3_000_000n;
 export const ETHEREUM_MAX_MINT_QUANTITY = 15;
+export const ETHEREUM_MAX_DISCOUNT_ALLOWANCE = 10;
 export const ETHEREUM_MAX_UNBOX_QUANTITY = 15;
 export const ETHEREUM_MAX_DELIVERY_ITEMS = 50;
 export const ETHEREUM_MAX_DELIVERY_CONFIGS = 32;
@@ -87,10 +91,20 @@ export function ethereumAssetId(chainId: number, contract: string, tokenId: stri
   return `eip155:${chainId}:${requireEthereumAddress(contract)}:${id}`;
 }
 
+export function isPossibleArtworkMintCount(artworksMinted: bigint, allocatedCrates: bigint, unclaimedRelics: bigint): boolean {
+  if (allocatedCrates > CRATE_COUNT || unclaimedRelics < 0n) return false;
+  const finalCrateAllocated = allocatedCrates === BigInt(CRATE_COUNT);
+  const unlockedCrates = allocatedCrates - unclaimedRelics * BigInt(ETHEREUM_CRATES_PER_RELIC);
+  const standardCrates = finalCrateAllocated ? unlockedCrates - 1n : unlockedCrates;
+  const batch = BigInt(ARTWORKS_PER_STANDARD_CRATE);
+  const fitsStandardCrates = (count: bigint) => count >= 0n && count <= standardCrates * batch && count % batch === 0n;
+  return fitsStandardCrates(artworksMinted) || (finalCrateAllocated && fitsStandardCrates(artworksMinted - BigInt(ARTWORKS_IN_FINAL_CRATE)));
+}
+
 function crateArtworkIds(crateId: number): number[] {
   if (!Number.isInteger(crateId) || crateId < 1 || crateId > CRATE_COUNT) throw new Error('Invalid crate number');
-  const count = crateId === CRATE_COUNT ? 31 : 20;
-  return Array.from({ length: count }, (_, index) => (crateId - 1) * 20 + index + 1);
+  const count = crateId === CRATE_COUNT ? ARTWORKS_IN_FINAL_CRATE : ARTWORKS_PER_STANDARD_CRATE;
+  return Array.from({ length: count }, (_, index) => (crateId - 1) * ARTWORKS_PER_STANDARD_CRATE + index + 1);
 }
 
 export function physicalCrateArtworkIds(crateId: number): number[] {

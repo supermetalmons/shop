@@ -17,7 +17,7 @@ import {
   type PreparedPreorderCollectionConfig,
   type PreorderCollectionConfig,
 } from '../scripts/shared/preorderCollectionConfig.ts';
-import { buildCreateMplCoreCollectionV2Ix } from '../scripts/deploy-all-onchain.ts';
+import { buildCreateMplCoreCollectionV2Ix } from '../scripts/shared/mplCoreCollection.ts';
 import { BUBBLEGUM_PROGRAM_ADDRESS, MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 import { getPreorderConfig } from '../shared/preorders.ts';

@@ -10,8 +10,13 @@ import {
   MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS, SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../shared/solanaProgramAddresses.ts';
 import {
-  assertMplCoreCollectionHasUpdateDelegates, bubblegumTreeConfigPda, decodeReceiptTreeState, getConcurrentMerkleTreeAccountSize,
+  assertMplCoreCollectionHasUpdateDelegates,
   IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1,
+} from './mplCoreCollection.ts';
+import {
+  bubblegumTreeConfigPda,
+  decodeReceiptTreeState,
+  getConcurrentMerkleTreeAccountSize,
 } from '../deploy-all-onchain.ts';
 import { validatePreorderCollectionAccount } from '../deploy-preorder-collection.ts';
 import { closedMiNotePreorderConfig } from './miNoteDropManifest.ts';

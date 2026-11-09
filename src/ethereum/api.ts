@@ -9,7 +9,7 @@ import {
   type EthereumDeliveryPrepareRequest, type EthereumDeliveryConfirmRequest,
   type EthereumClaimPrepareRequest, type EthereumClaimConfirmRequest,
 } from '../../shared/ethereum/api';
-import { ethereumAssetId, ethereumItemDisplayIdMaximum, ethereumRelicClaimCount, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_CRATES_PER_RELIC, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId, type EthereumMetadata } from '../../shared/ethereum/protocol';
+import { ethereumAssetId, ethereumItemDisplayIdMaximum, ethereumRelicClaimCount, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_CRATES_PER_RELIC, ETHEREUM_MAX_DISCOUNT_ALLOWANCE, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { requestEthereumJson, type EthereumRequestOptions } from './request';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
@@ -143,7 +143,8 @@ export const ethereumApi = {
       (address === null ? value.owner !== null : normalizeEthereumAddress(value.owner) !== address) ||
       !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.discountCratePriceWei) ||
       typeof value.discountMerkleRoot !== 'string' || !/^0x[0-9a-f]{64}$/.test(value.discountMerkleRoot) ||
-      !['discountAllowance', 'discountUsed'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 10) ||
+      value.discountAllowance === 0 ||
+      !['discountAllowance', 'discountUsed'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= ETHEREUM_MAX_DISCOUNT_ALLOWANCE) ||
       (Object.hasOwn(value, 'maxDiscountedMints') || Object.hasOwn(value, 'totalDiscountedMints')) &&
         (!['maxDiscountedMints', 'totalDiscountedMints'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0 && Number(value[key]) <= 5555) ||
           Number(value.totalDiscountedMints) > Number(value.maxDiscountedMints)) ||
