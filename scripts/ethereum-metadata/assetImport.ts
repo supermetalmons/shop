@@ -183,6 +183,7 @@ function referenceTemplates(manifest: RevealAssetCatalog, template: unknown): Re
     const metadata: Record<string, unknown> = {
       ...template,
       name: category === 'egg' ? 'Egg #{{assetId}}' : '{{tokenId}}',
+      description: category === 'egg' ? 'a unrevealed gan egg. what will hatch from it?' : template.description,
       image: placeholderUrl(media.image),
       aspectRatio: media.aspectRatio,
       attributes: [...attributes.filter(attribute => (attribute as Record<string, unknown>).trait_type !== 'type'),

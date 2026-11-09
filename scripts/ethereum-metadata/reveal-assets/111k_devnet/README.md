@@ -105,7 +105,9 @@ metadata or preassigned token identities. All 111,111 artwork baseline objects
 still use the unrevealed artwork template until confirmed reveal.
 
 Revealed eggs use `Egg #{{assetId}}` as their name, matching the assigned egg
-image ID. Other artwork categories retain the baseline name.
+image ID, and `a unrevealed gan egg. what will hatch from it?` as their description.
+These values apply when egg metadata is first frozen; existing frozen metadata
+is preserved. Other artwork categories retain the baseline name and description.
 
 ## Deployment verification
 

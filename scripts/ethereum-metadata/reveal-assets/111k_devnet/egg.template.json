@@ -1,6 +1,6 @@
 {
   "name": "Egg #{{assetId}}",
-  "description": "",
+  "description": "a unrevealed gan egg. what will hatch from it?",
   "image": "https://cdn.lil.org/nft/111k/eggs/{{assetId}}.png",
   "attributes": [
     {

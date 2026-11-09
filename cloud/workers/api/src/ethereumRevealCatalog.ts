@@ -43,12 +43,13 @@ export function buildRevealedArtwork(input: {
   };
   const media = revealAssetMedia(input.category, input.assetId);
   const name = input.category === 'egg' ? `Egg #${input.assetId}` : template.name;
+  const description = input.category === 'egg' ? 'a unrevealed gan egg. what will hatch from it?' : template.description;
   const attributes = [...(template.attributes || []).filter(attribute => attribute.trait_type !== 'type'),
     { trait_type: 'type', value: input.category }];
-  const metadata = { ...template, name, ...media, attributes, category: input.category, revealStatus: 'revealed' as const };
+  const metadata = { ...template, name, description, ...media, attributes, category: input.category, revealStatus: 'revealed' as const };
   return {
     artwork: { tokenId: input.tokenId, crateTokenId: input.crateTokenId, category: input.category,
-      name, ...(template.description !== undefined ? { description: template.description } : {}),
+      name, ...(description !== undefined ? { description } : {}),
       ...media, attributes, observation: input.observation },
     metadataJson: `${JSON.stringify(metadata, null, 2)}\n`,
     placeholderJson: `${JSON.stringify(template, null, 2)}\n`,

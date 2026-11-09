@@ -351,7 +351,7 @@ test('baseline artwork template changes require a revision and retain only the s
   for (const category of ['egg', 'painting', 'video', '3d', 'animated']) {
     const reference = JSON.parse(await readFile(join(f.rootDirectory, assetDirectory, `${category}.template.json`), 'utf8'));
     assert.equal(reference.name, category === 'egg' ? 'Egg #{{assetId}}' : '{{tokenId}}');
-    assert.equal(reference.description, 'Shared description');
+    assert.equal(reference.description, category === 'egg' ? 'a unrevealed gan egg. what will hatch from it?' : 'Shared description');
     assert.deepEqual(reference.attributes, [{ trait_type: 'series', value: '111K' }, { trait_type: 'type', value: category }]);
   }
 });
