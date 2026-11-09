@@ -3,6 +3,7 @@ import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_UNBOX_QUANT
 import type { InventoryItem } from '../types';
 import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
 import { decodeReturn, encodeCall } from '../../shared/ethereum/abi';
+import { ethereumCatalogKey } from './catalogRevision';
 
 export type EthereumAction = 'mint' | 'relic-claim' | 'unbox' | 'delivery' | 'claim' | 'transfer' | 'cancel';
 export type EthereumPendingTransaction = {
@@ -29,7 +30,9 @@ export function ethereumInventoryScope(config: Pick<Ethereum111kConfig, 'chainId
   return owner && config.contractAddress ? `${config.chainId}:${config.contractAddress.toLowerCase()}:${owner}` : null;
 }
 
-export function ethereumInventoryQueryKey(scope: string | null) { return ['ethereum111k', 'inventory', scope] as const; }
+export function ethereumInventoryQueryKey(scope: string | null, catalog?: Pick<Ethereum111kConfig, 'catalogRevision' | 'deploymentId'>) {
+  return ['ethereum111k', 'inventory', scope, ...ethereumCatalogKey(catalog ?? {})] as const;
+}
 
 export function ethereumInventoryView(item: EthereumInventoryItem, dropId = '111k_devnet'): EthereumInventoryView {
   const containerMedia = item.kind === 'crate' || item.kind === 'warehouse' ? ETHEREUM_CONTAINER_MEDIA[item.kind] : undefined;

@@ -12,11 +12,13 @@ export type EthereumArtworkAspectRatio = { width: number; height: number };
 export type EthereumRevealObservation = { transactionHash: string; blockNumber: number; blockHash: string };
 export type EthereumRevealScope = {
   deploymentId: string;
+  catalogRevision?: number;
   dropId: string;
   chainId: number;
   contractAddress: string;
 };
 export type EthereumRevealedArtwork = {
+  metadataRevision?: number;
   tokenId: string;
   crateTokenId: string;
   category: EthereumArtworkCategory;

@@ -7,6 +7,8 @@ export type Ethereum111kConfig = {
   contractAddress: string | null;
   metadataBaseUri: string;
   deploymentBlock: number;
+  deploymentId?: string | null;
+  catalogRevision?: number;
   explorerUrl: string;
   walletRpcUrl: string;
   enabled: boolean;

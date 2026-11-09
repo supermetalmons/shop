@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { attributePublisherName } from '../src/ethereumRevealAttributes.ts';
 import type { RevealPublicationJob } from '../src/ethereumRevealStore.ts';
+import type { MetadataWrite } from '../src/ethereumRevealPublisherObject.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 
 const { EthereumRevealPublisherObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealPublisherObject.ts'));
@@ -11,6 +12,13 @@ const scope = { deploymentId: 'test-sepolia', chainId: 11155111, contractAddress
 const job = (id = '1'): RevealPublicationJob => ({ token_id: id, metadata_json: `{"image":"https://example.test/${id}.webp"}`,
   placeholder_json: '{"image":"https://example.test/placeholder.webp"}', attempts: 0 });
 const key = (id = '1') => `111k-sepolia/test-sepolia/${id}.json`;
+const metadataWrite = (item: RevealPublicationJob): MetadataWrite => ({ tokenId: item.token_id,
+  metadataRevision: item.metadata_revision ?? 0, metadataJson: item.metadata_json,
+  expectedJsons: item.expected_jsons_json ? JSON.parse(item.expected_jsons_json) : [item.placeholder_json],
+  allowMissing: item.allow_missing ?? true });
+const replacementJob = (id = '1'): RevealPublicationJob => ({ ...job(id), metadata_revision: 3,
+  metadata_json: `{"image":"https://example.test/new-${id}.png","attributes":[]}`,
+  expected_jsons_json: JSON.stringify([job(id).placeholder_json, job(id).metadata_json]), allow_missing: true, migration: true });
 const jsonHeaders = { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' };
 const registration = {
   deployment_id: scope.deploymentId, drop_id: '111k_devnet', chain_id: scope.chainId, contract_address: scope.contractAddress,
@@ -26,6 +34,8 @@ function fixture() {
   const registry = { row: { ...registration } as Record<string, unknown> | null };
   const objects = new Map<string, { body: string; etag: string; httpMetadata?: R2HTTPMetadata }>();
   const writes: Array<{ key: string; body: string; options: R2PutOptions }> = [];
+  const desired = new Map<string, MetadataWrite>();
+  const publishers = new Map<string, InstanceType<typeof EthereumRevealPublisherObject>>();
   let reads = 0;
   let aborts = 0;
   const bucket = {
@@ -52,12 +62,23 @@ function fixture() {
     } };
     return statement;
   } };
-  const reopen = (name = objectName) => new EthereumRevealPublisherObject({ waitUntil() {}, abort() { aborts++; },
+  const reopen = (name = objectName): InstanceType<typeof EthereumRevealPublisherObject> => {
+    const publisher = new EthereumRevealPublisherObject({ waitUntil() {}, abort() { aborts++; },
     id: { equals: (id: DurableObjectId) => id.toString() === name } } as never,
     { ETHEREUM_REVEAL_METADATA: bucket, OPS_DB: database, COMMERCE_DB: database,
       ETHEREUM_111K_CHAIN_ID: '11155111', ETHEREUM_111K_CONTRACT_ADDRESS: currentContract,
-      ETHEREUM_REVEAL_PUBLISHER: { idFromName: (name: string) => ({ toString: () => name }) } } as unknown as Env);
-  return { publisher: reopen(), reopen, registry, bucket, objects, writes, reads: () => reads, aborts: () => aborts };
+      ETHEREUM_REVEAL: { getByName: () => ({ validatePublication: async (_scope: unknown, job: MetadataWrite) => {
+        const current = desired.get(job.tokenId);
+        return !current || current.metadataRevision === job.metadataRevision && current.metadataJson === job.metadataJson &&
+          current.allowMissing === job.allowMissing && JSON.stringify(current.expectedJsons) === JSON.stringify(job.expectedJsons);
+      } }) },
+      ETHEREUM_REVEAL_PUBLISHER: { idFromName: (name: string) => ({ toString: () => name }),
+        getByName: (name: string) => publishers.get(name) ?? reopen(name) } } as unknown as Env);
+    publishers.set(name, publisher);
+    return publisher;
+  };
+  const retire = () => Object.assign(registry.row!, { state: 'paused', retired_at_ms: Date.now(), replacement_deployment_id: 'replacement', revision: 4 });
+  return { publisher: reopen(), reopen, retire, registry, bucket, objects, writes, desired, reads: () => reads, aborts: () => aborts };
 }
 
 for (const previous of ['absent', 'placeholder', 'published'] as const) test(`publisher handles ${previous} metadata idempotently`, async () => {
@@ -71,7 +92,7 @@ for (const previous of ['absent', 'placeholder', 'published'] as const) test(`pu
   if (f.writes.length) assert.deepEqual(f.writes[0].options, {
     onlyIf: previous === 'absent' ? { etagDoesNotMatch: '*' } : { etagMatches: 'original' },
     httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' },
-    customMetadata: { revealDeployment: scope.deploymentId, revealToken: '1' },
+    customMetadata: { revealDeployment: scope.deploymentId, revealToken: '1', revealMetadataRevision: '0' },
   });
 });
 
@@ -130,6 +151,74 @@ test('publisher bounds concurrent batches at eight active tokens', async () => {
   release();
   assert.ok((await first).every(result => result.status === 'published'));
   assert.equal(f.writes.length, 8);
+});
+
+test('a replacement invalidates delayed reads and stale retries without blocking another token', async () => {
+  const f = fixture();
+  f.objects.set(key(), { body: job().placeholder_json, etag: 'placeholder', httpMetadata: jsonHeaders });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const get = f.bucket.get;
+  f.bucket.get = async objectKey => { const value = await get(objectKey); if (objectKey === key()) { entered.resolve(); await release.promise; } return value; };
+  const old = f.publisher.publishBatch(scope, [job()]);
+  await entered.promise;
+  f.desired.set('1', metadataWrite(replacementJob()));
+  assert.equal((await f.publisher.publishBatch(scope, [job('2')]))[0].status, 'published');
+  release.resolve();
+  assert.equal((await old)[0].status, 'superseded');
+  assert.equal(f.objects.get(key())?.body, job().placeholder_json);
+  assert.equal((await f.publisher.publishBatch(scope, [replacementJob()]))[0].status, 'published');
+  const reads = f.reads();
+  assert.equal((await f.publisher.publishBatch(scope, [job()]))[0].status, 'superseded');
+  assert.equal(f.reads(), reads);
+  assert.equal(f.objects.get(key())?.body, replacementJob().metadata_json);
+});
+
+for (const winner of ['old', 'replacement']) test(`conditional writes preserve the replacement when the ${winner} PUT wins after a restart`, async () => {
+  const f = fixture();
+  f.objects.set(key(), { body: job().placeholder_json, etag: 'placeholder', httpMetadata: jsonHeaders });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const put = f.bucket.put;
+  f.bucket.put = async (...args) => {
+    if (args[1] === job().metadata_json) { entered.resolve(); await release.promise; }
+    return put(...args);
+  };
+  const old = f.publisher.publishBatch(scope, [job()]);
+  await entered.promise;
+  f.desired.set('1', metadataWrite(replacementJob()));
+  const current = f.reopen();
+  if (winner === 'replacement') {
+    assert.equal((await current.publishBatch(scope, [replacementJob()]))[0].status, 'published');
+    release.resolve();
+    assert.equal((await old)[0].status, 'retry');
+  } else {
+    const read = Promise.withResolvers<void>(), continueRead = Promise.withResolvers<void>();
+    const get = f.bucket.get;
+    f.bucket.get = async objectKey => { const value = await get(objectKey); read.resolve(); await continueRead.promise; return value; };
+    const replacement = current.publishBatch(scope, [replacementJob()]);
+    await read.promise;
+    release.resolve();
+    assert.equal((await old)[0].status, 'published');
+    continueRead.resolve();
+    assert.equal((await replacement)[0].status, 'retry');
+    assert.equal((await current.publishBatch(scope, [replacementJob()]))[0].status, 'published');
+  }
+  assert.equal(f.objects.get(key())?.body, replacementJob().metadata_json);
+  assert.equal((await current.publishBatch(scope, [job()]))[0].status, 'superseded');
+});
+
+test('two replacement writes leave all eight ordinary publication slots available', async () => {
+  const f = fixture();
+  const release = Promise.withResolvers<void>();
+  const get = f.bucket.get;
+  f.bucket.get = async objectKey => { await release.promise; return get(objectKey); };
+  const replacements = f.publisher.publishBatch(scope, [replacementJob('20'), replacementJob('21')]);
+  const ordinary = f.publisher.publishBatch(scope, Array.from({ length: 8 }, (_, index) => job(String(index + 1))));
+  assert.equal((await f.publisher.publishBatch(scope, [replacementJob('22')]))[0].status, 'retry');
+  assert.equal((await f.publisher.publishBatch(scope, [job('9')]))[0].status, 'retry');
+  release.resolve();
+  assert.ok((await replacements).every(result => result.status === 'published'));
+  assert.ok((await ordinary).every(result => result.status === 'published'));
+  assert.equal(f.writes.length, 10);
 });
 
 test('publisher rejects oversized payloads and batches before starting R2 work', () => {
@@ -212,13 +301,14 @@ test('publisher starts no storage work after a caller lease expires', async () =
   assert.equal(f.aborts(), 0);
 });
 
-for (const invalid of ['missing', 'retired', 'deployment', 'prefix'] as const) {
+for (const invalid of ['missing', 'retired', 'unsupported', 'deployment', 'prefix'] as const) {
   test(`publisher refuses ${invalid} registry scope before R2 access`, async () => {
     const f = fixture();
     if (invalid === 'missing') f.registry.row = null;
-    else f.registry.row![invalid === 'retired' ? 'catalog_version' : invalid === 'deployment' ? 'deployment_id' : 'metadata_base_uri'] =
-      invalid === 'retired' ? '111k-v4' : invalid === 'deployment' ? 'other' : 'https://cdn.mons.shop/111k-sepolia/other/';
-    await assert.rejects(f.publisher.publishBatch(scope, [job()]), /not current and registered/);
+    else if (invalid === 'retired') f.retire();
+    else f.registry.row![invalid === 'unsupported' ? 'catalog_version' : invalid === 'deployment' ? 'deployment_id' : 'metadata_base_uri'] =
+      invalid === 'unsupported' ? '111k-v4' : invalid === 'deployment' ? 'other' : 'https://cdn.mons.shop/111k-sepolia/other/';
+    await assert.rejects(f.publisher.publishBatch(scope, [job()]), invalid === 'unsupported' ? /catalog is not supported/ : /not current and registered/);
     assert.equal(f.reads(), 0);
     assert.equal(f.writes.length, 0);
   });
@@ -251,10 +341,9 @@ test('retired publisher fences new batches and drains the actual pending PUT bef
   f.bucket.put = async (...args) => { entered.resolve(); await release.promise; return put(...args); };
   const publication = f.publisher.publishBatch(scope, [job()]);
   await entered.promise;
-  f.registry.row!.catalog_version = '111k-v4';
-  f.registry.row!.state = 'paused';
+  f.retire();
   let completed = false;
-  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 }).then(result => { completed = true; return result; });
+  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 }).then(result => { completed = true; return result; });
   try {
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(completed, false);
@@ -275,9 +364,8 @@ test('retirement during a stalled GET prevents its continuation from starting a 
   f.bucket.get = async key => { entered.resolve(); await release.promise; return get(key); };
   const publication = f.publisher.publishBatch(scope, [job()]);
   await entered.promise;
-  f.registry.row!.catalog_version = '111k-v4';
-  f.registry.row!.state = 'paused';
-  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 });
+  f.retire();
+  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 });
   try {
     await new Promise(resolve => setTimeout(resolve, 0));
     release.resolve();
@@ -313,10 +401,9 @@ test('a timed-out PUT remains in the retirement drain and a resetting executor n
   const publication = f.publisher.publishBatch(scope, [job()], Date.now() + 20);
   await entered.promise;
   assert.deepEqual(await publication, [{ tokenId: '1', status: 'retry' }]);
-  f.registry.row!.catalog_version = '111k-v4';
-  f.registry.row!.state = 'paused';
+  f.retire();
   let settled = false;
-  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 });
+  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 });
   const rejection = assert.rejects(drain, /restart/).then(() => { settled = true; });
   try {
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -325,7 +412,7 @@ test('a timed-out PUT remains in the retirement drain and a resetting executor n
     release.resolve();
     await rejection;
     assert.equal(f.writes.length, 1);
-    assert.deepEqual(await f.reopen().drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 3 }), { drained: true });
+    assert.deepEqual(await f.reopen().drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 }), { drained: true });
   } finally { release.resolve(); await rejection; }
 });
 
@@ -338,6 +425,7 @@ test('native publisher timeout resets its instance and retries frozen work throu
       constructor(ctx, env) {
         const state = { stalled: true, writes: 0 };
         super(ctx, { ETHEREUM_REVEAL_PUBLISHER: env.PUBLISHER,
+          ETHEREUM_REVEAL: { getByName: () => ({ validatePublication: async () => true }) },
           OPS_DB: { prepare: () => ({ bind: () => ({ first: async () => (${JSON.stringify(registration)}) }) }) }, ETHEREUM_REVEAL_METADATA: {
           get: key => env.BUCKET.get(key),
           put: (...args) => { state.writes++; return state.stalled ? new Promise(() => {}) : env.BUCKET.put(...args); },
@@ -389,7 +477,7 @@ test('attribute publication replaces only exact base bytes and reconciles a lost
   const f = fixture();
   const name = attributePublisherName(scope);
   const publisher = f.reopen(name);
-  const item = { tokenId: '1', baseJson: job().metadata_json, metadataJson: '{"attributes":[{"trait_type":"collection block","value":"B"}]}' };
+  const item = { tokenId: '1', baseJson: job().metadata_json, metadataJson: '{"attributes":[{"trait_type":"collection block","value":"B"}]}', metadataRevision: 1 };
   const publish = () => publisher.publishAttributes(scope, item, Date.now() + 5_000);
   assert.equal((await publish()).status, 'conflict');
   for (const body of [job().placeholder_json, 'other', '\ufeff' + item.baseJson]) {
@@ -406,7 +494,7 @@ test('attribute publication replaces only exact base bytes and reconciles a lost
   assert.deepEqual(f.writes[0].options.httpMetadata, { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' });
   assert.equal((await f.reopen(name).publishAttributes(scope, item, Date.now() + 5_000)).status, 'published');
   assert.equal(f.writes.length, 1);
-  await assert.rejects(f.publisher.publishAttributes(scope, item, Date.now() + 5_000), /does not match/);
+  assert.equal((await f.publisher.publishAttributes(scope, item, Date.now() + 5_000)).status, 'published');
   await assert.rejects(publisher.publishBatch(scope, [job()]), /does not match/);
 });
 
@@ -415,7 +503,7 @@ for (const stage of ['media', 'attributes'] as const) test(`${stage} publication
   const publisher = f.reopen(attributePublisherName(scope));
   const item = job();
   const publish = async () => stage === 'media' ? (await f.publisher.publishBatch(scope, [item]))[0]
-    : publisher.publishAttributes(scope, { tokenId: item.token_id, baseJson: item.placeholder_json, metadataJson: item.metadata_json }, Date.now() + 5_000);
+    : publisher.publishAttributes(scope, { tokenId: item.token_id, baseJson: item.placeholder_json, metadataJson: item.metadata_json, metadataRevision: 1 }, Date.now() + 5_000);
   for (const httpMetadata of [undefined, { ...jsonHeaders, contentType: 'application/octet-stream' },
     { ...jsonHeaders, cacheControl: 'max-age=3600' }, { ...jsonHeaders, contentEncoding: 'gzip' }]) {
     f.objects.set(key(), { body: item.metadata_json, etag: 'restored', httpMetadata });
@@ -441,7 +529,7 @@ for (const stage of ['media', 'attributes'] as const) test(`${stage} publication
 test('attribute publisher drains header repairs and refuses new writes after retirement', async () => {
   const f = fixture();
   const publisher = f.reopen(attributePublisherName(scope));
-  const item = { tokenId: '1', baseJson: job().metadata_json, metadataJson: '{"enriched":true}' };
+  const item = { tokenId: '1', baseJson: job().metadata_json, metadataJson: '{"enriched":true}', metadataRevision: 1 };
   f.objects.set(key(), { body: item.metadataJson, etag: 'restored', httpMetadata: { contentType: 'application/octet-stream' } });
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -451,7 +539,8 @@ test('attribute publisher drains header repairs and refuses new writes after ret
   await entered.promise;
   Object.assign(f.registry.row!, { state: 'paused', retired_at_ms: Date.now(), replacement_deployment_id: 'replacement', revision: 4 });
   let drained = false;
-  const drain = publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 }).then(() => { drained = true; });
+  const drain = Promise.all([publisher, f.publisher].map(writer => writer.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 })))
+    .then(() => { drained = true; });
   try {
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(drained, false);
@@ -459,7 +548,7 @@ test('attribute publisher drains header repairs and refuses new writes after ret
     release.resolve();
     await Promise.all([write, drain]);
     assert.equal(drained, true);
-    await assert.rejects(f.reopen(attributePublisherName(scope)).publishAttributes(scope, item, Date.now() + 5_000), /not current/);
+    assert.equal((await f.reopen(attributePublisherName(scope)).publishAttributes(scope, item, Date.now() + 5_000)).status, 'retry');
   } finally { release.resolve(); await Promise.allSettled([write, drain]); }
 });
 

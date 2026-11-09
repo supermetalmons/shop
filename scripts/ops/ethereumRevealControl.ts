@@ -1,3 +1,4 @@
+import { isSupportedRevealDeployment } from '../../cloud/workers/api/src/ethereumRevealCatalog.ts';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -157,7 +158,7 @@ export function buildEthereumRevealRegistration(value: Registration, publication
 
 export function buildEthereumRevealTransition(command: 'activate' | 'pause', current: EthereumRevealDeployment, revision: number): string {
   if (current.retiredAtMs != null) throw new Error('Retired reveal deployments cannot be reactivated or transitioned.');
-  if (command === 'activate' && current.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION) {
+  if (current.catalogUpdateId != null || command === 'activate' && !isSupportedRevealDeployment(current)) {
     throw new Error('Retired reveal catalogs cannot be activated.');
   }
   if (revision !== current.revision || command === 'activate' && !['ready', 'paused'].includes(current.state) ||
@@ -167,7 +168,7 @@ export function buildEthereumRevealTransition(command: 'activate' | 'pause', cur
   return `UPDATE ethereum_reveal_deployments SET state = '${command === 'activate' ? 'active' : 'paused'}', revision = revision + 1,
     updated_at_ms = ${COMMERCE_D1_NOW_MS_SQL}${command === 'activate' ? `, activated_at_ms = COALESCE(activated_at_ms, ${COMMERCE_D1_NOW_MS_SQL})` : ''}
     WHERE deployment_id = ${sqlString(current.deploymentId)} AND revision = ${revision} AND state = ${sqlString(current.state)}
-      AND retired_at_ms IS NULL RETURNING *`;
+      AND retired_at_ms IS NULL AND catalog_update_id IS NULL RETURNING *`;
 }
 
 export async function runEthereumRevealControl(argv: string[], overrides: {
@@ -219,7 +220,7 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
   if (args.command === 'backfill-attributes') {
     const revision = args.expectedRevision ?? current.revision;
     if (current.chainId !== 11155111 || current.dropId !== '111k_devnet' || current.state !== 'active' ||
-      current.retiredAtMs != null || current.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION || current.revision !== revision) {
+      current.retiredAtMs != null || current.catalogUpdateId != null || !isSupportedRevealDeployment(current) || current.revision !== revision) {
       throw new Error('Attribute backfill requires the active Sepolia deployment at the expected revision.');
     }
     const totals = await (overrides.maintenance ?? withEthereumRevealMaintenance)(async transport => {

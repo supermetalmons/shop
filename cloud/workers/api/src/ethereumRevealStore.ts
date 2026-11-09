@@ -5,7 +5,8 @@ import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, Ethereum
 export type { RevealDispatchState, RevealReceiptClaim, RevealScanClaim, RevealWorkLane } from './ethereumRevealRecoveryStore.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumRevealEnrichmentStore, REVEAL_ENRICHMENT_SCHEMA } from './ethereumRevealEnrichmentStore.js';
-import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, REVEAL_CATEGORY_COUNTS,
+import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, revealCategoryCounts, revealDeploymentCatalog,
   revealCrateSize, revealRandomInteger } from './ethereumRevealCatalog.js';
 
 type SqlValue = string | number | null | ArrayBuffer;
@@ -23,11 +24,14 @@ export type RevealTransactionJob = {
 };
 export type RevealPublicationJob = {
   token_id: string; metadata_json: string; placeholder_json: string; attempts: number; claim_id?: string;
+  metadata_revision?: number; expected_jsons_json?: string; allow_missing?: boolean; migration?: boolean;
 };
-export type RevealPublicationResult = { job: RevealPublicationJob; status: 'published' | 'conflict' | 'retry' };
+export type RevealPublicationResult = { job: RevealPublicationJob; status: 'published' | 'conflict' | 'retry' | 'superseded' };
 export type RevealSearchRange = { fromBlock: number; toBlock?: number };
 
 const REVEAL_CRATE_EGG_LIMIT = 8;
+const NORMAL_PUBLICATION = `NOT EXISTS (SELECT 1 FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
+  WHERE a.category='egg' AND a.asset_id=m.egg_id AND g.activated_at_ms IS NOT NULL AND a.assignment_revision<g.target_revision)`;
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), deployment_json TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0)`,
@@ -107,19 +111,21 @@ function immutableDeployment(deployment: EthereumRevealDeployment): string {
 
 export class EthereumRevealStore {
   readonly enrichment: EthereumRevealEnrichmentStore;
+  readonly catalogUpdate: EthereumRevealCatalogUpdateStore;
   private readonly transaction: <T>(action: () => T) => T;
   private readonly recovery: EthereumRevealRecoveryStore;
 
   constructor(private readonly sql: RevealSql, transaction: <T>(action: () => T) => T,
     private readonly randomInteger: (maximum: number) => number = revealRandomInteger) {
     let depth = 0;
-    this.transaction = action => {
+    const runTransaction = <T>(action: () => T): T => {
       if (depth) return action();
       return transaction(() => {
         depth++;
         try { return action(); } finally { depth--; }
       });
     };
+    this.transaction = runTransaction;
     this.transaction(() => {
       for (const statement of SCHEMA) this.sql.exec(statement);
       const columns = new Set(this.sql.exec<{ name: string }>('PRAGMA table_info(transactions)').toArray().map(row => row.name));
@@ -132,8 +138,10 @@ export class EthereumRevealStore {
         this.sql.exec('ALTER TABLE publication ADD COLUMN claim_id TEXT');
       }
     });
-    this.enrichment = new EthereumRevealEnrichmentStore(sql, this.transaction);
-    this.recovery = new EthereumRevealRecoveryStore(sql, action => this.transaction(action), {
+    this.catalogUpdate = new EthereumRevealCatalogUpdateStore(sql, runTransaction);
+    this.catalogUpdate.initialize();
+    this.enrichment = new EthereumRevealEnrichmentStore(this.sql, this.transaction);
+    this.recovery = new EthereumRevealRecoveryStore(this.sql, action => this.transaction(action), {
       freeze: (deployment, observation, crates, now, allCrates) => this.freezeRecords(deployment, observation, crates, now, allCrates),
       reserve: crates => this.reserve(crates),
       frozen: ids => this.frozen(ids),
@@ -145,9 +153,10 @@ export class EthereumRevealStore {
     const existing = this.sql.exec<{ deployment_json: string }>('SELECT deployment_json FROM settings WHERE id=1').toArray()[0];
     if (existing && existing.deployment_json !== serialized) throw new Error('Reveal deployment identity cannot change.');
     if (existing) return;
+    const categoryCounts = revealCategoryCounts(revealDeploymentCatalog(deployment));
     this.transaction(() => {
       this.sql.exec('INSERT INTO settings(id,deployment_json) VALUES(1,?)', serialized);
-      for (const category of REVEAL_CATEGORIES) this.sql.exec('INSERT INTO pools(category,total) VALUES(?,?)', category, REVEAL_CATEGORY_COUNTS[category]);
+      for (const category of REVEAL_CATEGORIES) this.sql.exec('INSERT INTO pools(category,total) VALUES(?,?)', category, categoryCounts[category]);
     });
   }
 
@@ -179,7 +188,7 @@ export class EthereumRevealStore {
     });
   }
 
-  private pools(): PoolRow[] { return this.sql.exec<PoolRow>('SELECT * FROM pools ORDER BY category').toArray(); }
+  private pools(): PoolRow[] { return this.catalogUpdate.pools(); }
 
   private privateSlot(crateTokenId: string, slot: number): ReservationRow | undefined {
     return this.sql.exec<ReservationRow>(`SELECT category,asset_id,crate_token_id,slot FROM assignments
@@ -188,9 +197,7 @@ export class EthereumRevealStore {
 
   private freeReservation(reservation: ReservationRow): void {
     this.sql.exec('DELETE FROM assignments WHERE category=? AND asset_id=? AND token_id IS NULL', reservation.category, reservation.asset_id);
-    const pool = this.sql.exec<PoolRow>('SELECT * FROM pools WHERE category=?', reservation.category).toArray()[0];
-    this.sql.exec('INSERT INTO free_slots(category,slot,asset_id) VALUES(?,?,?)', reservation.category, pool.available, reservation.asset_id);
-    this.sql.exec('UPDATE pools SET available=available+1 WHERE category=?', reservation.category);
+    this.catalogUpdate.releaseFree({ category: reservation.category, assetId: reservation.asset_id });
   }
 
   private takeAsset(crateTokenId: string, slot: number, reclaim: boolean, frozenEggs = 0): ReservationRow | undefined {
@@ -203,22 +210,18 @@ export class EthereumRevealStore {
       pools = this.pools().filter(pool => pool.available > 0);
     }
     if (!pools.length) return undefined;
-    const privateEggs = this.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments
-      WHERE crate_token_id=? AND token_id IS NULL AND category='egg'`, crateTokenId).toArray()[0].count;
+    const privateEggs = this.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments INDEXED BY assignments_crate
+      WHERE crate_token_id=? AND token_id IS NULL AND category='egg' AND asset_id<=?`,
+      crateTokenId, this.catalogUpdate.activeCatalog().categories.eggs.count).toArray()[0].count;
     if (privateEggs + frozenEggs >= REVEAL_CRATE_EGG_LIMIT && pools.some(pool => pool.category !== 'egg')) {
       pools = pools.filter(pool => pool.category !== 'egg');
     }
     let selection = this.randomInteger(pools.reduce((sum, pool) => sum + pool.total, 0));
     const pool = pools.find(value => { selection -= value.total; return selection < 0; })!;
     const index = this.randomInteger(pool.available);
-    const chosen = this.sql.exec<{ asset_id: number }>('SELECT asset_id FROM free_slots WHERE category=? AND slot=?', pool.category, index).toArray()[0];
-    const last = this.sql.exec<{ asset_id: number }>('SELECT asset_id FROM free_slots WHERE category=? AND slot=?', pool.category, pool.available - 1).toArray()[0];
-    if (!chosen || !last) throw new Error('Reveal free pool is inconsistent.');
-    this.sql.exec('DELETE FROM free_slots WHERE category=? AND slot=?', pool.category, pool.available - 1);
-    if (index !== pool.available - 1) this.sql.exec('UPDATE free_slots SET asset_id=? WHERE category=? AND slot=?', last.asset_id, pool.category, index);
-    this.sql.exec('UPDATE pools SET available=available-1 WHERE category=?', pool.category);
-    this.sql.exec('INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES(?,?,?,?)', pool.category, chosen.asset_id, crateTokenId, slot);
-    return { category: pool.category, asset_id: chosen.asset_id, crate_token_id: crateTokenId, slot };
+    const chosen = this.catalogUpdate.takeFree(pool.category, index);
+    this.sql.exec('INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES(?,?,?,?)', chosen.category, chosen.assetId, crateTokenId, slot);
+    return { category: chosen.category, asset_id: chosen.assetId, crate_token_id: crateTokenId, slot };
   }
 
   reserve(crateTokenIds: string[]): void {
@@ -235,15 +238,7 @@ export class EthereumRevealStore {
   }
 
   frozen(tokenIds: string[]): EthereumRevealedArtwork[] {
-    const byId = new Map<string, EthereumRevealedArtwork>();
-    for (let start = 0; start < tokenIds.length; start += 100) {
-      const page = tokenIds.slice(start, start + 100);
-      if (!page.length) continue;
-      const rows = this.sql.exec<{ token_id: string; artwork_json: string }>(`SELECT token_id,artwork_json FROM assignments
-        WHERE token_id IN (${page.map(() => '?').join(',')})`, ...page).toArray();
-      for (const row of rows) byId.set(row.token_id, JSON.parse(row.artwork_json));
-    }
-    return tokenIds.flatMap(id => byId.has(id) ? [byId.get(id)!] : []);
+    return this.catalogUpdate.canonicalArtworks(tokenIds);
   }
 
   private freezeRecords(deployment: EthereumRevealDeployment, observation: EthereumRevealObservation, crates: RevealCrate[], now: number,
@@ -255,6 +250,8 @@ export class EthereumRevealStore {
       tokens.some(id => !/^[1-9]\d*$/.test(id) || Number(id) > REVEAL_ARTWORK_COUNT) ||
       crates.some(crate => crate.tokenIds.length !== revealCrateSize(crate.crateTokenId))) throw new Error('Invalid verified reveal ranges.');
     return this.transaction(() => {
+      deployment = this.catalogUpdate.effectiveDeployment(deployment);
+      const catalog = this.catalogUpdate.activeCatalog();
       const existing = new Map(this.frozen(tokens).map(artwork => [artwork.tokenId, artwork]));
       for (const crate of crates) {
         this.sql.exec('INSERT OR IGNORE INTO crates(crate_token_id) VALUES(?)', crate.crateTokenId);
@@ -271,13 +268,14 @@ export class EthereumRevealStore {
           if (existing.has(tokenId)) continue;
           const reservation = this.privateSlot(crate.crateTokenId, slot) || this.takeAsset(crate.crateTokenId, slot, true, frozenEggs);
           if (!reservation) throw new Error('Reveal inventory invariant failed.');
+          const effective = this.catalogUpdate.resolveUnit({ category: reservation.category, assetId: reservation.asset_id });
           const value = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: crate.crateTokenId,
-            category: reservation.category, assetId: reservation.asset_id, observation });
-          this.sql.exec(`UPDATE assignments SET token_id=?,artwork_json=?,metadata_json=?,placeholder_json=?,frozen_at_ms=?
+            category: effective.category, assetId: effective.assetId, observation, catalog });
+          this.sql.exec(`UPDATE assignments SET token_id=?,artwork_json=?,metadata_json=?,placeholder_json=?,frozen_at_ms=?,assignment_revision=?
             WHERE category=? AND asset_id=? AND token_id IS NULL`, tokenId, JSON.stringify(value.artwork), value.metadataJson,
-            value.placeholderJson, now, reservation.category, reservation.asset_id);
+            value.placeholderJson, now, deployment.catalogRevision ?? 0, reservation.category, reservation.asset_id);
           this.sql.exec('INSERT INTO publication(token_id) VALUES(?)', tokenId);
-          if (reservation.category === 'egg') frozenEggs++;
+          if (effective.category === 'egg') frozenEggs++;
         }
         this.sql.exec(`INSERT OR IGNORE INTO observations(transaction_hash,block_hash,crate_token_id,block_number,token_ids_json)
           VALUES(?,?,?,?,?)`, observation.transactionHash, observation.blockHash, crate.crateTokenId, observation.blockNumber, JSON.stringify(crate.tokenIds));
@@ -322,7 +320,7 @@ export class EthereumRevealStore {
       .map(value => ({ ...value, crateTokenId: cratesByToken.get(value.tokenId)! })) : [];
     const observation: EthereumRevealObservation | null = job?.observation_json ? JSON.parse(job.observation_json) : null;
     return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,
-      contractAddress: deployment.contractAddress, status, artworks,
+      contractAddress: deployment.contractAddress, catalogRevision: this.catalogUpdate.effectiveCatalog()?.catalogRevision ?? 0, status, artworks,
       retryAfterMs: status === 'pending' ? 2_000 : 0,
       ...(observation ? { observedBlock: { number: observation.blockNumber, hash: observation.blockHash } } : {}) };
   }
@@ -334,7 +332,9 @@ export class EthereumRevealStore {
   recoveringTokenIds(ids: string[]): string[] { return this.recovery.recoveringTokenIds(ids); }
   admitTransaction(hash: string, fromBlock: number, now: number) { return this.recovery.admitTransaction(hash, fromBlock, now); }
   admitTokens(ids: string[], fromBlock: number, now: number): void { this.recovery.admitTokens(ids, fromBlock, now); }
-  tokensResponse(deployment: EthereumRevealDeployment, ids: string[]) { return this.recovery.tokensResponse(deployment, ids); }
+  tokensResponse(deployment: EthereumRevealDeployment, ids: string[]) {
+    return { ...this.recovery.tokensResponse(deployment, ids), catalogRevision: this.catalogUpdate.effectiveCatalog()?.catalogRevision ?? 0 };
+  }
   opaqueCount(): number { return this.recovery.opaqueCount(); }
   dispatchState(now: number): RevealDispatchState { return this.recovery.dispatchState(now); }
   recordThrottle(now: number, retryAfterMs: number): void { this.recovery.recordThrottle(now, retryAfterMs); }
@@ -380,15 +380,22 @@ export class EthereumRevealStore {
 
   claimPublications(now: number, limit = 8): RevealPublicationJob[] {
     return this.transaction(() => {
-      const rows = this.sql.exec<RevealPublicationJob>(`SELECT p.token_id,a.metadata_json,a.placeholder_json,p.attempts FROM publication p
-        JOIN assignments a ON a.token_id=p.token_id WHERE p.status='pending' AND p.next_check_ms<=?
+      const rows: RevealPublicationJob[] = this.sql.exec<Pick<RevealPublicationJob, 'token_id' | 'metadata_json' | 'placeholder_json' | 'attempts'>>(`SELECT p.token_id,a.metadata_json,a.placeholder_json,p.attempts FROM publication p
+        JOIN assignments a ON a.token_id=p.token_id WHERE p.status='pending' AND p.next_check_ms<=? AND ${NORMAL_PUBLICATION}
         ORDER BY p.next_check_ms,CAST(p.token_id AS INTEGER) LIMIT ?`, now, limit).toArray();
       if (!rows.length) return rows;
       const claimId = crypto.randomUUID();
+      const canonical = new Map(this.catalogUpdate.canonicalMetadata(rows.map(row => row.token_id)).map(row => [row.tokenId, row]));
       for (const row of rows) {
+        const current = canonical.get(row.token_id)!;
         row.claim_id = claimId;
-        this.sql.exec('UPDATE publication SET next_check_ms=?,attempts=attempts+1,claim_id=? WHERE token_id=?',
-          now + 60_000, claimId, row.token_id);
+        row.metadata_json = current.metadataJson;
+        row.metadata_revision = current.metadataRevision;
+        row.expected_jsons_json = JSON.stringify(current.expectedJsons);
+        row.allow_missing = current.allowMissing;
+        row.migration = false;
+        this.sql.exec('UPDATE publication SET next_check_ms=?,attempts=attempts+1,claim_id=?,metadata_revision=? WHERE token_id=?',
+          now + 60_000, claimId, current.metadataRevision, row.token_id);
       }
       return rows;
     });
@@ -409,21 +416,29 @@ export class EthereumRevealStore {
       const applied: RevealPublicationResult[] = [];
       for (const result of results) {
         const { job, status } = result;
-        const updated = status === 'published' ? this.publicationComplete(job.token_id, job.attempts + 1, job.claim_id)
-          : this.publicationFailed(job.token_id, now, job.attempts, status === 'conflict', job.attempts + 1, job.claim_id);
+        if (status === 'superseded') { this.releasePublicationClaims([job], now); continue; }
+        const updated = status === 'published' ? this.publicationComplete(job.token_id, job.attempts + 1, job.claim_id, job.metadata_revision ?? 0)
+          : this.publicationFailed(job.token_id, now, job.attempts, status === 'conflict', job.attempts + 1, job.claim_id, job.metadata_revision ?? 0);
         if (updated) applied.push(result);
       }
       return applied;
     });
   }
 
-  publicationComplete(tokenId: string, expectedAttempts?: number, expectedClaimId?: string): boolean {
-    return this.sql.exec(`UPDATE publication SET status='published',last_error=NULL,claim_id=NULL WHERE token_id=?${
-      expectedAttempts === undefined ? '' : " AND status='pending' AND attempts=? AND claim_id IS ?"} RETURNING token_id`,
-      tokenId, ...(expectedAttempts === undefined ? [] : [expectedAttempts, expectedClaimId ?? null])).toArray().length > 0;
+  validateMetadataWrite(job: Parameters<EthereumRevealCatalogUpdateStore['validateMetadataWrite']>[0]): boolean {
+    return this.catalogUpdate.validateMetadataWrite(job);
   }
 
-  publicationFailed(tokenId: string, now: number, attempts: number, conflict = false, expectedAttempts?: number, expectedClaimId?: string): boolean {
+  publicationComplete(tokenId: string, expectedAttempts?: number, expectedClaimId?: string, metadataRevision?: number): boolean {
+    const current = this.catalogUpdate.canonicalMetadata([tokenId])[0];
+    if (!current || metadataRevision !== undefined && current.metadataRevision !== metadataRevision) return false;
+    return this.sql.exec(`UPDATE publication SET status='published',last_error=NULL,claim_id=NULL,metadata_revision=? WHERE token_id=?${
+      expectedAttempts === undefined ? '' : " AND status='pending' AND attempts=? AND claim_id IS ?"} RETURNING token_id`,
+      current.metadataRevision, tokenId, ...(expectedAttempts === undefined ? [] : [expectedAttempts, expectedClaimId ?? null])).toArray().length > 0;
+  }
+
+  publicationFailed(tokenId: string, now: number, attempts: number, conflict = false, expectedAttempts?: number, expectedClaimId?: string, metadataRevision?: number): boolean {
+    if (metadataRevision !== undefined && this.catalogUpdate.canonicalMetadata([tokenId])[0]?.metadataRevision !== metadataRevision) return false;
     return this.sql.exec(`UPDATE publication SET status=?,last_error=?,next_check_ms=?,claim_id=NULL WHERE token_id=?${
       expectedAttempts === undefined ? '' : " AND status='pending' AND attempts=? AND claim_id IS ?"} RETURNING token_id`,
       conflict ? 'conflict' : 'pending', conflict ? 'metadata-conflict' : 'publication-unavailable',
@@ -432,14 +447,17 @@ export class EthereumRevealStore {
   }
 
   publicationError(): 'metadata-conflict' | 'publication-unavailable' | null {
-    if (this.sql.exec<{ found: number }>("SELECT 1 AS found FROM publication WHERE status='conflict' LIMIT 1").toArray().length) return 'metadata-conflict';
-    return this.sql.exec<{ found: number }>("SELECT 1 AS found FROM publication WHERE status='pending' AND last_error IS NOT NULL LIMIT 1")
+    if (this.sql.exec<{ found: number }>(`SELECT 1 AS found FROM publication p JOIN assignments a ON a.token_id=p.token_id
+      WHERE p.status='conflict' AND ${NORMAL_PUBLICATION} LIMIT 1`).toArray().length) return 'metadata-conflict';
+    return this.sql.exec<{ found: number }>(`SELECT 1 AS found FROM publication p JOIN assignments a ON a.token_id=p.token_id
+      WHERE p.status='pending' AND p.last_error IS NOT NULL AND ${NORMAL_PUBLICATION} LIMIT 1`)
       .toArray().length ? 'publication-unavailable' : null;
   }
 
   nextWake(now: number, enrichmentBusy = false): number | null {
     const recovery = this.recovery.nextWake(now);
-    const publication = this.sql.exec<{ due: number | null }>("SELECT MIN(next_check_ms) AS due FROM publication WHERE status='pending'").toArray()[0]?.due;
+    const publication = this.sql.exec<{ due: number | null }>(`SELECT MIN(p.next_check_ms) AS due FROM publication p JOIN assignments a ON a.token_id=p.token_id
+      WHERE p.status='pending' AND ${NORMAL_PUBLICATION}`).toArray()[0]?.due;
     const times = [recovery, publication, this.enrichment.nextWake(now, enrichmentBusy)].filter((value): value is number => value != null);
     return times.length ? Math.max(now + 250, Math.min(...times)) : null;
   }

@@ -219,7 +219,9 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
       assert.equal(result.chainId, scope.chainId);
       assert.equal(result.contractAddress, scope.contractAddress);
       assert.equal(result.artworks.length, 20);
-      assert.ok(result.artworks.every(artwork => artwork.name.startsWith(`${scope.deploymentId} #`) &&
+      assert.ok(result.artworks.every(artwork => (artwork.category === 'egg'
+        ? artwork.name === `Egg #${new URL(artwork.image).pathname.split('/').at(-1)!.replace('.png', '')}`
+        : artwork.name.startsWith(`${scope.deploymentId} #`)) &&
         artwork.observation.blockHash === blockHash(scope.chainId, INCLUSION)));
       return result;
     };

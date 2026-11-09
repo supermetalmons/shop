@@ -928,6 +928,48 @@ test('published reveal metadata does not need token recovery on a fresh inventor
   assert.equal(view.result.current.applyArtwork(published).category, 'video');
 });
 
+test('a catalog revision replaces a cached egg and ignores a delayed old reveal', async t => {
+  const before = { ...config, deploymentId: responseScope.deploymentId, catalogRevision: 0 };
+  const after = { ...before, catalogRevision: 1 };
+  const egg = { ...item(), ...artwork('1', 'egg'), image: 'https://cdn.lil.org/nft/111k/eggs/76642.png', revealStatus: 'revealed' as const };
+  let finish!: (value: EthereumRevealTransactionResponse) => void;
+  let started = false;
+  let pendingSignal: AbortSignal | undefined;
+  const request = t.mock.method(ethereumRevealApi, 'transaction', async (requested, _hash, signal) => {
+    if (requested.catalogRevision === 1) return { ...transactionResponse('revealed', [artwork()]), catalogRevision: 1 };
+    started = true;
+    pendingSignal = signal;
+    return new Promise<EthereumRevealTransactionResponse>(resolve => { finish = resolve; });
+  });
+  const view = harness({ config: before, items: [egg] });
+  await waitFor(() => assert.equal(view.result.current.applyArtwork(item()).category, 'egg'));
+  act(() => rememberEthereumRevealJob(scope, hash, submissionTime, pending()));
+  await waitFor(() => assert.equal(started, true));
+  const replacement = { ...item(), ...artwork(), metadataRevision: 2, revealStatus: 'revealed' as const };
+  view.update({ config: after, items: [replacement] });
+  await waitFor(() => assert.equal(view.result.current.applyArtwork(item()).category, 'painting'));
+  assert.equal(pendingSignal?.aborted, false);
+  assert.equal(request.mock.callCount(), 1);
+  assert.equal(readEthereumRevealJobs(scope).length, 1);
+  await act(async () => finish({ ...transactionResponse('revealed', [artwork('1', 'egg')]), catalogRevision: 0 }));
+  assert.equal(view.result.current.applyArtwork(item()).category, 'painting');
+  assert.equal(view.result.current.applyArtwork(item()).image, replacement.image);
+});
+
+test('token batches accept newer artwork while refreshing the catalog signal', async t => {
+  const items = Array.from({ length: ETHEREUM_REVEAL_MAX_TOKEN_IDS + 1 }, (_, index) => item(String(index + 1)));
+  t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids) => ({ ...responseScope,
+    catalogRevision: ids.includes('1') ? 0 : 1,
+    artworks: ids.map(id => ({ ...artwork(id), metadataRevision: ids.includes('1') ? 0 : 2 })), unresolved: [], retryAfterMs: 0 }));
+  const view = harness({ items });
+  const refresh = t.mock.method(view.client, 'invalidateQueries');
+  await waitFor(() => assert.ok(refresh.mock.calls.some(call =>
+    JSON.stringify(call.arguments[0]?.queryKey) === JSON.stringify(['ethereum111k', 'config']))));
+  assert.equal(view.result.current.applyArtwork(items.at(-1)!).metadataRevision, 2);
+  assert.equal(view.result.current.applyArtwork(items.at(-1)!).image, artwork(String(items.length)).image);
+  assert.equal(view.result.current.applyArtwork(items[0]).image, artwork('1').image);
+});
+
 test('refreshed revealed inventory exposes enriched traits while placeholders retain their reveal overlay', async t => {
   const frozen = artwork('1', 'video');
   const placeholder = item();

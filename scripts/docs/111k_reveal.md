@@ -90,7 +90,7 @@ Mixed requests can include revealed and unminted IDs. When a previously unminted
 
 ## Response fields and media
 
-Both responses include `deploymentId`, `dropId`, `chainId`, `contractAddress`, `artworks`, and `retryAfterMs` (milliseconds), without a wrapper. Check the returned chain and contract.
+Both responses include `deploymentId`, `dropId`, `chainId`, `contractAddress`, `artworks`, and `retryAfterMs` (milliseconds), without a wrapper. Check the returned chain and contract. Catalog-update support adds `catalogRevision`, a nonnegative integer; treat an omitted revision as `0` during rollout.
 
 Each artwork has this shape (illustrative values):
 
@@ -170,7 +170,24 @@ Existing reservations and revealed artwork are preserved, even if they already
 exceed the cap. Historical frozen assignments outside the current unpack's token
 range do not count toward its limit.
 
-Cache media by `(chainId, contractAddress, tokenId)`. Revealed artwork stays unchanged through reorgs and remints. Use inventory data for ownership.
+Cache media by `(chainId, contractAddress, deploymentId, tokenId)` and retain each
+item's `metadataRevision`; omitted legacy revisions mean `0`. Replace metadata
+only with the same or a higher token revision. Revisions encode the assignment
+revision and publication stage, so delayed base metadata cannot replace newer
+artwork or enriched traits. Use current inventory data for ownership.
+
+An online catalog update replaces cutoff eggs using a frozen random mapping,
+without changing token IDs or stopping reads and reveals. Config and inventory
+envelopes retain `catalogRevision` as a refresh signal. On advancement, keep the
+visible inventory and pending transaction tracking while refreshing owned tokens
+in the background. A pagination boundary crossing activation can be retried
+internally; per-token revisions remain authoritative across mixed responses.
+Catalog activation does not introduce a maintenance `503` response.
+
+The API serves canonical artwork from the coordinator immediately after activation.
+The public token URI and marketplace copy may still show the previous metadata
+until conditional background publication and external refresh finish. Do not tag
+CDN metadata with a newer API revision or let it replace a newer cached token.
 
 Metadata JSON addresses follow the collection's configured base URI plus the decimal token ID and `.json`. The JSON address itself is predictable before minting; it contains only the placeholder until reveal. Use the methods above to establish reveal status and obtain media immediately, without waiting for CDN or marketplace refreshes.
 

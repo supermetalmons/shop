@@ -1,4 +1,30 @@
 import { ethereumItemDisplayIdMaximum } from './protocol.ts';
+import type { RevealCatalogUpdateBatch } from './revealCatalogUpdate.ts';
+
+export type EthereumRevealCatalogUpdateRequest = EthereumRevealMaintenanceRequest & {
+  batchId: string;
+  action: 'inspect' | 'begin' | 'advance' | 'verify' | 'cancel';
+  batch?: RevealCatalogUpdateBatch;
+  verificationAfterEggId?: number;
+};
+
+export type EthereumRevealCatalogUpdateResult = {
+  deploymentId: string;
+  batchId: string;
+  phase: 'unstarted' | 'staging' | 'validating' | 'activating' | 'publishing' | 'verifying' | 'observing' | 'complete' | 'cancelled';
+  complete: boolean;
+  catalogRevision: number;
+  total: number;
+  staged: number;
+  applied: number;
+  published: number;
+  frozen: number;
+  conflicts?: number;
+  retrying?: number;
+  retryAfterMs: number;
+  nextVerificationEggId?: number | null;
+  refreshTransaction?: { chainId: number; to: string; data: string; value: '0x0' };
+};
 
 export function isRevealArtworkTokenId(value: unknown): value is string {
   return typeof value === 'string' && /^[1-9]\d{0,5}$/.test(value) && Number(value) <= ethereumItemDisplayIdMaximum('artwork');

@@ -24,6 +24,11 @@ export type EthereumRevealDeployment = {
   activatedAtMs: number | null;
   provisionedAtMs: number | null;
   lastError: string | null;
+  effectiveCatalogVersion?: string | null;
+  effectiveCatalogSha256?: string | null;
+  catalogRevision?: number;
+  catalogUpdateId?: string | null;
+  catalogUpdateStartedAtMs?: number | null;
   retiredAtMs?: number | null;
   replacementDeploymentId?: string | null;
 };
@@ -57,6 +62,18 @@ export function parseEthereumRevealDeployment(row: Record<string, unknown>): Eth
   const metadataBaseUri = ethereumMetadataBaseUri(row.metadata_base_uri, chainId);
   const retiredAtMs = row.retired_at_ms == null ? null : integer(row.retired_at_ms, 1);
   const replacementDeploymentId = row.replacement_deployment_id ?? null;
+  const effectiveCatalogVersion = row.effective_catalog_version ?? null;
+  const effectiveCatalogSha256 = row.effective_catalog_sha256 ?? null;
+  const catalogRevision = integer(row.catalog_revision ?? 0);
+  const catalogUpdateId = row.catalog_update_id ?? null;
+  const catalogUpdateStartedAtMs = row.catalog_update_started_at_ms == null ? null : integer(row.catalog_update_started_at_ms, 1);
+  if ((effectiveCatalogVersion === null) !== (effectiveCatalogSha256 === null) ||
+    effectiveCatalogVersion !== null && (typeof effectiveCatalogVersion !== 'string' || !ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN.test(effectiveCatalogVersion)) ||
+    effectiveCatalogSha256 !== null && (typeof effectiveCatalogSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(effectiveCatalogSha256)) ||
+    (catalogUpdateId === null) !== (catalogUpdateStartedAtMs === null) ||
+    catalogUpdateId !== null && (typeof catalogUpdateId !== 'string' || !ETHEREUM_REVEAL_DEPLOYMENT_ID.test(catalogUpdateId)) ||
+    catalogUpdateId !== null && retiredAtMs !== null ||
+    catalogRevision > 0 && effectiveCatalogVersion === null) throw new Error('Invalid reveal catalog update.');
   if ((retiredAtMs === null) !== (replacementDeploymentId === null) ||
     replacementDeploymentId !== null && (typeof replacementDeploymentId !== 'string' ||
       !ETHEREUM_REVEAL_DEPLOYMENT_ID.test(replacementDeploymentId) || replacementDeploymentId === row.deployment_id) ||
@@ -76,6 +93,8 @@ export function parseEthereumRevealDeployment(row: Record<string, unknown>): Eth
     state: row.state as EthereumRevealDeployment['state'], revision: integer(row.revision, 1),
     createdAtMs: integer(row.created_at_ms), updatedAtMs: integer(row.updated_at_ms),
     activatedAtMs: timestamp(row.activated_at_ms), provisionedAtMs: timestamp(row.provisioned_at_ms), lastError: row.last_error as string | null,
+    effectiveCatalogVersion: effectiveCatalogVersion as string | null, effectiveCatalogSha256: effectiveCatalogSha256 as string | null,
+    catalogRevision, catalogUpdateId: catalogUpdateId as string | null, catalogUpdateStartedAtMs,
     ...(retiredAtMs !== null ? { retiredAtMs, replacementDeploymentId: replacementDeploymentId as string } : {}),
   };
 }

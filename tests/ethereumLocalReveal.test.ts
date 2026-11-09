@@ -43,6 +43,7 @@ test('local initialization registers, completely provisions and activates its im
   try {
     db.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', import.meta.url), 'utf8'));
     db.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', import.meta.url), 'utf8'));
+    db.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql', import.meta.url), 'utf8'));
     let calls = 0;
     const env = { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contract,
       ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', OPS_DB: d1Database(db),

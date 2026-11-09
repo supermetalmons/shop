@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { encodeAbi } from '../../../../shared/ethereum/abi.ts';
 import { parseEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import catalogDescriptor from '../../../../shared/ethereum/revealCatalog.json';
 import { buildEthereumRevealRegistration, buildEthereumRevealTransition } from '../../../../scripts/ops/ethereumRevealControl.ts';
 import { requireRetiredRevealDeployment, parseRevealReplacementRequest } from '../src/ethereumRevealMaintenanceSupport.ts';
 import { acquireRevealCommerceFence } from '../src/ethereumRevealCommerceFence.ts';
@@ -23,7 +24,7 @@ function fixture(t: TestContext, overrides: { oldChain?: number; oldDrop?: strin
   newCatalog?: string; newState?: string } = {}) {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys=ON');
-  for (const file of ['0009_ethereum_reveal_deployments.sql', '0011_ethereum_reveal_retirement.sql']) {
+  for (const file of ['0009_ethereum_reveal_deployments.sql', '0011_ethereum_reveal_retirement.sql', '0012_ethereum_reveal_catalog_updates.sql']) {
     database.exec(readFileSync(`cloud/workers/api/ops-migrations/${file}`, 'utf8'));
   }
   const add = (deploymentId: string, contractAddress: string, block: number, chainId: number, dropId: string, catalogVersion: string, state: string, revision: number) => {
@@ -59,7 +60,7 @@ function fixture(t: TestContext, overrides: { oldChain?: number; oldDrop?: strin
       assert.equal(name, `11155111:${oldContract}`);
       return { async quiesceRetired(value: unknown) {
         state.quiesces++;
-        assert.deepEqual(value, { deploymentId: 'old', expectedRevision: 5 });
+        assert.deepEqual(value, { deploymentId: 'old', expectedRevision: read('old').revision });
         assert.ok(read('old').retiredAtMs);
         if (state.quiesceFailures-- > 0) throw new Error('Publisher drain interrupted');
         return { quiesced: true };
@@ -104,6 +105,58 @@ function interruptCommit(t: TestContext, f: ReturnType<typeof fixture>) {
 
 const controlArgs = (command: 'pause' | 'resume', contract: string, revision: number) =>
   [command, '--chain-id', '11155111', '--contract', contract, '--expected-revision', String(revision), '--write'];
+
+function amendCatalog(f: ReturnType<typeof fixture>, deploymentId: string, catalogVersion: string, manifestSha256: string): void {
+  const previous = f.read(deploymentId);
+  f.database.prepare(`UPDATE ethereum_reveal_deployments SET catalog_update_id=?,catalog_update_started_at_ms=1,
+    revision=revision+1 WHERE deployment_id=?`).run(`catalog-${deploymentId}`, deploymentId);
+  f.database.prepare(`UPDATE ethereum_reveal_deployments SET effective_catalog_version=?,effective_catalog_sha256=?,
+    catalog_revision=catalog_revision+1,catalog_update_id=NULL,catalog_update_started_at_ms=NULL,state=?,revision=revision+1
+    WHERE deployment_id=?`).run(catalogVersion, manifestSha256, previous.state, deploymentId);
+}
+
+test('an old deployment catalog amendment blocks retirement before creating the Commerce fence', async t => {
+  const f = fixture(t);
+  f.database.exec(`UPDATE ethereum_reveal_deployments SET catalog_update_id='catalog-in-progress',catalog_update_started_at_ms=1,
+    revision=5 WHERE deployment_id='old'`);
+  const before = f.read('old');
+  const scope = { ...request, expectedRevision: 5 };
+  await assert.rejects(f.maintenance.retireForReplacement(scope), /superseded Sepolia/);
+  await assert.rejects(f.maintenance.cancelRetirement(scope), /cancellation scope/);
+  assert.deepEqual(f.read('old'), before);
+  assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS count FROM ethereum_111k_retirements').get()!.count, 0);
+  assert.equal(f.state.inspected, 0);
+  assert.equal(f.state.quiesces, 0);
+  assert.equal(f.state.rpc, 0);
+});
+
+test('retirement rejects a newer effective old catalog even when its origin catalog is older', async t => {
+  const f = fixture(t, { oldCatalog: '111k-v4' });
+  amendCatalog(f, 'old', '111k-v6', 'b'.repeat(64));
+  const before = f.read('old');
+  await assert.rejects(f.maintenance.retireForReplacement({ ...request, expectedRevision: before.revision }), /superseded Sepolia/);
+  assert.equal(before.catalogVersion, '111k-v4');
+  assert.equal(before.effectiveCatalogVersion, '111k-v6');
+  assert.deepEqual(f.read('old'), before);
+  assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS count FROM ethereum_111k_retirements').get()!.count, 0);
+  assert.equal(f.state.inspected, 0);
+  assert.equal(f.state.rpc, 0);
+});
+
+test('retirement compares effective catalogs while preserving both immutable origin versions', async t => {
+  const f = fixture(t, { oldCatalog: '111k-v4', newCatalog: '111k-v3' });
+  amendCatalog(f, 'old', catalogDescriptor.catalogVersion, catalogDescriptor.manifestSha256);
+  amendCatalog(f, 'replacement', catalogDescriptor.catalogVersion, catalogDescriptor.manifestSha256);
+  const old = f.read('old'), replacement = f.read('replacement');
+  const result = await f.maintenance.retireForReplacement({ ...request, expectedRevision: old.revision,
+    expectedReplacementRevision: replacement.revision });
+  assert.equal(result.quiesced, true);
+  assert.equal(f.read('old').catalogVersion, '111k-v4');
+  assert.equal(f.read('replacement').catalogVersion, '111k-v3');
+  assert.equal(f.read('old').effectiveCatalogVersion, catalogDescriptor.catalogVersion);
+  assert.deepEqual(f.read('replacement'), replacement);
+  assert.equal(f.commerce.database.prepare('SELECT state FROM ethereum_111k_retirements').get()!.state, 'retired');
+});
 
 test('commerce cannot move during retirement CAS and cannot resume the retired scope after release', async t => {
   const f = fixture(t);

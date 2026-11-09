@@ -89,13 +89,14 @@ function sourceGroups(source: string): Record<SourceGroup, SourceDimensions> {
     groups[group].set(id, [dimensions[0], dimensions[1]]);
   }
   for (const group of SOURCE_GROUPS) {
+    if (group === 'paintings/alt') continue;
     const ids = [...groups[group].keys()].sort((a, b) => a - b);
     if (ids.length === 0 || ids.some((id, index) => id !== index + 1)) {
       throw new Error(`Asset IDs must be contiguous from 1 with no gaps: ${group}`);
     }
   }
-  if (groups.paintings.size !== groups['paintings/alt'].size) {
-    throw new Error('Painting alternate IDs must match the primary painting IDs');
+  if ([...groups['paintings/alt'].keys()].some(id => !groups.paintings.has(id))) {
+    throw new Error('Painting alternate IDs must belong to primary painting IDs');
   }
   if (groups['videos/mp4'].size !== groups['videos/webp'].size) {
     throw new Error('Video MP4 and WEBP IDs must be paired');
@@ -109,11 +110,11 @@ function sourceGroups(source: string): Record<SourceGroup, SourceDimensions> {
   return groups;
 }
 
-function palette(dimensions: SourceDimensions): {
+function palette(dimensions: SourceDimensions, ids = [...dimensions.keys()].sort((a, b) => a - b)): {
   aspectRatioPalette: RevealAssetRatio[];
   aspectRatioIndexById: number[];
 } {
-  const ratios = Array.from({ length: dimensions.size }, (_, index) => reducedRatio(dimensions.get(index + 1)!));
+  const ratios = ids.map(id => reducedRatio(dimensions.get(id)!));
   const unique = new Map(ratios.map(ratio => [ratio.join(':'), ratio]));
   const aspectRatioPalette = [...unique.values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const indexes = new Map(aspectRatioPalette.map((ratio, index) => [ratio.join(':'), index]));
@@ -149,7 +150,10 @@ export function buildRevealAssetCatalog(
       eggs: { count: eggCount, availableCount: availableEggs, pathTemplate: 'eggs/{id}.png', aspectRatio: [1, 1] },
       paintings: {
         ...mediaCategory(groups.paintings, 'paintings/{id}.png'),
-        variants: { alt: { pathTemplate: 'paintings/alt/{id}.webp', ...palette(groups['paintings/alt']) } },
+        ...(groups['paintings/alt'].size ? { variants: { alt: { pathTemplate: 'paintings/alt/{id}.webp',
+          ...(groups['paintings/alt'].size === groups.paintings.size ? {} : {
+            assetIds: [...groups['paintings/alt'].keys()].sort((a, b) => a - b) }),
+          ...palette(groups['paintings/alt']) } } } : {}),
       },
       videos: mediaCategory(groups['videos/mp4'], 'videos/{id}.mp4', 'videos/{id}.webp'),
       '3d': mediaCategory(groups['3d'], '3d/{id}.glb', '3d/{id}.png'),
@@ -291,9 +295,16 @@ export async function importRevealAssets(options: RevealAssetImportOptions = {})
     }
     return runImport(rootDirectory, options);
   }
+  return withRevealAssetImportLock(rootDirectory, importAssets => importAssets(options));
+}
+
+export async function withRevealAssetImportLock<T>(root: string,
+  work: (importAssets: (options?: Omit<RevealAssetImportOptions, 'rootDirectory'>) => Promise<RevealAssetImportResult>) => Promise<T>,
+): Promise<T> {
+  const rootDirectory = resolve(root);
   return withMetadataLock(join(rootDirectory, '.111k-assets.lock'), async () => {
     await recoverOutputs(rootDirectory);
-    return runImport(rootDirectory, options);
+    return work((options = {}) => runImport(rootDirectory, options));
   });
 }
 

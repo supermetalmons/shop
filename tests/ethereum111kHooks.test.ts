@@ -106,6 +106,68 @@ async function ready(view: ReturnType<typeof harness>) {
   await waitFor(() => assert.equal(view.result.current.stats.isSuccess, true));
   await waitFor(() => assert.equal(view.result.current.inventory.isSuccess, true));
 }
+
+test('a newer inventory catalog refreshes config, replaces cached eggs and ignores a delayed older config', async t => {
+  let revision = 0;
+  let configRevision = 0;
+  const egg = { ...token('1', owner, 'artwork'), category: 'egg' as const,
+    image: 'https://cdn.lil.org/nft/111k/eggs/76642.png', revealStatus: 'revealed' as const };
+  const painting = { ...egg, metadataRevision: 2, category: 'painting' as const, image: 'https://cdn.lil.org/nft/111k/paintings/30991.png' };
+  t.mock.method(ethereumApi, 'config', async () => ({ ...config, deploymentId: 'test', catalogRevision: configRevision }));
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [revision ? painting : egg], nextCursor: null,
+    observedBlock: 1, deploymentId: 'test', catalogRevision: revision }));
+  const view = harness();
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.items[0]?.image, egg.image));
+  revision = configRevision = 1;
+  await act(async () => { await view.result.current.inventory.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.config.catalogRevision, 1));
+  await waitFor(() => assert.equal(view.result.current.items[0]?.image, painting.image));
+  assert.equal(view.client.getQueryData(['ethereum111k', 'revealed-artworks', config.chainId, contract, 'test', 0]), undefined);
+  configRevision = 0;
+  await act(async () => { await view.result.current.configQuery.refetch(); });
+  assert.equal(view.result.current.config.catalogRevision, 1);
+  assert.equal(view.result.current.items[0]?.image, painting.image);
+});
+
+test('inventory recovers after a cancelled catalog update without a revision change', async t => {
+  const tick = manualRecoveryTicks(t, 5_000);
+  const currentConfig = { ...config, deploymentId: 'test', catalogRevision: 0 };
+  const configRequest = t.mock.method(ethereumApi, 'config', async () => currentConfig);
+  let fenced = true;
+  const request = t.mock.method(ethereumApi, 'inventory', async () => {
+    if (fenced) throw new EthereumApiError(503, 'Artworks are being updated. Try again shortly.', 'unavailable');
+    return { items: [token()], nextCursor: null, observedBlock: 1, deploymentId: 'test', catalogRevision: 0 };
+  });
+  const view = harness();
+  await waitFor(() => assert.equal(view.result.current.inventory.isError, true));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  await tick();
+  assert.equal(request.mock.callCount(), 1);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  await tick();
+  assert.equal(request.mock.callCount(), 2);
+  fenced = false;
+  await tick();
+  await waitFor(() => assert.equal(view.result.current.inventory.isSuccess, true));
+  assert.deepEqual(view.result.current.items, [token()]);
+  assert.equal(view.result.current.config, currentConfig);
+  assert.equal(configRequest.mock.callCount(), 1);
+  assert.equal(request.mock.callCount(), 3);
+  await tick();
+  assert.equal(request.mock.callCount(), 3);
+});
+
+for (const failure of [new EthereumApiError(403, 'Forbidden.'), new EthereumApiError(500, 'Invalid request.'), new Error('Invalid response.')]) {
+  test(`inventory does not poll after ${failure.message}`, async t => {
+    const tick = manualRecoveryTicks(t, 5_000);
+    const request = t.mock.method(ethereumApi, 'inventory', async () => { throw failure; });
+    const view = harness();
+    await waitFor(() => assert.equal(view.result.current.inventory.isError, true));
+    await tick();
+    assert.equal(request.mock.callCount(), 1);
+  });
+}
 async function mint(view: ReturnType<typeof harness>, kind: 'crate' | 'warehouse' = 'crate', quantity = 1) {
   let succeeded = false;
   await act(async () => { succeeded = await view.result.current.mint(kind, quantity); });
@@ -116,13 +178,13 @@ function savedOperation(hash = hashFor(1), submittedAt = Date.now()) {
     intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]), value: '0x0' } };
 }
 
-function manualRecoveryTicks(t: TestContext) {
+function manualRecoveryTicks(t: TestContext, interval = 4_000) {
   const schedule = globalThis.setInterval;
   const cancel = globalThis.clearInterval;
   const callbacks = new Map<ReturnType<typeof setInterval>, () => void>();
   t.mock.method(globalThis, 'setInterval', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-    const timer = schedule(callback, delay === 4_000 ? 2_147_483_647 : delay, ...args);
-    if (delay === 4_000) callbacks.set(timer, () => callback(...args));
+    const timer = schedule(callback, delay === interval ? 2_147_483_647 : delay, ...args);
+    if (delay === interval) callbacks.set(timer, () => callback(...args));
     return timer;
   });
   t.mock.method(globalThis, 'clearInterval', (timer: Parameters<typeof clearInterval>[0]) => {

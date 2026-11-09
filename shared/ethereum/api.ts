@@ -34,7 +34,8 @@ export type EthereumPublicRelicSale = {
   limit: number; minted: number; priceWei: string; active: boolean; mintable: number;
   freeLimit: number; freeUsed: number; remainingFreeAllowance: number;
 };
-export type EthereumInventoryResponse = { items: EthereumInventoryItem[]; nextCursor: string | null; observedBlock: number };
+export type EthereumInventoryResponse = { items: EthereumInventoryItem[]; nextCursor: string | null; observedBlock: number;
+  deploymentId?: string | null; catalogRevision?: number };
 export type EthereumPreparedTransaction = { to: string; data: string; value: string; chainId: number };
 export type EthereumProfileResponse = { wallet: string; email?: string; addresses: ProfileAddress[] };
 export type EthereumSaveAddressRequest = SaveProfileAddressRequest;

@@ -7,12 +7,13 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 New deployments use catalog version `111k-v5`: 76,642 eggs, 30,990 paintings,
 58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
 111,111-artwork supply from 76,700 available eggs after counting all non-egg
-artworks. The runtime supports this catalog only. Retired-catalog API requests return `409`,
-watchdog scans skip them, and their alarms stop. Superseded testnet registrations
+artworks. The runtime supports the current catalog and explicitly retained ancestor
+catalogs. Unknown-catalog API requests return `409`, watchdog scans skip them, and
+their alarms stop. Superseded testnet registrations
 retain ownership records that prevent prefix reuse; their reveal ledgers and CDN
 metadata can be deleted through the retirement procedure below. Registration and
-activation require the current catalog. Do not rewrite an old catalog version or
-migrate an existing allocation pool to v5.
+initialization require the current default catalog. Never rewrite an existing
+catalog identity; use the catalog expansion operation below for live pool changes.
 
 The media root is `https://cdn.lil.org/nft/111k/`. Eggs, paintings, 3D previews,
 and animated previews use PNGs. 3D models use GLBs; animated artworks use original
@@ -27,8 +28,8 @@ For each updated complete source JSON, import with a higher catalog version,
 review the generated counts and references, and verify representative public
 GET/HEAD responses, content types, and CORS for category boundaries and media
 companions. Confirm the egg allocation fits the available inventory. Freeze
-the resulting catalog before registration; confirmed assignments and their
-metadata do not change afterward.
+the resulting catalog before registration. Ordinary reveal preserves confirmed
+assignments; explicit catalog expansion can replace cutoff eggs with new artworks.
 
 Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired deployment identities continue to reserve their original prefixes even after testnet data is purged. Deployment IDs are globally unique across all networks, and each URI suffix must equal its deployment ID. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
@@ -57,6 +58,112 @@ Reveal registrations are independent of the API's global `ETHEREUM_111K_*` store
 The shared URI builder derives each metadata address from the validated chain-specific base URI and decimal token ID. Storefront metadata reads and reveal publication do not call `tokenURI`, `previewTokenURI`, or `previewTokenURIs` to reconstruct that address. Inventory ownership, mint existence, receipt confirmation, and canonical block snapshots still require their existing chain checks. Metadata-only reads remain available during an RPC outage when the CDN is available; they do not establish that a token was minted.
 
 The contract owner can change `baseURI()`, but the registered reveal prefix is immutable. Keep the onchain base URI, storefront configuration, and reveal registration aligned; do not change a registered contract's base URI independently. Registration and provisioning verify the initial match. A replacement deployment requires a new contract and a fresh prefix registered together. For Sepolia replacements, preserve the old ledger only through verified cutover, then immediately perform the required testnet retirement phase below in the same deployment task. Mainnet retention is unchanged.
+
+## Adding artworks and cutting off eggs
+
+Use `npm run ethereum:catalog-update` for repeated additive batches. This operation
+keeps the deployment, contract, token IDs, metadata prefix, and total supply intact.
+It is not a testnet replacement and does not retire or purge a deployment. Keep
+the replacement retirement procedure for actual replacement contracts.
+
+The input is a complete path-to-dimensions JSON. Existing paths and exact dimensions
+must remain unchanged; primary category IDs must append without gaps. Painting
+alternatives may be absent or sparse and never count as additional artworks.
+The operation removes exactly the highest remaining egg IDs, regardless of
+whether they are free, privately reserved, or already revealed. Every removed egg is
+paired with a distinct newly added artwork using one cryptographically shuffled
+bijection, frozen before reading deployment allocation states and reused across
+retries and deployments. Each new artwork has the same assignment probability
+for every cutoff egg; revealed tokens receive no preferential or leftover pool.
+
+Inspect without writes, then prepare an immutable local bundle when approved:
+
+```sh
+npm run ethereum:catalog-update -- inspect --source /path/to/111k.json
+npm run ethereum:catalog-update -- prepare --source /path/to/111k.json --catalog-version 111k-v6 --bundle /path/to/batch
+npm run ethereum:catalog-update -- verify --bundle /path/to/batch
+```
+
+`inspect` does not save a candidate or access the network. `prepare` saves the exact
+old and new source bytes, both catalog descriptors/manifests, and the frozen
+mapping plus a cryptographic operation nonce; it does not change the default
+catalog or any remote data. Repeating prepare against the same bundle with
+identical inputs returns its existing nonce and mapping. Different inputs or
+tampered hashes fail. Preserve the bundle until every intended deployment is
+updated; never prepare a replacement bundle to resume an interrupted operation.
+
+Promote the prepared catalog separately when scheduling activation:
+
+```sh
+npm run ethereum:catalog-update -- promote --bundle /path/to/batch --write
+npm run check:ethereum-assets
+```
+
+Promotion changes local canonical inputs for future deployments and retains the
+predecessor in the supported catalog registry. It does not update an existing
+deployment. Deploy OPS migration `0012_ethereum_reveal_catalog_updates.sql`, the
+compatible API Worker, and the frontend revision support before live application.
+Reload sessions opened before that first frontend upgrade; subsequent batches are
+detected through the existing config polling and revision-aware caches.
+The Worker must contain both exact predecessor and target catalog
+hashes; a globally promoted default must not change an existing deployment's pool
+or metadata interpretation before its own activation transaction commits.
+
+Select each deployment explicitly with its original registry revision. Apply the
+same frozen bundle independently to testnet and, when requested, mainnet:
+
+```sh
+npm run ethereum:catalog-update -- apply --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4 --write
+npm run ethereum:catalog-update -- inspect --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4
+npm run ethereum:catalog-update -- verify --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4
+```
+
+Before the first remote mutation, apply checks every new primary image and required
+MP4/GLB companion using bounded public requests, content types, and anonymous CORS.
+Missing media blocks activation. The runtime stages and validates every added
+artwork's collection block and traits while normal reads, reveals, and publication
+continue. Staging has no effect on allocation and can be cancelled.
+
+Activation atomically installs the complete mapping and advances the coordinator's
+catalog revision. A concurrent reveal resolves the same mapped artwork whether its
+egg was free, reserved, or revealed before activation. Allocation stays at 111111;
+repeated batches can replace every remaining egg. Token IDs, ownership, crate slots,
+and reveal provenance remain intact. The coordinator is authoritative immediately;
+the registry mirror catches up without disabling requests or cancelling recovery.
+
+Replacement metadata publishes gradually at unchanged token URLs. Per-token
+revisions and conditional publication prevent stale jobs from restoring old eggs.
+The API resolves current artwork from the coordinator while CDN and marketplace
+copies catch up. The operation does not pause the collection or drain all writers,
+and it does not introduce maintenance 503 responses. It verifies its finite activation set, observes another
+five-minute scheduler interval, and verifies again before reporting completion.
+
+Apply records progress beside the immutable bundle and resumes with the same
+deployment ID, original expected revision, and batch hash. Do not edit the journal
+or pass a newer revision on retry. Inspect and verify are read-only; verify pages
+through its checks without advancing operation state. An interrupted apply keeps
+the collection available and resumes the same mapping. Publication failures affect
+their token jobs, not unrelated reveals. Conflicting metadata can delay completion;
+inspect the reported conflict before retrying, and never overwrite foreign bytes.
+
+```sh
+npm run ethereum:catalog-update -- cancel --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4 --write
+```
+
+Cancellation is available only before logical activation. A
+cancelled bundle remains terminal and is retained as audit evidence. To retry an
+explicitly cancelled operation, prepare a new bundle directory from that bundle:
+
+```sh
+npm run ethereum:catalog-update -- prepare --from-bundle /path/to/cancelled-batch --bundle /path/to/new-batch
+```
+
+This preserves the exact catalog and mapping while issuing a new nonce, including
+after local promotion and when only one new artwork exists. Use the deployment's
+new current registry revision for the new operation.
+After activation, finish the original batch. A returned metadata-refresh transaction is
+unsigned owner calldata; review and submit it separately to refresh marketplace
+caches. The catalog tool never signs or sends an onchain transaction.
 
 ## Registration and credentials
 

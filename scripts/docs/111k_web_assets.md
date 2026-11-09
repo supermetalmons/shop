@@ -26,7 +26,7 @@ relative to the corresponding family directory.
 | Family | Standard metadata image | Standard image variants | Other published companions |
 | --- | --- | --- | --- |
 | Eggs | `eggs/{id}.png` | None | `{id}.webp` |
-| Paintings | `paintings/{id}.png` | All four | `alt/{id}.webp` |
+| Paintings | `paintings/{id}.png` | All four | `alt/{id}.webp`, when available |
 | 3D | `3d/{id}.png` | All four | `{id}.glb` |
 | Animated | `animated/{id}.png` | All four | `{id}.mp4`, `mid/{id}.mp4` |
 | Videos | `videos/{id}.webp` | All four | `{id}.mp4` |
@@ -50,7 +50,9 @@ the root WebP retains the original displayed dimensions.
 Eggs have a root WebP companion at `eggs/{id}.webp`, with the same 1024 × 1024
 dimensions as the PNG. They have no published `mid`, `thumbs` or `alt` paths.
 
-Only paintings have `alt/{id}.webp` images. These alternative views have their
+Only paintings have `alt/{id}.webp` images. New paintings may be added before
+their alternative views exist. Treat an alternate URL as optional and retain
+the primary image when it is unavailable. Existing alternative views have their
 own dimensions and may contain transparency. Read their intrinsic dimensions
 when displaying them; the original image's aspect ratio need not match.
 
@@ -133,8 +135,9 @@ model: https://cdn.lil.org/nft/111k/3d/1.glb
 
 Pass the original `metadata.image` string to this function. It accepts the
 exact canonical image paths in the table and returns only the applicable URL
-fields. Other inputs return just `original`, unchanged. It constructs URLs
-without network requests or checking whether an asset ID exists.
+fields. Other inputs return just `original`, unchanged. It constructs candidate
+URLs without network requests or checking whether an asset ID or painting
+alternative exists.
 
 ```js
 function derive111kAssets(image) {

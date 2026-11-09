@@ -17,6 +17,7 @@ import { matchesEthereumOperationEvent } from './recovery';
 import { ethereumMetadataBaseUri } from '../../shared/ethereum/config';
 import { hasValidEthereumMedia } from './artworkMedia';
 import { isShipmentHistoryCursor, type ShipmentPageRequest } from '../../shared/shipmentHistory';
+import { assertEthereumCatalog, assertSameEthereumCatalog, retainEthereumMetadata, validEthereumCatalogScope, validEthereumMetadataRevision } from './catalogRevision';
 
 export class EthereumApiError extends Error {
   constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null) { super(message); }
@@ -52,7 +53,7 @@ export function parseEthereumConfig(value: unknown): Ethereum111kConfig {
     !Number.isSafeInteger(value.maxMintQuantity) || Number(value.maxMintQuantity) < 1 || Number(value.maxMintQuantity) > 15 ||
     !Number.isSafeInteger(value.maxUnboxQuantity) || Number(value.maxUnboxQuantity) < 1 || Number(value.maxUnboxQuantity) > ETHEREUM_MAX_UNBOX_QUANTITY ||
     !Number.isSafeInteger(value.maxDeliveryItems) || Number(value.maxDeliveryItems) < 1 || Number(value.maxDeliveryItems) > 50 ||
-    !Number.isSafeInteger(value.confirmationBlocks) || Number(value.confirmationBlocks) < 1) return invalid();
+    !Number.isSafeInteger(value.confirmationBlocks) || Number(value.confirmationBlocks) < 1 || !validEthereumCatalogScope(value)) return invalid();
   const rpc = new URL(value.walletRpcUrl);
   ethereumMetadataBaseUri(value.metadataBaseUri, value.chainId);
   if (rpc.protocol !== 'https:' && !(value.chainId === 31337 && rpc.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(rpc.hostname))) return invalid();
@@ -65,7 +66,7 @@ export function parseEthereumInventoryItem(value: unknown, config: Ethereum111kC
     !ETHEREUM_ITEM_KINDS.includes(value.kind as EthereumInventoryItem['kind']) || typeof value.name !== 'string' ||
     !Number.isSafeInteger(value.displayId) || Number(value.displayId) < 1 ||
     Number(value.displayId) > ethereumItemDisplayIdMaximum(value.kind as EthereumInventoryItem['kind']) ||
-    !hasValidEthereumMedia(value)) return invalid();
+    !hasValidEthereumMedia(value) || !validEthereumMetadataRevision(value.metadataRevision)) return invalid();
   const id = ethereumAssetId(config.chainId, config.contractAddress!, value.tokenId as string);
   if (value.id !== id) return invalid();
   return value as EthereumInventoryItem;
@@ -163,24 +164,38 @@ export const ethereumApi = {
       batches.push(expected.slice(offset, offset + ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE));
     }
     if (!batches.length) batches.push([]);
-    const pages: EthereumInventoryResponse[] = [];
-    for (let offset = 0; offset < batches.length; offset += 2) {
-      signal?.throwIfAborted();
-      pages.push(...await Promise.all(batches.slice(offset, offset + 2).map(async ids => {
-        const params = new URLSearchParams({ owner });
-        if (cursor) params.set('cursor', cursor);
-        else if (ids.length) params.set('expectedTokenIds', ids.join(','));
-        const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal, preserveTraitNumbers: true });
-        if (!record(value) || !Array.isArray(value.items) || value.items.length > 500 ||
-          (value.nextCursor !== null && typeof value.nextCursor !== 'string') || !Number.isSafeInteger(value.observedBlock)) return invalid();
-        return { items: value.items.map(item => parseEthereumInventoryItem(item, config, owner)), nextCursor: value.nextCursor as string | null, observedBlock: Number(value.observedBlock) };
-      })));
+    for (let attempt = 0; ; attempt++) {
+      const pages: EthereumInventoryResponse[] = [];
+      for (let offset = 0; offset < batches.length; offset += 2) {
+        signal?.throwIfAborted();
+        pages.push(...await Promise.all(batches.slice(offset, offset + 2).map(async ids => {
+          const params = new URLSearchParams({ owner });
+          if (cursor) params.set('cursor', cursor);
+          else if (ids.length) params.set('expectedTokenIds', ids.join(','));
+          const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal, preserveTraitNumbers: true });
+          if (!record(value) || !Array.isArray(value.items) || value.items.length > 500 ||
+            (value.nextCursor !== null && typeof value.nextCursor !== 'string') || !Number.isSafeInteger(value.observedBlock) || !validEthereumCatalogScope(value)) return invalid();
+          const page: EthereumInventoryResponse = { items: value.items.map(item => parseEthereumInventoryItem(item, config, owner)),
+            nextCursor: value.nextCursor as string | null, observedBlock: Number(value.observedBlock),
+            ...(value.catalogRevision !== undefined && { catalogRevision: Number(value.catalogRevision) }),
+            ...(value.deploymentId !== undefined && { deploymentId: value.deploymentId as string | null }) };
+          assertEthereumCatalog(config, page);
+          return page;
+        })));
+      }
+      for (const page of pages) assertSameEthereumCatalog(pages[0], page);
+      const catalogRevision = Math.max(...pages.map(page => page.catalogRevision ?? 0));
+      if (attempt === 0 && pages.some(page => (page.catalogRevision ?? 0) !== catalogRevision)) continue;
+      const items = new Map<string, EthereumInventoryItem>();
+      for (const item of pages.flatMap(page => page.items)) items.set(item.id, retainEthereumMetadata(items.get(item.id), item));
+      return {
+        ...(pages.some(page => page.catalogRevision !== undefined) && { catalogRevision }),
+        ...(pages[0].deploymentId !== undefined && { deploymentId: pages[0].deploymentId }),
+        items: [...items.values()],
+        nextCursor: pages[0].nextCursor,
+        observedBlock: Math.min(...pages.map(page => page.observedBlock)),
+      };
     }
-    return {
-      items: [...new Map(pages.flatMap(page => page.items).map(item => [item.id, item])).values()],
-      nextCursor: pages[0].nextCursor,
-      observedBlock: Math.min(...pages.map(page => page.observedBlock)),
-    };
   },
   async challenge(address: string, config: Ethereum111kConfig, signal?: AbortSignal): Promise<EthereumAuthChallenge> {
     const value = await request(ETHEREUM_API_PATHS.authChallenge, { body: { dropId: config.dropId, address, chainId: config.chainId }, signal });

@@ -5,7 +5,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { decodeReturn, encodeCall } from '../../shared/ethereum/abi.ts';
 import { ethereumMetadataBaseUri } from '../../shared/ethereum/config.ts';
 import { ETHEREUM_111K_CONTROL_SQL, parseEthereum111kControl } from '../../shared/ethereum/control.ts';
-import { ETHEREUM_REVEAL_CATALOG_VERSION, parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
+import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
+import { getRevealCatalog } from '../../shared/ethereum/revealCatalogRegistry.ts';
 import type { EthereumRevealInspection, EthereumRevealPurgeResult, EthereumRevealReplacementInspection,
   EthereumRevealRetirementResult } from '../../shared/ethereum/revealMaintenance.ts';
 import { verifyRevealDeployment } from '../../cloud/workers/api/src/ethereumRevealChain.ts';
@@ -137,8 +138,8 @@ export function validateReplacementSnapshot(release: ReplacementRelease, snapsho
     ethereumMetadataBaseUri(deployment.metadataBaseUri, CHAIN);
   }
   if (!fields(current, { chainId: release.chainId, deploymentId: release.deploymentId, contractAddress: release.contractAddress,
-    metadataBaseUri: release.metadataBaseUri, deploymentBlock: release.deploymentBlock, catalogVersion: ETHEREUM_REVEAL_CATALOG_VERSION,
-    state: 'active' }) || current.retiredAtMs != null || current.replacementDeploymentId != null
+    metadataBaseUri: release.metadataBaseUri, deploymentBlock: release.deploymentBlock,
+    state: 'active' }) || !getRevealCatalog(current.catalogVersion) || current.retiredAtMs != null || current.replacementDeploymentId != null
     || old.contractAddress !== release.previousContract || old.state !== 'paused'
     || old.contractAddress === current.contractAddress || old.deploymentId === current.deploymentId
     || old.metadataBaseUri === current.metadataBaseUri || !integer(snapshot.commerceRevision, 1)

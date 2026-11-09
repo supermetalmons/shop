@@ -67,8 +67,13 @@ test('native retired purge removes frozen storage and alarms without recreation 
       assert.ok(row);
       return parseEthereumRevealDeployment(row);
     };
-    const old = await register('old-native', oldContract, '111k-v4');
-    const current = await register('current-native', currentContract, '111k-v5');
+    await register('old-native', oldContract, '111k-v4');
+    await register('current-native', currentContract, '111k-v5');
+    const current = parseEthereumRevealDeployment((await env.OPS_DB.prepare(`UPDATE ethereum_reveal_deployments
+      SET state='active',revision=5 WHERE deployment_id='current-native' RETURNING *`).first<Record<string, unknown>>())!);
+    const old = parseEthereumRevealDeployment((await env.OPS_DB.prepare(`UPDATE ethereum_reveal_deployments
+      SET retired_at_ms=?,replacement_deployment_id='current-native',revision=5 WHERE deployment_id='old-native' RETURNING *`)
+      .bind(Date.now() - 65_001).first<Record<string, unknown>>())!);
     const name = `11155111:${oldContract}`, currentName = `11155111:${currentContract}`;
     let object = env.ETHEREUM_REVEAL.getByName(name);
     await object.seedLegacy(old);
@@ -89,7 +94,7 @@ test('native retired purge removes frozen storage and alarms without recreation 
     assert.equal(inspection.alarmCleared, false);
     await assert.rejects(object.purgeRetired({ ...request, expectedRevision: 3 }));
     await assert.rejects(env.ETHEREUM_REVEAL.getByName(currentName).purgeRetired(request));
-    await assert.rejects(env.ETHEREUM_REVEAL.getByName(currentName).purgeRetired({ deploymentId: current.deploymentId, expectedRevision: 4 }));
+    await assert.rejects(env.ETHEREUM_REVEAL.getByName(currentName).purgeRetired({ deploymentId: current.deploymentId, expectedRevision: current.revision }));
     const [first, duplicate] = await Promise.all([object.purgeRetired(request), object.purgeRetired(request)]);
     assert.equal(first.purged, true);
     assert.equal(first.storageEmpty, true);

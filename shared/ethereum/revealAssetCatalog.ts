@@ -6,7 +6,7 @@ export type RevealAssetRatio = readonly [number, number];
 export type RevealAssetRatios =
   | { aspectRatio: RevealAssetRatio; aspectRatioPalette?: never; aspectRatioIndexById?: never }
   | { aspectRatio?: never; aspectRatioPalette: readonly RevealAssetRatio[]; aspectRatioIndexById: readonly number[] };
-export type RevealAssetVariant = RevealAssetRatios & { pathTemplate: string };
+export type RevealAssetVariant = RevealAssetRatios & { pathTemplate: string; assetIds?: readonly number[] };
 export type RevealAssetCategory = RevealAssetRatios & {
   count: number;
   pathTemplate: string;
@@ -123,9 +123,13 @@ export function validateRevealAssetCatalog(value: unknown, descriptor?: unknown)
     } else if (category.availableCount !== undefined) invalid('unexpected available count');
     if (category.variants !== undefined) {
       if (name !== 'paintings' || !record(category.variants) || !keys(category.variants, ['alt']) ||
-        !record(category.variants.alt) || !keys(category.variants.alt, ['pathTemplate', 'aspectRatio', 'aspectRatioPalette', 'aspectRatioIndexById']) ||
+        !record(category.variants.alt) || !keys(category.variants.alt, ['pathTemplate', 'assetIds', 'aspectRatio', 'aspectRatioPalette', 'aspectRatioIndexById']) ||
         category.variants.alt.pathTemplate !== 'paintings/alt/{id}.webp') invalid('invalid artwork variant');
-      validateRatios(category.variants.alt, category.count);
+      const ids = category.variants.alt.assetIds;
+      const categoryCount = category.count;
+      if (ids !== undefined && (!Array.isArray(ids) || !ids.length || ids.some((id, index) =>
+        !count(id) || id < 1 || id > categoryCount || index > 0 && id <= ids[index - 1]))) invalid('invalid variant asset IDs');
+      validateRatios(category.variants.alt, ids === undefined ? category.count : (ids as number[]).length);
     }
   }
   if (total !== value.artworkCount) invalid('artwork counts must total 111111');
@@ -135,6 +139,12 @@ export function validateRevealAssetCatalog(value: unknown, descriptor?: unknown)
     bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(value)))) !== descriptor.manifestSha256)) {
     invalid('catalog descriptor checksum mismatch');
   }
+}
+
+export function computeRevealCatalogDescriptor(catalog: RevealAssetCatalog): RevealAssetCatalogDescriptor {
+  validateRevealAssetCatalog(catalog);
+  return { catalogVersion: catalog.catalogVersion,
+    manifestSha256: bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(catalog)))) };
 }
 
 export function revealCatalogMedia(catalog: RevealAssetCatalog, category: EthereumArtworkCategory, assetId: number): {

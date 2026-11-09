@@ -15,6 +15,7 @@ const row = {
   metadata_base_uri: 'https://cdn.mons.shop/111k-sepolia/old-sepolia/', deployment_block: 100, catalog_version: '111k-v4',
   template_json: '{"name":"artwork","description":"","image":"placeholder","attributes":[]}', template_sha256: 'a'.repeat(64),
   state: 'paused', revision: 4, created_at_ms: 1, updated_at_ms: 4, activated_at_ms: 3, provisioned_at_ms: 2, last_error: null,
+  retired_at_ms: 1, replacement_deployment_id: 'current-sepolia',
 };
 const identity = { deploymentId: request.deploymentId, chainId: 11155111, contractAddress: oldContract,
   metadataBaseUri: row.metadata_base_uri, revision: 4 };
@@ -56,7 +57,7 @@ function fixture() {
 test('private reveal maintenance accepts only explicit identities and revisions', async () => {
   const f = fixture();
   assert.deepEqual(Object.getOwnPropertyNames(EthereumRevealMaintenance.prototype).sort(),
-    ['backfillAttributes', 'cancelRetirement', 'constructor', 'inspectReplacement', 'inspectRetired', 'purgeRetired', 'retireForReplacement']);
+    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'inspectReplacement', 'inspectRetired', 'purgeRetired', 'retireForReplacement']);
   for (const value of [null, {}, { ...request, expectedRevision: 0 }, { ...request, expectedRevision: '4' },
     { ...request, deploymentId: '../old' }, { ...request, contractAddress: currentContract }]) {
     await assert.rejects(f.maintenance.purgeRetired(value), /Invalid reveal maintenance/);
@@ -65,14 +66,13 @@ test('private reveal maintenance accepts only explicit identities and revisions'
   assert.deepEqual(f.calls, []);
 });
 
-for (const invalid of ['missing', 'revision', 'active', 'catalog', 'future-catalog', 'mainnet', 'drop', 'configured', 'commerce', 'reset'] as const) {
+for (const invalid of ['missing', 'revision', 'active', 'not-retired', 'mainnet', 'drop', 'configured', 'commerce', 'reset'] as const) {
   test(`maintenance rejects ${invalid} targets without contacting a Durable Object`, async () => {
     const f = fixture();
     if (invalid === 'missing') f.registry.row = null;
     if (invalid === 'revision') f.registry.row!.revision = 5;
     if (invalid === 'active') f.registry.row!.state = 'active';
-    if (invalid === 'catalog') f.registry.row!.catalog_version = '111k-v5';
-    if (invalid === 'future-catalog') f.registry.row!.catalog_version = '111k-v6';
+    if (invalid === 'not-retired') Object.assign(f.registry.row!, { retired_at_ms: null, replacement_deployment_id: null });
     if (invalid === 'drop') f.registry.row!.drop_id = 'other';
     if (invalid === 'mainnet') {
       f.registry.row!.chain_id = 1;
@@ -84,6 +84,17 @@ for (const invalid of ['missing', 'revision', 'active', 'catalog', 'future-catal
     await assert.rejects(f.maintenance.purgeRetired(request));
     await assert.rejects(f.maintenance.inspectRetired(request));
     assert.deepEqual(f.calls, []);
+  });
+}
+
+for (const catalogVersion of ['111k-v1', '111k-v4', '111k-v5', '111k-v6']) {
+  test(`catalog ${catalogVersion} requires an explicit retirement marker before purge`, async () => {
+    const f = fixture();
+    Object.assign(f.registry.row!, { catalog_version: catalogVersion, retired_at_ms: null, replacement_deployment_id: null });
+    await assert.rejects(f.maintenance.purgeRetired(request), /retired Sepolia/);
+    Object.assign(f.registry.row!, { retired_at_ms: 1, replacement_deployment_id: 'current-sepolia' });
+    assert.equal((await f.maintenance.purgeRetired(request)).purged, true);
+    await f.deferred.drain();
   });
 }
 
@@ -111,7 +122,8 @@ test('the coordinator checks the fresh registry and receiving object before touc
 
 test('a cold coordinator counts historical attributes without schema writes or alarms and rechecks the revision each page', async t => {
   const f = fixture();
-  Object.assign(f.registry.row!, { catalog_version: '111k-v5', state: 'active', last_error: 'metadata-conflict' });
+  Object.assign(f.registry.row!, { catalog_version: '111k-v5', state: 'active', last_error: 'metadata-conflict',
+    retired_at_ms: null, replacement_deployment_id: null });
   Object.assign(f.control, { contract_address: oldContract, paused: 1, paused_at_ms: 1 });
   Object.assign(f.env, { ETHEREUM_111K_CONTRACT_ADDRESS: oldContract, ETHEREUM_111K_METADATA_BASE_URI: row.metadata_base_uri,
     ETHEREUM_111K_DEPLOYMENT_BLOCK: String(row.deployment_block) });
@@ -162,6 +174,8 @@ test('a failed storage purge can retry without changing the permanent registrati
     ...identity, dropId: '111k_devnet', deploymentBlock: 100, catalogVersion: '111k-v4', templateJson: row.template_json,
     templateSha256: row.template_sha256, state: 'paused', createdAtMs: 1, updatedAtMs: 4,
     activatedAtMs: 3, provisionedAtMs: 2, lastError: null,
+    retiredAtMs: 1, replacementDeploymentId: 'current-sepolia', effectiveCatalogVersion: null, effectiveCatalogSha256: null,
+    catalogRevision: 0, catalogUpdateId: null, catalogUpdateStartedAtMs: null,
   });
   await f.deferred.drain();
 });

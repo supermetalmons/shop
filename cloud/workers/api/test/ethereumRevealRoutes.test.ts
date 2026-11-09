@@ -20,6 +20,7 @@ function fixture() {
   const database = new DatabaseSync(':memory:');
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql', 'utf8'));
   let allowed = true;
   let admissionAllowed = true;
   const limits: string[] = [];

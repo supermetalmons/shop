@@ -9,8 +9,21 @@ import { parseRevealAttributeBackfillRequest, parseRevealMaintenanceRequest, par
 import { acquireRevealCommerceFence, requireCancelableRevealFence, resolveRevealCommerceFence } from './ethereumRevealCommerceFence.js';
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import { verifyRevealDeployment } from './ethereumRevealChain.js';
+import { parseCatalogUpdateRequest } from './ethereumRevealCatalogUpdate.js';
+import { ETHEREUM_REVEAL_DEPLOYMENTS_SQL, parseEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
+import type { EthereumRevealCatalogUpdateResult } from '../../../../shared/ethereum/revealMaintenance.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async catalogUpdate(value: unknown): Promise<EthereumRevealCatalogUpdateResult> {
+    const request = parseCatalogUpdateRequest(value);
+    const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)
+      .bind(request.deploymentId).first<Record<string, unknown>>();
+    if (!row) throw new Error('Catalog deployment is not registered.');
+    const deployment = parseEthereumRevealDeployment(row);
+    if (deployment.retiredAtMs != null) throw new Error('Retired deployments cannot receive catalog updates.');
+    return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).catalogUpdate(deployment, request);
+  }
+
   async backfillAttributes(value: unknown): Promise<EthereumRevealAttributeBackfillPage> {
     const request = parseRevealAttributeBackfillRequest(value);
     const deployment = await requireAttributeBackfillDeployment(this.env, request);

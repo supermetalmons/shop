@@ -24,7 +24,8 @@ uses IDs 1–76,642 and leaves IDs 76,643–76,700 unused. Every import recalcul
 the egg allocation as `111111 - nonEggArtworkCount` and rejects an insufficient
 egg inventory or more than 111,111 non-egg artworks.
 
-All 30,990 paintings also have `paintings/alt/{id}.webp` variants. Their paths
+All current 30,990 paintings also have `paintings/alt/{id}.webp` variants. Future
+paintings may have no alternative. Their paths
 and exact ratios are preserved separately; they do not add artworks or replace
 the PNG used by metadata. Video MP4/poster pairs also count as one artwork each.
 The source map intentionally omits 3D GLBs and animated MP4s; those companions
@@ -56,8 +57,11 @@ npm run check:ethereum-assets
 The first imported revision is `111k-v4`. Use a higher explicit catalog version
 whenever the source, allocation settings, or generated manifest changes. An
 identical import at the same version is a no-op; changed content at the same
-or an older version fails before any output is written. Each changed catalog
-requires a fresh contract, metadata namespace, and allocation pool.
+or an older version fails before any output is written. For additions to an existing
+pool, use the [catalog expansion operation](../../../docs/111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs)
+instead of a standalone import. It freezes the old-to-new egg mapping, preserves
+supported ancestor catalogs, and separates local promotion from live application.
+Other incompatible catalog changes still require a fresh deployment.
 
 `--source` defaults to the preserved source, and `--catalog-version` defaults
 to the current revision. `--available-eggs` overrides the saved available egg
@@ -77,7 +81,7 @@ npm run ethereum:assets -- import --check
 Check mode regenerates in memory and compares the source, manifest, compact
 shared descriptor, and five reference JSONs without writing files. The API and
 frontend check commands include this verification. Imports validate supported
-paths, positive safe-integer dimensions, contiguous IDs, matching variants,
+paths, positive safe-integer dimensions, contiguous primary IDs, valid alternative IDs,
 video/poster pairs, and supply before writing generated outputs.
 
 ## Manifest and metadata references
@@ -93,7 +97,11 @@ fixed `placeholder.png` path shared by every receipt ID. Moving media also
 records an `imagePathTemplate`. A category may override the global `baseUrl`. Ratios use either `aspectRatio: [width, height]` or
 a reduced, sorted `aspectRatioPalette` with `aspectRatioIndexById`. Index
 `id - 1` selects that asset's palette entry. Painting alternatives have their
-own ratio data under `variants.alt`.
+own ratio data under `variants.alt`. Complete alternative coverage retains the
+original representation. Partial coverage adds a sorted, unique `assetIds` list;
+its ratio indexes correspond to positions in that list. IDs must reference primary
+paintings. With no alternatives, `variants` is omitted. Existing v2 manifests and
+their hashes remain unchanged.
 
 The importer generates [egg](egg.template.json), [painting](painting.template.json),
 [video](video.template.json), [3D](3d.template.json), and

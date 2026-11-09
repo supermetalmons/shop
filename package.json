@@ -23,6 +23,7 @@
     "dev:ethereum:api": "node --import tsx scripts/ethereum111k-dev-api.ts",
     "ethereum:metadata": "node --import tsx scripts/ethereum-metadata/cli.ts",
     "ethereum:assets": "node --import tsx scripts/ethereum-metadata/assetCli.ts",
+    "ethereum:catalog-update": "node --import tsx scripts/ethereum-metadata/catalogUpdateCli.ts",
     "check:ethereum-assets": "npm run ethereum:assets -- import --check",
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",
     "render:clear-cards": "node scripts/render-clear-cards.mjs",

@@ -4,9 +4,10 @@ import { createElement, type PropsWithChildren } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import type { EthereumInventoryItem, EthereumInventoryResponse } from '../shared/ethereum/api.ts';
-import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
+import { ethereumAssetId, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS } from '../shared/ethereum/protocol.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { buildEthereumInventoryItems } from '../src/ethereum/inventory.ts';
+import { EthereumCatalogChangedError } from '../src/ethereum/catalogRevision.ts';
 
 let { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
@@ -96,6 +97,58 @@ test('repeated inventory cursor cycles fail instead of fetching indefinitely', a
   assert.equal(count, 3);
 });
 
+test('concurrent expected-ID inventory requests cannot merge different catalog identities', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [], nextCursor: null, observedBlock: 1,
+    deploymentId: ++calls === 1 ? 'first' : 'second', catalogRevision: 0 }));
+  await assert.rejects(ethereumApi.inventory(config, owner, null, undefined,
+    Array.from({ length: 101 }, (_, index) => String(index + 1))), EthereumCatalogChangedError);
+  assert.equal(calls, 2);
+});
+
+for (const stage of ['cursor', 'expected'] as const) test(`catalog changes during ${stage} inventory aggregation retry internally`, async t => {
+  let calls = 0;
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [token(String(++calls))], observedBlock: calls,
+    nextCursor: stage === 'cursor' && calls === 1 ? 'more' : null, deploymentId: 'v17', catalogRevision: calls - 1 }));
+  const expected = stage === 'expected' ? Array.from({ length: ETHEREUM_MAX_INVENTORY_EXPECTED_IDS + 1 }, (_, index) => String(index + 1)) : [];
+  const result = await fetchEthereumInventory(config, owner, new AbortController().signal, expected);
+  assert.equal(calls, stage === 'cursor' ? 3 : 4);
+  assert.equal(result.catalogRevision, calls - 1);
+  assert.equal(result.items[0].tokenId, '3');
+});
+
+test('a catalog revision refresh keeps visible inventory and lets an in-flight read finish', async t => {
+  const stale = deferred<EthereumInventoryResponse>();
+  const before = { ...config, deploymentId: 'v17', catalogRevision: 0 };
+  const after = { ...before, catalogRevision: 1 };
+  let staleSignal!: AbortSignal;
+  let calls = 0;
+  t.mock.method(ethereumApi, 'inventory', async (requested, _owner, _cursor, signal) => {
+    if (requested.catalogRevision === 1) return { items: [{ ...token('2'), metadataRevision: 2 }], nextCursor: null, observedBlock: 2,
+      deploymentId: 'v17', catalogRevision: 1 };
+    if (++calls === 1) return { items: [token('1')], nextCursor: null, observedBlock: 1, deploymentId: 'v17', catalogRevision: 0 };
+    staleSignal = signal!;
+    return stale.promise;
+  });
+  const client = new QueryClient();
+  clients.push(client);
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+  const view = renderHook(current => useEthereumInventory(current, owner, ethereumInventoryScope(current, owner)), {
+    wrapper, initialProps: before,
+  });
+  await waitFor(() => assert.deepEqual(view.result.current.data?.items, [token('1')]));
+  let pending!: Promise<unknown>;
+  act(() => { pending = view.result.current.refetch(); });
+  await waitFor(() => assert.ok(staleSignal));
+  view.rerender(after);
+  assert.deepEqual(view.result.current.data?.items, [token('1')]);
+  assert.equal(staleSignal.aborted, false);
+  await act(async () => stale.resolve({ items: [token('3')], nextCursor: null, observedBlock: 1, deploymentId: 'v17', catalogRevision: 0 }));
+  await act(async () => { await pending; });
+  await waitFor(() => assert.deepEqual(view.result.current.data?.items, [{ ...token('2'), metadataRevision: 2 }]), { timeout: 3_000 });
+  assert.equal(view.result.current.data?.catalogRevision, 1);
+});
+
 test('an aborted inventory read stops before requesting another cursor', async t => {
   const controller = new AbortController();
   const request = t.mock.method(ethereumApi, 'inventory', async () => {
@@ -104,6 +157,25 @@ test('an aborted inventory read stops before requesting another cursor', async t
   });
   await assert.rejects(fetchEthereumInventory(config, owner, controller.signal), { name: 'AbortError' });
   assert.equal(request.mock.callCount(), 1);
+});
+
+test('an older item revision cannot replace newer metadata in the same inventory cache', async t => {
+  const scoped = { ...config, deploymentId: 'v17', catalogRevision: 1 };
+  const painting = { ...token('1'), metadataRevision: 3, category: 'painting' as const,
+    image: 'https://cdn.lil.org/nft/111k/paintings/30991.png', revealStatus: 'revealed' as const };
+  const egg = { ...painting, metadataRevision: 0, category: 'egg' as const, image: 'https://cdn.lil.org/nft/111k/eggs/76642.png' };
+  let reads = 0;
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [++reads === 1 ? painting : egg], nextCursor: null,
+    observedBlock: reads, deploymentId: 'v17', catalogRevision: 1 }));
+  const client = new QueryClient();
+  clients.push(client);
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+  const view = renderHook(() => useEthereumInventory(scoped, owner, ethereumInventoryScope(scoped, owner)), { wrapper });
+  await waitFor(() => assert.equal(view.result.current.data?.items[0].image, painting.image));
+  await act(async () => { await view.result.current.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.data?.observedBlock, 2));
+  assert.equal(view.result.current.data?.items[0].image, painting.image);
+  assert.equal(view.result.current.data?.items[0].metadataRevision, 3);
 });
 
 for (const change of ['owner', 'deployment'] as const) test(`inventory ${change} changes abort stale pages and isolate the new collection`, async t => {

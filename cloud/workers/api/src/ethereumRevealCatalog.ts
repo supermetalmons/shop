@@ -2,14 +2,27 @@ import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_de
 import descriptor from '../../../../shared/ethereum/revealCatalog.json';
 import { revealCatalogMedia, validateRevealAssetCatalog, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
+import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
+import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 
-export const REVEAL_CATEGORY_COUNTS = {
+export function revealCategoryCounts(catalog: { categories: Record<'eggs' | 'paintings' | 'videos' | '3d' | 'animated', { count: number }> }) { return {
   egg: catalog.categories.eggs.count,
   painting: catalog.categories.paintings.count,
   video: catalog.categories.videos.count,
   '3d': catalog.categories['3d'].count,
   animated: catalog.categories.animated.count,
-} as const;
+} as const; }
+export const REVEAL_CATEGORY_COUNTS = revealCategoryCounts(catalog);
+
+export function revealDeploymentCatalog(deployment: Pick<EthereumRevealDeployment, 'catalogVersion' | 'effectiveCatalogVersion' | 'effectiveCatalogSha256'>): RevealAssetCatalog {
+  const catalog = getRevealCatalog(deployment.effectiveCatalogVersion ?? deployment.catalogVersion, deployment.effectiveCatalogSha256 ?? undefined);
+  if (!catalog) throw new Error('Reveal catalog is not supported.');
+  return catalog;
+}
+
+export function isSupportedRevealDeployment(deployment: EthereumRevealDeployment): boolean {
+  return Boolean(getRevealCatalog(deployment.effectiveCatalogVersion ?? deployment.catalogVersion, deployment.effectiveCatalogSha256 ?? undefined));
+}
 export const REVEAL_ARTWORK_COUNT = 111_111;
 export const REVEAL_CATEGORIES = ['egg', 'painting', 'video', '3d', 'animated'] as const;
 let validatedCatalog: RevealAssetCatalog | undefined;
@@ -29,7 +42,8 @@ export function validateRevealCatalog(): void {
   validatedCatalog = value;
 }
 
-function revealAssetMedia(category: EthereumArtworkCategory, assetId: number) {
+function revealAssetMedia(category: EthereumArtworkCategory, assetId: number, supplied?: RevealAssetCatalog) {
+  if (supplied) return revealCatalogMedia(supplied, category, assetId);
   validateRevealCatalog();
   return revealCatalogMedia(validatedCatalog!, category, assetId);
 }
@@ -37,11 +51,12 @@ function revealAssetMedia(category: EthereumArtworkCategory, assetId: number) {
 export function buildRevealedArtwork(input: {
   templateJson: string; tokenId: string; crateTokenId: string; category: EthereumArtworkCategory;
   assetId: number; observation: EthereumRevealObservation;
+  catalog?: RevealAssetCatalog;
 }): { artwork: EthereumRevealedArtwork; metadataJson: string; placeholderJson: string } {
   const template = JSON.parse(input.templateJson.replaceAll('{{tokenId}}', input.tokenId).replaceAll('{{displayId}}', input.tokenId)) as {
     name: string; description?: string; image: string; attributes?: Array<{ trait_type: string; value: string | number }>;
   };
-  const media = revealAssetMedia(input.category, input.assetId);
+  const media = revealAssetMedia(input.category, input.assetId, input.catalog);
   const name = input.category === 'egg' ? `Egg #${input.assetId}` : template.name;
   const description = input.category === 'egg' ? 'a unrevealed gan egg. what will hatch from it?' : template.description;
   const attributes = [...(template.attributes || []).filter(attribute => attribute.trait_type !== 'type'),

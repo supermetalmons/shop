@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumRelicStatus, EthereumStats, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
-import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
+import { DEFAULT_ETHEREUM_111K_CONFIG, type Ethereum111kConfig } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MINT_KINDS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_RELICS, ethereumAssetId, ethereumHexQuantity, type EthereumContainerKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumRevealedArtwork } from '../../shared/ethereum/reveal';
@@ -17,6 +17,7 @@ import { useEthereumInventory } from './useEthereumInventory';
 import type { EthereumPendingMint } from './inventory';
 import { hasEthereumConfirmedInventory, readEthereumConfirmedInventory, rememberEthereumConfirmedInventory } from './confirmedInventory';
 import { ETHEREUM_DROP_OPERATION_TTL, definiteEthereumSubmissionRejection, migrateEthereumDropOperation, readEthereumDropBusy, readEthereumDropOperations, runEthereumDropRequest, subscribeEthereumDropOperations, writeEthereumDropOperation, type EthereumDropOperation } from './dropOperations';
+import { ethereumCatalogKey, retainEthereumCatalogConfig, retainEthereumMetadata } from './catalogRevision';
 
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
 
@@ -57,11 +58,16 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContainerKind = 'crate', suspended = false) {
   const client = useQueryClient();
   const pageVisible = useSyncExternalStore(subscribeVisibility, () => document.visibilityState !== 'hidden', () => true);
-  const configQuery = useQuery({ queryKey: ['ethereum111k', 'config'], queryFn: ({ signal }) => ethereumApi.config(signal), retry: false, refetchInterval: 60_000 });
+  const configQuery = useQuery({ queryKey: ['ethereum111k', 'config'], queryFn: async ({ signal }) => {
+    const value = await ethereumApi.config(signal);
+    signal.throwIfAborted();
+    return retainEthereumCatalogConfig(client.getQueryData<Ethereum111kConfig>(['ethereum111k', 'config']), value);
+  }, retry: false, refetchInterval: 60_000 });
   const config = configQuery.data ?? DEFAULT_ETHEREUM_111K_CONFIG;
+  const catalogIdentity = JSON.stringify(ethereumCatalogKey(config));
   const owner = ethereumAddress(wallet.address);
   const scope = ethereumInventoryScope(config, owner);
-  const current = useRef({ wallet, scope, mounted: false });
+  const current = useRef({ wallet, scope, catalogIdentity, mounted: false });
   const initiated = useRef(new Set<string>());
   const localOperations = useRef(new Map<string, EthereumDropOperation>());
   const confirmedUnpacks = useRef(new Set<string>());
@@ -80,6 +86,7 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
   }, []);
   current.current.wallet = wallet;
   current.current.scope = scope;
+  current.current.catalogIdentity = catalogIdentity;
   useEffect(() => { current.current.mounted = true; return () => { current.current.mounted = false; }; }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -96,16 +103,27 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
   const [error, setError] = useState<string | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
   const [outcomes, setOutcomes] = useState<{ scope: string | null; results: Record<string, EthereumInventoryItem[]>; errors: Record<string, string> }>({ scope: null, results: {}, errors: {} });
+  const previousCatalog = useRef({ scope, revision: config.catalogRevision ?? 0 });
+  useEffect(() => {
+    const previous = previousCatalog.current;
+    previousCatalog.current = { scope, revision: config.catalogRevision ?? 0 };
+    if (!scope || previous.scope !== scope || (config.catalogRevision ?? 0) <= previous.revision) return;
+    void client.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope, config) }, { cancelRefetch: false });
+  }, [client, config, scope]);
   const unpackResults = outcomes.scope === scope ? outcomes.results : {};
   const unpackErrors = outcomes.scope === scope ? outcomes.errors : {};
   const publishUnpack = useCallback((hash: string, items: EthereumInventoryItem[]) => {
-    if (!current.current.mounted || current.current.scope !== scope) return;
+    if (!current.current.mounted || current.current.scope !== scope || current.current.catalogIdentity !== catalogIdentity) return;
     if (localOperations.current.has(hash)) {
       if (confirmedUnpacks.current.delete(hash)) localOperations.current.delete(hash);
       else revealedUnpacks.current.add(hash);
     }
-    setOutcomes(previous => ({ scope, results: { ...(previous.scope === scope ? previous.results : {}), [hash]: items }, errors: previous.scope === scope ? previous.errors : {} }));
-  }, [scope]);
+    setOutcomes(previous => {
+      const existing = new Map((previous.scope === scope ? previous.results[hash] ?? [] : []).map(item => [item.id, item]));
+      return { scope, results: { ...(previous.scope === scope ? previous.results : {}),
+        [hash]: items.map(item => retainEthereumMetadata(existing.get(item.id), item)) }, errors: previous.scope === scope ? previous.errors : {} };
+    });
+  }, [scope, catalogIdentity]);
   useEffect(() => { setError(null); if (scope) migrateEthereumDropOperation(scope); }, [scope]);
   useEffect(() => {
     const provider = wallet.provider;
@@ -208,8 +226,11 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
       const accepted = result.items.filter(item => !burned.has(item.tokenId));
       const added = new Set(accepted.map(item => item.tokenId));
       writeEthereumExpected(scope, [...new Set([...readEthereumExpected(scope).filter(id => !burned.has(id)), ...added])].slice(-ETHEREUM_MAX_EXPECTED_IDS));
-      client.setQueryData<EthereumInventoryResponse>(ethereumInventoryQueryKey(scope), previous => ({ nextCursor: null,
-        observedBlock: previous?.observedBlock ?? 0, items: [...accepted, ...(previous?.items ?? []).filter(item => !burned.has(item.tokenId) && !added.has(item.tokenId))] }));
+      client.setQueryData<EthereumInventoryResponse>(ethereumInventoryQueryKey(scope, config), previous => ({ nextCursor: null,
+        ...(config.catalogRevision !== undefined || previous?.catalogRevision !== undefined
+          ? { catalogRevision: Math.max(config.catalogRevision ?? 0, previous?.catalogRevision ?? 0) } : {}),
+        ...(config.deploymentId !== undefined && { deploymentId: config.deploymentId }),
+        observedBlock: previous?.observedBlock ?? 0, items: [...accepted.map(item => retainEthereumMetadata(previous?.items.find(value => value.id === item.id), item)), ...(previous?.items ?? []).filter(item => !burned.has(item.tokenId) && !added.has(item.tokenId))] }));
       if (operation.action === 'unbox') {
         if (operation.hash && localOperations.current.has(operation.hash)) confirmedUnpacks.current.add(operation.hash);
         if (!isEthereumCrateUnpack(operation)) publishUnpack(operation.hash!, result.items);
@@ -316,7 +337,7 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
       controller.abort(); clearInterval(interval); unsubscribe(); document.removeEventListener('visibilitychange', tick);
       if (reconcilePending.current === reconcile) reconcilePending.current = null;
     };
-  }, [scope, owner, config, client, publishUnpack, refresh, retireOperation, isTrackingReveal]);
+  }, [scope, owner, config.enabled, config.chainId, config.contractAddress, config.deploymentId, config.metadataBaseUri, client, publishUnpack, refresh, retireOperation, isTrackingReveal]);
   const run = async <T,>(label: string, action: (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) => Promise<T>): Promise<T | null> => {
     if (!config.enabled || !scope || !owner) { setError(config.enabled ? 'Connect your wallet first.' : 'Minting is unavailable.'); return null; }
     const capturedWallet = wallet;

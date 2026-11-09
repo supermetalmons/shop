@@ -14,6 +14,8 @@ function fixture(count: number, failId?: string) {
     template_sha256: 'a'.repeat(64), state: 'active', revision: 3, created_at_ms: index,
     updated_at_ms: index, provisioned_at_ms: 1, activated_at_ms: 2, last_error: null,
     retired_at_ms: null as number | null, replacement_deployment_id: null as string | null,
+    effective_catalog_version: null as string | null, catalog_update_id: null as string | null,
+    catalog_update_started_at_ms: null as number | null,
   }));
   const visited: string[] = [];
   const names: string[] = [];
@@ -25,9 +27,9 @@ function fixture(count: number, failId?: string) {
         bind(...values: unknown[]) {
           return {
             async all<T>() {
-              assert.match(sql, /WHERE catalog_version=\? AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100/);
+              assert.match(sql, /WHERE COALESCE\(effective_catalog_version,catalog_version\)\s+IN \(\?\) AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100/);
               assert.deepEqual(values, ['111k-v5']);
-              return { results: rows.filter(row => row.catalog_version === values[0] && row.retired_at_ms === null)
+              return { results: rows.filter(row => values.includes(row.effective_catalog_version ?? row.catalog_version) && row.retired_at_ms === null)
                 .sort((a, b) => a.updated_at_ms - b.updated_at_ms).slice(0, 100).map(row => ({ ...row })) as T[] };
             },
             async run() {
@@ -83,6 +85,16 @@ test('watchdog excludes explicitly retired deployments even when their catalog i
   assert.equal(result.attempted, 5);
   assert.deepEqual(visited, ['test-125', 'test-126', 'test-127', 'test-128', 'test-129']);
   assert.deepEqual(rows.slice(0, 125), retired);
+});
+
+test('watchdog keeps normal recovery and publication running during an online catalog update', async () => {
+  const { env, visited, rows } = fixture(1);
+  rows[0].catalog_update_id = 'catalog-online';
+  rows[0].catalog_update_started_at_ms = 1;
+  const result = await reconcileEthereumReveals(env, new AbortController().signal);
+  assert.equal(result.completed, 1);
+  assert.deepEqual(visited, ['test-000']);
+  assert.equal(rows[0].state, 'active');
 });
 
 for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`watchdog excludes retired catalog ${catalogVersion} before its bounded page without changing historical rows`, async () => {

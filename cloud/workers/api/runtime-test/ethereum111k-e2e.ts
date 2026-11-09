@@ -790,6 +790,8 @@ try {
   const relicDatabase = new DatabaseSync(':memory:');
   try {
     relicDatabase.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql'), 'utf8'));
+    relicDatabase.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql'), 'utf8'));
+    relicDatabase.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql'), 'utf8'));
     const templateJson = JSON.stringify(JSON.parse(await readFile(resolve(root, 'scripts/ethereum-metadata/templates/artwork.json'), 'utf8')));
     relicDatabase.exec(buildEthereumRevealRegistration({ deploymentId: 'relic-e2e', dropId: '111k_devnet', chainId: 31337,
       contractAddress: relicContract.toLowerCase(), metadataBaseUri: metadataBaseURI,

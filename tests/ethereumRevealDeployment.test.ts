@@ -29,6 +29,7 @@ async function fixture(t: TestContext) {
   const database = new DatabaseSync(':memory:');
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', import.meta.url), 'utf8'));
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', import.meta.url), 'utf8'));
+  database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql', import.meta.url), 'utf8'));
   t.after(() => database.close());
   const query = (sql: string) => database.prepare(sql).all();
   return { database, query, register: () => parseEthereumRevealDeployment(query(buildEthereumRevealRegistration(registration))[0]) };

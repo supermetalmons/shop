@@ -97,6 +97,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion, reg
   database.exec('PRAGMA foreign_keys=ON');
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql', 'utf8'));
   database.prepare(`INSERT INTO ethereum_reveal_deployments(deployment_id,drop_id,chain_id,contract_address,metadata_base_uri,
     deployment_block,catalog_version,template_json,template_sha256,state,revision,created_at_ms,updated_at_ms,provisioned_at_ms,activated_at_ms)
     VALUES(?,?,?,?,?,?,?,?,?,'active',3,1,3,2,3)`).run(registered.deploymentId, registered.dropId, registered.chainId, CONTRACT,
@@ -177,7 +178,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion, reg
   };
   const object = make();
   const store = catalogVersion === registered.catalogVersion ? object.store : new EthereumRevealStore(sql, context.storage.transactionSync);
-  store.configure({ ...registered, catalogVersion });
+  store.configure(registered);
   while (!store.initializeChunk()) {}
   while (!store.migrationReady()) store.migrateChunk(Date.now(), 128);
   const state = { head: 1000, minted: 0, receipts: new Map<string, Receipt | Promise<Receipt | null>>(),
@@ -1896,12 +1897,13 @@ test('incomplete receipt evidence stays private and does not block another crate
   assert.equal(f.store.frozen(ids(1)).length, 20);
 });
 
-for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3', '111k-v4']) test(`retired catalog ${catalogVersion} alarms stop without changing frozen artwork, reservations or pending publication`, async t => {
+for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3', '111k-v4']) test(`unsupported legacy catalog ${catalogVersion} alarms stop without changing frozen artwork, reservations or pending publication`, async t => {
   const f = fixture(t, catalogVersion);
   const legacy = { ...deployment, catalogVersion };
   f.store.reserve(['111112', '111113']);
-  f.store.freeze(legacy, { transactionHash: hash(1), blockNumber: 101, blockHash: hash(101) },
+  f.store.freeze(deployment, { transactionHash: hash(1), blockNumber: 101, blockHash: hash(101) },
     [{ crateTokenId: '111112', tokenIds: ids(1) }], Date.now());
+  f.database.prepare("UPDATE settings SET deployment_json=json_set(deployment_json,'$.catalogVersion',?) WHERE id=1").run(catalogVersion);
   const before = {
     assignments: f.rows('SELECT * FROM assignments ORDER BY category,asset_id'),
     pools: f.rows('SELECT * FROM pools ORDER BY category'),
@@ -2212,6 +2214,7 @@ test('verified pending overflow promptly recovers a crate with an obsolete daily
     observation: { transactionHash: hash(1), blockNumber: 101, blockHash: hash(101) },
     crates: [{ crateTokenId: '111112', tokenIds: ids(1) }], confirmations: 64 }, now);
   const frozen = f.store.frozen(ids(1));
+  const originalAssignments = f.rows("SELECT * FROM assignments WHERE CAST(token_id AS INTEGER) BETWEEN 1 AND 20 ORDER BY token_id");
   for (let index = 100; index < 10100; index++) f.store.admitTransaction(hash(index), 100, now);
   f.sql.exec('UPDATE receipt_work SET next_check_ms=? WHERE opaque=1', now + 86_400_000);
   now += 100;
@@ -2226,6 +2229,7 @@ test('verified pending overflow promptly recovers a crate with an obsolete daily
   await f.reopen().watchdog(deployment);
   await f.settle();
   assert.equal(f.store.frozen(ids(21)).length, 20);
+  assert.deepEqual(f.rows("SELECT * FROM assignments WHERE CAST(token_id AS INTEGER) BETWEEN 1 AND 20 ORDER BY token_id"), originalAssignments);
   assert.deepEqual(f.store.frozen(ids(1)), frozen);
 });
 

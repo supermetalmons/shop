@@ -5,13 +5,14 @@ import type { EthereumInventoryItem } from '../../shared/ethereum/protocol';
 import { ETHEREUM_REVEAL_MAX_TOKEN_IDS, ETHEREUM_REVEAL_RETRY_MS, type EthereumRevealedArtwork, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../shared/ethereum/reveal';
 import { ethereumRevealApi, EthereumRevealApiError } from './revealApi';
 import { ETHEREUM_DROP_OPERATION_TTL } from './dropOperations';
+import { assertEthereumCatalog, assertSameEthereumCatalog, ethereumCatalogKey, EthereumCatalogChangedError, refreshEthereumCatalog } from './catalogRevision';
 import {
   forgetEthereumRevealJob, isEthereumCrateUnpack, isEthereumRevealJobCompleted, readEthereumRevealJobs, restorePendingEthereumRevealJob,
   subscribeEthereumRevealJobs, type EthereumPendingTransaction, type EthereumRevealJob,
 } from './state';
 
 type ArtworkDisplay = Pick<EthereumInventoryItem,
-  'tokenId' | 'name' | 'description' | 'image' | 'animation_url' | 'aspectRatio' | 'category' | 'attributes'>;
+  'tokenId' | 'name' | 'description' | 'image' | 'animation_url' | 'aspectRatio' | 'category' | 'attributes' | 'metadataRevision'>;
 type ArtworkDisplayCache = Readonly<Record<string, ArtworkDisplay>>;
 const emptyArtworks: ArtworkDisplayCache = Object.freeze({});
 const tokenCooldowns = new WeakMap<QueryClient, { until: number; message: string }>();
@@ -57,23 +58,30 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
   onFailed?: (transactionHash: string, message: string) => void,
   retainLocalJob?: (job: EthereumRevealJob) => boolean) {
   const client = useQueryClient();
+  const catalogKey = useMemo(() => ethereumCatalogKey(config), [config.catalogRevision, config.deploymentId]);
+  const catalogIdentity = JSON.stringify(catalogKey);
+  const activeCatalog = useRef(catalogIdentity);
+  activeCatalog.current = catalogIdentity;
+  const transactionKey = useCallback((hash: string) => ['ethereum111k', 'reveal-transaction', config.chainId, config.contractAddress,
+    ...catalogKey, hash] as const, [config.chainId, config.contractAddress, catalogKey]);
   const attemptedTransactions = useRef(new Set<string>());
-  const transactionIdentity = useCallback((job: EthereumRevealJob) => `${config.chainId}:${config.contractAddress}:${job.transactionHash}:${job.trackingId}`,
-    [config.chainId, config.contractAddress]);
-  const mediaKey = useMemo(() => ['ethereum111k', 'revealed-artworks', config.chainId, config.contractAddress] as const,
-    [config.chainId, config.contractAddress]);
+  const transactionIdentity = useCallback((job: EthereumRevealJob) => `${config.chainId}:${config.contractAddress}:${catalogIdentity}:${job.transactionHash}:${job.trackingId}`,
+    [config.chainId, config.contractAddress, catalogIdentity]);
+  const mediaKey = useMemo(() => ['ethereum111k', 'revealed-artworks', config.chainId, config.contractAddress, ...catalogKey] as const,
+    [config.chainId, config.contractAddress, catalogKey]);
   const mediaQuery = useQuery({ queryKey: mediaKey, queryFn: async () => emptyArtworks, enabled: false, staleTime: Infinity });
   const media = mediaQuery.data ?? emptyArtworks;
   const rememberArtworks = useCallback((artworks: readonly ArtworkDisplay[]) => {
-    if (!artworks.length) return;
+    if (!artworks.length || activeCatalog.current !== catalogIdentity) return;
     client.setQueryData<ArtworkDisplayCache>(mediaKey, current => {
-      const additions = artworks.filter(item => !current?.[item.tokenId]);
+      const additions = artworks.filter(item => !current?.[item.tokenId] ||
+        (item.metadataRevision ?? 0) > (current[item.tokenId].metadataRevision ?? 0));
       return additions.length ? { ...current, ...Object.fromEntries(additions.map(item => [item.tokenId, {
         tokenId: item.tokenId, name: item.name, description: item.description, image: item.image,
-        animation_url: item.animation_url, aspectRatio: item.aspectRatio, category: item.category, attributes: item.attributes,
+        animation_url: item.animation_url, aspectRatio: item.aspectRatio, category: item.category, attributes: item.attributes, metadataRevision: item.metadataRevision,
       }])) } : current;
     });
-  }, [client, mediaKey]);
+  }, [client, mediaKey, catalogIdentity]);
   useEffect(() => {
     if (!scope || !config.enabled || config.chainId === 31337) return;
     rememberArtworks(inventory.filter(item => item.kind === 'artwork' && item.revealStatus === 'revealed' &&
@@ -126,21 +134,20 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
     let generations = transactionGenerations.get(client);
     if (!generations) transactionGenerations.set(client, generations = new Map());
     for (const job of jobs) {
-      const identity = `${scope}:${job.transactionHash}`;
+      const identity = `${scope}:${catalogIdentity}:${job.transactionHash}`;
       const previous = generations.get(identity);
       if (previous === job.trackingId) continue;
       generations.set(identity, job.trackingId);
-      const queryKey = ['ethereum111k', 'reveal-transaction', config.chainId, config.contractAddress, job.transactionHash];
+      const queryKey = transactionKey(job.transactionHash);
       const query = client.getQueryState<EthereumRevealTransactionResponse>(queryKey);
       if (query) client.removeQueries({ queryKey, exact: true });
       if (previous !== undefined) client.removeQueries({ queryKey: ['ethereum111k', 'transaction', scope, job.transactionHash], exact: true });
     }
-  }, [client, scope, config.chainId, config.contractAddress, jobs]);
+  }, [client, scope, catalogIdentity, transactionKey, jobs]);
   useEffect(() => {
     const schedule = () => setActiveState(current => {
       if (!scope || !config.enabled) return current.jobs.length || current.scope !== scope ? { scope, jobs: [] } : current;
-      const state = (hash: string) => client.getQueryState<EthereumRevealTransactionResponse>(
-        ['ethereum111k', 'reveal-transaction', config.chainId, config.contractAddress, hash]);
+      const state = (hash: string) => client.getQueryState<EthereumRevealTransactionResponse>(transactionKey(hash));
       const running = current.scope === scope ? current.jobs.filter(job => jobs.some(value => sameRevealJob(value, job)) &&
         state(job.transactionHash)?.fetchStatus === 'fetching') : [];
       const nextCheck = (job: EthereumRevealJob) => {
@@ -167,12 +174,20 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
     const timer = setInterval(schedule, 250);
     const unsubscribe = focusManager.subscribe(schedule);
     return () => { clearInterval(timer); unsubscribe(); };
-  }, [scope, config.enabled, config.chainId, config.contractAddress, jobs, pending?.hash, client, transactionIdentity]);
+  }, [scope, config.enabled, transactionKey, jobs, pending?.hash, client, transactionIdentity]);
   const transactions = useQueries({ queries: activeJobs.map(job => ({
-    queryKey: ['ethereum111k', 'reveal-transaction', config.chainId, config.contractAddress, job.transactionHash],
-    queryFn: ({ signal }: { signal: AbortSignal }) => {
+    queryKey: transactionKey(job.transactionHash),
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
       attemptedTransactions.current.add(transactionIdentity(job));
-      return ethereumRevealApi.transaction(config, job.transactionHash, signal);
+      try {
+        const response = await ethereumRevealApi.transaction(config, job.transactionHash, signal);
+        signal.throwIfAborted();
+        assertEthereumCatalog(config, response);
+        if ((response.catalogRevision ?? 0) > (config.catalogRevision ?? 0)) {
+          void client.invalidateQueries({ queryKey: ['ethereum111k', 'config'] }, { cancelRefetch: false });
+        }
+        return response;
+      } catch (error) { await refreshEthereumCatalog(client, error); throw error; }
     },
     enabled: Boolean(scope && config.enabled), retry: false, staleTime: 0,
     refetchOnWindowFocus: false, refetchOnReconnect: false,
@@ -187,7 +202,7 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
     return batches;
   }, [inventory, config.chainId]);
   const tokens = useQuery({
-    queryKey: ['ethereum111k', 'reveal-tokens', config.chainId, config.contractAddress, tokenBatches],
+    queryKey: ['ethereum111k', 'reveal-tokens', config.chainId, config.contractAddress, ...catalogKey, tokenBatches],
     queryFn: async ({ signal }) => {
       const result: Pick<EthereumRevealTokensResponse, 'artworks' | 'unresolved' | 'retryAfterMs'> = {
         artworks: [], unresolved: [], retryAfterMs: ETHEREUM_REVEAL_RETRY_MS,
@@ -195,6 +210,7 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
       const current = client.getQueryData<ArtworkDisplayCache>(mediaKey);
       const missing = tokenBatches.map(ids => ids.filter(id => !current?.[id])).filter(ids => ids.length);
       const failures: unknown[] = [];
+      let catalog: EthereumRevealTokensResponse | undefined;
       for (let offset = 0; offset < missing.length; offset += 2) {
         signal.throwIfAborted();
         const responses = await Promise.allSettled(missing.slice(offset, offset + 2).map(async ids => {
@@ -205,6 +221,12 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
             throw error;
           });
           signal.throwIfAborted();
+          assertEthereumCatalog(config, response);
+          if (catalog) assertSameEthereumCatalog(catalog, response);
+          else catalog = response;
+          if ((response.catalogRevision ?? 0) > (config.catalogRevision ?? 0)) {
+            void client.invalidateQueries({ queryKey: ['ethereum111k', 'config'] }, { cancelRefetch: false });
+          }
           rememberArtworks(response.artworks);
           return response;
         }));
@@ -216,6 +238,8 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
           result.unresolved.push(...response.unresolved);
           result.retryAfterMs = Math.max(result.retryAfterMs, response.retryAfterMs);
         }
+        const changed = failures.find(error => error instanceof EthereumCatalogChangedError);
+        if (changed) { await refreshEthereumCatalog(client, changed); throw changed; }
         const cooldown = tokenCooldown(client);
         if (cooldown) throw cooldown;
       }
@@ -256,10 +280,12 @@ export function useEthereumReveals(config: Ethereum111kConfig, scope: string | n
   }, [scope, config.enabled, transactions, tokens, activeJobs, rememberArtworks, onRevealed, onFailed, readJobs]);
   const applyArtwork = useCallback((item: EthereumInventoryItem): EthereumInventoryItem => {
     const artwork = item.kind === 'artwork' && item.chainId === config.chainId && item.contractAddress === config.contractAddress ? media[item.tokenId] : undefined;
-    if (!artwork) return item;
-    return { ...item, name: artwork.name, description: artwork.description, image: artwork.image,
+    if (!artwork || (item.metadataRevision ?? 0) > (artwork.metadataRevision ?? 0)) return item;
+    return { ...item, ...(artwork.metadataRevision !== undefined && { metadataRevision: artwork.metadataRevision }),
+      name: artwork.name, description: artwork.description, image: artwork.image,
       animation_url: artwork.animation_url, aspectRatio: artwork.aspectRatio, category: artwork.category,
-      attributes: config.chainId !== 31337 && item.revealStatus === 'revealed' ? item.attributes ?? artwork.attributes : artwork.attributes,
+      attributes: config.chainId !== 31337 && item.revealStatus === 'revealed' &&
+        (item.metadataRevision ?? 0) === (artwork.metadataRevision ?? 0) ? item.attributes ?? artwork.attributes : artwork.attributes,
       revealStatus: 'revealed' };
   }, [media, config.chainId, config.contractAddress]);
   return { applyArtwork, isTracking };

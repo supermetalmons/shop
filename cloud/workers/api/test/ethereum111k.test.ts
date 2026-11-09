@@ -62,6 +62,7 @@ function fixture(controlActive = true) {
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql', 'utf8'));
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', 'utf8'));
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', 'utf8'));
+  ops.exec(readFileSync('cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql', 'utf8'));
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0010_ethereum_profile_address_guards.sql', 'utf8'));
   const registerDeployment = (chainId = 31337, contractAddress = CONTRACT, state: EthereumRevealDeployment['state'] = 'active') => {
     const id = `test-${chainId}-${contractAddress.slice(2, 10)}`;

@@ -12,6 +12,7 @@ import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.j
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
 import { EthereumApiError } from './ethereumError.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
+import { ethereumCatalogSnapshot, requireEthereumCatalogSnapshot } from './ethereumCatalogRevision.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
 import {
   ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
@@ -106,10 +107,6 @@ async function readMetadata(context: EthereumContext, tokenId: string): Promise<
     createError: () => new EthereumApiError('unavailable', 'Invalid Ethereum metadata.') }));
 }
 
-async function ethereumMetadata(context: EthereumContext, kind: EthereumItemKind, displayId: number): Promise<EthereumMetadata> {
-  return readMetadata(context, ethereumMetadataTokenId(kind, displayId));
-}
-
 function readChunks<T>(values: T[], size: number): T[][] {
   return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size));
 }
@@ -134,22 +131,47 @@ export async function ethereumTokenInfos(context: EthereumContext, ids: string[]
 }
 
 export async function ethereumInventoryItems(context: EthereumContext, infos: EthereumTokenInfo[]): Promise<EthereumInventoryItem[]> {
+  return (await ethereumInventorySnapshot(context, infos)).items;
+}
+
+async function ethereumInventorySnapshot(context: EthereumContext, infos: EthereumTokenInfo[]) {
   const contractAddress = requireEthereumContract(context);
   for (const info of infos) {
     if (ethereumMetadataTokenId(info.kind, info.displayId) !== info.tokenId) {
       throw new EthereumApiError('unavailable', 'Invalid Ethereum token information.');
     }
   }
+  const ids = infos.filter(info => info.kind === 'artwork').map(info => info.tokenId);
+  let catalog = await ethereumCatalogSnapshot(context, ids);
+  let canonical = new Map(catalog.artworks.map(value => [value.tokenId, value]));
   const pending = new Map<string, Promise<EthereumMetadata>>();
-  return mapWithConcurrency(infos, 8, async (info, _index, signal) => {
+  const metadata = await mapWithConcurrency(infos, 8, async (info, _index, signal) => {
+    if (canonical.has(info.tokenId)) return null;
     let metadata = pending.get(info.tokenId);
     if (!metadata) {
       metadata = readMetadata({ ...context, signal }, info.tokenId);
       pending.set(info.tokenId, metadata);
     }
-    return { ...info, ...await metadata, id: ethereumAssetId(context.config.chainId, contractAddress, info.tokenId),
-      chainId: context.config.chainId, contractAddress };
+    return metadata;
   }, { signal: context.signal, failureMode: 'fail-fast' });
+  if (pending.size) {
+    catalog = await ethereumCatalogSnapshot(context, ids);
+    canonical = new Map(catalog.artworks.map(value => [value.tokenId, value]));
+  }
+  const decoded = new Map<string, EthereumMetadata>();
+  const items = infos.map((info, index) => {
+    const assigned = canonical.get(info.tokenId);
+    const fallback = metadata[index];
+    if (!assigned && !fallback) throw new EthereumApiError('unavailable', 'Artwork metadata is temporarily unavailable.');
+    const value: EthereumMetadata = assigned
+      ? decoded.get(info.tokenId) ?? { ...parseMetadata(parseMetadataJson(assigned.metadataJson)), metadataRevision: assigned.metadataRevision }
+      : fallback!;
+    if (assigned) { decoded.set(info.tokenId, value); assigned.metadataJson = ''; }
+    return { ...info, ...value, id: ethereumAssetId(context.config.chainId, contractAddress, info.tokenId),
+      chainId: context.config.chainId, contractAddress };
+  });
+  await requireEthereumCatalogSnapshot(context, catalog);
+  return { items, catalogRevision: catalog.catalogRevision, deploymentId: catalog.deploymentId };
 }
 
 async function alchemyOwnerIds(context: EthereumContext, wallet: string, cursor: string | null): Promise<{ ids: string[]; nextCursor: string | null }> {
@@ -199,12 +221,14 @@ async function localOwnerInfos(context: EthereumContext, wallet: string, head: n
 
 export async function ethereumPublicRead(request: Request, context: EthereumContext, path: string): Promise<unknown> {
   if (path.endsWith('/config')) {
+    const catalog = await ethereumCatalogSnapshot(context);
     let enabled = context.config.enabled && await ethereum111kWritesAllowed(context.env.COMMERCE_DB, context.config, context.signal);
     if (enabled) {
       try { enabled = await ethereumRelicInterfaceAvailable(context); }
       catch { context.signal.throwIfAborted(); enabled = false; }
     }
-    return { ...context.config, enabled };
+    await requireEthereumCatalogSnapshot(context, catalog);
+    return { ...context.config, enabled, deploymentId: catalog.deploymentId, catalogRevision: catalog.catalogRevision };
   }
   requireEthereumContract(context);
   const url = new URL(request.url);
@@ -251,7 +275,11 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
       displayId > ethereumItemDisplayIdMaximum(kind)) {
       throw new EthereumApiError('invalid-argument', 'Invalid item metadata request.');
     }
-    return ethereumMetadata(context, kind, displayId);
+    const tokenId = ethereumMetadataTokenId(kind, displayId);
+    const { items } = await ethereumInventorySnapshot(context, [{ tokenId, kind, displayId, owner: ZERO_ADDRESS }]);
+    const { owner: _owner, tokenId: _tokenId, kind: _kind, displayId: _displayId, id: _id,
+      chainId: _chainId, contractAddress: _contractAddress, ...metadata } = items[0];
+    return metadata;
   }
   const wallet = ethereumAddress(url.searchParams.get('owner'));
   const cursor = url.searchParams.get('cursor');
@@ -279,9 +307,9 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
     infos = await ethereumTokenInfos(context, [...new Set([...page.ids, ...recentIds])], blockReference);
     nextCursor = page.nextCursor;
   }
-  const items = await ethereumInventoryItems(context, infos.filter((info) => info.owner === wallet));
+  const inventory = await ethereumInventorySnapshot(context, infos.filter((info) => info.owner === wallet));
   await verifyEthereumBlockSnapshot(context, snapshot);
-  return { items, nextCursor, observedBlock: snapshot.blockNumber };
+  return { ...inventory, nextCursor, observedBlock: snapshot.blockNumber };
 }
 
 export function transferTokenIds(receipt: EthereumReceipt, contract: string): { minted: string[]; burned: string[] } {

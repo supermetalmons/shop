@@ -2,9 +2,10 @@ import { fileURLToPath } from 'node:url';
 import type { GetPlatformProxyOptions } from 'wrangler';
 import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealRetirementRequest, EthereumRevealRetirementResult, EthereumRevealRetirementCancellation, EthereumRevealReplacementRequest,
-  EthereumRevealReplacementInspection } from '../../shared/ethereum/revealMaintenance.ts';
+  EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  catalogUpdate?(request: EthereumRevealCatalogUpdateRequest): Promise<EthereumRevealCatalogUpdateResult>;
   backfillAttributes?(request: EthereumRevealAttributeBackfillRequest): Promise<EthereumRevealAttributeBackfillPage>;
   purgeRetired(request: EthereumRevealMaintenanceRequest): Promise<EthereumRevealPurgeResult>;
   inspectRetired(request: EthereumRevealMaintenanceRequest): Promise<EthereumRevealInspection>;
@@ -41,7 +42,16 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async backfillAttributes(request) {
+    return await run({ async catalogUpdate(request) {
+      const result = await call(() => proxy.env.REVEAL_MAINTENANCE.catalogUpdate!(request));
+      return { deploymentId: result.deploymentId, batchId: result.batchId, phase: result.phase, complete: result.complete,
+        catalogRevision: result.catalogRevision, total: result.total, staged: result.staged, applied: result.applied,
+        published: result.published, frozen: result.frozen, retryAfterMs: result.retryAfterMs,
+        conflicts: result.conflicts, retrying: result.retrying,
+        ...(result.nextVerificationEggId !== undefined ? { nextVerificationEggId: result.nextVerificationEggId } : {}),
+        ...(result.refreshTransaction ? { refreshTransaction: { chainId: result.refreshTransaction.chainId,
+          to: result.refreshTransaction.to, data: result.refreshTransaction.data, value: result.refreshTransaction.value } } : {}) };
+    }, async backfillAttributes(request) {
       const page = await call(() => proxy.env.REVEAL_MAINTENANCE.backfillAttributes!(request));
       return { nextCursor: page.nextCursor, eligible: page.eligible, missing: page.missing,
         invalid: page.invalid, conflict: page.conflict, conflictRechecks: page.conflictRechecks, enqueued: page.enqueued, requeued: page.requeued };

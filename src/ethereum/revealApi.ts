@@ -8,8 +8,9 @@ import {
 import { hasValidEthereumMedia, isEthereumMediaUrl } from './artworkMedia';
 import { EthereumApiError } from './api';
 import { requestEthereumJson } from './request';
+import { assertEthereumCatalog, validEthereumCatalogScope, validEthereumMetadataRevision } from './catalogRevision';
 
-type RevealConfig = Pick<Ethereum111kConfig, 'chainId' | 'contractAddress'>;
+type RevealConfig = Pick<Ethereum111kConfig, 'chainId' | 'contractAddress' | 'catalogRevision' | 'deploymentId'>;
 const hashPattern = /^0x[0-9a-f]{64}$/;
 
 export class EthereumRevealApiError extends EthereumApiError {
@@ -38,7 +39,7 @@ function parseArtwork(value: unknown): EthereumRevealedArtwork {
     !record(value.observation) || typeof value.observation.transactionHash !== 'string' ||
     !hashPattern.test(value.observation.transactionHash) || typeof value.observation.blockHash !== 'string' ||
     !hashPattern.test(value.observation.blockHash) || !Number.isSafeInteger(value.observation.blockNumber) ||
-    Number(value.observation.blockNumber) < 0 ||
+    Number(value.observation.blockNumber) < 0 || !validEthereumMetadataRevision(value.metadataRevision) ||
     value.attributes !== undefined && (!Array.isArray(value.attributes) || !value.attributes.every(attribute =>
       record(attribute) && typeof attribute.trait_type === 'string' &&
       (typeof attribute.value === 'string' || typeof attribute.value === 'number' && Number.isFinite(attribute.value))))) return invalid();
@@ -63,7 +64,9 @@ async function request(path: string, config: RevealConfig,
   }
   if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
     typeof value.deploymentId !== 'string' || !value.deploymentId || typeof value.dropId !== 'string' || !value.dropId ||
-    !Number.isSafeInteger(value.retryAfterMs) || Number(value.retryAfterMs) < 0 || !Array.isArray(value.artworks)) return invalid();
+    !Number.isSafeInteger(value.retryAfterMs) || Number(value.retryAfterMs) < 0 || !Array.isArray(value.artworks) ||
+    !validEthereumCatalogScope(value)) return invalid();
+  assertEthereumCatalog(config, value);
   return value;
 }
 

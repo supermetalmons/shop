@@ -1,6 +1,7 @@
 import { ETHEREUM_111K_CONTROL_SQL, parseEthereum111kControl } from '../../../../shared/ethereum/control.js';
+import { isSupportedRevealDeployment } from './ethereumRevealCatalog.js';
 import { normalizeEthereumAddress } from '../../../../shared/ethereum/protocol.js';
-import { ETHEREUM_REVEAL_CATALOG_VERSION, ETHEREUM_REVEAL_DEPLOYMENT_ID,
+import { ETHEREUM_REVEAL_DEPLOYMENT_ID,
   ETHEREUM_REVEAL_DEPLOYMENTS_SQL, parseEthereumRevealDeployment,
   type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { isRevealArtworkTokenId, type EthereumRevealAttributeBackfillRequest, type EthereumRevealMaintenanceRequest,
@@ -59,9 +60,8 @@ export async function requireRetiredRevealDeployment(env: Env, value: unknown,
   options: { requireDrain?: boolean } = {}): Promise<EthereumRevealDeployment> {
   const request = parseRevealMaintenanceRequest(value);
   const deployment = await readRevealMaintenanceDeployment(env, request.deploymentId);
-  const olderCatalog = Number(deployment.catalogVersion.slice(6)) < Number(ETHEREUM_REVEAL_CATALOG_VERSION.slice(6));
   if (deployment.revision !== request.expectedRevision || deployment.chainId !== 11155111 || deployment.dropId !== '111k_devnet' ||
-    deployment.state !== 'paused' || deployment.retiredAtMs == null && !olderCatalog) {
+    deployment.state !== 'paused' || deployment.retiredAtMs == null || deployment.catalogUpdateId != null) {
     throw new Error('Reveal purge requires the expected retired Sepolia deployment.');
   }
   if (options.requireDrain && deployment.retiredAtMs != null && Date.now() - deployment.retiredAtMs < 65_000) {
@@ -84,7 +84,7 @@ async function requireActiveRevealScope(env: Env, request: EthereumRevealMainten
   const control = parseEthereum111kControl(await env.COMMERCE_DB.prepare(ETHEREUM_111K_CONTROL_SQL).first());
   if (deployment.revision !== request.expectedRevision || deployment.chainId !== 11155111 || deployment.dropId !== '111k_devnet' ||
     deployment.state !== 'active' || deployment.retiredAtMs != null ||
-    deployment.catalogVersion !== ETHEREUM_REVEAL_CATALOG_VERSION ||
+    !isSupportedRevealDeployment(deployment) || operation === 'Replacement' && deployment.catalogUpdateId != null ||
     deployment.provisionedAtMs === null || Number(env.ETHEREUM_111K_CHAIN_ID) !== deployment.chainId ||
     normalizeEthereumAddress(env.ETHEREUM_111K_CONTRACT_ADDRESS) !== deployment.contractAddress ||
     env.ETHEREUM_111K_METADATA_BASE_URI !== deployment.metadataBaseUri || Number(env.ETHEREUM_111K_DEPLOYMENT_BLOCK) !== deployment.deploymentBlock ||
@@ -118,10 +118,11 @@ export async function requireRevealRetirementPair(env: Env, value: unknown) {
   }
   const replacement = await requireRevealReplacement(env, { deploymentId: request.replacementDeploymentId,
     expectedRevision: replay ? currentReplacement.revision : request.expectedReplacementRevision });
-  if (deployment.chainId !== 11155111 || deployment.dropId !== '111k_devnet' || deployment.state !== 'paused' ||
+  if (deployment.chainId !== 11155111 || deployment.dropId !== '111k_devnet' || deployment.state !== 'paused' || deployment.catalogUpdateId != null ||
     deployment.contractAddress === replacement.contractAddress || deployment.metadataBaseUri === replacement.metadataBaseUri ||
     deployment.deploymentBlock >= replacement.deploymentBlock ||
-    Number(deployment.catalogVersion.slice(6)) > Number(replacement.catalogVersion.slice(6)) ||
+    Number((deployment.effectiveCatalogVersion ?? deployment.catalogVersion).slice(6)) >
+      Number((replacement.effectiveCatalogVersion ?? replacement.catalogVersion).slice(6)) ||
     (deployment.retiredAtMs != null ? !replay : deployment.revision !== request.expectedRevision)) {
     throw new Error('Retirement requires the expected superseded Sepolia deployment and replacement.');
   }
@@ -134,7 +135,7 @@ export async function requireRevealCancellationPair(env: Env, value: unknown) {
     readRevealMaintenanceDeployment(env, request.deploymentId),
     readRevealMaintenanceDeployment(env, request.replacementDeploymentId),
   ]);
-  if ([deployment, replacement].some(row => row.chainId !== 11155111 || row.dropId !== '111k_devnet')
+  if ([deployment, replacement].some(row => row.chainId !== 11155111 || row.dropId !== '111k_devnet' || row.catalogUpdateId != null)
     || deployment.contractAddress === replacement.contractAddress || deployment.deploymentBlock >= replacement.deploymentBlock
     || deployment.revision < request.expectedRevision || replacement.revision < request.expectedReplacementRevision
     || deployment.retiredAtMs != null && (deployment.replacementDeploymentId !== replacement.deploymentId

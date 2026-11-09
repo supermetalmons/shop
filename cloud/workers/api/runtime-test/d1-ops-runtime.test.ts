@@ -209,6 +209,7 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       '0009_ethereum_reveal_deployments.sql',
       '0010_ethereum_profile_address_guards.sql',
       '0011_ethereum_reveal_retirement.sql',
+      '0012_ethereum_reveal_catalog_updates.sql',
     ]);
     await assertEthereumProfilePersistence(env.OPS_DB);
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count

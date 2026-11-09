@@ -1,0 +1,277 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import test, { type TestContext } from 'node:test';
+import catalogJson from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
+import { computeRevealCatalogDescriptor, validateRevealAssetCatalog, type RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
+import { revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
+import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
+
+const sourceData: unknown = structuredClone(catalogJson);
+validateRevealAssetCatalog(sourceData);
+const source = sourceData;
+const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
+  attributes: [{ trait_type: 'series', value: '111K' }] });
+const deployment: EthereumRevealDeployment = { deploymentId: 'catalog-update-test', dropId: '111k_devnet', chainId: 11155111,
+  contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/catalog-update-test/',
+  deploymentBlock: 100, catalogVersion: source.catalogVersion, templateJson,
+  templateSha256: createHash('sha256').update(templateJson).digest('hex'), state: 'active', revision: 3,
+  createdAtMs: 1, updatedAtMs: 3, provisionedAtMs: 2, activatedAtMs: 3, lastError: null };
+const observation = { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 };
+
+function batch(predecessor: RevealAssetCatalog = source, count = 3): RevealCatalogUpdateBatch {
+  const target = structuredClone(predecessor);
+  target.catalogVersion = `111k-v${Number(predecessor.catalogVersion.slice(6)) + 1}`;
+  target.categories.eggs.count -= count;
+  target.categories.videos.count += count;
+  target.categories.videos.aspectRatioIndexById = [...target.categories.videos.aspectRatioIndexById!, ...Array<number>(count).fill(0)];
+  const body: RevealCatalogUpdateBody = { version: 1, nonce: '00000000-0000-4000-8000-000000000001',
+    predecessor: { manifest: predecessor, descriptor: computeRevealCatalogDescriptor(predecessor) },
+    target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) },
+    mappings: Array.from({ length: count }, (_, index) => ({ eggId: target.categories.eggs.count + index + 1,
+      category: 'video', assetId: predecessor.categories.videos.count + index + 1 })) };
+  const batchSha256 = revealCatalogUpdateHash(body);
+  return { ...body, batchId: `catalog-${batchSha256.slice(0, 32)}`, batchSha256 };
+}
+
+function fixture(t: TestContext, scope = deployment) {
+  const database = new DatabaseSync(':memory:');
+  database.exec('PRAGMA foreign_keys=ON');
+  let failSql: string | undefined;
+  const sql: RevealSql = { exec<T extends Record<string, string | number | null | ArrayBuffer>>(query: string, ...bindings: Array<string | number | null | ArrayBuffer>) {
+    if (failSql && query.includes(failSql)) throw new Error('injected failure');
+    const statement = database.prepare(query);
+    const parameters = bindings.map(value => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+    const rows = statement.columns().length ? statement.all(...parameters) : (statement.run(...parameters), []);
+    return { toArray: () => rows as T[] };
+  } };
+  const transaction = <T>(action: () => T): T => {
+    database.exec('BEGIN IMMEDIATE');
+    try { const result = action(); database.exec('COMMIT'); return result; }
+    catch (error) { database.exec('ROLLBACK'); throw error; }
+  };
+  const random: number[] = [];
+  const store = new EthereumRevealStore(sql, transaction, maximum => { const value = random.shift() ?? 0; assert.ok(value < maximum); return value; });
+  store.configure(scope);
+  while (!store.initializeChunk()) {}
+  t.after(() => database.close());
+  return { store, database, sql, transaction, random, fail: (fragment?: string) => { failSql = fragment; },
+    reopen: () => new EthereumRevealStore(sql, transaction, () => 0) };
+}
+
+function reserveEgg(database: DatabaseSync, eggId: number, crateId: string, slot: number) {
+  database.prepare('INSERT OR IGNORE INTO crates(crate_token_id) VALUES(?)').run(crateId);
+  const selected = Number(database.prepare("SELECT slot FROM free_slots WHERE category='egg' AND asset_id=?").get(eggId)!.slot);
+  const available = Number(database.prepare("SELECT available FROM pools WHERE category='egg'").get()!.available);
+  const last = Number(database.prepare("SELECT asset_id FROM free_slots WHERE category='egg' AND slot=?").get(available - 1)!.asset_id);
+  database.prepare("DELETE FROM free_slots WHERE category='egg' AND slot=?").run(available - 1);
+  if (selected !== available - 1) database.prepare("UPDATE free_slots SET asset_id=? WHERE category='egg' AND slot=?").run(last, selected);
+  database.prepare("UPDATE pools SET available=available-1 WHERE category='egg'").run();
+  database.prepare("INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES('egg',?,?,?)").run(eggId, crateId, slot);
+}
+
+const attributesJson = '[{"trait_type":"collection block","value":"new artworks"},{"trait_type":"serial","value":9007199254740993}]';
+const attributesSha256 = createHash('sha256').update(attributesJson).digest('hex');
+function stageMetadata(store: EthereumRevealStore, update: RevealCatalogUpdateBatch) {
+  const operation = store.catalogUpdate;
+  operation.begin(update, 2000);
+  for (let offset = 0; offset < update.mappings.length; offset += 256) operation.stageMappings(update.batchId, update.mappings.slice(offset, offset + 256));
+  operation.sealMappings(update.batchId);
+  for (;;) {
+    const page = operation.metadataPreparationPage(update.batchId, 256);
+    if (!page.length) break;
+    operation.metadataStage(update.batchId, page.map(row => ({ ...row, attributesJson, sha256: attributesSha256 })));
+  }
+}
+
+function stageGeneration(store: EthereumRevealStore, update: RevealCatalogUpdateBatch, interleave?: () => void) {
+  while (store.catalogUpdate.status(update.batchId)!.generationSeeded < 111111) {
+    store.catalogUpdate.generationStage(update.batchId);
+    interleave?.();
+  }
+  store.catalogUpdate.seal(update.batchId);
+}
+
+function conservation(store: EthereumRevealStore, database: DatabaseSync) {
+  const pools = store.catalogUpdate.pools();
+  assert.equal(pools.reduce((sum, row) => sum + row.total, 0), 111111);
+  assert.equal(pools.reduce((sum, row) => sum + row.available, 0) + Number(database.prepare('SELECT COUNT(*) AS count FROM assignments').get()!.count), 111111);
+  assert.equal(new Set(store.catalogUpdate.canonicalMetadata(['1', '2', '3']).map(row => `${row.category}:${row.assetId}`)).size,
+    store.catalogUpdate.canonicalMetadata(['1', '2', '3']).length);
+}
+
+test('online activation maps free, private and frozen units atomically without rewriting original evidence', t => {
+  const f = fixture(t);
+  const update = batch();
+  const maximum = source.categories.eggs.count;
+  reserveEgg(f.database, maximum, '111112', 0);
+  reserveEgg(f.database, 70000, '111112', 1);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 1000);
+  f.store.publicationComplete('1');
+  reserveEgg(f.database, maximum - 1, '111113', 0);
+  const original = f.database.prepare('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id').all();
+  stageMetadata(f.store, update);
+  stageGeneration(f.store, update);
+  assert.equal(f.store.frozen(['1'])[0].category, 'egg');
+  assert.equal(f.store.catalogUpdate.pools().find(row => row.category === 'egg')!.total, maximum);
+  f.store.catalogUpdate.activate(update.batchId, 3000);
+  const changed = f.store.catalogUpdate.canonicalMetadata(['1'])[0];
+  assert.equal(changed.category, 'video');
+  assert.equal(changed.assetId, 61);
+  assert.equal(changed.metadataRevision, 3);
+  assert.match(changed.metadataJson, /9007199254740993/);
+  assert.equal(changed.artwork.crateTokenId, '111112');
+  assert.deepEqual(changed.artwork.observation, observation);
+  assert.deepEqual(f.database.prepare('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id').all(), original);
+  assert.equal(f.store.frozen(['2'])[0].category, 'egg');
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111113', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 21)) }], 3001);
+  assert.equal(f.store.frozen(['21'])[0].category, 'video');
+  assert.equal(f.store.catalogUpdate.canonicalMetadata(['21'])[0].assetId, 60);
+  assert.equal(f.store.catalogUpdate.status(update.batchId)!.frozen, 1);
+  assert.equal(f.store.catalogUpdate.publicationPage(update.batchId).length, 1);
+  f.random.push(111110, 0);
+  f.store.reserve(['111114']);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111114', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 41)) }], 3002);
+  assert.equal(f.store.catalogUpdate.canonicalMetadata(['41'])[0].assetId, 59);
+  assert.equal(f.store.frozen(['41'])[0].category, 'video');
+  assert.equal(f.store.tokensResponse(deployment, ['1']).catalogRevision, 1);
+  assert.equal(f.store.transactionResponse(deployment, observation.transactionHash).catalogRevision, 1);
+  conservation(f.store, f.database);
+  const job = f.store.catalogUpdate.pendingPublications(update.batchId)[0];
+  assert.ok(f.store.catalogUpdate.validateMetadataWrite(job));
+  assert.equal(f.store.catalogUpdate.validateMetadataWrite({ ...job, metadataRevision: 0 }), false);
+  f.store.catalogUpdate.acknowledgePublication(update.batchId, job.tokenId, job.metadataRevision, job.targetSha256);
+  f.store.catalogUpdate.finalize(update.batchId);
+  while (f.store.catalogUpdate.prune(update.batchId).remaining) {}
+  assert.equal(f.database.prepare('SELECT COUNT(*) AS count FROM free_slots').get()!.count, 0);
+  assert.equal(f.store.catalogUpdate.verify(update.batchId).published, 1);
+  assert.equal(f.reopen().frozen(['1'])[0].category, 'video');
+  assert.throws(() => f.database.prepare("UPDATE assignments SET metadata_json='{}' WHERE token_id='1'").run(), /Frozen reveal/);
+});
+
+test('candidate free slots mirror live allocations and releases while staging, including after sealing', t => {
+  const f = fixture(t);
+  const update = batch();
+  stageMetadata(f.store, update);
+  f.store.catalogUpdate.generationStage(update.batchId);
+  f.random.push(source.categories['3d'].count + source.categories.animated.count, 0);
+  f.store.reserve(['111112']);
+  assert.equal(f.database.prepare("SELECT COUNT(*) AS count FROM reveal_catalog_free WHERE origin_category='egg' AND origin_asset_id=1").get()!.count, 0);
+  f.database.prepare("DELETE FROM assignments WHERE category='egg' AND asset_id=1 AND token_id IS NULL").run();
+  f.store.catalogUpdate.releaseFree({ category: 'egg', assetId: 1 });
+  assert.equal(f.database.prepare("SELECT COUNT(*) AS count FROM reveal_catalog_free WHERE origin_category='egg' AND origin_asset_id=1").get()!.count, 1);
+  stageGeneration(f.store, update);
+  f.store.reserve(['111113']);
+  const lastEgg = source.categories.eggs.count;
+  const slot = Number(f.database.prepare("SELECT slot FROM free_slots WHERE category='egg' AND asset_id=?").get(lastEgg)!.slot);
+  f.random.push(source.categories['3d'].count + source.categories.animated.count, slot);
+  f.store.reserve(['111114']);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111114', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 2999);
+  assert.equal(f.store.frozen(['1'])[0].category, 'egg');
+  f.store.catalogUpdate.activate(update.batchId, 3000);
+  assert.equal(f.store.frozen(['1'])[0].category, 'video');
+  assert.equal(f.store.catalogUpdate.status(update.batchId)!.frozen, 1);
+  const publication = f.store.catalogUpdate.pendingPublications(update.batchId)[0];
+  f.store.catalogUpdate.acknowledgePublication(update.batchId, publication.tokenId, publication.metadataRevision, publication.targetSha256);
+  conservation(f.store, f.database);
+  f.store.catalogUpdate.finalize(update.batchId);
+});
+
+test('cancelling staged work leaves reads and allocations online and permits a new frozen mapping', t => {
+  const f = fixture(t);
+  const update = batch();
+  stageMetadata(f.store, update);
+  f.store.catalogUpdate.generationStage(update.batchId);
+  f.store.reserve(['111112']);
+  const before = f.store.summary();
+  f.store.catalogUpdate.cancel(update.batchId);
+  assert.deepEqual(f.store.summary(), before);
+  assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
+  while (f.store.catalogUpdate.prune(update.batchId).remaining) {}
+  f.store.reserve(['111113']);
+  conservation(f.store, f.database);
+});
+
+test('a conflict on one replacement does not prevent other replacements from publishing', t => {
+  const f = fixture(t);
+  const update = batch();
+  update.mappings.forEach((mapping, slot) => reserveEgg(f.database, mapping.eggId, '111112', slot));
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 1000);
+  stageMetadata(f.store, update);
+  stageGeneration(f.store, update);
+  f.store.catalogUpdate.activate(update.batchId, 3000);
+  const first = f.store.catalogUpdate.pendingPublications(update.batchId, 1, 3000)[0];
+  f.store.catalogUpdate.failPublication(update.batchId, first.tokenId, first.metadataRevision, 'conflict', 3000);
+  const rest = f.store.catalogUpdate.pendingPublications(update.batchId, 8, 3001);
+  assert.equal(rest.length, 2);
+  assert.ok(rest.every(row => row.tokenId !== first.tokenId));
+  for (const row of rest) f.store.catalogUpdate.acknowledgePublication(update.batchId, row.tokenId, row.metadataRevision, row.targetSha256);
+  f.store.reserve(['111113']);
+  assert.equal(f.store.catalogUpdate.status(update.batchId)!.conflicts, 1);
+  assert.throws(() => f.store.catalogUpdate.cancel(update.batchId), /resume forward/);
+  assert.equal(f.store.catalogUpdate.pendingPublications(update.batchId, 8, 303001).length, 1);
+});
+
+test('500 reveal projections stay compact while canonical inventory metadata keeps full staged traits', { timeout: 60_000 }, t => {
+  const f = fixture(t);
+  const update = batch(source, 500);
+  update.mappings.forEach((mapping, index) => reserveEgg(f.database, mapping.eggId, String(111112 + Math.floor(index / 20)), index % 20));
+  for (let index = 0; index < 25; index++) f.store.freeze(deployment, observation, [{ crateTokenId: String(111112 + index),
+    tokenIds: Array.from({ length: 20 }, (_, offset) => String(index * 20 + offset + 1)) }], 1000);
+  f.store.catalogUpdate.begin(update, 2000);
+  for (let offset = 0; offset < update.mappings.length; offset += 256) f.store.catalogUpdate.stageMappings(update.batchId, update.mappings.slice(offset, offset + 256));
+  f.store.catalogUpdate.sealMappings(update.batchId);
+  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'heavy' }, { trait_type: 'large', value: 'x'.repeat(64 * 1024) }]);
+  const sha256 = createHash('sha256').update(payload).digest('hex');
+  for (;;) {
+    const page = f.store.catalogUpdate.metadataPreparationPage(update.batchId, 8);
+    if (!page.length) break;
+    f.store.catalogUpdate.metadataStage(update.batchId, page.map(row => ({ ...row, attributesJson: payload, sha256 })));
+  }
+  stageGeneration(f.store, update);
+  f.store.catalogUpdate.activate(update.batchId, 3000);
+  const items = f.store.frozen(Array.from({ length: 500 }, (_, index) => String(index + 1)));
+  assert.equal(items.length, 500);
+  assert.ok(items.every(row => row.category === 'video' && row.metadataRevision === 2 && row.attributes?.every(attribute => attribute.trait_type !== 'large')));
+  assert.ok(Buffer.byteLength(JSON.stringify(items)) < 512 * 1024);
+  const full = f.store.catalogUpdate.canonicalMetadata(['1'])[0];
+  assert.equal(full.metadataRevision, 3);
+  assert.equal(JSON.parse(full.metadataJson).attributes.find((attribute: { trait_type: string }) => attribute.trait_type === 'large').value.length, 64 * 1024);
+});
+
+test('oversized merged metadata is rejected before activation while the original pool remains available', t => {
+  const f = fixture(t);
+  const update = batch();
+  f.store.catalogUpdate.begin(update, 2000);
+  f.store.catalogUpdate.stageMappings(update.batchId, update.mappings);
+  f.store.catalogUpdate.sealMappings(update.batchId);
+  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'large' }, { trait_type: 'data', value: 'x'.repeat(128 * 1024 - 200) }]);
+  assert.ok(Buffer.byteLength(payload) < 128 * 1024);
+  const [row] = f.store.catalogUpdate.metadataPreparationPage(update.batchId);
+  assert.throws(() => f.store.catalogUpdate.metadataStage(update.batchId, [{ ...row, attributesJson: payload,
+    sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 128 KiB/);
+  assert.equal(f.store.catalogUpdate.status(update.batchId)!.metadataStaged, 0);
+  assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
+  f.store.reserve(['111112']);
+});
+
+for (const amount of [9358, source.categories.eggs.count]) test(`online generation stages ${amount} replacements and reaches its exact cutoff`, { timeout: 120_000 }, t => {
+  const f = fixture(t);
+  const update = batch(source, amount);
+  const started = performance.now();
+  stageMetadata(f.store, update);
+  let crate = 111112;
+  stageGeneration(f.store, update, () => { if (crate < 111132) f.store.reserve([String(crate++)]); });
+  const stagedMs = performance.now() - started;
+  const activated = performance.now();
+  f.store.catalogUpdate.activate(update.batchId, 3000);
+  const activationMs = performance.now() - activated;
+  assert.equal(f.store.catalogUpdate.activeCatalog().categories.eggs.count, source.categories.eggs.count - amount);
+  assert.equal(f.store.catalogUpdate.pools().find(row => row.category === 'egg')!.total, source.categories.eggs.count - amount);
+  conservation(f.store, f.database);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 3001);
+  if (amount === source.categories.eggs.count) assert.ok(f.store.frozen(Array.from({ length: 20 }, (_, index) => String(index + 1))).every(row => row.category !== 'egg'));
+  f.store.catalogUpdate.finalize(update.batchId);
+  t.diagnostic(JSON.stringify({ amount, stagedMs: Math.round(stagedMs), activationMs: Math.round(activationMs) }));
+});
