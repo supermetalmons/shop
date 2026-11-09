@@ -104,6 +104,9 @@ metadata uses the actual assigned asset's ratio. They are examples, not baseline
 metadata or preassigned token identities. All 111,111 artwork baseline objects
 still use the unrevealed artwork template until confirmed reveal.
 
+Revealed eggs use `Egg #{{assetId}}` as their name, matching the assigned egg
+image ID. Other artwork categories retain the baseline name.
+
 ## Deployment verification
 
 Before publishing a new release, verify public GET/HEAD responses, media content

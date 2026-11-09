@@ -42,12 +42,13 @@ export function buildRevealedArtwork(input: {
     name: string; description?: string; image: string; attributes?: Array<{ trait_type: string; value: string | number }>;
   };
   const media = revealAssetMedia(input.category, input.assetId);
+  const name = input.category === 'egg' ? `Egg #${input.assetId}` : template.name;
   const attributes = [...(template.attributes || []).filter(attribute => attribute.trait_type !== 'type'),
     { trait_type: 'type', value: input.category }];
-  const metadata = { ...template, ...media, attributes, category: input.category, revealStatus: 'revealed' as const };
+  const metadata = { ...template, name, ...media, attributes, category: input.category, revealStatus: 'revealed' as const };
   return {
     artwork: { tokenId: input.tokenId, crateTokenId: input.crateTokenId, category: input.category,
-      name: template.name, ...(template.description !== undefined ? { description: template.description } : {}),
+      name, ...(template.description !== undefined ? { description: template.description } : {}),
       ...media, attributes, observation: input.observation },
     metadataJson: `${JSON.stringify(metadata, null, 2)}\n`,
     placeholderJson: `${JSON.stringify(template, null, 2)}\n`,

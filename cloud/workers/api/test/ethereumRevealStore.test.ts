@@ -132,6 +132,12 @@ test('catalog preserves all category counts, exact ratios, posters, and immutabl
   assert.deepEqual(result.artwork.attributes, [{ trait_type: 'series', value: '111K' }, { trait_type: 'type', value: 'video' }]);
   assert.equal(JSON.parse(result.metadataJson).animation_url, 'https://cdn.lil.org/nft/111k/videos/3.mp4');
   assert.equal(JSON.parse(result.placeholderJson).image, 'https://cdn.lil.org/nft/111k/placeholder.png');
+  const egg = buildRevealedArtwork({ ...input, category: 'egg', assetId: 14 });
+  assert.equal(egg.artwork.name, 'Egg #14');
+  assert.equal(JSON.parse(egg.metadataJson).name, 'Egg #14');
+  assert.equal(JSON.parse(egg.metadataJson).image, 'https://cdn.lil.org/nft/111k/eggs/14.png');
+  assert.equal(egg.placeholderJson, result.placeholderJson);
+  assert.equal(JSON.parse(egg.placeholderJson).name, '71');
   for (const assetId of [1, 3000]) {
     const model = buildRevealedArtwork({ ...input, category: '3d', assetId });
     assert.equal(model.artwork.name, '71');

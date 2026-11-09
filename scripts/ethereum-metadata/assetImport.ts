@@ -182,7 +182,7 @@ function referenceTemplates(manifest: RevealAssetCatalog, template: unknown): Re
     };
     const metadata: Record<string, unknown> = {
       ...template,
-      name: '{{tokenId}}',
+      name: category === 'egg' ? 'Egg #{{assetId}}' : '{{tokenId}}',
       image: placeholderUrl(media.image),
       aspectRatio: media.aspectRatio,
       attributes: [...attributes.filter(attribute => (attribute as Record<string, unknown>).trait_type !== 'type'),

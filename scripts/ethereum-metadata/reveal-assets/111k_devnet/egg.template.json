@@ -1,5 +1,5 @@
 {
-  "name": "{{tokenId}}",
+  "name": "Egg #{{assetId}}",
   "description": "",
   "image": "https://cdn.lil.org/nft/111k/eggs/{{assetId}}.png",
   "attributes": [

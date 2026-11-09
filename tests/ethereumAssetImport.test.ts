@@ -164,6 +164,7 @@ test('a complete non-egg inventory allocates zero eggs and excess artwork cannot
   assert.equal(imported.manifest.categories['3d'].count, 111108);
   assert.throws(() => revealCatalogMedia(imported.manifest, 'egg', 1), /Invalid reveal asset/);
   const reference = JSON.parse(await readFile(join(f.rootDirectory, assetDirectory, 'egg.template.json'), 'utf8'));
+  assert.equal(reference.name, 'Egg #{{assetId}}');
   assert.equal(reference.image, 'https://cdn.lil.org/nft/111k/eggs/{{assetId}}.png');
   const before = await snapshot(f.rootDirectory);
   source['3d/111109.png'] = [2048, 2048];
@@ -349,6 +350,7 @@ test('baseline artwork template changes require a revision and retain only the s
   await importRevealAssets({ ...f.options, artworkTemplatePath: templatePath, catalogVersion: '111k-v6' });
   for (const category of ['egg', 'painting', 'video', '3d', 'animated']) {
     const reference = JSON.parse(await readFile(join(f.rootDirectory, assetDirectory, `${category}.template.json`), 'utf8'));
+    assert.equal(reference.name, category === 'egg' ? 'Egg #{{assetId}}' : '{{tokenId}}');
     assert.equal(reference.description, 'Shared description');
     assert.deepEqual(reference.attributes, [{ trait_type: 'series', value: '111K' }, { trait_type: 'type', value: category }]);
   }
