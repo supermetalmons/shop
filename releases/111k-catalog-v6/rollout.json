@@ -1,0 +1,70 @@
+{
+  "completedAt": "2026-11-09T22:22:34.833969+00:00",
+  "kind": "111k-online-catalog-update",
+  "status": "complete",
+  "deploymentId": "v17",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "originalRegistryRevision": 3,
+  "finalRegistryRevision": 6,
+  "originCatalogVersion": "111k-v5",
+  "effectiveCatalogVersion": "111k-v6",
+  "catalogRevision": 1,
+  "catalogSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+  "sourceSha256": "cf7e8a5973d56ab633f9f338f63737d1c58b26be32f395774f0db8f8d1dadbf4",
+  "batchId": "catalog-a711aeea26eaaf4789b983beb5880f67",
+  "batchSha256": "a711aeea26eaaf4789b983beb5880f6770522608750319f8956b2e6d4348c58e",
+  "addedPaintings": {
+    "first": 30991,
+    "last": 40348,
+    "count": 9358
+  },
+  "removedEggs": {
+    "first": 67285,
+    "last": 76642,
+    "count": 9358
+  },
+  "counts": {
+    "eggs": 67284,
+    "paintings": 40348,
+    "videos": 58,
+    "3d": 3000,
+    "animated": 421
+  },
+  "artworkSupply": 111111,
+  "updatedRevealedEggs": 230,
+  "mappingApplied": 9358,
+  "conflicts": 0,
+  "retrying": 0,
+  "completedObservationAndCleanup": true,
+  "originalFrozenArtworkEvidenceUnchanged": {
+    "frozenThroughMs": 1794256573384,
+    "frozenArtworks": 4360,
+    "frozenMetadataSha256": "c8bdbf1d781a516358aab0510544663930a061abcd0caa4d0ff20c607358446b"
+  },
+  "apiVersionId": "b989abf8-55b2-406b-9e34-7f29dd96410d",
+  "frontendVersionId": "b31dca34-85d4-42e2-9b50-94c7463cc6db",
+  "availabilityProbes": 1973,
+  "failedAvailabilityProbes": 0,
+  "contractReplaced": false,
+  "saleOrCommercePaused": false,
+  "testMintsCreated": false,
+  "onchainRefreshSent": false,
+  "evidenceFiles": [
+    "bundle-audit.json",
+    "media-preflight.json",
+    "v17.media-preflight.json",
+    "api-deployment.json",
+    "frontend-deployment.json",
+    "frontend-verification.json",
+    "browser-verification.json",
+    "v17-before.json",
+    "verification.json",
+    "postflight.json",
+    "availability-summary.json",
+    "metadata-refresh-unsigned.json",
+    "deployment-validation.json",
+    "availability.jsonl.gz"
+  ]
+}

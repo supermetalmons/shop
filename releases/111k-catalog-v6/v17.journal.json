@@ -1,0 +1,27 @@
+{
+  "deploymentId": "v17",
+  "expectedRevision": 3,
+  "batchId": "catalog-a711aeea26eaaf4789b983beb5880f67",
+  "batchSha256": "a711aeea26eaaf4789b983beb5880f6770522608750319f8956b2e6d4348c58e",
+  "result": {
+    "deploymentId": "v17",
+    "batchId": "catalog-a711aeea26eaaf4789b983beb5880f67",
+    "phase": "complete",
+    "complete": true,
+    "catalogRevision": 1,
+    "total": 9358,
+    "staged": 9358,
+    "applied": 9358,
+    "published": 230,
+    "frozen": 230,
+    "retryAfterMs": 0,
+    "conflicts": 0,
+    "retrying": 0,
+    "refreshTransaction": {
+      "chainId": 11155111,
+      "to": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "data": "0x55f804b30000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002768747470733a2f2f63646e2e6d6f6e732e73686f702f3131316b2d7365706f6c69612f7631372f00000000000000000000000000000000000000000000000000",
+      "value": "0x0"
+    }
+  }
+}

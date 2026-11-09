@@ -4,7 +4,7 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-New deployments use catalog version `111k-v5`: 76,642 eggs, 30,990 paintings,
+New deployments use catalog version `111k-v6`: 67,284 eggs, 40,348 paintings,
 58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
 111,111-artwork supply from 76,700 available eggs after counting all non-egg
 artworks. The runtime supports the current catalog and explicitly retained ancestor
@@ -179,7 +179,7 @@ Create a private local manifest using the deployment ID and prefix chosen above:
   "contractAddress": "<deployed contract address>",
   "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/<new-sepolia-deployment-id>/",
   "deploymentBlock": 0,
-  "catalogVersion": "111k-v5",
+  "catalogVersion": "111k-v6",
   "publicationDirectory": "./published-metadata"
 }
 ```

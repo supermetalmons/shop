@@ -9,6 +9,7 @@ import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revea
 import type { EthereumRevealObservation } from '../../../../shared/ethereum/reveal.ts';
 import { revealCatalogMedia, validateRevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
+import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 
 const REVEAL_TRANSIENT_TRANSACTION_LIMIT = 10_000;
 const REVEAL_TRANSIENT_TRANSACTION_TTL_MS = 15 * 60_000;
@@ -90,9 +91,9 @@ function reserveEggSlots(database: DatabaseSync, crateTokenId: string, slots: nu
   }
 }
 
-test('catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
+test('current v6 catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
   validateRevealCatalog();
-  assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 76642, painting: 30990, video: 58 });
+  assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 67284, painting: 40348, video: 58 });
   assert.equal(Object.values(REVEAL_CATEGORY_COUNTS).reduce<number>((sum, value) => sum + value, 0), REVEAL_ARTWORK_COUNT);
   const imageUrls = new Set<string>();
   const mediaFor = (category: keyof typeof REVEAL_CATEGORY_COUNTS, assetId: number) => buildRevealedArtwork({
@@ -164,10 +165,10 @@ test('catalog preserves all category counts, exact ratios, posters, and immutabl
     assert.equal(animated.placeholderJson, result.placeholderJson);
   }
   for (const assetId of [0, 422]) assert.throws(() => mediaFor('animated', assetId), /Invalid reveal asset/);
-  assert.equal(mediaFor('painting', 30990).image, 'https://cdn.lil.org/nft/111k/paintings/30990.png');
-  assert.throws(() => mediaFor('painting', 30991), /Invalid reveal asset/);
-  assert.equal(mediaFor('egg', 76642).image, 'https://cdn.lil.org/nft/111k/eggs/76642.png');
-  assert.throws(() => mediaFor('egg', 76643), /Invalid reveal asset/);
+  assert.equal(mediaFor('painting', 40348).image, 'https://cdn.lil.org/nft/111k/paintings/40348.png');
+  assert.throws(() => mediaFor('painting', 40349), /Invalid reveal asset/);
+  assert.equal(mediaFor('egg', 67284).image, 'https://cdn.lil.org/nft/111k/eggs/67284.png');
+  assert.throws(() => mediaFor('egg', 67285), /Invalid reveal asset/);
   assert.throws(() => mediaFor('video', 59), /Invalid reveal asset/);
   assert.equal(revealCrateSize('116666'), 31);
   for (const id of ['0111112', '111111', '116667', '1.0']) assert.throws(() => revealCrateSize(id));
@@ -176,6 +177,17 @@ test('catalog preserves all category counts, exact ratios, posters, and immutabl
     const value = revealRandomInteger(max);
     assert.ok(Number.isInteger(value) && value >= 0 && value < max);
   }
+});
+
+test('historical v5 deployments retain their original egg and painting boundaries after v6 promotion', () => {
+  const historical = getRevealCatalog('111k-v5')!;
+  const mediaFor = (category: 'egg' | 'painting', assetId: number) => buildRevealedArtwork({
+    templateJson, tokenId: '1', crateTokenId: crateId(0), category, assetId, observation: observation(1), catalog: historical,
+  }).artwork;
+  assert.equal(mediaFor('egg', 76642).image, 'https://cdn.lil.org/nft/111k/eggs/76642.png');
+  assert.equal(mediaFor('painting', 30990).image, 'https://cdn.lil.org/nft/111k/paintings/30990.png');
+  assert.throws(() => mediaFor('egg', 76643), /Invalid reveal asset/);
+  assert.throws(() => mediaFor('painting', 30991), /Invalid reveal asset/);
 });
 
 test('animated metadata resolves future ratios by asset ID and validates the ratio index', () => {

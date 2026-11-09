@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-11-09T21:05:11.698Z",
+  "result": {
+    "deploymentId": "v17",
+    "batchId": "catalog-a711aeea26eaaf4789b983beb5880f67",
+    "phase": "unstarted",
+    "complete": false,
+    "catalogRevision": 0,
+    "total": 0,
+    "staged": 0,
+    "applied": 0,
+    "published": 0,
+    "frozen": 0,
+    "retryAfterMs": 0,
+    "conflicts": 0,
+    "retrying": 0
+  },
+  "config": {
+    "deploymentId": "v17",
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+    "deploymentBlock": 12092412,
+    "catalogRevision": 0,
+    "enabled": true
+  }
+}

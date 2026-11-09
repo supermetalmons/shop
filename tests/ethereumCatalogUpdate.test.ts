@@ -307,13 +307,16 @@ test('concurrent local mutation commands cannot overwrite the operation journal'
   assert.equal(JSON.parse(await readFile(join(input.directory, 'test.journal.json'), 'utf8')).expectedRevision, 4);
 });
 
-test('current catalog registry is pinned and immutable', () => {
+test('current v6 catalog and retained v5 ancestor are pinned and immutable', () => {
   const supported = getSupportedRevealCatalogVersions();
-  assert.ok(supported.includes('111k-v5'));
-  const descriptor = getRevealCatalogDescriptor('111k-v5')!;
-  const value = getRevealCatalog('111k-v5', descriptor.manifestSha256)!;
-  assert.equal(value.categories.eggs.count, 76642);
-  assert.ok(Object.isFrozen(value.categories.eggs));
-  assert.equal(getRevealCatalog('111k-v5', 'a'.repeat(64)), undefined);
+  for (const [version, eggs, paintings] of [['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348]] as const) {
+    assert.ok(supported.includes(version));
+    const descriptor = getRevealCatalogDescriptor(version)!;
+    const value = getRevealCatalog(version, descriptor.manifestSha256)!;
+    assert.equal(value.categories.eggs.count, eggs);
+    assert.equal(value.categories.paintings.count, paintings);
+    assert.ok(Object.isFrozen(value.categories.eggs));
+    assert.equal(getRevealCatalog(version, 'a'.repeat(64)), undefined);
+  }
   assert.equal(getRevealCatalog('111k-v999'), undefined);
 });

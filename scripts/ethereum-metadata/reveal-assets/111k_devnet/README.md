@@ -1,6 +1,6 @@
 # 111k reveal asset catalog
 
-[manifest.json](manifest.json) is the generated `111k-v5` reveal catalog for fresh
+[manifest.json](manifest.json) is the generated `111k-v6` reveal catalog for fresh
 testnet and future mainnet deployments. [source.json](source.json) preserves the
 supplied `111k.json` dimensions map. The catalog uses the media root
 `https://cdn.lil.org/nft/111k/`; metadata JSONs still use the deployment's
@@ -11,8 +11,8 @@ for publication and registration.
 
 | Category | Allocated | Image | Animation/model | Ratio |
 | --- | ---: | --- | --- | --- |
-| Eggs | 76,642 | `eggs/{id}.png` | — | 1:1 |
-| Paintings | 30,990 | `paintings/{id}.png` | — | Per ID |
+| Eggs | 67,284 | `eggs/{id}.png` | — | 1:1 |
+| Paintings | 40,348 | `paintings/{id}.png` | — | Per ID |
 | 3D | 3,000 | `3d/{id}.png` | `3d/{id}.glb` | 1:1 preview |
 | Animated | 421 | `animated/{id}.png` | `animated/{id}.mp4` | Per ID, currently 466:503 |
 | Videos | 58 | `videos/{id}.webp` | `videos/{id}.mp4` | Per ID |
@@ -20,12 +20,12 @@ for publication and registration.
 
 Category-local IDs are continuous integers beginning at 1. They are independent
 of onchain token IDs. There are 76,700 available egg PNGs; the current allocation
-uses IDs 1–76,642 and leaves IDs 76,643–76,700 unused. Every import recalculates
+uses IDs 1–67,284 and leaves IDs 67,285–76,700 unused. Every import recalculates
 the egg allocation as `111111 - nonEggArtworkCount` and rejects an insufficient
 egg inventory or more than 111,111 non-egg artworks.
 
-All current 30,990 paintings also have `paintings/alt/{id}.webp` variants. Future
-paintings may have no alternative. Their paths
+Paintings 1–30,990 also have `paintings/alt/{id}.webp` variants. Paintings
+30,991–40,348 have no alternative. Their paths
 and exact ratios are preserved separately; they do not add artworks or replace
 the PNG used by metadata. Video MP4/poster pairs also count as one artwork each.
 The source map intentionally omits 3D GLBs and animated MP4s; those companions
@@ -50,7 +50,7 @@ The importer accepts a complete JSON object mapping relative media paths to
 Run it from the shop repository:
 
 ```sh
-npm run ethereum:assets -- import --source /path/to/updated/111k.json --catalog-version 111k-v6
+npm run ethereum:assets -- import --source /path/to/updated/111k.json --catalog-version 111k-v7
 npm run check:ethereum-assets
 ```
 
@@ -86,7 +86,7 @@ video/poster pairs, and supply before writing generated outputs.
 
 ## Manifest and metadata references
 
-Storage format version 2 is distinct from the `111k-v5` catalog revision.
+Storage format version 2 is distinct from the `111k-v6` catalog revision.
 `source.sha256` hashes the exact source bytes. `importSettings` records the
 available egg inventory and square egg ratio. The compact shared descriptor
 pins the catalog version and SHA-256 of `JSON.stringify(manifest)`; browser
@@ -126,6 +126,9 @@ boundaries as well. The v4 preparation checked representative public media paths
 and confirmed that eggs 1 and 76,700 are 1024 × 1024 PNGs. The v5 media update
 uses a 1448 × 1086 crate WEBP, 1536 × 1024 warehouse WEBP, and 932 × 1006
 placeholder PNG, preserving all existing artwork counts and source dimensions.
+The v6 catalog adds paintings 30,991–40,348 and reduces the egg allocation by
+9,358. The retained v5 catalog remains available for existing deployments until
+their explicit online catalog update activates.
 
 Generate and validate the complete 344,984-object baseline revision, then follow
 the reveal runbook for fresh-prefix publication, verification, contract

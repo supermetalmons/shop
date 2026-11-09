@@ -1,0 +1,48 @@
+{
+  "startedAt": "2026-11-09T20:36:07.494Z",
+  "finishedAt": "2026-11-09T22:20:35.884Z",
+  "probeCount": 1973,
+  "failedProbes": 0,
+  "intervalTargetSeconds": 15,
+  "logSha256": "1747c087890245320ec86f5a8f5a322581bb276b690b0d33d23435b8fb3d460b",
+  "endpoints": {
+    "https://api.mons.shop/ethereum/111k/config": {
+      "probes": 395,
+      "failures": 0,
+      "medianMs": 832,
+      "p95Ms": 1434,
+      "maxMs": 2199
+    },
+    "https://cdn.mons.shop/111k-sepolia/v17/1.json": {
+      "probes": 394,
+      "failures": 0,
+      "medianMs": 411.5,
+      "p95Ms": 515,
+      "maxMs": 1102
+    },
+    "https://cdn.mons.shop/111k-sepolia/v17/2.json": {
+      "probes": 394,
+      "failures": 0,
+      "medianMs": 474.0,
+      "p95Ms": 582,
+      "maxMs": 956
+    },
+    "https://mons.shop/": {
+      "probes": 395,
+      "failures": 0,
+      "medianMs": 262,
+      "p95Ms": 320,
+      "maxMs": 492
+    },
+    "https://www.mons.shop/": {
+      "probes": 395,
+      "failures": 0,
+      "medianMs": 267,
+      "p95Ms": 317,
+      "maxMs": 537
+    }
+  },
+  "observation": "No HTTP or availability failures observed by these passive probes; no test mint or wallet transaction was performed.",
+  "rawLogFile": "availability.jsonl.gz",
+  "compressedLogSha256": "27959405c26dd81899d3d254059d3c298838e8cd90f28e90ff507d951cc7565d"
+}

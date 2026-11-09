@@ -1,0 +1,41 @@
+{
+  "recordedAt": "2026-11-09T21:30:40.053837+00:00",
+  "baseCommit": "4e0aca0f918f56caeb76d955181ff2abc0b87c26",
+  "gates": {
+    "api": {
+      "versionId": "b989abf8-55b2-406b-9e34-7f29dd96410d",
+      "testSuiteCounts": [
+        3281,
+        63
+      ],
+      "logSha256": "0e1a3ebb93a634964cba1013886d252451ae3eaf7faf3b85e07e0ef06bc12c2e",
+      "deploymentCommand": "npm run deploy:api",
+      "completed": true
+    },
+    "frontend": {
+      "versionId": "b31dca34-85d4-42e2-9b50-94c7463cc6db",
+      "testSuiteCounts": [
+        4,
+        29,
+        1,
+        5197
+      ],
+      "logSha256": "7b0cc4ee57e8faf167e49dde51bf4631ad6461f0cd64f4e5189357dc9084402e",
+      "deploymentCommand": "npm run deploy",
+      "completed": true
+    }
+  },
+  "appliedMigrations": {
+    "ops": [
+      "0012_ethereum_reveal_catalog_updates.sql"
+    ],
+    "data": [],
+    "commerce": []
+  },
+  "opsMigrationExecutionMs": 13.98,
+  "preparationChanges": [
+    "catalog data and retained ancestor",
+    "test fixtures",
+    "allocation documentation"
+  ]
+}

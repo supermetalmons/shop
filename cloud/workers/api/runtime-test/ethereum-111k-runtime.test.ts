@@ -398,6 +398,9 @@ export default {
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: {
     name: 'ethereum-read-runtime', main: fixturePath,
     compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
+    d1_databases: production.d1_databases.filter((database: Record<string, unknown>) => database.binding === 'OPS_DB')
+      .map((database: Record<string, unknown>) => ({ ...database, remote: false,
+        migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)) })),
     vars: { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: '0x1111111111111111111111111111111111111111',
       ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
       ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/' },
@@ -405,6 +408,7 @@ export default {
   try {
     await server.listen();
     const worker = server.getWorker('ethereum-read-runtime');
+    await worker.applyD1Migrations('OPS_DB');
     const confirm = (query = '') => worker.fetch(`https://api.mons.shop${paths.transactionsConfirm}${query}`, {
       method: 'POST', headers: { Origin: ORIGIN, 'X-Mons-CSRF': '1', 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.42' },
       body: JSON.stringify({ transactionHash: `0x${'aa'.repeat(32)}` }),

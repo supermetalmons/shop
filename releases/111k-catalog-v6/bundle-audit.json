@@ -1,0 +1,46 @@
+{
+  "checkedAt": "2026-11-09T20:56:52.749Z",
+  "complete": true,
+  "batchId": "catalog-a711aeea26eaaf4789b983beb5880f67",
+  "batchSha256": "a711aeea26eaaf4789b983beb5880f6770522608750319f8956b2e6d4348c58e",
+  "sourceSha256": "cf7e8a5973d56ab633f9f338f63737d1c58b26be32f395774f0db8f8d1dadbf4",
+  "predecessorSourceSha256": "ce2298a61f183c3786f55fb3bc22a975057e79a7a914c9245be23ce71bdc45c5",
+  "predecessor": {
+    "catalogVersion": "111k-v5",
+    "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a"
+  },
+  "target": {
+    "catalogVersion": "111k-v6",
+    "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4"
+  },
+  "mappingCount": 9358,
+  "mappingSha256": "02584d25a66e46bd621e448593411cf06dd93dcf9bb671b12a863e868bb60525",
+  "cutoffEggIds": {
+    "first": 67285,
+    "last": 76642,
+    "count": 9358
+  },
+  "addedPaintingIds": {
+    "first": 30991,
+    "last": 40348,
+    "count": 9358
+  },
+  "eggsRemaining": 67284,
+  "paintingsAfter": 40348,
+  "totalArtworks": 111111,
+  "sourcePathChanges": {
+    "added": 9358,
+    "removed": 0,
+    "changed": 0
+  },
+  "checks": {
+    "bijection": true,
+    "allNewAssetsArePaintings": true,
+    "otherCategoriesUnchanged": true,
+    "canonicalTargetMatchesBundle": true,
+    "canonicalSourceBytesMatchBundle": true,
+    "retainedV5AncestorMatchesPredecessor": true,
+    "catalogRatiosMatchSourceDimensions": true,
+    "alternateCoverageMatchesSource": true
+  }
+}

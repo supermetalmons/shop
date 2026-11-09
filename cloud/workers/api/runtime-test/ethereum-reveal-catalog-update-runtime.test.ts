@@ -327,6 +327,6 @@ test('native online catalog update preserves live reads and allocations through 
     const newlyRevealed = await request<{ catalogRevision: number; artworks: Array<{ image: string }> }>('/tokens', { ...tokenBody, tokenIds: ['61'] });
     assert.equal(newlyRevealed.catalogRevision, 1);
     assert.equal(newlyRevealed.artworks[0].image, `https://cdn.lil.org/nft/111k/videos/${freeMapping.assetId}.webp`);
-    assert.equal(getRevealCatalog('111k-v6'), undefined);
+    assert.equal(getRevealCatalog('111k-v6', batch.target.descriptor.manifestSha256), undefined);
   } finally { await runtime.dispose(); }
 });

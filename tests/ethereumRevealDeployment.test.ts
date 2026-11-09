@@ -11,7 +11,7 @@ import test, { type TestContext } from 'node:test';
 import { encodeAbi } from '../shared/ethereum/abi.ts';
 import { checksumEthereumAddress } from '../shared/ethereum/crypto.ts';
 import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
-import { parseEthereumRevealDeployment, readEthereumRevealDeployment } from '../shared/ethereum/revealDeployment.ts';
+import { ETHEREUM_REVEAL_CATALOG_VERSION, parseEthereumRevealDeployment, readEthereumRevealDeployment } from '../shared/ethereum/revealDeployment.ts';
 import { buildEthereumRevealRegistration, buildEthereumRevealTransition, ethereumRevealRegistrationRpcKey, loadEthereumRevealRegistration, parseEthereumRevealControlArgs, runEthereumRevealControl } from '../scripts/ops/ethereumRevealControl.ts';
 import { acquireMetadataPublicationLease } from '../scripts/ethereum-metadata/publicationLease.ts';
 import { parseMetadataCliArgs } from '../scripts/ethereum-metadata/cli.ts';
@@ -23,7 +23,7 @@ const scope = { chainId: 11155111, contractAddress: `0x${'ab'.repeat(20)}` };
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [{ trait_type: 'type', value: 'painting' }], aspectRatio: { width: 466, height: 503 } });
 const registration = { deploymentId: 'sepolia-test-2', dropId: '111k_devnet', ...scope,
   metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/sepolia-test-2/', deploymentBlock: 12005467,
-  catalogVersion: '111k-v5', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
+  catalogVersion: ETHEREUM_REVEAL_CATALOG_VERSION, templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') };
 
 async function fixture(t: TestContext) {
   const database = new DatabaseSync(':memory:');
@@ -131,6 +131,24 @@ test('registry lookup is scoped to chain and normalized contract', async t => {
   }; } };
   assert.equal((await readEthereumRevealDeployment(db, { ...scope, contractAddress: scope.contractAddress.toUpperCase().replace('0X', '0x') }))?.deploymentId, registration.deploymentId);
   assert.equal(await readEthereumRevealDeployment(db, { ...scope, chainId: 1 }), null);
+});
+
+test('a retained v5 registration remains active-compatible while fresh registrations require v6', async t => {
+  const { database, query } = await fixture(t);
+  const legacy = { ...registration, catalogVersion: '111k-v5' };
+  query(buildEthereumRevealRegistration(legacy));
+  database.exec("UPDATE ethereum_reveal_deployments SET state='paused', provisioned_at_ms=1, revision=3");
+  const manifest = await controlManifest(t, registrationIdentity(legacy));
+  const status = await runEthereumRevealControl(['status', '--manifest', manifest], { query });
+  assert.ok('deployments' in status);
+  assert.equal(status.deployments[0].catalogVersion, '111k-v5');
+  const active = await runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '3', '--write'], { query });
+  assert.ok('deployment' in active && 'state' in active.deployment);
+  assert.equal(active.deployment.state, 'active');
+  assert.equal(active.deployment.catalogVersion, '111k-v5');
+  const fresh = await controlManifest(t, { ...registrationIdentity(legacy), deploymentId: 'new-ancestor',
+    metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/new-ancestor/' });
+  await assert.rejects(runEthereumRevealControl(['register', '--manifest', fresh, '--write'], { query }), /current catalog version/);
 });
 
 for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3', '111k-v4']) test(`${catalogVersion} records remain inspectable and pausable but cannot register or activate`, async t => {

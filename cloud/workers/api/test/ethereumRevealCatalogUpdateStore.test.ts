@@ -2,15 +2,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
-import catalogJson from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
-import { computeRevealCatalogDescriptor, validateRevealAssetCatalog, type RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
+import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
+import { computeRevealCatalogDescriptor, type RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import { revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 
-const sourceData: unknown = structuredClone(catalogJson);
-validateRevealAssetCatalog(sourceData);
-const source = sourceData;
+const source = getRevealCatalog('111k-v5')!;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
   attributes: [{ trait_type: 'series', value: '111K' }] });
 const deployment: EthereumRevealDeployment = { deploymentId: 'catalog-update-test', dropId: '111k_devnet', chainId: 11155111,

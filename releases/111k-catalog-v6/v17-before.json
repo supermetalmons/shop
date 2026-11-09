@@ -1,0 +1,65 @@
+{
+  "deploymentId": "v17",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "revision": 3,
+  "ready": true,
+  "frozenThroughMs": 1794256573384,
+  "frozenArtworks": 4360,
+  "frozenMetadataSha256": "c8bdbf1d781a516358aab0510544663930a061abcd0caa4d0ff20c607358446b",
+  "frozenSamples": [
+    {
+      "tokenId": "1",
+      "metadataSha256": "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41"
+    },
+    {
+      "tokenId": "2",
+      "metadataSha256": "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313"
+    },
+    {
+      "tokenId": "3",
+      "metadataSha256": "357696ac6976751666ee80a9b1f69c0f8d5e308ad46f836c60bc5fdd34d8748d"
+    },
+    {
+      "tokenId": "4",
+      "metadataSha256": "f6c22d31101f2b19e5218a73dee18fbf9c18b10afadb3a1df5d8812370f573a5",
+      "enrichment": {
+        "version": "v0",
+        "sha256": "b4b49ed0eefbf7507a9fd6aea6ff3ca59a708397af1e0bc2e05d8465a8db5613",
+        "published": true
+      }
+    },
+    {
+      "tokenId": "5",
+      "metadataSha256": "fcf42e242d281339e20a0d54cfdf883b3baee9482494b3b858ef584902a141bd",
+      "enrichment": {
+        "version": "v0",
+        "sha256": "81dc7b835de4d96b6ffcef2046030282b7cc47a122405e95312c1f71fa551180",
+        "published": true
+      }
+    },
+    {
+      "tokenId": "6",
+      "metadataSha256": "1fade286f6ffbf3d5bdea9731f19d43234f908863ac1b523f8b897859c7afe0d",
+      "enrichment": {
+        "version": "v0",
+        "sha256": "c0ec06121680abc44c610fe40e11a049d439855a8bcf61d625aec1ec0e22e758",
+        "published": true
+      }
+    },
+    {
+      "tokenId": "7",
+      "metadataSha256": "555865c1716194412ddbf048c2cdc24eb5b7e2331f8d60fea08a33bb5e32b21a"
+    },
+    {
+      "tokenId": "8",
+      "metadataSha256": "485e112032f6758ed08ac4232f7dff11e160bde7e22ffcdec73b77af7523f8a0",
+      "enrichment": {
+        "version": "v0",
+        "sha256": "25ad8cb065906bea9212482c296b7e15a24427d3e220eabafad600841ed9d4cb",
+        "published": true
+      }
+    }
+  ]
+}
