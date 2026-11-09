@@ -13,8 +13,9 @@ Deployment IDs are globally unique across networks. Later replacements must choo
 New `NFT111K` builds expose a fixed `contractURI()` returning
 `https://cdn.mons.shop/111k/collection.json` on mainnet, Sepolia, and local chains.
 The source is [`collection.json`](../ethereum-metadata/collection.json), with the
-collection name `111k` and empty `description`, `image`, and `external_link`
-(website) fields. The ERC-721 name and symbol remain `111K`.
+collection name `111k`, description `111k is a collection about nfts`, image
+`https://cdn.lil.org/nft/111k/paintings/1.png`, and website (`external_link`)
+`https://vvv.so/111k`. The ERC-721 name and symbol remain `111K`.
 
 The URL has no setter and is independent of `baseURI()`. Its hosted JSON can be
 updated later without a contract transaction; marketplaces may require a metadata
@@ -25,7 +26,7 @@ This shared object is outside every deployment namespace and the 344984-token
 publication manifest. Root token inventories exclude only `111k/collection.json`;
 deployment token uploads, restores, and testnet retirement do not manage it.
 
-To publish the placeholder from the repository root, supply the R2 credentials
+To publish the collection JSON from the repository root, supply the R2 credentials
 described under [Generate and publish](#generate-and-publish)
 and run the single-object operation below. It creates a missing object, accepts
 an identical existing object, and rejects different existing contents.
