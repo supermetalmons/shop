@@ -15,6 +15,24 @@ contract NFT111KMetadataTest is TestSupport {
         token.setSaleActive(true);
     }
 
+    function testCollectionUriSharedAcrossChainsAndIndependentOfTokenBaseUri() public {
+        uint256[3] memory chains = [uint256(1), 11155111, 31337];
+        string[3] memory prefixes = [
+            "https://cdn.mons.shop/111k/mainnet-v1/",
+            "https://cdn.mons.shop/111k-sepolia/v18/",
+            "http://127.0.0.1:8788/111k/"
+        ];
+        for (uint256 i; i < chains.length; ++i) {
+            vm.chainId(chains[i]);
+            NFT111K deployed = _deploy(prefixes[i]);
+            assertEq(deployed.contractURI(), "https://cdn.mons.shop/111k/collection.json");
+            assertEq(deployed.previewTokenURI(1, 42), string.concat(prefixes[i], "42.json"));
+            deployed.setBaseURI("https://cdn.mons.shop/111k/updated/");
+            assertEq(deployed.contractURI(), "https://cdn.mons.shop/111k/collection.json");
+            assertEq(deployed.previewTokenURI(1, 42), "https://cdn.mons.shop/111k/updated/42.json");
+        }
+    }
+
     function testEveryTokenRangeBoundaryUsesItsTokenId() public view {
         assertEq(token.baseURI(), BASE);
         _uri(1, 1, 1);
@@ -117,11 +135,13 @@ contract NFT111KMetadataTest is TestSupport {
         }
     }
 
-    function testBaseUriCharacterBoundariesInConstructorAndSetter() public {
-        uint8[8] memory characters = [uint8(0), 31, 32, 33, 126, 127, 128, 255];
-        for (uint256 i; i < characters.length; ++i) {
-            string memory uri = string(bytes.concat(bytes(BASE), bytes1(characters[i]), bytes("/")));
-            if (characters[i] == 33 || characters[i] == 126) {
+    function testEveryBaseUriCharacterInConstructorAndSetter() public {
+        for (uint256 character; character < 256; ++character) {
+            string memory uri = string(bytes.concat(bytes(BASE), bytes1(uint8(character)), bytes("/")));
+            if (
+                character > 32 && character < 127 && character != 35 && character != 63 && character != 64
+                    && character != 92
+            ) {
                 NFT111K deployed = _deploy(uri);
                 assertEq(deployed.baseURI(), uri);
                 assertEq(deployed.previewTokenURI(1, 42), string.concat(uri, "42.json"));

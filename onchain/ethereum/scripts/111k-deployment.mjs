@@ -13,6 +13,7 @@ import { parseDiscountCapConfigJson } from './discount-cap-config.mjs';
 import { compilerGateSettings } from './compiler-gate.mjs';
 import { parseRelicReservation, relicReservation, validateRelicReservationSkip, verifyRelicReservationSkip } from './relic-reservation-config.mjs';
 import { deploymentGas, matchingRuntime, validateDeploymentBalance, validateDeploymentGasPrice } from './pre111k-deployment.mjs';
+import { verify111kCollectionURI } from './111k-verification.mjs';
 import { withMetadataLock } from '../../../scripts/ethereum-metadata/lock.ts';
 import { record111kReleaseLocation, resolve111kReleaseLocation } from '../../../scripts/shared/ethereum111kReleaseLocations.ts';
 
@@ -422,6 +423,7 @@ async function requireNewCollection(rpc, frozen) {
     ['mintRecipientCount()', 'uint256', BigInt(manifest.proceeds.mintRecipients.length)]]) {
     assert.equal((await call(rpc, manifest.contractAddress, signature, [type]))[0], expected, `New collection ${signature} changed`);
   }
+  await verify111kCollectionURI(artifact, (signature, types) => call(rpc, manifest.contractAddress, signature, types));
 }
 
 async function preflightAction(rpc, frozen, action, journal) {

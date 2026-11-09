@@ -497,6 +497,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "contractURI",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
     "name": "cratePrice",
     "inputs": [],
     "outputs": [

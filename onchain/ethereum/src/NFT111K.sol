@@ -119,6 +119,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 private constant METADATA_OFFSETS = ((CRATE_TOKEN_START - 1) << 44) | ((WAREHOUSE_TOKEN_START - 1) << 66)
         | (ARTWORK_RECEIPT_OFFSET << 88) | (CRATE_RECEIPT_OFFSET << 110) | ((RELIC_TOKEN_START - 1) << 132)
         | (RELIC_RECEIPT_OFFSET << 154);
+    uint256 private constant URI_CHARACTERS = ((uint256(1) << 127) - (uint256(1) << 33))
+        & ~((uint256(1) << 35) | (uint256(1) << 63) | (uint256(1) << 64) | (uint256(1) << 92));
 
     bytes32 private constant DELIVERY_TYPEHASH = keccak256(
         "Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline,uint256 configId)"
@@ -611,6 +613,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
     }
 
+    function contractURI() external pure returns (string memory) {
+        return "https://cdn.mons.shop/111k/collection.json";
+    }
+
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         if (!_exists(tokenId)) revert URIQueryForNonexistentToken();
         return _tokenURI(tokenId);
@@ -1020,11 +1026,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         bool local = block.chainid == 31337 && bytes7(value) == bytes7("http://");
         if ((!secure && !local) || value[secure ? 8 : 7] == "/") revert InvalidBaseURI();
         for (uint256 i; i < value.length; ++i) {
-            bytes1 character = value[i];
-            if (
-                uint8(character) <= 32 || uint8(character) >= 127 || character == "?" || character == "#"
-                    || character == "\\" || character == "@"
-            ) revert InvalidBaseURI();
+            if ((URI_CHARACTERS >> uint8(value[i])) & 1 == 0) revert InvalidBaseURI();
         }
     }
 

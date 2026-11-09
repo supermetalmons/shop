@@ -8,6 +8,61 @@ Deployment IDs are globally unique across networks. Later replacements must choo
 
 111K metadata uses `https://cdn.mons.shop/111k-sepolia/` on Sepolia and `https://cdn.mons.shop/111k/` on Ethereum mainnet, followed by a decimal `{tokenId}.json` filename. Replacement deployments add a unique `<deploymentId>/` namespace beneath the network prefix. Each decimal filename is the ERC-721 token ID. The current shop integration remains Sepolia/Anvil only; publishing mainnet files does not enable mainnet sales.
 
+## Collection metadata
+
+New `NFT111K` builds expose a fixed `contractURI()` returning
+`https://cdn.mons.shop/111k/collection.json` on mainnet, Sepolia, and local chains.
+The source is [`collection.json`](../ethereum-metadata/collection.json), with the
+collection name `111k` and empty `description`, `image`, and `external_link`
+(website) fields. The ERC-721 name and symbol remain `111K`.
+
+The URL has no setter and is independent of `baseURI()`. Its hosted JSON can be
+updated later without a contract transaction; marketplaces may require a metadata
+refresh. Existing contracts retain their deployed interfaces. Release verification
+checks the fixed URL when the frozen artifact ABI includes `contractURI()`.
+
+This shared object is outside every deployment namespace and the 344984-token
+publication manifest. Root token inventories exclude only `111k/collection.json`;
+deployment token uploads, restores, and testnet retirement do not manage it.
+
+To publish the placeholder from the repository root, supply the R2 credentials
+described under [Generate and publish](#generate-and-publish)
+and run the single-object operation below. It creates a missing object, accepts
+an identical existing object, and rejects different existing contents.
+
+```sh
+node --import tsx --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { environmentStorage } from './scripts/ethereum-metadata/storage.ts';
+
+const key = '111k/collection.json';
+const body = await readFile('scripts/ethereum-metadata/collection.json');
+const storage = environmentStorage(1);
+try {
+  let existing;
+  try {
+    existing = await storage.get(key);
+  } catch (error) {
+    if (error.name !== 'NoSuchKey' || error.$metadata?.httpStatusCode !== 404) throw error;
+  }
+  if (existing) assert.ok(existing.equals(body), 'Collection metadata already differs');
+  else await storage.put(key, body, null);
+  assert.ok((await storage.get(key)).equals(body));
+  const response = await fetch(`https://cdn.mons.shop/${key}`, {
+    cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15_000),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.ok(Buffer.from(await response.arrayBuffer()).equals(body));
+  console.log('Verified https://cdn.mons.shop/111k/collection.json');
+} finally {
+  storage.close();
+}
+NODE
+```
+
 ## Identities
 
 | Kind | Token IDs | Item number |

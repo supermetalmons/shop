@@ -155,14 +155,45 @@ test('metadata inventories isolate direct token files from nested deployment nam
   }
 });
 
-test('parallel root inventory ignores child namespaces inside and beyond direct-file ranges', async () => {
+test('mainnet root inventory excludes shared collection metadata from token counts and snapshots', async t => {
+  const directory = await temporaryDirectory(t);
   const storage = new MemoryStorage({});
-  const expected = new Set(Array.from({ length: 10_001 }, (_, index) => `${index + 1}.json`));
-  for (const file of expected) storage.values.set(prefix + file, Buffer.from('x'));
-  for (const namespace of ['1', '5000', 'next']) storage.values.set(`${prefix}${namespace}/1.json`, Buffer.from('other scope'));
-  const inventory = await remoteInventory(storage, prefix, expected);
-  assert.equal(inventory.size, expected.size);
-  assert.deepEqual([...inventory.keys()].sort(), [...expected].sort());
+  for (const file of files()) storage.values.set('111k/' + file, Buffer.from(file));
+  storage.values.set('111k/collection.json', Buffer.from('{"name":"111k"}'));
+  const inventory = await remoteInventory(storage, '111k/', files());
+  assert.deepEqual([...inventory.keys()], [...files()]);
+  const manifest = await snapshotMetadata(storage, 'mainnet', directory, inventory, publicationManifestSha256);
+  assert.equal(manifest.objectCount, files().size);
+  const snapshot = await collect(snapshotObjects(directory, manifest, files()));
+  assert.deepEqual(snapshot.map(object => object.file).sort(), [...files()]);
+  assert.deepEqual(storage.reads.sort(), [...files()].map(file => '111k/' + file));
+  for (const invalid of ['invalid.json', 'collection.json.bak', 'Collection.json']) {
+    storage.values.set('111k/' + invalid, Buffer.from('unexpected'));
+    await assert.rejects(remoteInventory(storage, '111k/', files()), /Unexpected remote metadata key/);
+    storage.values.delete('111k/' + invalid);
+  }
+});
+
+test('collection metadata is rejected inside token deployments and at the Sepolia root', async () => {
+  for (const selectedPrefix of [prefix, '111k/mainnet-v1/', '111k-sepolia/test-v1/']) {
+    const storage = new MemoryStorage({});
+    for (const file of files()) storage.values.set(selectedPrefix + file, Buffer.from(file));
+    storage.values.set(selectedPrefix + 'collection.json', Buffer.from('{"name":"111k"}'));
+    await assert.rejects(remoteInventory(storage, selectedPrefix, files()), /Unexpected remote metadata key/);
+  }
+});
+
+test('parallel root inventory isolates shared collection metadata and child namespaces', async () => {
+  for (const selectedPrefix of [prefix, '111k/']) {
+    const storage = new MemoryStorage({});
+    const expected = new Set(Array.from({ length: 10_001 }, (_, index) => `${index + 1}.json`));
+    for (const file of expected) storage.values.set(selectedPrefix + file, Buffer.from('x'));
+    for (const namespace of ['1', '5000', 'next']) storage.values.set(`${selectedPrefix}${namespace}/1.json`, Buffer.from('other scope'));
+    storage.values.set('111k/collection.json', Buffer.from('{"name":"111k"}'));
+    const inventory = await remoteInventory(storage, selectedPrefix, expected);
+    assert.equal(inventory.size, expected.size);
+    assert.deepEqual([...inventory.keys()].sort(), [...expected].sort());
+  }
 });
 
 test('S3 listing uses a delimiter to avoid enumerating child deployment objects', async () => {

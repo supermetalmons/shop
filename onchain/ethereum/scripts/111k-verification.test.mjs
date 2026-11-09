@@ -15,6 +15,7 @@ const selector = signature => '0x' + Buffer.from(keccak_256(signature)).subarray
 const names = ['_cachedDomainSeparator', '_cachedChainId', '_cachedThis', '_hashedName', '_hashedVersion', '_name', '_version'];
 const stages = ['closed', 'reserved', 'open', 'mint-qa', 'unpack-qa'];
 const actions = ['deploy', 'reserve', 'open', 'mint-qa', 'unpack-qa'];
+const collectionURI = 'https://cdn.mons.shop/111k/collection.json';
 
 for (const [name, environment, expectedUrl] of [
   ['accepts and encodes the deployment Alchemy key', { ALCHEMY_API_KEY: 'test/key?value=1#fragment &' },
@@ -57,6 +58,8 @@ function fixture(stage, concurrent = false, preopeningPayout = false, options = 
   const artifact = { deployedBytecode: { object: '0x' + '00'.repeat(32 * 7),
     immutableReferences: Object.fromEntries(names.map((_, i) => [i + 1, [{ start: i * 32, length: 32 }]])) },
     metadata: { compiler: { version: '0.8.38+commit.1835d247' } } };
+  if (options.collectionMetadata) artifact.abi = [{ type: 'function', name: 'contractURI', inputs: [],
+    outputs: [{ name: '', type: 'string' }], stateMutability: 'pure' }];
   const compilerOutput = { sources: { 'EIP712.sol': { ast: { nodes: names.map((name, i) => ({ id: i + 1, name,
     nodeType: 'VariableDeclaration', mutability: 'immutable' })) } } } };
   const crateTokenId = concurrent ? 113111 : 113110;
@@ -90,6 +93,7 @@ function fixture(stage, concurrent = false, preopeningPayout = false, options = 
   register('pendingOwner()', ['address'], [address(0)]);
   register('quoteSigner()', ['address'], [manifest.quoteSigner]);
   register('baseURI()', ['string'], [manifest.metadataBaseURI]);
+  if (options.collectionMetadata) register('contractURI()', ['string'], [collectionURI]);
   register('mintRecipientCount()', ['uint256'], [14]);
   register('deliveryConfigCount()', ['uint256'], [1]);
   register('deliveryConfigs(uint256)', ['address', 'address', 'uint16', 'uint256', 'uint256', 'uint256'], [manifest.initialDeliveryReceiver, address(0), 0, 0, 0, 0]);
@@ -184,6 +188,41 @@ for (const stage of stages) test(`verifies ${stage} at one canonical block with 
   assert.equal(report.runtimeAndImmutablesMatch, true);
   assert.equal(report.totalMintReleased, 0n);
   assert.equal(Object.keys(report.actions).length, stages.indexOf(stage) + 1);
+});
+
+test('verifies the shared collection URI exposed by the frozen ABI at the canonical block', async () => {
+  const { context, rpc } = fixture('closed', false, false, { collectionMetadata: true });
+  const report = await verify111kDeployment(context, rpc);
+  assert.equal(report.contractURI, collectionURI);
+});
+
+test('rejects a changed collection URI instead of falling back to legacy verification', async () => {
+  const { context, rpc, lookup } = fixture('closed', false, false, { collectionMetadata: true });
+  for (const uri of ['', 'https://cdn.mons.shop/111k-sepolia/collection.json']) {
+    lookup.get(selector('contractURI()')).values[0] = uri;
+    await assert.rejects(verify111kDeployment(context, rpc), /Collection contractURI\(\) changed/);
+  }
+});
+
+test('propagates collection URI RPC failures for a frozen ABI that exposes the getter', async () => {
+  const { context, rpc } = fixture('closed', false, false, { collectionMetadata: true });
+  await assert.rejects(verify111kDeployment(context, async (method, params) => {
+    if (method === 'eth_call' && params[0].data === selector('contractURI()')) throw new Error('Unavailable collection URI');
+    return rpc(method, params);
+  }), /Unavailable collection URI/);
+});
+
+test('does not request collection metadata from historical artifacts without the getter', async () => {
+  const { context, rpc } = fixture('closed');
+  for (const abi of [undefined, [], [{ type: 'event', name: 'contractURI', inputs: [] }],
+    [{ type: 'function', name: 'contractURI', inputs: [{ type: 'uint256' }] }]]) {
+    context.artifact.abi = abi;
+    const report = await verify111kDeployment(context, async (method, params) => {
+      if (method === 'eth_call') assert.notEqual(params[0].data, selector('contractURI()'));
+      return rpc(method, params);
+    });
+    assert.equal(Object.hasOwn(report, 'contractURI'), false);
+  }
 });
 
 for (const quantity of [0, 3, 18]) test(`verifies an explicit ${quantity}-relic reservation and inactive public issuance`, async () => {

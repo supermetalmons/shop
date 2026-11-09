@@ -72,6 +72,7 @@ export async function remoteInventory(storage: MetadataStorage, prefix: string,
         throw new Error(`Unexpected remote metadata key or checksum: ${object.key}`);
       }
       previous = object.key;
+      if (prefix === '111k/' && file === 'collection.json') continue;
       if (/^[a-z0-9][a-z0-9-]{0,63}\//.test(file)) continue;
       if (!files.has(file) || found.has(file) || !Number.isSafeInteger(object.bytes) || object.bytes < 0 ||
         typeof object.md5 !== 'string' || !options.allowInvalidMetadata &&

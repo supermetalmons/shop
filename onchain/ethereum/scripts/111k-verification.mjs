@@ -217,6 +217,13 @@ async function parallel(items, operation) {
   return result;
 }
 
+export async function verify111kCollectionURI(artifact, call) {
+  if (!artifact.abi?.some(entry => entry.type === 'function' && entry.name === 'contractURI' && entry.inputs?.length === 0)) return null;
+  const [uri] = await call('contractURI()', ['string']);
+  assert.equal(uri, 'https://cdn.mons.shop/111k/collection.json', 'Collection contractURI() changed');
+  return uri;
+}
+
 export async function verify111kDeployment(context, rpc, stage = 'closed') {
   assert.ok(STAGES.includes(stage), 'Unknown verification stage');
   assert.equal(BigInt(await rpc('eth_chainId')), BigInt(CHAIN_ID), 'Verification RPC chain mismatch');
@@ -252,6 +259,7 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
   assert.equal(pendingOwner[0], ZERO);
   assert.equal(signer[0], address(manifest.quoteSigner));
   assert.equal(uri[0], manifest.metadataBaseURI);
+  const contractURI = await verify111kCollectionURI(context.artifact, call);
   assert.equal(recipientCount[0], BigInt(manifest.proceeds.mintRecipients.length));
   assert.equal(recipientCount[0], 14n, 'Expected the fourteen-receiver mint split');
   assert.equal(deliveryCount[0], 1n);
@@ -367,6 +375,7 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
   assert.equal((await rpc('eth_getBlockByNumber', [snapshot.number, false]))?.hash, snapshot.hash, 'Verification snapshot reorganized');
   return { stage, chainId: CHAIN_ID, deploymentId: manifest.deploymentId, contractAddress: address(manifest.contractAddress),
     metadataBaseURI: manifest.metadataBaseURI, manifestSha256: context.manifestSha256, checkedAt: new Date().toISOString(),
+    ...(contractURI === null ? {} : { contractURI }),
     snapshotBlock: Number(BigInt(snapshot.number)), snapshotBlockHash: snapshot.hash,
     transactionHash: actions.deploy.transactionHash, deploymentBlock: actions.deploy.blockNumber, confirmations: actions.deploy.confirmations,
     runtimeBytes: bytes(runtime).length, runtimeKeccak256: hash(bytes(runtime)), runtimeAndImmutablesMatch: true,

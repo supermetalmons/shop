@@ -481,6 +481,14 @@ test('the journaled Sepolia lifecycle resumes interruptions and rejects stale un
   const closed = await verifyStage('closed');
   assert.equal(closed.totalSupply, 0n);
   assert.equal(closed.totalMintReceived, 0n);
+  assert.equal(closed.contractURI, 'https://cdn.mons.shop/111k/collection.json');
+  const collectionURISelector = cast(['calldata', 'contractURI()']);
+  await assert.rejects(run111kDeployment(['verify', ...baseArgs], { ...overrides, rpc: async (method, params) => {
+    if (method === 'eth_call' && params[0].data === collectionURISelector) {
+      return cast(['abi-encode', 'value(string)', 'https://cdn.mons.shop/111k-sepolia/collection.json']);
+    }
+    return f.rpc(method, params);
+  } }), /Collection contractURI\(\) changed/);
   await invoke('reserve');
   await invoke('reserve');
   assert.equal(sends, 2);
