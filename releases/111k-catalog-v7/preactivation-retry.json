@@ -1,0 +1,14 @@
+{
+  "recordedAt": "2026-11-09T22:57:43.019Z",
+  "firstAttempt": "rejected-before-activation",
+  "error": "Deploy support for both catalog revisions before beginning the update.",
+  "apiVersionId": "ce8a8dd9-b2e4-4252-b19a-e97e66a6d222",
+  "deployedAt": "2026-11-09T22:53:50.947795Z",
+  "registryRevisionAfterRejection": 6,
+  "effectiveCatalogAfterRejection": "111k-v6",
+  "catalogUpdateIdAfterRejection": null,
+  "expectedDurableObjectCodeUpdateDelaySeconds": 300,
+  "documentation": "https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/",
+  "sameFrozenBundleRequired": true,
+  "originalExpectedRevision": 6
+}

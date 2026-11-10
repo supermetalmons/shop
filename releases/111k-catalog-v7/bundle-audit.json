@@ -1,0 +1,37 @@
+{
+  "checkedAt": "2026-11-09T22:43:55.197Z",
+  "verified": true,
+  "batchId": "catalog-7fa76fa1143cd3f605b37a57eb7eb4ea",
+  "batchSha256": "7fa76fa1143cd3f605b37a57eb7eb4eac92cf9f3c2e87c8946f86e446298e0ee",
+  "sourceSha256": "cf1f28ac5ed7e4de5697641322556d86178f622aedc3203ff6d990481e207704",
+  "sourceMatchesSuppliedBytes": true,
+  "predecessorSourceSha256": "cf7e8a5973d56ab633f9f338f63737d1c58b26be32f395774f0db8f8d1dadbf4",
+  "predecessor": {
+    "catalogVersion": "111k-v6",
+    "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4"
+  },
+  "target": {
+    "catalogVersion": "111k-v7",
+    "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13"
+  },
+  "mappings": 6780,
+  "mappingIsBijection": true,
+  "cutoffEggs": {
+    "first": 60505,
+    "last": 67284,
+    "count": 6780
+  },
+  "addedPaintings": {
+    "first": 40349,
+    "last": 47128,
+    "count": 6780
+  },
+  "counts": {
+    "eggs": 60504,
+    "paintings": 47128,
+    "videos": 58,
+    "3d": 3000,
+    "animated": 421
+  },
+  "artworkSupply": 111111
+}

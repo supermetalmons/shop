@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "checkedAt": "2026-11-09T22:57:33.703Z",
+  "complete": true,
+  "verificationScope": "Local dry-run API artifact only; this does not attest remote runtime contents.",
+  "artifact": {
+    "path": ".cache/mons-shop-api-dry-run.js",
+    "bytes": 25241174,
+    "sha256": "d0306e54e97c4a9ed2809709e864ea639b195313b24bf493eedc21accb2ccf97",
+    "modifiedAt": "2026-11-09T22:49:43.758Z"
+  },
+  "batchId": "catalog-7fa76fa1143cd3f605b37a57eb7eb4ea",
+  "batchSha256": "7fa76fa1143cd3f605b37a57eb7eb4eac92cf9f3c2e87c8946f86e446298e0ee",
+  "compiledCurrentDescriptor": {
+    "catalogVersion": "111k-v7",
+    "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13"
+  },
+  "compiledCatalogs": [
+    {
+      "catalogVersion": "111k-v5",
+      "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a",
+      "artworkCount": 111111,
+      "counts": {
+        "eggs": 76642,
+        "paintings": 30990,
+        "videos": 58,
+        "3d": 3000,
+        "animated": 421,
+        "receipts": 85556
+      }
+    },
+    {
+      "catalogVersion": "111k-v6",
+      "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+      "artworkCount": 111111,
+      "counts": {
+        "eggs": 67284,
+        "paintings": 40348,
+        "videos": 58,
+        "3d": 3000,
+        "animated": 421,
+        "receipts": 85556
+      }
+    },
+    {
+      "catalogVersion": "111k-v7",
+      "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
+      "artworkCount": 111111,
+      "counts": {
+        "eggs": 60504,
+        "paintings": 47128,
+        "videos": 58,
+        "3d": 3000,
+        "animated": 421,
+        "receipts": 85556
+      }
+    }
+  ],
+  "predecessorMatchesFrozenBatch": true,
+  "targetMatchesFrozenBatch": true
+}

@@ -1,0 +1,34 @@
+{
+  "checkedAt": "2026-11-09T23:41:41.375Z",
+  "probes": 1268,
+  "failures": 0,
+  "startedAt": "2026-11-09T22:45:05.912Z",
+  "endedAt": "2026-11-09T23:41:20.247Z",
+  "endpointCounts": {
+    "https://api.mons.shop/ethereum/111k/config": {
+      "probes": 213,
+      "failures": 0
+    },
+    "https://mons.shop/": {
+      "probes": 213,
+      "failures": 0
+    },
+    "https://www.mons.shop/": {
+      "probes": 213,
+      "failures": 0
+    },
+    "https://cdn.mons.shop/111k-sepolia/v17/1.json": {
+      "probes": 213,
+      "failures": 0
+    },
+    "https://cdn.mons.shop/111k-sepolia/v17/2.json": {
+      "probes": 213,
+      "failures": 0
+    },
+    "https://api.mons.shop/ethereum/111k/reveal/tokens": {
+      "probes": 203,
+      "failures": 0
+    }
+  },
+  "logSha256": "aa5ae3a8445691559d81432f3453c77d4c503d0e52d60d13fc4b38920930011a"
+}

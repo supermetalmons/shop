@@ -91,9 +91,9 @@ function reserveEggSlots(database: DatabaseSync, crateTokenId: string, slots: nu
   }
 }
 
-test('current v6 catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
+test('current v7 catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
   validateRevealCatalog();
-  assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 67284, painting: 40348, video: 58 });
+  assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 60504, painting: 47128, video: 58 });
   assert.equal(Object.values(REVEAL_CATEGORY_COUNTS).reduce<number>((sum, value) => sum + value, 0), REVEAL_ARTWORK_COUNT);
   const imageUrls = new Set<string>();
   const mediaFor = (category: keyof typeof REVEAL_CATEGORY_COUNTS, assetId: number) => buildRevealedArtwork({
@@ -165,10 +165,11 @@ test('current v6 catalog preserves all category counts, exact ratios, posters, a
     assert.equal(animated.placeholderJson, result.placeholderJson);
   }
   for (const assetId of [0, 422]) assert.throws(() => mediaFor('animated', assetId), /Invalid reveal asset/);
-  assert.equal(mediaFor('painting', 40348).image, 'https://cdn.lil.org/nft/111k/paintings/40348.png');
-  assert.throws(() => mediaFor('painting', 40349), /Invalid reveal asset/);
-  assert.equal(mediaFor('egg', 67284).image, 'https://cdn.lil.org/nft/111k/eggs/67284.png');
-  assert.throws(() => mediaFor('egg', 67285), /Invalid reveal asset/);
+  assert.equal(mediaFor('painting', 47128).image, 'https://cdn.lil.org/nft/111k/paintings/47128.png');
+  assert.deepEqual(mediaFor('painting', 47128).aspectRatio, { width: 466, height: 503 });
+  assert.throws(() => mediaFor('painting', 47129), /Invalid reveal asset/);
+  assert.equal(mediaFor('egg', 60504).image, 'https://cdn.lil.org/nft/111k/eggs/60504.png');
+  assert.throws(() => mediaFor('egg', 60505), /Invalid reveal asset/);
   assert.throws(() => mediaFor('video', 59), /Invalid reveal asset/);
   assert.equal(revealCrateSize('116666'), 31);
   for (const id of ['0111112', '111111', '116667', '1.0']) assert.throws(() => revealCrateSize(id));
@@ -179,16 +180,18 @@ test('current v6 catalog preserves all category counts, exact ratios, posters, a
   }
 });
 
-test('historical v5 deployments retain their original egg and painting boundaries after v6 promotion', () => {
-  const historical = getRevealCatalog('111k-v5')!;
-  const mediaFor = (category: 'egg' | 'painting', assetId: number) => buildRevealedArtwork({
-    templateJson, tokenId: '1', crateTokenId: crateId(0), category, assetId, observation: observation(1), catalog: historical,
-  }).artwork;
-  assert.equal(mediaFor('egg', 76642).image, 'https://cdn.lil.org/nft/111k/eggs/76642.png');
-  assert.equal(mediaFor('painting', 30990).image, 'https://cdn.lil.org/nft/111k/paintings/30990.png');
-  assert.throws(() => mediaFor('egg', 76643), /Invalid reveal asset/);
-  assert.throws(() => mediaFor('painting', 30991), /Invalid reveal asset/);
-});
+for (const [version, eggCount, paintingCount] of [['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348]] as const) {
+  test(`historical ${version} deployments retain their original egg and painting boundaries after v7 promotion`, () => {
+    const historical = getRevealCatalog(version)!;
+    const mediaFor = (category: 'egg' | 'painting', assetId: number) => buildRevealedArtwork({
+      templateJson, tokenId: '1', crateTokenId: crateId(0), category, assetId, observation: observation(1), catalog: historical,
+    }).artwork;
+    assert.equal(mediaFor('egg', eggCount).image, `https://cdn.lil.org/nft/111k/eggs/${eggCount}.png`);
+    assert.equal(mediaFor('painting', paintingCount).image, `https://cdn.lil.org/nft/111k/paintings/${paintingCount}.png`);
+    assert.throws(() => mediaFor('egg', eggCount + 1), /Invalid reveal asset/);
+    assert.throws(() => mediaFor('painting', paintingCount + 1), /Invalid reveal asset/);
+  });
+}
 
 test('animated metadata resolves future ratios by asset ID and validates the ratio index', () => {
   const candidate = { ...structuredClone(catalog), categories: { ...structuredClone(catalog.categories), animated: {

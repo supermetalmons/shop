@@ -1,0 +1,4477 @@
+{
+  "checkedAt": "2026-11-09T23:35:23.909Z",
+  "verified": true,
+  "batchId": "catalog-7fa76fa1143cd3f605b37a57eb7eb4ea",
+  "batchSha256": "7fa76fa1143cd3f605b37a57eb7eb4eac92cf9f3c2e87c8946f86e446298e0ee",
+  "targetManifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
+  "deploymentId": "v17",
+  "dropId": "111k_devnet",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "catalogRevision": 2,
+  "samplesVerified": 8,
+  "api": {
+    "url": "https://api.mons.shop/ethereum/111k/reveal/tokens",
+    "method": "POST",
+    "status": 200,
+    "bytes": 4011,
+    "sha256": "e0ac1dba02daabee517f15d8e853aa72fbadf3c88d2db33481da79eb7dbc37be",
+    "contentType": "application/json; charset=utf-8",
+    "cors": "https://mons.shop",
+    "cacheControl": "no-store",
+    "cfCacheStatus": null,
+    "value": {
+      "deploymentId": "v17",
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "artworks": [
+        {
+          "tokenId": "30",
+          "crateTokenId": "111890",
+          "category": "painting",
+          "name": "30",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/44146.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa56e128dde062617d3f9532589bad7cb3800d12a2da498d63ab142f77aacafa7",
+            "blockNumber": 12092641,
+            "blockHash": "0x76c79e8fd42896084224ffc7afae4e3b20cde2c151c6d94bc3c3845eda637b51"
+          },
+          "metadataRevision": 4
+        },
+        {
+          "tokenId": "84",
+          "crateTokenId": "111907",
+          "category": "painting",
+          "name": "84",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/42192.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x48358707f741c98ec7dead506c71cb64394a911544e6357757c0af408756d243",
+            "blockNumber": 12092971,
+            "blockHash": "0x546069bec4918c563ef2a3ee3088e9fdef8a5bd8931f839db59faa36a0f43879"
+          },
+          "metadataRevision": 4
+        },
+        {
+          "tokenId": "89",
+          "crateTokenId": "111907",
+          "category": "painting",
+          "name": "89",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/42907.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x48358707f741c98ec7dead506c71cb64394a911544e6357757c0af408756d243",
+            "blockNumber": 12092971,
+            "blockHash": "0x546069bec4918c563ef2a3ee3088e9fdef8a5bd8931f839db59faa36a0f43879"
+          },
+          "metadataRevision": 4
+        },
+        {
+          "tokenId": "126",
+          "crateTokenId": "111910",
+          "category": "painting",
+          "name": "126",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/42683.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 4
+        },
+        {
+          "tokenId": "128",
+          "crateTokenId": "111910",
+          "category": "painting",
+          "name": "128",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/44030.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 4
+        },
+        {
+          "tokenId": "143",
+          "crateTokenId": "111924",
+          "category": "painting",
+          "name": "143",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/42491.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 4
+        },
+        {
+          "tokenId": "188",
+          "crateTokenId": "111926",
+          "category": "painting",
+          "name": "188",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/43305.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 4
+        },
+        {
+          "tokenId": "202",
+          "crateTokenId": "111927",
+          "category": "painting",
+          "name": "202",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/44536.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 4
+        }
+      ],
+      "unresolved": [],
+      "retryAfterMs": 0,
+      "catalogRevision": 2
+    }
+  },
+  "samples": [
+    {
+      "tokenId": "30",
+      "eggId": 66983,
+      "paintingId": 44146,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 111,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/44146.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 8385,
+        "sha256": "8afdb4911b769a80ff82bd7b2ffd0c7f3e6997dc48807be377552983f5beb22b",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 109
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/30.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 5780,
+      "sha256": "85f80987644a37117648393ede125480bf82f2953cd7a19845a358f56fbf7409",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "30",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/44146.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "marks2"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "2 paint marks stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "0"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "2"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.55"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "multiply"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "full"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.83, 1.01"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "marks1:third gen__00474_seed1332260247_psi1.4640_paint_cutout | marks2:third gen__00970_seed914260049_psi1.0543_paint_cutout"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "00202_seed2129509148_psi1.3603.png-74f"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "off"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "left 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "left"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drifella"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "mouth, nose, eyes"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "scribbles"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "through scribbles / overlays"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "soft-light"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "off"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "off"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Drilady 574"
+          },
+          {
+            "trait_type": "drifellabody",
+            "value": "aura compassionate"
+          },
+          {
+            "trait_type": "drifellabody z",
+            "value": "2"
+          },
+          {
+            "trait_type": "drifellabody blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "drifellabody opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "drifellabody bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "drifellabody blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "tattoos",
+            "value": "phantom troupe"
+          },
+          {
+            "trait_type": "tattoos z",
+            "value": "3"
+          },
+          {
+            "trait_type": "tattoos blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "tattoos opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "tattoos bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "tattoos blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "cloth",
+            "value": "BOOM"
+          },
+          {
+            "trait_type": "cloth z",
+            "value": "4"
+          },
+          {
+            "trait_type": "cloth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "cloth opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "cloth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "cloth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "accesory",
+            "value": "None"
+          },
+          {
+            "trait_type": "accesory z",
+            "value": "5"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "drained"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "6"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "clown nose"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "7"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyes",
+            "value": "blazed"
+          },
+          {
+            "trait_type": "eyes z",
+            "value": "8"
+          },
+          {
+            "trait_type": "eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head",
+            "value": "bane"
+          },
+          {
+            "trait_type": "head z",
+            "value": "9"
+          },
+          {
+            "trait_type": "head blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "head bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "after 16"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "nomask-21"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "39"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets punch",
+            "value": "off"
+          },
+          {
+            "trait_type": "scatter assets depth",
+            "value": "after-16"
+          },
+          {
+            "trait_type": "scatter assets count",
+            "value": "2"
+          },
+          {
+            "trait_type": "scatter assets recipe",
+            "value": "overlay@0.5, overlay@0.7"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "asset-277-head-backwars-cap"
+          },
+          {
+            "trait_type": "scatter assets blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "scatter assets opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "scatter assets 2",
+            "value": "asset-287-head-jester-hat-drifella-og"
+          },
+          {
+            "trait_type": "scatter assets 2 blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "scatter assets 2 opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "off"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise1"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "42"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "30",
+        "crateTokenId": "111890",
+        "category": "painting",
+        "name": "30",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/44146.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa56e128dde062617d3f9532589bad7cb3800d12a2da498d63ab142f77aacafa7",
+          "blockNumber": 12092641,
+          "blockHash": "0x76c79e8fd42896084224ffc7afae4e3b20cde2c151c6d94bc3c3845eda637b51"
+        },
+        "metadataRevision": 4
+      }
+    },
+    {
+      "tokenId": "84",
+      "eggId": 65666,
+      "paintingId": 42192,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 134,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/42192.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 10153,
+        "sha256": "0a5d4b5f5ed0f0ef3becbccdc7adf01c172beb4901240cfe59b372a1093615b3",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 132
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/84.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 6950,
+      "sha256": "11f2ef0d0dc9b228df5baadc08ea367daefd49b0316003f6f8406a831b948755",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "84",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42192.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "marks2"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "2 paint marks stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "0"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "2"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.28"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.76, 0.9"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "marks1:04177_seed275707110_psi1.2039_paint_cutout | marks2:third gen__01245_seed12570822_psi1.3025_paint_cutout"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "off"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "off"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "left 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "left"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drilady chopped"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "nose, small eyes, mouth"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "gan-marks"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "gan underpainting + paint marks"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "multiply"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "Drilady 928"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Marelady 618"
+          },
+          {
+            "trait_type": "main body",
+            "value": "squiggles"
+          },
+          {
+            "trait_type": "main body z",
+            "value": "1"
+          },
+          {
+            "trait_type": "main body blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "main body opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "main body bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "main body blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind",
+            "value": "ascii 5"
+          },
+          {
+            "trait_type": "hair behind z",
+            "value": "2"
+          },
+          {
+            "trait_type": "hair behind blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair behind opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair behind bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair behind blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind body clip",
+            "value": "body silhouette"
+          },
+          {
+            "trait_type": "clothes",
+            "value": "chic metallic outfit"
+          },
+          {
+            "trait_type": "clothes z",
+            "value": "3"
+          },
+          {
+            "trait_type": "clothes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "clothes opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "clothes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "clothes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair front",
+            "value": "brunette"
+          },
+          {
+            "trait_type": "hair front z",
+            "value": "4"
+          },
+          {
+            "trait_type": "hair front blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair front opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair front bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair front blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "crucifella",
+            "value": "goat"
+          },
+          {
+            "trait_type": "crucifella z",
+            "value": "5"
+          },
+          {
+            "trait_type": "crucifella blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "crucifella opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "crucifella bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "crucifella blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "nose"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "6"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "small eyes",
+            "value": "red"
+          },
+          {
+            "trait_type": "small eyes z",
+            "value": "7"
+          },
+          {
+            "trait_type": "small eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "small eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "small eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "small eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eye shadow",
+            "value": "wedding"
+          },
+          {
+            "trait_type": "eye shadow z",
+            "value": "8"
+          },
+          {
+            "trait_type": "eye shadow blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eye shadow opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "eye shadow bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eye shadow blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyebrows",
+            "value": "red"
+          },
+          {
+            "trait_type": "eyebrows z",
+            "value": "9"
+          },
+          {
+            "trait_type": "eyebrows blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyebrows opacity",
+            "value": "0.6"
+          },
+          {
+            "trait_type": "eyebrows bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyebrows blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "smirk drifella og"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "11"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head accessory",
+            "value": "backwars cap"
+          },
+          {
+            "trait_type": "head accessory z",
+            "value": "12"
+          },
+          {
+            "trait_type": "head accessory blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head accessory opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "head accessory bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head accessory blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "after 16"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "nomask-6"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "40"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "darken"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets punch",
+            "value": "off"
+          },
+          {
+            "trait_type": "scatter assets depth",
+            "value": "after bacon"
+          },
+          {
+            "trait_type": "scatter assets count",
+            "value": "1"
+          },
+          {
+            "trait_type": "scatter assets recipe",
+            "value": "overlay@0.5"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "asset-41-overlay-horse-zien-1"
+          },
+          {
+            "trait_type": "scatter assets blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "scatter assets opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "veil036"
+          },
+          {
+            "trait_type": "iscanner veil z",
+            "value": "42"
+          },
+          {
+            "trait_type": "iscanner veil blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "iscanner veil opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "43"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "84",
+        "crateTokenId": "111907",
+        "category": "painting",
+        "name": "84",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42192.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0x48358707f741c98ec7dead506c71cb64394a911544e6357757c0af408756d243",
+          "blockNumber": 12092971,
+          "blockHash": "0x546069bec4918c563ef2a3ee3088e9fdef8a5bd8931f839db59faa36a0f43879"
+        },
+        "metadataRevision": 4
+      }
+    },
+    {
+      "tokenId": "89",
+      "eggId": 63609,
+      "paintingId": 42907,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 111,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/42907.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 8537,
+        "sha256": "768b1e8f764f649afb1aaa49e5d9141c7efdef8dc6434d249df8b3ae5ff5120a",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 109
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/89.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 5932,
+      "sha256": "f1b852a4a7ba2e0a518833e176ffc71c62bba6e16e9f6aca7c0b547f240fd7cf",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "89",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42907.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "gan2-marks3"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "2 gans + 3 marks stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "2"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "3"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.55"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "full"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.81, 0.65, 0.62, 0.95, 1.04"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "gan1:04025_seed772996463_psi1.4993.png | gan2:light__image_01223.png | marks1:third gen__00474_seed1332260247_psi1.4640_paint_cutout | marks2:third gen__00345_seed212246094_psi1.4064_paint_cutout | marks3:third gen__00176_seed1719604862_psi0.9443_paint_cutout"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "off"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "second folder__00826_seed2141015059_psi1.3679_paint_cutout"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "right 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "right"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drifella"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "mouth, nose, eyes"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "gan-cel"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "gan + anime cel + paint marks"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "off"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "off"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Drilady 334"
+          },
+          {
+            "trait_type": "drifellabody",
+            "value": "skull cat"
+          },
+          {
+            "trait_type": "drifellabody z",
+            "value": "2"
+          },
+          {
+            "trait_type": "drifellabody blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "drifellabody opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "drifellabody bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "drifellabody blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "tattoos",
+            "value": "phantom troupe"
+          },
+          {
+            "trait_type": "tattoos z",
+            "value": "3"
+          },
+          {
+            "trait_type": "tattoos blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "tattoos opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "tattoos bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "tattoos blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "cloth",
+            "value": "tapout"
+          },
+          {
+            "trait_type": "cloth z",
+            "value": "4"
+          },
+          {
+            "trait_type": "cloth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "cloth opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "cloth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "cloth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "accesory",
+            "value": "None"
+          },
+          {
+            "trait_type": "accesory z",
+            "value": "5"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "gengar smile"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "6"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "clown nose"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "7"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyes",
+            "value": "beat n bruised"
+          },
+          {
+            "trait_type": "eyes z",
+            "value": "8"
+          },
+          {
+            "trait_type": "eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head",
+            "value": "make my apartment clean again hat"
+          },
+          {
+            "trait_type": "head z",
+            "value": "9"
+          },
+          {
+            "trait_type": "head blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "head bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "back"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "masked-18"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "39"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "multiply"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets punch",
+            "value": "off"
+          },
+          {
+            "trait_type": "scatter assets depth",
+            "value": "after 8"
+          },
+          {
+            "trait_type": "scatter assets count",
+            "value": "1"
+          },
+          {
+            "trait_type": "scatter assets recipe",
+            "value": "darken@0.5"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "asset-17-mouth-carnage"
+          },
+          {
+            "trait_type": "scatter assets blend",
+            "value": "darken"
+          },
+          {
+            "trait_type": "scatter assets opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "veil022"
+          },
+          {
+            "trait_type": "iscanner veil z",
+            "value": "41"
+          },
+          {
+            "trait_type": "iscanner veil blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "iscanner veil opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise1"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "42"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "89",
+        "crateTokenId": "111907",
+        "category": "painting",
+        "name": "89",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42907.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0x48358707f741c98ec7dead506c71cb64394a911544e6357757c0af408756d243",
+          "blockNumber": 12092971,
+          "blockHash": "0x546069bec4918c563ef2a3ee3088e9fdef8a5bd8931f839db59faa36a0f43879"
+        },
+        "metadataRevision": 4
+      }
+    },
+    {
+      "tokenId": "126",
+      "eggId": 63936,
+      "paintingId": 42683,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 120,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/42683.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 9119,
+        "sha256": "cd1e6f6a66deb394870b2a34c1f2d34470d2c0a1f2b1d0effca65d623d8df0f7",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 118
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/126.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 6281,
+      "sha256": "1171fd1cdf4f5ad90fb6390e0da2a577f2c09d050ce5a9c975e98e16927187b6",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "126",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42683.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "gan2"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "2 paint gans stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "2"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "0"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.98"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.64, 0.84"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "gan1:light__image_00506.png | gan2:dark__image_00955.png"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "03234_seed1549836313_psi0.9103.png-73b"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "04022_seed1373587209_psi1.3591_paint_cutout"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "left 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "left"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drifella"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "mouth, nose, eyes"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "full"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "full 111k stack"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "off"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "off"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Drifella 110"
+          },
+          {
+            "trait_type": "drifellabody",
+            "value": "cyan"
+          },
+          {
+            "trait_type": "drifellabody z",
+            "value": "2"
+          },
+          {
+            "trait_type": "drifellabody blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "drifellabody opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "drifellabody bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "drifellabody blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "tattoos",
+            "value": "hisoka"
+          },
+          {
+            "trait_type": "tattoos z",
+            "value": "3"
+          },
+          {
+            "trait_type": "tattoos blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "tattoos opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "tattoos bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "tattoos blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "cloth",
+            "value": "toriyama bomber jacket"
+          },
+          {
+            "trait_type": "cloth z",
+            "value": "4"
+          },
+          {
+            "trait_type": "cloth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "cloth opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "cloth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "cloth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "accesory",
+            "value": "pokeball necklace"
+          },
+          {
+            "trait_type": "accesory z",
+            "value": "5"
+          },
+          {
+            "trait_type": "accesory blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "accesory opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "accesory bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "milady smirk"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "6"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "clown nose big"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "7"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyes",
+            "value": "fang red"
+          },
+          {
+            "trait_type": "eyes z",
+            "value": "8"
+          },
+          {
+            "trait_type": "eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head",
+            "value": "fucking spiky headphones"
+          },
+          {
+            "trait_type": "head z",
+            "value": "9"
+          },
+          {
+            "trait_type": "head blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "head bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "back"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "masked-10"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "39"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "multiply"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets punch",
+            "value": "off"
+          },
+          {
+            "trait_type": "scatter assets depth",
+            "value": "after-16"
+          },
+          {
+            "trait_type": "scatter assets count",
+            "value": "3"
+          },
+          {
+            "trait_type": "scatter assets recipe",
+            "value": "soft-light@0.35, overlay@0.5, soft-light@0.35"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "asset-21-eyes-robot-eye-1"
+          },
+          {
+            "trait_type": "scatter assets blend",
+            "value": "soft-light"
+          },
+          {
+            "trait_type": "scatter assets opacity",
+            "value": "0.35"
+          },
+          {
+            "trait_type": "scatter assets 2",
+            "value": "asset-274-mouth-jock-joker"
+          },
+          {
+            "trait_type": "scatter assets 2 blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "scatter assets 2 opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "scatter assets 3",
+            "value": "asset-11-mouth-deaths-head-moth"
+          },
+          {
+            "trait_type": "scatter assets 3 blend",
+            "value": "soft-light"
+          },
+          {
+            "trait_type": "scatter assets 3 opacity",
+            "value": "0.35"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "veil040"
+          },
+          {
+            "trait_type": "iscanner veil z",
+            "value": "41"
+          },
+          {
+            "trait_type": "iscanner veil blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "iscanner veil opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise1"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "42"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "126",
+        "crateTokenId": "111910",
+        "category": "painting",
+        "name": "126",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42683.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 4
+      }
+    },
+    {
+      "tokenId": "128",
+      "eggId": 63712,
+      "paintingId": 44030,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 110,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/44030.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 8363,
+        "sha256": "9e70d64e72336bee6c5c6f4586b99e39f9130fcc48b977569357271d16123189",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 108
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/128.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 5785,
+      "sha256": "7fd6f15f00dcadc1b12eab361bfb7c1c160f1b2f6595fc28831147ef8d388609",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "128",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/44030.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "gan2-marks1"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "2 gans + 1 mark stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "2"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "1"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.55"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "hard-light"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "full"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.67, 0.74, 0.91"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "gan1:light__image_00050.png | gan2:light__abstract_image_00001.png | marks1:00119_seed680512294_psi1.2810_paint_cutout"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "third gen__00497_seed980944686_psi0.9161.png-903"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "off"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "right 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "right"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drilady chopped"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "open eyes, nose, mouth"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "under"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "through underpainting"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "soft-light"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "off"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "off"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Drifella 458"
+          },
+          {
+            "trait_type": "main body",
+            "value": "main body"
+          },
+          {
+            "trait_type": "main body z",
+            "value": "1"
+          },
+          {
+            "trait_type": "main body blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "main body opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "main body bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "main body blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind",
+            "value": "pulp fiction"
+          },
+          {
+            "trait_type": "hair behind z",
+            "value": "2"
+          },
+          {
+            "trait_type": "hair behind blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair behind opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair behind bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair behind blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind body clip",
+            "value": "body silhouette"
+          },
+          {
+            "trait_type": "open eyes",
+            "value": "money"
+          },
+          {
+            "trait_type": "open eyes z",
+            "value": "4"
+          },
+          {
+            "trait_type": "open eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "open eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "open eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "open eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "little nose"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "5"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyebrows",
+            "value": "black"
+          },
+          {
+            "trait_type": "eyebrows z",
+            "value": "6"
+          },
+          {
+            "trait_type": "eyebrows blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyebrows opacity",
+            "value": "0.6"
+          },
+          {
+            "trait_type": "eyebrows bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyebrows blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair front",
+            "value": "pigtails"
+          },
+          {
+            "trait_type": "hair front z",
+            "value": "7"
+          },
+          {
+            "trait_type": "hair front blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair front opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair front bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair front blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "bullet bill"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "8"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head accessory",
+            "value": "mcdonals cap"
+          },
+          {
+            "trait_type": "head accessory z",
+            "value": "9"
+          },
+          {
+            "trait_type": "head accessory blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head accessory opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "head accessory bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head accessory blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "after 16"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "nomask-47"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "37"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "off"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "veil030"
+          },
+          {
+            "trait_type": "iscanner veil z",
+            "value": "39"
+          },
+          {
+            "trait_type": "iscanner veil blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "iscanner veil opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "40"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "128",
+        "crateTokenId": "111910",
+        "category": "painting",
+        "name": "128",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/44030.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 4
+      }
+    },
+    {
+      "tokenId": "143",
+      "eggId": 63146,
+      "paintingId": 42491,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 110,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/42491.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 8354,
+        "sha256": "131c827246934df9d606838ef396f203bc5f2df97fd955b4b3b4a6c0f3d8ab6d",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 108
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/143.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 5776,
+      "sha256": "6dde517fe251c50f2706b8395c41b5b1d019e58d1828069e45e048ab639e7326",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "143",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42491.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "gan3"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "3 paint gans stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "3"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "0"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.65"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.79, 0.94, 0.79"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "gan1:light__image_01433.png | gan2:dark__image_00737.png | gan3:third gen__00506_seed1543771327_psi1.3396.png"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "dark__image_00989.png"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "second folder__00826_seed2141015059_psi1.3679_paint_cutout"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "right 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "right"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drilady chopped"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "open eyes, nose, mouth"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "full"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "full 111k stack"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "off"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "off"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Drifella 917"
+          },
+          {
+            "trait_type": "main body",
+            "value": "dewy"
+          },
+          {
+            "trait_type": "main body z",
+            "value": "1"
+          },
+          {
+            "trait_type": "main body blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "main body opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "main body bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "main body blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind",
+            "value": "blonde"
+          },
+          {
+            "trait_type": "hair behind z",
+            "value": "2"
+          },
+          {
+            "trait_type": "hair behind blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair behind opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair behind bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair behind blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind body clip",
+            "value": "body silhouette"
+          },
+          {
+            "trait_type": "open eyes",
+            "value": "nice eyelashes"
+          },
+          {
+            "trait_type": "open eyes z",
+            "value": "4"
+          },
+          {
+            "trait_type": "open eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "open eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "open eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "open eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "little nose"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "5"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyebrows",
+            "value": "pink"
+          },
+          {
+            "trait_type": "eyebrows z",
+            "value": "6"
+          },
+          {
+            "trait_type": "eyebrows blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyebrows opacity",
+            "value": "0.6"
+          },
+          {
+            "trait_type": "eyebrows bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyebrows blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair front",
+            "value": "long"
+          },
+          {
+            "trait_type": "hair front z",
+            "value": "7"
+          },
+          {
+            "trait_type": "hair front blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair front opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair front bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair front blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "anime smiles"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "8"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head accessory",
+            "value": "mcdonals cap.PNG"
+          },
+          {
+            "trait_type": "head accessory z",
+            "value": "9"
+          },
+          {
+            "trait_type": "head accessory blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head accessory opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "head accessory bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head accessory blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "back"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "masked-17"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "37"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "multiply"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "off"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "veil042"
+          },
+          {
+            "trait_type": "iscanner veil z",
+            "value": "39"
+          },
+          {
+            "trait_type": "iscanner veil blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "iscanner veil opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "40"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "143",
+        "crateTokenId": "111924",
+        "category": "painting",
+        "name": "143",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/42491.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 4
+      }
+    },
+    {
+      "tokenId": "188",
+      "eggId": 67062,
+      "paintingId": 43305,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 119,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/43305.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 9133,
+        "sha256": "0a80be0bfd7b48350cb691c697b377d698eac47ab7ff10ff8b3068f102cf534b",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 117
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/188.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 6321,
+      "sha256": "8755bccd492cd5e2146150f3b434eba70050307c891593d84cc57f75f5e4ca56",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "188",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/43305.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "marks2"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "2 paint marks stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "0"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "2"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.55"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "hard-light"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "full"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.71, 0.78"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "marks1:01987_seed11751516_psi1.3103_paint_cutout | marks2:second folder__00235_seed1117536898_psi1.4157_paint_cutout"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "dark__image_01016.png"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "off"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "right 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "right"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drilady chopped"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "open eyes, nose, mouth"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "collage"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "through collage / panels"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "darken"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "off"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "off"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Marelady 732"
+          },
+          {
+            "trait_type": "main body",
+            "value": "clown"
+          },
+          {
+            "trait_type": "main body z",
+            "value": "1"
+          },
+          {
+            "trait_type": "main body blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "main body opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "main body bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "main body blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind",
+            "value": "blonde bob"
+          },
+          {
+            "trait_type": "hair behind z",
+            "value": "2"
+          },
+          {
+            "trait_type": "hair behind blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair behind opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair behind bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair behind blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind body clip",
+            "value": "body silhouette"
+          },
+          {
+            "trait_type": "open eyes",
+            "value": "wink"
+          },
+          {
+            "trait_type": "open eyes z",
+            "value": "4"
+          },
+          {
+            "trait_type": "open eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "open eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "open eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "open eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "nose"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "5"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyebrows",
+            "value": "thin"
+          },
+          {
+            "trait_type": "eyebrows z",
+            "value": "6"
+          },
+          {
+            "trait_type": "eyebrows blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyebrows opacity",
+            "value": "0.6"
+          },
+          {
+            "trait_type": "eyebrows bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyebrows blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair front",
+            "value": "long"
+          },
+          {
+            "trait_type": "hair front z",
+            "value": "7"
+          },
+          {
+            "trait_type": "hair front blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair front opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair front bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair front blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "side smile drifella og"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "8"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head accessory",
+            "value": "umbreon hat drifella "
+          },
+          {
+            "trait_type": "head accessory z",
+            "value": "9"
+          },
+          {
+            "trait_type": "head accessory blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head accessory opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "head accessory bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head accessory blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "back"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "masked-11"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "37"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "soft-light"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets punch",
+            "value": "off"
+          },
+          {
+            "trait_type": "scatter assets depth",
+            "value": "after 8"
+          },
+          {
+            "trait_type": "scatter assets count",
+            "value": "3"
+          },
+          {
+            "trait_type": "scatter assets recipe",
+            "value": "darken@0.7, multiply@0.5, overlay@0.35"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "asset-261-mouth-cigs"
+          },
+          {
+            "trait_type": "scatter assets blend",
+            "value": "darken"
+          },
+          {
+            "trait_type": "scatter assets opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets 2",
+            "value": "asset-01-head-art-guy-1"
+          },
+          {
+            "trait_type": "scatter assets 2 blend",
+            "value": "multiply"
+          },
+          {
+            "trait_type": "scatter assets 2 opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "scatter assets 3",
+            "value": "asset-214-eyes-beauty"
+          },
+          {
+            "trait_type": "scatter assets 3 blend",
+            "value": "overlay"
+          },
+          {
+            "trait_type": "scatter assets 3 opacity",
+            "value": "0.35"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "off"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "40"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "188",
+        "crateTokenId": "111926",
+        "category": "painting",
+        "name": "188",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/43305.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 4
+      }
+    },
+    {
+      "tokenId": "202",
+      "eggId": 64697,
+      "paintingId": 44536,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 4,
+      "provenanceUnchanged": true,
+      "attributesMatchSource": true,
+      "baseAttributesMatchApi": true,
+      "attributeCount": 107,
+      "traitSource": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/44536.json",
+        "method": "GET",
+        "status": 200,
+        "bytes": 8154,
+        "sha256": "909bd0e7fccbcc4c6296e00ef897c69b7a69c7ed4623dbc8afd6a95af83aca0a",
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "collectionBlock": "Poets, Gamblers, Fools",
+        "attributeCount": 105
+      },
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/202.json",
+      "method": "GET",
+      "status": 200,
+      "bytes": 5654,
+      "sha256": "0dfba781d888da5cb1687171613bbdf7bbe1f5ca364e215240e83454cb434cf2",
+      "contentType": "application/json; charset=utf-8",
+      "cors": "*",
+      "cacheControl": "no-store",
+      "cfCacheStatus": "DYNAMIC",
+      "metadata": {
+        "name": "202",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/44536.png",
+        "attributes": [
+          {
+            "trait_type": "collection block",
+            "value": "Poets, Gamblers, Fools"
+          },
+          {
+            "trait_type": "type",
+            "value": "painting"
+          },
+          {
+            "trait_type": "Look",
+            "value": "half mask mix"
+          },
+          {
+            "trait_type": "Half mask bacon look",
+            "value": "111k original"
+          },
+          {
+            "trait_type": "Pixel stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon stack",
+            "value": "111k"
+          },
+          {
+            "trait_type": "Half mask hold",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Half mask paint",
+            "value": "off"
+          },
+          {
+            "trait_type": "Extra gan paint",
+            "value": "second folder__02890_seed1982614538_psi1.2817.png-b82"
+          },
+          {
+            "trait_type": "Body clip",
+            "value": "ears / hair to body"
+          },
+          {
+            "trait_type": "Top paint gan",
+            "value": "marks2"
+          },
+          {
+            "trait_type": "Top paint gan label",
+            "value": "2 paint marks stacked"
+          },
+          {
+            "trait_type": "Top paint gan count",
+            "value": "0"
+          },
+          {
+            "trait_type": "Top paint marks count",
+            "value": "2"
+          },
+          {
+            "trait_type": "Top paint gan opacity",
+            "value": "0.55"
+          },
+          {
+            "trait_type": "Top paint gan blend",
+            "value": "soft-light"
+          },
+          {
+            "trait_type": "Top paint gan side",
+            "value": "full"
+          },
+          {
+            "trait_type": "Top paint gan scales",
+            "value": "0.59, 0.98"
+          },
+          {
+            "trait_type": "Top paint gan layers",
+            "value": "marks1:third gen__01664_seed756036453_psi1.0556_paint_cutout | marks2:02835_seed736265563_psi1.1232_paint_cutout"
+          },
+          {
+            "trait_type": "Pixel side gan",
+            "value": "second folder__01324_seed1039304866_psi1.3472.png-ad9"
+          },
+          {
+            "trait_type": "Pixel side paint marks",
+            "value": "off"
+          },
+          {
+            "trait_type": "Face punch",
+            "value": "right 1.png"
+          },
+          {
+            "trait_type": "Face punch side",
+            "value": "right"
+          },
+          {
+            "trait_type": "Face punch under",
+            "value": "pixel"
+          },
+          {
+            "trait_type": "Face punch under asset",
+            "value": "Drifella"
+          },
+          {
+            "trait_type": "Chopped chrome",
+            "value": "drilady chopped"
+          },
+          {
+            "trait_type": "Chopped chrome blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "Chopped chrome opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Chopped chrome blur",
+            "value": "8"
+          },
+          {
+            "trait_type": "Eight over chrome",
+            "value": "color"
+          },
+          {
+            "trait_type": "Eight over chrome blend",
+            "value": "color"
+          },
+          {
+            "trait_type": "Face hint",
+            "value": "face"
+          },
+          {
+            "trait_type": "Face hint blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "Face hint opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "Face hint parts",
+            "value": "open eyes, nose, mouth"
+          },
+          {
+            "trait_type": "Face hint face opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "111k depth",
+            "value": "scribbles"
+          },
+          {
+            "trait_type": "111k depth label",
+            "value": "through scribbles / overlays"
+          },
+          {
+            "trait_type": "bg",
+            "value": "black"
+          },
+          {
+            "trait_type": "Look",
+            "value": "pixel master"
+          },
+          {
+            "trait_type": "Stack",
+            "value": "Drilady"
+          },
+          {
+            "trait_type": "Bacon preset",
+            "value": "layers"
+          },
+          {
+            "trait_type": "Overlap blend",
+            "value": "multiply"
+          },
+          {
+            "trait_type": "Over 8 opacity",
+            "value": "off"
+          },
+          {
+            "trait_type": "Over 8",
+            "value": "off"
+          },
+          {
+            "trait_type": "Under 16",
+            "value": "Drilady 964"
+          },
+          {
+            "trait_type": "main body",
+            "value": "jester"
+          },
+          {
+            "trait_type": "main body z",
+            "value": "1"
+          },
+          {
+            "trait_type": "main body blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "main body opacity",
+            "value": "0.45"
+          },
+          {
+            "trait_type": "main body bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "main body blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind",
+            "value": "middle part"
+          },
+          {
+            "trait_type": "hair behind z",
+            "value": "2"
+          },
+          {
+            "trait_type": "hair behind blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair behind opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair behind bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair behind blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair behind body clip",
+            "value": "body silhouette"
+          },
+          {
+            "trait_type": "open eyes",
+            "value": "owl eyes"
+          },
+          {
+            "trait_type": "open eyes z",
+            "value": "4"
+          },
+          {
+            "trait_type": "open eyes blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "open eyes opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "open eyes bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "open eyes blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "nose",
+            "value": "nose"
+          },
+          {
+            "trait_type": "nose z",
+            "value": "5"
+          },
+          {
+            "trait_type": "nose blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "nose opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "nose bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "nose blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "eyebrows",
+            "value": "pink"
+          },
+          {
+            "trait_type": "eyebrows z",
+            "value": "6"
+          },
+          {
+            "trait_type": "eyebrows blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "eyebrows opacity",
+            "value": "0.6"
+          },
+          {
+            "trait_type": "eyebrows bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "eyebrows blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "hair front",
+            "value": "i am music"
+          },
+          {
+            "trait_type": "hair front z",
+            "value": "7"
+          },
+          {
+            "trait_type": "hair front blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "hair front opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "hair front bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "hair front blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "mouth",
+            "value": "tongue"
+          },
+          {
+            "trait_type": "mouth z",
+            "value": "8"
+          },
+          {
+            "trait_type": "mouth blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "mouth opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "mouth bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "mouth blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "head accessory",
+            "value": "dragonite"
+          },
+          {
+            "trait_type": "head accessory z",
+            "value": "9"
+          },
+          {
+            "trait_type": "head accessory blend",
+            "value": "source-over"
+          },
+          {
+            "trait_type": "head accessory opacity",
+            "value": "0.5"
+          },
+          {
+            "trait_type": "head accessory bacon",
+            "value": "yes"
+          },
+          {
+            "trait_type": "head accessory blur",
+            "value": "12"
+          },
+          {
+            "trait_type": "scatter punch",
+            "value": "8px"
+          },
+          {
+            "trait_type": "scatter depth",
+            "value": "after 16"
+          },
+          {
+            "trait_type": "scatter drawings",
+            "value": "nomask-10"
+          },
+          {
+            "trait_type": "scatter drawings z",
+            "value": "37"
+          },
+          {
+            "trait_type": "scatter drawings blend",
+            "value": "darken"
+          },
+          {
+            "trait_type": "scatter drawings opacity",
+            "value": "0.7"
+          },
+          {
+            "trait_type": "scatter assets",
+            "value": "off"
+          },
+          {
+            "trait_type": "iscanner veil",
+            "value": "off"
+          },
+          {
+            "trait_type": "noise",
+            "value": "noise"
+          },
+          {
+            "trait_type": "noise z",
+            "value": "40"
+          },
+          {
+            "trait_type": "noise blend",
+            "value": "screen"
+          },
+          {
+            "trait_type": "noise opacity",
+            "value": "0.73"
+          }
+        ],
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "category": "painting",
+        "revealStatus": "revealed"
+      },
+      "artwork": {
+        "tokenId": "202",
+        "crateTokenId": "111927",
+        "category": "painting",
+        "name": "202",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/44536.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 4
+      }
+    }
+  ]
+}

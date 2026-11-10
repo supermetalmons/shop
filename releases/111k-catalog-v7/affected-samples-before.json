@@ -1,0 +1,376 @@
+{
+  "checkedAt": "2026-11-09T22:47:04.940Z",
+  "samples": [
+    {
+      "tokenId": "30",
+      "eggId": 66983,
+      "paintingId": 44146,
+      "metadata": {
+        "name": "30",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/66983.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    },
+    {
+      "tokenId": "84",
+      "eggId": 65666,
+      "paintingId": 42192,
+      "metadata": {
+        "name": "84",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/65666.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    },
+    {
+      "tokenId": "89",
+      "eggId": 63609,
+      "paintingId": 42907,
+      "metadata": {
+        "name": "89",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63609.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    },
+    {
+      "tokenId": "126",
+      "eggId": 63936,
+      "paintingId": 42683,
+      "metadata": {
+        "name": "126",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63936.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    },
+    {
+      "tokenId": "128",
+      "eggId": 63712,
+      "paintingId": 44030,
+      "metadata": {
+        "name": "128",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63712.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    },
+    {
+      "tokenId": "143",
+      "eggId": 63146,
+      "paintingId": 42491,
+      "metadata": {
+        "name": "143",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63146.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    },
+    {
+      "tokenId": "188",
+      "eggId": 67062,
+      "paintingId": 43305,
+      "metadata": {
+        "name": "188",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/67062.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    },
+    {
+      "tokenId": "202",
+      "eggId": 64697,
+      "paintingId": 44536,
+      "metadata": {
+        "name": "202",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/64697.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "category": "egg",
+        "revealStatus": "revealed"
+      }
+    }
+  ],
+  "api": {
+    "deploymentId": "v17",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "artworks": [
+      {
+        "tokenId": "30",
+        "crateTokenId": "111890",
+        "category": "egg",
+        "name": "30",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/66983.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa56e128dde062617d3f9532589bad7cb3800d12a2da498d63ab142f77aacafa7",
+          "blockNumber": 12092641,
+          "blockHash": "0x76c79e8fd42896084224ffc7afae4e3b20cde2c151c6d94bc3c3845eda637b51"
+        }
+      },
+      {
+        "tokenId": "84",
+        "crateTokenId": "111907",
+        "category": "egg",
+        "name": "84",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/65666.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0x48358707f741c98ec7dead506c71cb64394a911544e6357757c0af408756d243",
+          "blockNumber": 12092971,
+          "blockHash": "0x546069bec4918c563ef2a3ee3088e9fdef8a5bd8931f839db59faa36a0f43879"
+        }
+      },
+      {
+        "tokenId": "89",
+        "crateTokenId": "111907",
+        "category": "egg",
+        "name": "89",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63609.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0x48358707f741c98ec7dead506c71cb64394a911544e6357757c0af408756d243",
+          "blockNumber": 12092971,
+          "blockHash": "0x546069bec4918c563ef2a3ee3088e9fdef8a5bd8931f839db59faa36a0f43879"
+        }
+      },
+      {
+        "tokenId": "126",
+        "crateTokenId": "111910",
+        "category": "egg",
+        "name": "126",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63936.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        }
+      },
+      {
+        "tokenId": "128",
+        "crateTokenId": "111910",
+        "category": "egg",
+        "name": "128",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63712.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        }
+      },
+      {
+        "tokenId": "143",
+        "crateTokenId": "111924",
+        "category": "egg",
+        "name": "143",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/63146.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        }
+      },
+      {
+        "tokenId": "188",
+        "crateTokenId": "111926",
+        "category": "egg",
+        "name": "188",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/67062.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        }
+      },
+      {
+        "tokenId": "202",
+        "crateTokenId": "111927",
+        "category": "egg",
+        "name": "202",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/eggs/64697.png",
+        "aspectRatio": {
+          "width": 1,
+          "height": 1
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "egg"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        }
+      }
+    ],
+    "unresolved": [],
+    "retryAfterMs": 0,
+    "catalogRevision": 1
+  }
+}

@@ -75,19 +75,19 @@ function interruptImport(options: Parameters<typeof importRevealAssets>[0], dest
   assert.equal(result.signal, 'SIGKILL', `${result.error ?? ''}\n${result.stdout}\n${result.stderr}`);
 }
 
-test('saved v6 source imports the five categories, partial painting alternatives and balanced egg supply', async () => {
+test('saved v7 source imports the five categories, partial painting alternatives and balanced egg supply', async () => {
   const source = await readFile(sourcePath);
-  const catalog = buildRevealAssetCatalog(source, { catalogVersion: '111k-v6' });
+  const catalog = buildRevealAssetCatalog(source, { catalogVersion: '111k-v7' });
   validateRevealAssetCatalog(catalog);
   assert.equal(catalog.version, 2);
-  assert.equal(catalog.catalogVersion, '111k-v6');
-  assert.equal(Object.keys(JSON.parse(source.toString('utf8'))).length, 74875);
+  assert.equal(catalog.catalogVersion, '111k-v7');
+  assert.equal(Object.keys(JSON.parse(source.toString('utf8'))).length, 81655);
   assert.deepEqual(catalog.source, { filename: '111k.json', sha256: digest(source) });
   assert.deepEqual(catalog.importSettings, { availableEggs: 76700, eggAspectRatio: [1, 1] });
   assert.deepEqual(Object.fromEntries(Object.entries(catalog.categories).map(([category, value]) => [category, value.count])), {
-    eggs: 67284, paintings: 40348, videos: 58, '3d': 3000, animated: 421, receipts: 85556,
+    eggs: 60504, paintings: 47128, videos: 58, '3d': 3000, animated: 421, receipts: 85556,
   });
-  assert.equal(catalog.categories.eggs.availableCount! - catalog.categories.eggs.count, 9416);
+  assert.equal(catalog.categories.eggs.availableCount! - catalog.categories.eggs.count, 16196);
   assert.equal(catalog.artworkCount, 111111);
   assert.deepEqual(revealCatalogMedia(catalog, 'painting', 1), {
     image: 'https://cdn.lil.org/nft/111k/paintings/1.png', aspectRatio: { width: 466, height: 503 },
@@ -109,7 +109,8 @@ test('saved v6 source imports the five categories, partial painting alternatives
   assert.ok(alternateIds.every((id, index) => id === index + 1));
   assert.deepEqual(revealCatalogMedia(catalog, 'painting', 30991).aspectRatio, { width: 466, height: 503 });
   assert.deepEqual(revealCatalogMedia(catalog, 'painting', 40348).aspectRatio, { width: 1, height: 1 });
-  assert.deepEqual(buildRevealAssetCatalog(source, { catalogVersion: '111k-v6' }), catalog);
+  assert.deepEqual(revealCatalogMedia(catalog, 'painting', 47128).aspectRatio, { width: 466, height: 503 });
+  assert.deepEqual(buildRevealAssetCatalog(source, { catalogVersion: '111k-v7' }), catalog);
 });
 
 test('source ordering cannot change asset IDs or ratio palette ordering, and variants do not add artworks', () => {

@@ -1,0 +1,54 @@
+{
+  "recordedAt": "2026-11-09T22:57:43.002Z",
+  "baseCommit": "57edeb8157ec402a9255c8ca2cf9aaf31e89ab3c",
+  "gates": {
+    "api": {
+      "recordedAt": "2026-11-09T22:54:11.380Z",
+      "command": "npm run deploy:api",
+      "versionId": "ce8a8dd9-b2e4-4252-b19a-e97e66a6d222",
+      "passed": true,
+      "testSuiteCounts": [
+        3283,
+        63
+      ],
+      "logSha256": "d54996d6374f82640225d1e44cc0cf114ffef9b49fe24dd0278c60376176c9f0",
+      "newMigrationsApplied": false
+    },
+    "frontend": {
+      "recordedAt": "2026-11-09T22:49:45.385Z",
+      "command": "npm run deploy",
+      "versionId": "60446636-5af8-48b3-9cd9-106a83818b7d",
+      "passed": true,
+      "testSuiteCounts": [
+        4,
+        29,
+        1,
+        5197
+      ],
+      "logSha256": "c54f4149658154fc3e88d20ba20308a2a07602af6d0e65a6a91eb1bfdffe3cf9"
+    },
+    "finalApiTypecheck": {
+      "passed": true,
+      "logSha256": "e4c3285a0ebac49a23cbbc4f54beb86efd78eb2923779846fe696673831db423"
+    },
+    "toolsTypecheck": {
+      "passed": true,
+      "logSha256": "70d6d696e83e6b05146bb20c710947dfcc17dcc8ed45df60dce9bae0299950c0"
+    },
+    "localE2e": {
+      "passed": true,
+      "evidence": "local-e2e-results.json"
+    }
+  },
+  "appliedMigrations": {
+    "ops": [],
+    "data": [],
+    "commerce": []
+  },
+  "preparationChanges": [
+    "catalog data and retained v6 ancestor",
+    "current-catalog test fixtures",
+    "local E2E reveal registry migration initialization",
+    "allocation and rollout documentation"
+  ]
+}

@@ -120,6 +120,12 @@ async function readTestMetadata(uri: string): Promise<EthereumMetadata> {
   return metadata as EthereumMetadata;
 }
 
+async function initializeRevealRegistry(database: DatabaseSync): Promise<void> {
+  for (const migration of ['0009_ethereum_reveal_deployments', '0011_ethereum_reveal_retirement', '0012_ethereum_reveal_catalog_updates']) {
+    database.exec(await readFile(resolve(root, `cloud/workers/api/ops-migrations/${migration}.sql`), 'utf8'));
+  }
+}
+
 function testEnvironment(contract: string, key: string, ops: EthereumEnvironment['OPS_DB'], commerce: EthereumEnvironment['COMMERCE_DB']): EthereumEnvironment {
   const limiter = { limit: async () => ({ success: true }) };
   return {
@@ -252,6 +258,7 @@ try {
     .run(contract.toLowerCase(), Date.now());
   const discountOps = new DatabaseSync(':memory:');
   try {
+    await initializeRevealRegistry(discountOps);
     const api = apiClient(testEnvironment(contract, key, d1Database(discountOps), discountCommerce.db));
     const stats = () => api<EthereumStats>(`${ETHEREUM_API_PATHS.stats}?owner=${discountWallet}`);
     const initial = await stats();
@@ -386,6 +393,7 @@ try {
   assert.ok(batching.metadata30ResponseBytes * 4 < 3 * 1024 * 1024);
   const publicDatabase = new DatabaseSync(':memory:');
   try {
+    await initializeRevealRegistry(publicDatabase);
     const db = d1Database(publicDatabase);
     const environment = testEnvironment(contract, key, db, db);
     const rpcCalls: Array<{ method: string; params: unknown[] }> = [];
@@ -444,6 +452,7 @@ try {
     .run(contract.toLowerCase(), Date.now());
   const ops = new DatabaseSync(':memory:');
   try {
+    await initializeRevealRegistry(ops);
     if (!commerce.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ethereum_delivery_quotes'").get()) {
       commerce.database.exec(await readFile(resolve(root, 'cloud/workers/api/commerce-migrations/0037_ethereum_111k.sql'), 'utf8'));
     }
@@ -789,9 +798,7 @@ try {
   const relicPreorderRevenue = 26400000000000000n;
   const relicDatabase = new DatabaseSync(':memory:');
   try {
-    relicDatabase.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql'), 'utf8'));
-    relicDatabase.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql'), 'utf8'));
-    relicDatabase.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql'), 'utf8'));
+    await initializeRevealRegistry(relicDatabase);
     const templateJson = JSON.stringify(JSON.parse(await readFile(resolve(root, 'scripts/ethereum-metadata/templates/artwork.json'), 'utf8')));
     relicDatabase.exec(buildEthereumRevealRegistration({ deploymentId: 'relic-e2e', dropId: '111k_devnet', chainId: 31337,
       contractAddress: relicContract.toLowerCase(), metadataBaseUri: metadataBaseURI,
@@ -941,6 +948,7 @@ try {
   const relicCommerce = createCommerceD1Harness();
   const relicOps = new DatabaseSync(':memory:');
   try {
+    await initializeRevealRegistry(relicOps);
     relicCommerce.database.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
       paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = ? WHERE singleton = 1`)
       .run(relicContract.toLowerCase(), Date.now());
@@ -1021,6 +1029,7 @@ try {
   const metadataChecks: Array<{ uri: string; kind: string; displayId: number; apiMatchesSource: boolean }> = [];
   const previewDatabase = new DatabaseSync(':memory:');
   try {
+    await initializeRevealRegistry(previewDatabase);
     const db = d1Database(previewDatabase);
     const api = apiClient(testEnvironment(contract, key, db, db));
     for (const preview of previews) {

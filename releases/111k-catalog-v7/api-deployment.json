@@ -1,0 +1,12 @@
+{
+  "recordedAt": "2026-11-09T22:54:11.380Z",
+  "command": "npm run deploy:api",
+  "versionId": "ce8a8dd9-b2e4-4252-b19a-e97e66a6d222",
+  "passed": true,
+  "testSuiteCounts": [
+    3283,
+    63
+  ],
+  "logSha256": "d54996d6374f82640225d1e44cc0cf114ffef9b49fe24dd0278c60376176c9f0",
+  "newMigrationsApplied": false
+}

@@ -4,7 +4,7 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-New deployments use catalog version `111k-v6`: 67,284 eggs, 40,348 paintings,
+New deployments use catalog version `111k-v7`: 60,504 eggs, 47,128 paintings,
 58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
 111,111-artwork supply from 76,700 available eggs after counting all non-egg
 artworks. The runtime supports the current catalog and explicitly retained ancestor
@@ -80,7 +80,7 @@ Inspect without writes, then prepare an immutable local bundle when approved:
 
 ```sh
 npm run ethereum:catalog-update -- inspect --source /path/to/111k.json
-npm run ethereum:catalog-update -- prepare --source /path/to/111k.json --catalog-version 111k-v6 --bundle /path/to/batch
+npm run ethereum:catalog-update -- prepare --source /path/to/111k.json --catalog-version 111k-v8 --bundle /path/to/batch
 npm run ethereum:catalog-update -- verify --bundle /path/to/batch
 ```
 
@@ -108,6 +108,13 @@ detected through the existing config polling and revision-aware caches.
 The Worker must contain both exact predecessor and target catalog
 hashes; a globally promoted default must not change an existing deployment's pool
 or metadata interpretation before its own activation transaction commits.
+
+After deploying catalog support, allow the default five-minute
+[Durable Object code update delay](https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/)
+before applying the batch. Active coordinators can keep their previous code during
+that interval. If the catalog-support guard rejects an early attempt, confirm the
+deployment and original registry revision, then retry the same frozen bundle after
+the delay; do not regenerate the mapping or change catalog hashes.
 
 Select each deployment explicitly with its original registry revision. Apply the
 same frozen bundle independently to testnet and, when requested, mainnet:
@@ -179,7 +186,7 @@ Create a private local manifest using the deployment ID and prefix chosen above:
   "contractAddress": "<deployed contract address>",
   "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/<new-sepolia-deployment-id>/",
   "deploymentBlock": 0,
-  "catalogVersion": "111k-v6",
+  "catalogVersion": "111k-v7",
   "publicationDirectory": "./published-metadata"
 }
 ```

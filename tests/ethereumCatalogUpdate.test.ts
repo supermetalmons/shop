@@ -307,9 +307,11 @@ test('concurrent local mutation commands cannot overwrite the operation journal'
   assert.equal(JSON.parse(await readFile(join(input.directory, 'test.journal.json'), 'utf8')).expectedRevision, 4);
 });
 
-test('current v6 catalog and retained v5 ancestor are pinned and immutable', () => {
+test('current v7 catalog and retained v5 and v6 ancestors are pinned and immutable', () => {
   const supported = getSupportedRevealCatalogVersions();
-  for (const [version, eggs, paintings] of [['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348]] as const) {
+  for (const [version, eggs, paintings] of [
+    ['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348], ['111k-v7', 60504, 47128],
+  ] as const) {
     assert.ok(supported.includes(version));
     const descriptor = getRevealCatalogDescriptor(version)!;
     const value = getRevealCatalog(version, descriptor.manifestSha256)!;

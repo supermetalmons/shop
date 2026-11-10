@@ -1,0 +1,27 @@
+{
+  "deployments": [
+    {
+      "deploymentId": "v17",
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+      "deploymentBlock": 12092412,
+      "catalogVersion": "111k-v5",
+      "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://cdn.lil.org/nft/111k/placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}],\"aspectRatio\":{\"width\":466,\"height\":503}}",
+      "templateSha256": "07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9",
+      "state": "active",
+      "revision": 6,
+      "createdAtMs": 1794164373000,
+      "updatedAtMs": 1794264008961,
+      "activatedAtMs": 1794165443000,
+      "provisionedAtMs": 1794164417699,
+      "lastError": null,
+      "effectiveCatalogVersion": "111k-v6",
+      "effectiveCatalogSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+      "catalogRevision": 1,
+      "catalogUpdateId": null,
+      "catalogUpdateStartedAtMs": null
+    }
+  ]
+}

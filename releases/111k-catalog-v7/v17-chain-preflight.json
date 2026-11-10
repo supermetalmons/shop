@@ -1,0 +1,9 @@
+{
+  "checkedAt": "2026-11-09T22:45:00.917Z",
+  "verified": true,
+  "provider": "https://ethereum-sepolia-rpc.publicnode.com",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "deploymentBlock": 12092412,
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/"
+}

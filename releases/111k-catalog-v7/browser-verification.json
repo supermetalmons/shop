@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-11-09T22:49:45.388Z",
+  "url": "https://mons.shop/111k_devnet",
+  "freshTab": true,
+  "rendered": true,
+  "availableCrates": 4347,
+  "maximumCrates": 5555,
+  "mintPrice": "0.0001 ETH",
+  "walletConnected": false,
+  "consoleErrors": [],
+  "actions": "Read-only page navigation and inspection; no wallet connection or mint."
+}

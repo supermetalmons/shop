@@ -1,0 +1,46 @@
+{
+  "recordedAt": "2026-11-09T23:39:13.826Z",
+  "deploymentId": "v17",
+  "batchId": "catalog-7fa76fa1143cd3f605b37a57eb7eb4ea",
+  "batchSha256": "7fa76fa1143cd3f605b37a57eb7eb4eac92cf9f3c2e87c8946f86e446298e0ee",
+  "classification": "asynchronous-remote-preview-diagnostics",
+  "assessment": "Observed diagnostics did not correspond to failed awaited catalog RPCs; final rollout completion requires separate verification.",
+  "operatorLog": {
+    "path": ".cache/111k-v7-rollout/apply-retry.log",
+    "observedInternalErrorLines": 3075,
+    "observedSuccessfulActionResults": 1447,
+    "fatalCatalogUpdateErrorObserved": false,
+    "rpcStubDisposalWarningObserved": true,
+    "loggingPath": "Wrangler getPlatformProxy remote proxy session preview tail invokes realishPrintLogs independently of awaited RPC results",
+    "implementation": "node_modules/wrangler/wrangler-dist/cli.js:186688,187225-187233"
+  },
+  "productionTailObservation": {
+    "worker": "mons-shop-api",
+    "durationSeconds": 41.3,
+    "statusFilters": [
+      "error",
+      "canceled"
+    ],
+    "observedEvents": 0,
+    "stderrLines": 0,
+    "rawEventsStored": false,
+    "requestHeadersOrBodiesStored": false,
+    "limitation": "Bounded observation; does not establish absence of errors outside the observed interval."
+  },
+  "stateAtDiagnosticObservation": {
+    "phase": "observing",
+    "complete": false,
+    "catalogRevision": 2,
+    "total": 6780,
+    "staged": 6780,
+    "applied": 6780,
+    "published": 172,
+    "frozen": 172,
+    "conflicts": 0,
+    "retrying": 0
+  },
+  "cause": {
+    "exactInternalCause": "unknown",
+    "inference": "The RPC-stub disposal warning may indicate a remote bridge lifecycle contributor; opaque platform reference IDs do not establish causation."
+  }
+}
