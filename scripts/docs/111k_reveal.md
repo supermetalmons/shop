@@ -99,6 +99,7 @@ Each artwork has this shape (illustrative values):
   "tokenId": "1",
   "crateTokenId": "111112",
   "category": "video",
+  "collectionBlock": "film clips",
   "name": "1",
   "image": "https://cdn.lil.org/nft/111k/videos/1.webp",
   "animation_url": "https://cdn.lil.org/nft/111k/videos/1.mp4",
@@ -112,6 +113,7 @@ Each artwork has this shape (illustrative values):
 ```
 
 - `category`: `egg`, `painting`, `video`, `3d`, or `animated`.
+- `collectionBlock`: the artwork's collection-block name as a string, preserving spelling and case. Both endpoints return it immediately, without waiting for metadata enrichment. It is `null` for unhatched eggs or when collection-block information is unavailable. Accept an omitted field from older API versions as unknown.
 - `image`: the artwork image, video or animated poster, or square 3D preview.
 - `animation_url`: present for videos and animated artworks (MP4), and 3D models (GLB). Choose the renderer from `category`; a GLB URL is not a video source. Eggs and paintings have no `animation_url`.
 - `aspectRatio`: proportions, **not pixel dimensions**. Use CSS `aspect-ratio: width / height`.
@@ -123,6 +125,7 @@ For a 3D artwork, the media fields are:
 ```json
 {
   "category": "3d",
+  "collectionBlock": "DrOps3 Knives",
   "image": "https://cdn.lil.org/nft/111k/3d/1.png",
   "animation_url": "https://cdn.lil.org/nft/111k/3d/1.glb",
   "aspectRatio": { "width": 1, "height": 1 },
@@ -141,6 +144,7 @@ For an animated artwork, the media fields are:
 ```json
 {
   "category": "animated",
+  "collectionBlock": "gifworks",
   "image": "https://cdn.lil.org/nft/111k/animated/1.png",
   "animation_url": "https://cdn.lil.org/nft/111k/animated/1.mp4",
   "aspectRatio": { "width": 466, "height": 503 },
@@ -191,7 +195,7 @@ CDN metadata with a newer API revision or let it replace a newer cached token.
 
 Metadata JSON addresses follow the collection's configured base URI plus the decimal token ID and `.json`. The JSON address itself is predictable before minting; it contains only the placeholder until reveal. Use the methods above to establish reveal status and obtain media immediately, without waiting for CDN or marketplace refreshes.
 
-After initial media publication, the token’s CDN JSON receives its artwork traits in a background update. Paintings, videos, 3D models and animated works list `collection block` first, then their original attributes, then the source traits. Eggs keep their original attributes. The reveal response continues to serve the frozen artwork immediately. Read the token URI for the enriched attributes.
+After initial media publication, the token’s CDN JSON receives its artwork traits in a background update. Paintings, videos, 3D models and animated works list `collection block` first, then their original attributes, then the source traits. Eggs keep their original attributes. The reveal API's `collectionBlock` field is available independently of this metadata update and its `attributes` array. Read the token URI for the other enriched attributes.
 
 Published revealed metadata also contains `revealStatus: "revealed"`, which the
 shop uses to skip redundant recovery requests. Baseline placeholder metadata
