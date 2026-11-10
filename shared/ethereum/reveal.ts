@@ -19,6 +19,7 @@ export type EthereumRevealScope = {
 };
 export type EthereumRevealedArtwork = {
   metadataRevision?: number;
+  collectionBlock?: string | null;
   tokenId: string;
   crateTokenId: string;
   category: EthereumArtworkCategory;

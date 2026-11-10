@@ -125,6 +125,30 @@ test('artwork requests carry deployment identity and CSRF without requesting a w
   ]);
 });
 
+test('both reveal clients preserve collection blocks and accept legacy or unknown values', async t => {
+  let asset: EthereumRevealedArtwork = artwork();
+  t.mock.method(globalThis, 'fetch', async input => Response.json(String(input).endsWith('/transaction')
+    ? transactionResponse('revealed', [asset]) : { ...responseScope, artworks: [asset], unresolved: [], retryAfterMs: 0 }));
+  for (const fields of [{}, { collectionBlock: null }, { collectionBlock: ' Poets, Gamblers, Fools ' }]) {
+    asset = { ...artwork(), ...fields };
+    assert.deepEqual((await ethereumRevealApi.transaction(config, hash)).artworks, [asset]);
+    assert.deepEqual((await ethereumRevealApi.tokens(config, ['1'])).artworks, [asset]);
+  }
+});
+
+test('both reveal clients reject malformed collection blocks', async t => {
+  let collectionBlock: unknown;
+  t.mock.method(globalThis, 'fetch', async input => {
+    const artworks = [{ ...artwork(), collectionBlock }];
+    return Response.json(String(input).endsWith('/transaction')
+      ? { ...transactionResponse('revealed'), artworks } : { ...responseScope, artworks, unresolved: [], retryAfterMs: 0 });
+  });
+  for (collectionBlock of ['', '  ', 1, false, [], {}]) {
+    await assert.rejects(ethereumRevealApi.transaction(config, hash), /invalid response/);
+    await assert.rejects(ethereumRevealApi.tokens(config, ['1']), /invalid response/);
+  }
+});
+
 test('3D reveal metadata survives inventory parsing and never becomes a video preview', async t => {
   const model = artwork('1', '3d');
   t.mock.method(globalThis, 'fetch', async () => Response.json(transactionResponse('revealed', [model])));

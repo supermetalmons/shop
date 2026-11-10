@@ -46,7 +46,10 @@ IDs 1–18 under that root; existing publications retain their recorded image UR
 ## Import an updated dimensions map
 
 The importer accepts a complete JSON object mapping relative media paths to
-`[width, height]` integer pairs, in the same format as the preserved source.
+`[width, height]` integer pairs or `[width, height, collectionBlock]` tuples.
+Collection blocks must be nonempty strings and agree between primary/alternate
+paintings and video/poster pairs. Legacy pairs remain supported. Existing recorded
+block labels cannot change or disappear during catalog expansion.
 Run it from the shop repository:
 
 ```sh
@@ -83,6 +86,45 @@ shared descriptor, and five reference JSONs without writing files. The API and
 frontend check commands include this verification. Imports validate supported
 paths, positive safe-integer dimensions, contiguous primary IDs, valid alternative IDs,
 video/poster pairs, and supply before writing generated outputs.
+
+## Collection blocks in reveal responses
+
+[collection-blocks.source.json](collection-blocks.source.json) preserves the full
+manifest with block labels separately from the frozen catalog source.
+[collection-blocks.json](collection-blocks.json) contains only the generated ranges,
+source checksum, and verified catalog bindings. The API Worker imports this compact
+artifact; the full source and generator are not bundled into the Worker or browser.
+
+Generate it for the current catalog after importing or promoting artwork additions:
+
+```sh
+npm run ethereum:assets -- collection-blocks --source /path/to/111k.json
+npm run check:ethereum-assets
+```
+
+The input must exactly cover the current catalog paths and dimensions, with a
+collection block on every entry. The generator verifies compatible ancestor media,
+binds exact catalog versions and hashes, and retains earlier bindings and labels.
+The source checksum records the exact input bytes. The current catalog, its source,
+descriptor, templates, allocation, and publication state remain unchanged.
+
+Both reveal endpoints add `collectionBlock` using the effective artwork category
+and asset ID. Unhatched eggs and unsupported catalog identities return `null`.
+Existing frozen reveals receive the field on their next API response without
+rewriting assignments. Metadata and background attribute enrichment are unchanged.
+
+`npm run check:ethereum-assets` verifies both the media catalog and collection-block
+artifact. It fails if a newly promoted catalog lacks a matching binding or complete
+coverage. Check mode uses the saved source and does not require the original file:
+
+```sh
+npm run ethereum:assets -- collection-blocks --check
+```
+
+Generation shares the asset-import lock and keeps a recovery journal under
+`.cache/111k-collection-blocks/`. If interrupted, rerun the same command without
+`--check` to restore the previous source/artifact pair and retry. Check mode reports
+pending recovery without changing files.
 
 ## Manifest and metadata references
 

@@ -1,4 +1,5 @@
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
+import type { RevealArtworkReadOptions } from './ethereumRevealCatalogUpdateStore.js';
 import type { EthereumRevealedArtwork, EthereumRevealObservation, EthereumRevealTokensResponse } from '../../../../shared/ethereum/reveal.js';
 import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, EthereumRevealTransactionInspection } from './ethereumRevealChain.js';
 import type { RevealCrate, RevealSearchRange, RevealSql } from './ethereumRevealStore.js';
@@ -29,7 +30,7 @@ type CrateReceiptSnapshot = { crate_token_id: string; generation: number; eviden
 type RecoveryHooks = {
   freeze(deployment: EthereumRevealDeployment, observation: EthereumRevealObservation, crates: RevealCrate[], now: number, allCrates: boolean): number;
   reserve(crateTokenIds: string[]): void;
-  frozen(tokenIds: string[]): EthereumRevealedArtwork[];
+  frozen(tokenIds: string[], options?: RevealArtworkReadOptions): EthereumRevealedArtwork[];
 };
 
 const ACTIVE_MS = 30_000;
@@ -396,7 +397,7 @@ export class EthereumRevealRecoveryStore {
   }
 
   tokensResponse(deployment: EthereumRevealDeployment, tokenIds: string[]): EthereumRevealTokensResponse {
-    const artworks = this.hooks.frozen(tokenIds), found = new Set(artworks.map(row => row.tokenId));
+    const artworks = this.hooks.frozen(tokenIds, { includeCollectionBlock: true }), found = new Set(artworks.map(row => row.tokenId));
     const statuses = new Map<string, string>();
     for (let offset = 0; offset < tokenIds.length; offset += 100) {
       const ids = tokenIds.slice(offset, offset + 100);

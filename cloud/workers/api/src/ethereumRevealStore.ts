@@ -5,7 +5,7 @@ import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, Ethereum
 export type { RevealDispatchState, RevealReceiptClaim, RevealScanClaim, RevealWorkLane } from './ethereumRevealRecoveryStore.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumRevealEnrichmentStore, REVEAL_ENRICHMENT_SCHEMA } from './ethereumRevealEnrichmentStore.js';
-import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import { EthereumRevealCatalogUpdateStore, type RevealArtworkReadOptions } from './ethereumRevealCatalogUpdateStore.js';
 import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, revealCategoryCounts, revealDeploymentCatalog,
   revealCrateSize, revealRandomInteger } from './ethereumRevealCatalog.js';
 
@@ -144,7 +144,7 @@ export class EthereumRevealStore {
     this.recovery = new EthereumRevealRecoveryStore(this.sql, action => this.transaction(action), {
       freeze: (deployment, observation, crates, now, allCrates) => this.freezeRecords(deployment, observation, crates, now, allCrates),
       reserve: crates => this.reserve(crates),
-      frozen: ids => this.frozen(ids),
+      frozen: (ids, options) => this.frozen(ids, options),
     });
   }
 
@@ -237,8 +237,8 @@ export class EthereumRevealStore {
     });
   }
 
-  frozen(tokenIds: string[]): EthereumRevealedArtwork[] {
-    return this.catalogUpdate.canonicalArtworks(tokenIds);
+  frozen(tokenIds: string[], options?: RevealArtworkReadOptions): EthereumRevealedArtwork[] {
+    return this.catalogUpdate.canonicalArtworks(tokenIds, options);
   }
 
   private freezeRecords(deployment: EthereumRevealDeployment, observation: EthereumRevealObservation, crates: RevealCrate[], now: number,
@@ -316,7 +316,7 @@ export class EthereumRevealStore {
     const mappings: Array<{ tokenId: string; crateTokenId: string }> = job ? JSON.parse(job.tokens_json) : [];
     const cratesByToken = new Map(mappings.map(value => [value.tokenId, value.crateTokenId]));
     const status = job?.status === 'revealed' && !job.revealed_all ? 'pending' : job?.status || 'pending';
-    const artworks = status === 'revealed' ? this.frozen(mappings.map(value => value.tokenId))
+    const artworks = status === 'revealed' ? this.frozen(mappings.map(value => value.tokenId), { includeCollectionBlock: true })
       .map(value => ({ ...value, crateTokenId: cratesByToken.get(value.tokenId)! })) : [];
     const observation: EthereumRevealObservation | null = job?.observation_json ? JSON.parse(job.observation_json) : null;
     return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,

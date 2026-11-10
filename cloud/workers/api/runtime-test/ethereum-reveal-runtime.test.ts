@@ -199,6 +199,8 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
     const singleCrateMs = performance.now() - baselineStarted;
     assert.equal(baseline.status, 'revealed');
     assert.equal(baseline.artworks.length, 20);
+    assert.ok(baseline.artworks.every(artwork => artwork.category === 'egg'
+      ? artwork.collectionBlock === null : typeof artwork.collectionBlock === 'string' && artwork.collectionBlock.length > 0));
     assert.ok(baseline.artworks.filter(artwork => artwork.category === 'egg').length <= 8);
     const singleCrateRpcCalls = rpcCalls.length - baselineRpc;
     const tampered = '{"image":"https://example.invalid/tampered.webp"}\n';
@@ -311,6 +313,8 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
     assert.deepEqual(restored, baseline);
     assert.equal(restoredTokens.artworks.length, 5);
     assert.equal(largeSnapshot.artworks.length, 500);
+    assert.ok(largeSnapshot.artworks.every(artwork => artwork.category === 'egg'
+      ? artwork.collectionBlock === null : typeof artwork.collectionBlock === 'string' && artwork.collectionBlock.length > 0));
     assert.deepEqual(largeSnapshot.unresolved, []);
     assert.equal(rpcCalls.length, warmRpc, 'Frozen reads after restart must not wait for an RPC request.');
     const warmRpcCalls = rpcCalls.length - warmRpc;

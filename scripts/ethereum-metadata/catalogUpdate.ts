@@ -6,6 +6,7 @@ import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAsset
   type RevealAssetCatalog } from '../../shared/ethereum/revealAssetCatalog.ts';
 import { revealCatalogAdditions, revealCatalogUpdateHash, validateRevealCatalogUpdateBatch,
   type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../shared/ethereum/revealCatalogUpdate.ts';
+import { selectRevealCollectionBlocks, validateRevealCollectionBlocks } from '../../shared/ethereum/revealCollectionBlocks.ts';
 import type { EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenance.ts';
 import { buildRevealAssetCatalog, withRevealAssetImportLock } from './assetImport.ts';
@@ -41,16 +42,25 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 function requireUnchangedSource(before: string, after: string): void {
   const previous = JSON.parse(before) as Record<string, unknown>;
   const next = JSON.parse(after) as Record<string, unknown>;
-  if (Object.entries(previous).some(([path, dimensions]) => JSON.stringify(next[path]) !== JSON.stringify(dimensions))) {
+  if (Object.entries(previous).some(([path, dimensions]) => {
+    const updated = next[path];
+    return !Array.isArray(dimensions) || !Array.isArray(updated) ||
+      dimensions[0] !== updated[0] || dimensions[1] !== updated[1];
+  })) {
     throw new Error('Catalog expansion cannot remove or change existing source paths or dimensions.');
+  }
+  if (Object.entries(previous).some(([path, dimensions]) => Array.isArray(dimensions) && dimensions.length === 3 &&
+    dimensions[2] !== (next[path] as unknown[])[2])) {
+    throw new Error('Catalog expansion cannot remove or change existing collection block labels.');
   }
 }
 
 async function inputCatalogs(input: RevealCatalogUpdateInput) {
   const root = resolve(input.rootDirectory ?? ROOT);
-  const [source, predecessorSource, manifest, descriptor] = await Promise.all([
+  const [source, predecessorSource, manifest, descriptor, blockSource, blockArtifact] = await Promise.all([
     readFile(resolve(input.sourcePath), 'utf8'), readFile(join(root, ASSETS, 'source.json'), 'utf8'),
     readFile(join(root, ASSETS, 'manifest.json'), 'utf8'), readFile(join(root, 'shared/ethereum/revealCatalog.json'), 'utf8'),
+    optionalFile(join(root, ASSETS, 'collection-blocks.source.json')), optionalFile(join(root, ASSETS, 'collection-blocks.json')),
   ]);
   const previous: unknown = JSON.parse(manifest);
   const previousDescriptor = JSON.parse(descriptor);
@@ -59,6 +69,14 @@ async function inputCatalogs(input: RevealCatalogUpdateInput) {
   const catalogVersion = input.catalogVersion ?? `111k-v${Number(previous.catalogVersion.slice(6)) + 1}`;
   const target = buildRevealAssetCatalog(source, { catalogVersion, availableEggs: previous.importSettings.availableEggs });
   requireUnchangedSource(predecessorSource, source);
+  if (blockSource !== null || blockArtifact !== null) {
+    if (blockSource === null || blockArtifact === null) throw new Error('Collection block source and artifact must both exist.');
+    const blocks: unknown = JSON.parse(blockArtifact);
+    validateRevealCollectionBlocks(blocks);
+    if (sha256(blockSource) !== blocks.source.sha256) throw new Error('Saved collection block source checksum mismatch.');
+    if (!selectRevealCollectionBlocks(blocks, previousDescriptor)) throw new Error('Collection blocks do not cover the predecessor catalog.');
+    requireUnchangedSource(blockSource, source);
+  }
   const additions = revealCatalogAdditions(previous, target);
   return { source, predecessorSource, predecessor: { manifest: previous, descriptor: previousDescriptor },
     target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) }, additions };

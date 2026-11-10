@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "source": {
+    "filename": "111k.json",
+    "sha256": "c43ff5b098c6dfe46f814a40b1ab9a3a677a2283a26387a4cccf7aa2450d2595"
+  },
+  "catalogs": [
+    {
+      "catalogVersion": "111k-v5",
+      "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a",
+      "counts": {
+        "painting": 30990,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v6",
+      "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+      "counts": {
+        "painting": 40348,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v7",
+      "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
+      "counts": {
+        "painting": 47128,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    }
+  ],
+  "ranges": {
+    "painting": [
+      [
+        8888,
+        "plane of existence"
+      ],
+      [
+        14538,
+        "Collage Paintings"
+      ],
+      [
+        18982,
+        "driflady"
+      ],
+      [
+        20301,
+        "DrifAura"
+      ],
+      [
+        22523,
+        "DriMi"
+      ],
+      [
+        23322,
+        "Puppet Readymade"
+      ],
+      [
+        23826,
+        "derivs"
+      ],
+      [
+        24369,
+        "dratini fanart"
+      ],
+      [
+        24911,
+        "hyperstacks"
+      ],
+      [
+        26911,
+        "pixel chunk no captain chunk!"
+      ],
+      [
+        30990,
+        "gpt pixel"
+      ],
+      [
+        32101,
+        "drif to sleep by grem curated"
+      ],
+      [
+        34323,
+        "driptobums"
+      ],
+      [
+        40348,
+        "Paint Me Like Your Old Models"
+      ],
+      [
+        41574,
+        "little swag"
+      ],
+      [
+        47128,
+        "Poets, Gamblers, Fools"
+      ]
+    ],
+    "video": [
+      [
+        58,
+        "film clips"
+      ]
+    ],
+    "3d": [
+      [
+        1000,
+        "DrOps3 Knives"
+      ],
+      [
+        3000,
+        "DrOps3 Guns"
+      ]
+    ],
+    "animated": [
+      [
+        421,
+        "gifworks"
+      ]
+    ]
+  }
+}

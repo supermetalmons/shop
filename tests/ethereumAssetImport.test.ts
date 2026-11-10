@@ -180,7 +180,7 @@ test('a complete non-egg inventory allocates zero eggs and excess artwork cannot
 });
 
 test('source parsing rejects malformed dimensions, noncanonical paths, gaps and unmatched media', () => {
-  for (const dimensions of [null, '932x1006', [], [1], [1, 2, 3], [0, 1], [-1, 1], [1.5, 2], ['1', 2], [Number.MAX_SAFE_INTEGER + 1, 2]]) {
+  for (const dimensions of [null, '932x1006', [], [1], [1, 2, 'block', 4], [0, 1], [-1, 1], [1.5, 2], ['1', 2], [Number.MAX_SAFE_INTEGER + 1, 2]]) {
     assert.throws(() => build(JSON.stringify({ ...sample(), '3d/1.png': dimensions })), /dimensions/);
   }
   for (const path of ['3d/01.png', '3d/0.png', '3d/9007199254740992.png', '3d/1.glb', '3d/1.PNG',
@@ -193,6 +193,28 @@ test('source parsing rejects malformed dimensions, noncanonical paths, gaps and 
   assert.throws(() => build(JSON.stringify({ ...sample(), 'paintings/alt/2.webp': [1, 1] })), /alternate IDs/);
   assert.throws(() => build(JSON.stringify({ ...sample(), 'videos/2.mp4': [1, 1] })), /paired/);
   assert.throws(() => build(JSON.stringify({ ...sample(), 'videos/1.webp': [1280, 720] })), /dimensions must match/);
+});
+
+test('collection-block source tuples preserve media and validate companion labels', async t => {
+  const source = Object.fromEntries(Object.entries(sample()).map(([path, dimensions]) =>
+    [path, [...dimensions as number[], ` ${path.split('/')[0]} Block `]]));
+  const rich = build(JSON.stringify(source));
+  assert.deepEqual(rich.categories, build().categories);
+  assert.notEqual(rich.source.sha256, build().source.sha256);
+  for (const label of [null, 3, '', '  ', [], {}]) {
+    assert.throws(() => build(JSON.stringify({ ...source, '3d/1.png': [2048, 2048, label] })), /collection block/);
+  }
+  for (const [path, tuple] of [['paintings/alt/1.webp', [1297, 1400]], ['videos/1.webp', [854, 480, 'other']]] as const) {
+    assert.throws(() => build(JSON.stringify({ ...source, [path]: tuple })), /collection blocks must match/);
+  }
+  const f = await fixture(t);
+  const bytes = `${JSON.stringify(source, null, 2)}\n`;
+  await writeFile(f.inputPath, bytes);
+  await importRevealAssets(f.options);
+  const before = await snapshot(f.rootDirectory);
+  assert.equal(await readFile(join(f.rootDirectory, assetDirectory, 'source.json'), 'utf8'), bytes);
+  assert.equal((await importRevealAssets({ rootDirectory: f.rootDirectory, check: true })).status, 'checked');
+  assert.deepEqual(await snapshot(f.rootDirectory), before);
 });
 
 test('import writes a complete reproducible bundle and check mode never rewrites it', async t => {

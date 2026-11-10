@@ -10,8 +10,11 @@ import type { RevealSql } from './ethereumRevealStore.js';
 import { buildRevealedArtwork } from './ethereumRevealCatalog.js';
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
 import { applyRevealAttributePayload } from './ethereumRevealAttributes.js';
+import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
+import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
 
 export type RevealOriginUnit = { category: EthereumArtworkCategory; assetId: number };
+export type RevealArtworkReadOptions = { includeCollectionBlock?: boolean };
 export type RevealEffectiveUnit = RevealOriginUnit & { assignmentRevision: number };
 export type RevealPool = { category: EthereumArtworkCategory; total: number; seeded: number; available: number };
 export type RevealCatalogMetadataStage = RevealOriginUnit & { attributesJson: string; sha256: string };
@@ -126,12 +129,15 @@ export class EthereumRevealCatalogUpdateStore {
     });
   }
 
-  private settings(): { deployment_json: string; catalog_revision: number; active_catalog_generation: string | null; candidate_catalog_generation: string | null } | null {
+  private settings(): { deployment_json: string; catalog_revision: number; active_catalog_generation: string | null;
+    candidate_catalog_generation: string | null; effective_catalog_version: string | null; effective_catalog_sha256: string | null } | null {
     if (!this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='settings'").toArray().length) return null;
-    const row = this.sql.exec<{ deployment_json: string; catalog_revision?: number; active_catalog_generation?: string | null; candidate_catalog_generation?: string | null }>(
+    const row = this.sql.exec<{ deployment_json: string; catalog_revision?: number; active_catalog_generation?: string | null;
+      candidate_catalog_generation?: string | null; effective_catalog_version?: string | null; effective_catalog_sha256?: string | null }>(
       'SELECT * FROM settings WHERE id=1').toArray()[0];
     return row ? { deployment_json: row.deployment_json, catalog_revision: row.catalog_revision ?? 0,
-      active_catalog_generation: row.active_catalog_generation ?? null, candidate_catalog_generation: row.candidate_catalog_generation ?? null } : null;
+      active_catalog_generation: row.active_catalog_generation ?? null, candidate_catalog_generation: row.candidate_catalog_generation ?? null,
+      effective_catalog_version: row.effective_catalog_version ?? null, effective_catalog_sha256: row.effective_catalog_sha256 ?? null } : null;
   }
 
   private operation(batchId: string): Operation {
@@ -216,10 +222,15 @@ export class EthereumRevealCatalogUpdateStore {
       assignmentRevision: Math.max(assignmentRevision, mapping.target_revision) } : { ...unit, assignmentRevision };
   }
 
-  canonicalArtworks(tokenIds: readonly string[]): EthereumRevealedArtwork[] {
+  canonicalArtworks(tokenIds: readonly string[], options?: RevealArtworkReadOptions): EthereumRevealedArtwork[] {
     const saved = this.settings();
     if (!saved || !tokenIds.length) return [];
     const deployment = JSON.parse(saved.deployment_json) as EthereumRevealDeployment;
+    const collectionBlocks = options?.includeCollectionBlock ? revealCollectionBlocks(
+      saved.effective_catalog_version === null && saved.effective_catalog_sha256 === null && !saved.active_catalog_generation
+        ? getRevealCatalogDescriptor(deployment.catalogVersion)
+        : saved.effective_catalog_version && saved.effective_catalog_sha256
+          ? { catalogVersion: saved.effective_catalog_version, manifestSha256: saved.effective_catalog_sha256 } : null) : null;
     let catalog: RevealAssetCatalog | undefined;
     const values = new Map<string, EthereumRevealedArtwork>();
     for (let offset = 0; offset < tokenIds.length; offset += 100) {
@@ -235,7 +246,9 @@ export class EthereumRevealCatalogUpdateStore {
             category: effective.category, assetId: effective.assetId, observation: artwork.observation, catalog }).artwork;
         }
         const metadataRevision = 2 * effective.assignmentRevision;
-        values.set(row.token_id, { ...artwork, ...(metadataRevision ? { metadataRevision } : {}) });
+        const canonical = { ...artwork, ...(metadataRevision ? { metadataRevision } : {}) };
+        if (options?.includeCollectionBlock) canonical.collectionBlock = lookupRevealCollectionBlock(collectionBlocks, effective.category, effective.assetId);
+        values.set(row.token_id, canonical);
       }
     }
     return tokenIds.flatMap(tokenId => values.has(tokenId) ? [values.get(tokenId)!] : []);

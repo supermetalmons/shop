@@ -1338,7 +1338,7 @@ test('mixed polling at and beyond negative-cache expiry returns freshly verified
   const f = fixture(t);
   f.freeze(hash(1), 241);
   f.state.minted = 260;
-  const frozen = f.store.frozen(['260']);
+  const frozen = f.store.frozen(['260'], { includeCollectionBlock: true });
   const first = value(await f.object.revealTokens(deployment, ['260', '111111'], true));
   assert.deepEqual(first.artworks, frozen);
   assert.deepEqual(first.unresolved, [{ tokenId: '111111', status: 'recovering' }]);
@@ -1370,7 +1370,7 @@ test('expired mixed negative results recheck later mints instead of returning st
   f.state.minted = 20;
   assert.equal(value(await f.object.revealTokens(deployment, ['21'], true)).unresolved[0].status, 'unminted');
   await f.settle();
-  const frozen = f.store.frozen(['1']);
+  const frozen = f.store.frozen(['1'], { includeCollectionBlock: true });
   now += 2_000;
   f.state.minted = 60;
   f.state.receipts.set(hash(2), receipt(hash(2), 1000, [{ crateTokenId: '111113', first: 21 }, { crateTokenId: '111114', first: 41 }]));

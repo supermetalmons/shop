@@ -82,9 +82,12 @@ function sourceGroups(source: string): Record<SourceGroup, SourceDimensions> {
     const rawId = match[2] ?? match[4] ?? match[6];
     const id = Number(rawId);
     if (!Number.isSafeInteger(id) || String(id) !== rawId) throw new Error(`Invalid asset ID: ${path}`);
-    if (!Array.isArray(dimensions) || dimensions.length !== 2 ||
-      dimensions.some(dimension => !Number.isSafeInteger(dimension) || dimension <= 0)) {
+    if (!Array.isArray(dimensions) || dimensions.length !== 2 && dimensions.length !== 3 ||
+      dimensions.slice(0, 2).some(dimension => !Number.isSafeInteger(dimension) || dimension <= 0)) {
       throw new Error(`Asset dimensions must be positive safe integers: ${path}`);
+    }
+    if (dimensions.length === 3 && (typeof dimensions[2] !== 'string' || !dimensions[2].trim())) {
+      throw new Error(`Asset collection block must be a nonempty string: ${path}`);
     }
     groups[group].set(id, [dimensions[0], dimensions[1]]);
   }
@@ -98,6 +101,11 @@ function sourceGroups(source: string): Record<SourceGroup, SourceDimensions> {
   if ([...groups['paintings/alt'].keys()].some(id => !groups.paintings.has(id))) {
     throw new Error('Painting alternate IDs must belong to primary painting IDs');
   }
+  for (const id of groups['paintings/alt'].keys()) {
+    if ((value[`paintings/alt/${id}.webp`] as unknown[])[2] !== (value[`paintings/${id}.png`] as unknown[])[2]) {
+      throw new Error(`Painting primary and alternate collection blocks must match: ${id}`);
+    }
+  }
   if (groups['videos/mp4'].size !== groups['videos/webp'].size) {
     throw new Error('Video MP4 and WEBP IDs must be paired');
   }
@@ -105,6 +113,9 @@ function sourceGroups(source: string): Record<SourceGroup, SourceDimensions> {
     const poster = groups['videos/webp'].get(id)!;
     if (dimensions[0] !== poster[0] || dimensions[1] !== poster[1]) {
       throw new Error(`Video MP4 and WEBP dimensions must match: ${id}`);
+    }
+    if ((value[`videos/${id}.mp4`] as unknown[])[2] !== (value[`videos/${id}.webp`] as unknown[])[2]) {
+      throw new Error(`Video MP4 and WEBP collection blocks must match: ${id}`);
     }
   }
   return groups;

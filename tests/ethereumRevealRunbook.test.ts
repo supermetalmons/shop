@@ -22,7 +22,17 @@ function revealCommands(source: string): string[] {
 
 function parseExample(command: string) {
   const args = command.match(/"[^"]*"|'[^']*'|<[^>]*>|[^\s]+/g)!;
-  assert.ok(!args.some(arg => arg === '--deployment-id' || arg.startsWith('--deployment-id=')), command);
+  assert.ok(!args.some(arg => arg.startsWith('--deployment-id=')), command);
+  if (args.includes('--deployment-id')) {
+    assert.equal(args[0], 'status', `Only status may target the discovered deployment directly: ${command}`);
+    const target = args[args.indexOf('--deployment-id') + 1];
+    assert.match(target, /^"\$[a-z][a-z0-9_]*_deployment"$/, `Use a quoted deployment variable: ${command}`);
+    const parsed = parseEthereumRevealControlArgs(args.map(arg => arg === target ? 'test-hatch-deployment' : arg));
+    assert.equal(parsed.deploymentId, 'test-hatch-deployment');
+    assert.equal(parsed.manifest, undefined);
+    assert.equal(parsed.write, false);
+    return { target, parsed };
+  }
   const target = args[args.indexOf('--manifest') + 1];
   assert.match(target, /^"\$[a-z][a-z0-9_]*_manifest"$/, `Use a quoted manifest variable: ${command}`);
   const parsed = parseEthereumRevealControlArgs(args.map((arg, index) =>
@@ -32,12 +42,17 @@ function parseExample(command: string) {
   return { target, parsed };
 }
 
-test('operational reveal commands use manifest variables in shell blocks and inline examples', () => {
+test('operational reveal commands use manifest targets or read-only discovered-deployment status', () => {
   for (const [name, markdown] of [['reveal runbook', runbook], ['replacement guide', replacementGuide]]) {
     const commands = executableSamples(markdown).flatMap(revealCommands);
     assert.ok(commands.length > 0, `No executable reveal commands found in ${name}`);
     for (const command of commands) parseExample(command);
   }
+});
+
+test('direct deployment examples cannot mutate reveal state', () => {
+  assert.throws(() => parseExample('activate --deployment-id "$hatch_deployment" --write'), /Only status/);
+  assert.throws(() => parseExample('status --deployment-id "$hatch_deployment" --write'));
 });
 
 test('registration, status and activation reuse the same manifest through the documented workflow', () => {

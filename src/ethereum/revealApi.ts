@@ -33,6 +33,8 @@ function parseArtwork(value: unknown): EthereumRevealedArtwork {
     BigInt(value.crateTokenId) < 111112n || BigInt(value.crateTokenId) > 116666n ||
     !['egg', 'painting', 'video', '3d', 'animated'].includes(String(value.category)) || typeof value.name !== 'string' ||
     value.description !== undefined && typeof value.description !== 'string' ||
+    value.collectionBlock !== undefined && value.collectionBlock !== null &&
+      (typeof value.collectionBlock !== 'string' || !value.collectionBlock.trim()) ||
     !hasValidEthereumMedia(value) || !isEthereumMediaUrl(value.image) || value.aspectRatio === undefined ||
     (value.category === 'video' || value.category === 'animated' || value.category === '3d'
       ? !isEthereumMediaUrl(value.animation_url) : value.animation_url !== undefined) ||

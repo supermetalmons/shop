@@ -98,8 +98,10 @@ frozen predecessor. Finish pending work first; never overwrite or rerandomize a 
 
 ### 2. Inspect and freeze a new batch
 
-Input is a complete relative-path-to-`[width, height]` JSON object. Existing paths
-and dimensions stay unchanged; primary IDs append without gaps. Alternatives add
+Input is a complete relative-path-to-`[width, height, collectionBlock]` JSON object;
+legacy `[width, height]` pairs remain supported for catalog construction. The
+response lookup requires labels for every entry. Existing paths, dimensions, and
+recorded block labels stay unchanged; primary IDs append without gaps. Alternatives add
 no slots. No new primary artworks or incompatible input means no hatch: report the
 validation result, without silently switching to a replacement deployment.
 
@@ -140,12 +142,19 @@ and deployed Worker. Run the asset check in either case.
 
 ```sh
 npm run ethereum:catalog-update -- promote --bundle "$hatch_bundle" --write
+npm run ethereum:assets -- collection-blocks --source "$hatch_bundle/source.json"
 npm run check:ethereum-assets
 ```
 
 Promotion changes the local default and retains the exact predecessor; it does not
 activate the live pool. Update current-catalog counts, boundary/ratio expectations,
 supported-version assertions, and allocation docs. Preserve historical fixtures.
+Generate the collection-block supplement against the promoted current catalog,
+using the bundle's frozen labeled source. When resuming an older retained bundle with
+a newer local default, keep the newer supplement and run its check instead of
+regenerating from the older source. The asset check rejects missing current-catalog
+bindings before deployment. This supplement changes reveal API responses only;
+it does not change catalog hashes or publish metadata.
 
 Immediately before deployment, re-read the live storefront config and require the
 chain, contract, metadata URI, and deployment block in `cloud/workers/api/wrangler.jsonc`

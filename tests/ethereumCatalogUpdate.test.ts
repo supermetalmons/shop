@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { buildRevealAssetCatalog, importRevealAssets } from '../scripts/ethereum-metadata/assetImport.ts';
+import { importRevealCollectionBlocks } from '../scripts/ethereum-metadata/collectionBlocks.ts';
 import { buildRevealCatalogUpdateBatch, inspectRevealCatalogUpdate, preflightRevealCatalogUpdateMedia,
   prepareRevealCatalogUpdate, prepareRevealCatalogUpdateFromBundle, promoteRevealCatalogUpdate,
   readRevealCatalogUpdateBundle, runRevealCatalogUpdate } from '../scripts/ethereum-metadata/catalogUpdate.ts';
@@ -167,6 +168,46 @@ test('source and frozen bundle tampering fail before canonical writes', async t 
   await assert.rejects(readRevealCatalogUpdateBundle(input.directory), /checksum/);
   await assert.rejects(promoteRevealCatalogUpdate(input.directory, { rootDirectory: input.rootDirectory, write: true }), /checksum/);
   assert.equal(JSON.parse(await readFile(join(input.rootDirectory, ASSETS, 'manifest.json'), 'utf8')).catalogVersion, '111k-v5');
+});
+
+test('expansion can add legacy collection blocks but cannot change dimensions or recorded labels', async t => {
+  const input = await fixture(t);
+  const rich = Object.fromEntries(Object.entries(nextSource()).map(([path, dimensions]) =>
+    [path, [...dimensions, `${path.split('/')[0]} Block`]]));
+  await writeFile(input.sourcePath, JSON.stringify(rich));
+  const prepared = await prepareRevealCatalogUpdate(input);
+  assert.equal(prepared.batch.mappings.length, 3);
+  await promoteRevealCatalogUpdate(input.directory, { rootDirectory: input.rootDirectory, write: true });
+  const expanded = { ...rich, 'paintings/4.png': [2, 3, 'New Block'] };
+  await writeFile(input.sourcePath, JSON.stringify(expanded));
+  const next = { ...input, catalogVersion: '111k-v7' };
+  assert.equal((await inspectRevealCatalogUpdate(next)).additions, 1);
+  for (const tuple of [[1, 1], [1, 1, 'changed']]) {
+    await writeFile(input.sourcePath, JSON.stringify({ ...expanded, '3d/1.png': tuple }));
+    await assert.rejects(inspectRevealCatalogUpdate(next), /existing collection block labels/);
+  }
+  await writeFile(input.sourcePath, JSON.stringify({ ...expanded, '3d/1.png': [2, 2, '3d Block'] }));
+  await assert.rejects(inspectRevealCatalogUpdate(next), /existing source paths or dimensions/);
+});
+
+test('expansion preserves supplemental labels before promoting a legacy two-value catalog', async t => {
+  const input = await fixture(t);
+  const withBlocks = (source: Record<string, number[]>) => Object.fromEntries(Object.entries(source).map(([path, dimensions]) =>
+    [path, [...dimensions, `${path.split('/')[0]} Block`]]));
+  await writeFile(input.sourcePath, JSON.stringify(withBlocks(sample())));
+  await importRevealCollectionBlocks(input);
+  const before = await readFile(join(input.rootDirectory, ASSETS, 'manifest.json'), 'utf8');
+  const expanded = withBlocks(nextSource());
+  await writeFile(input.sourcePath, JSON.stringify(expanded));
+  assert.equal((await inspectRevealCatalogUpdate(input)).additions, 3);
+  for (const tuple of [[1, 1], [1, 1, 'changed']]) {
+    await writeFile(input.sourcePath, JSON.stringify({ ...expanded, '3d/1.png': tuple }));
+    await assert.rejects(prepareRevealCatalogUpdate(input), /existing collection block labels/);
+    assert.equal(await readFile(join(input.rootDirectory, ASSETS, 'manifest.json'), 'utf8'), before);
+  }
+  await writeFile(input.sourcePath, JSON.stringify(expanded));
+  await writeFile(join(input.rootDirectory, ASSETS, 'collection-blocks.source.json'), JSON.stringify(withBlocks(nextSource())));
+  await assert.rejects(inspectRevealCatalogUpdate(input), /collection block source checksum mismatch/);
 });
 
 test('a cancelled operation can be prepared again after promotion with its original mapping and a new nonce', async t => {
