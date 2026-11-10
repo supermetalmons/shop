@@ -1,0 +1,17 @@
+{
+  "checkedAt": "2026-11-10T21:25:45.105Z",
+  "existingDeploymentRegistryUnchanged": true,
+  "currentSepoliaStillActive": true,
+  "mainnet": {
+    "deployment_id": "mainnet-v1",
+    "drop_id": "111k",
+    "chain_id": 1,
+    "contract_address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "metadata_base_uri": "https://cdn.mons.shop/111k/",
+    "state": "ready",
+    "revision": 2,
+    "catalog_version": "111k-v8",
+    "effective_catalog_version": null,
+    "retired_at_ms": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "deploymentId": "mainnet-v1",
+  "dropId": "111k",
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "metadataBaseUri": "https://cdn.mons.shop/111k/",
+  "deploymentBlock": 26387160,
+  "catalogVersion": "111k-v8",
+  "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://cdn.lil.org/nft/111k/placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}],\"aspectRatio\":{\"width\":466,\"height\":503}}",
+  "templateSha256": "07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9",
+  "state": "ready",
+  "revision": 2,
+  "createdAtMs": 1794345758000,
+  "updatedAtMs": 1794345914923,
+  "activatedAtMs": null,
+  "provisionedAtMs": 1794345914923,
+  "lastError": null,
+  "effectiveCatalogVersion": null,
+  "effectiveCatalogSha256": null,
+  "catalogRevision": 0,
+  "catalogUpdateId": null,
+  "catalogUpdateStartedAtMs": null
+}

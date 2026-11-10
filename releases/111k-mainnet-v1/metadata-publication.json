@@ -1,0 +1,14 @@
+{
+  "network": "mainnet",
+  "prefix": "111k/",
+  "operation": "bootstrap-mainnet-root",
+  "objectsSha256": "2cfacbe78e9aa36526541df5d0de15a988c29743b636110c3a0c9e480b255413",
+  "originalInventorySha256": "a68341c1487725a5119bf9c93cbf428d7ca69a59fe396077fab651564c18fa2b",
+  "originalObjectCount": 344948,
+  "snapshotSha256": "a51c0fc28d8c062396a56c9e699a92f854389e6c58895a46c37362703b39e48b",
+  "objectCount": 344984,
+  "uploaded": 344984,
+  "skipped": 0,
+  "complete": true,
+  "finishedAt": "2026-11-10T21:16:59.026Z"
+}

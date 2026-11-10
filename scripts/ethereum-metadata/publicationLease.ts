@@ -8,6 +8,7 @@ const WRITE_MS = 30_000;
 export type MetadataWriteFence = { assertWritable(): void; signal: AbortSignal };
 export type MetadataPublicationLease = MetadataWriteFence & {
   leaseId: string;
+  renew(): Promise<void>;
   beforePut(): Promise<void>;
   retireForRegistration(): Promise<void>;
   close(): Promise<void>;
@@ -88,6 +89,7 @@ async function acquireLease(metadataBaseUri: string, options: LeaseOptions): Pro
   };
   return {
     leaseId, signal: cancellation.signal,
+    renew,
     assertWritable() { usedForWrites = true; assertWritable(); },
     async beforePut() { usedForWrites = true; await renew(); },
     async retireForRegistration() {

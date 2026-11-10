@@ -170,6 +170,7 @@ contract Deploy111K {
         bytes memory prefix =
             bytes(chainId == 1 ? "https://cdn.mons.shop/111k/" : "https://cdn.mons.shop/111k-sepolia/");
         bytes memory value = bytes(uri);
+        if (chainId == 1 && keccak256(value) == keccak256(prefix)) return;
         if (value.length < prefix.length + 2 || value.length > prefix.length + 65 || value[value.length - 1] != "/") {
             revert NFT111K.InvalidBaseURI();
         }

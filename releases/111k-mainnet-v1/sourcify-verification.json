@@ -1,0 +1,11 @@
+{
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "transactionHash": "0x6c949b4b008f78993438a8b46205111609b0a8c4ea0d29d4ef547ecc2e0f95d9",
+  "checkedAt": "2026-11-10T21:22:05.136Z",
+  "creationMatch": "match",
+  "runtimeMatch": "match",
+  "frozenSourcesMatch": true,
+  "runtimeAndImmutablesMatch": true,
+  "url": "https://repo.sourcify.dev/1/0x08cded8258730bda384ff198001e47a1b50f7f9d"
+}

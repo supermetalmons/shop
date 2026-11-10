@@ -1,0 +1,241 @@
+{
+  "stage": "closed",
+  "chainId": 1,
+  "deploymentId": "mainnet-v1",
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "metadataBaseURI": "https://cdn.mons.shop/111k/",
+  "manifestSha256": "c3f3a160a84375dc5bb20258852465c2c3a714dc4268f38a3beaccac95c422e0",
+  "checkedAt": "2026-11-10T21:25:45.519Z",
+  "contractURI": "https://cdn.mons.shop/111k/collection.json",
+  "snapshotBlock": 26387188,
+  "snapshotBlockHash": "0x51ef42b182e06707c0d04b2f6ffbe585e97617767b594a080c0d61287ab4d752",
+  "transactionHash": "0x6c949b4b008f78993438a8b46205111609b0a8c4ea0d29d4ef547ecc2e0f95d9",
+  "deploymentBlock": 26387160,
+  "confirmations": 29,
+  "runtimeBytes": 24566,
+  "runtimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+  "runtimeAndImmutablesMatch": true,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "quoteSigner": "0x43c829cbb3648cc5eb8ebaa15fb7cfab21ecc2ea",
+  "initialDeliveryReceiver": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "deliveryConfigId": 1,
+  "mintRecipients": [
+    {
+      "address": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+      "shareBps": "2750",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+      "shareBps": "2600",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "shareBps": "500",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+      "shareBps": "500",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+      "shareBps": "500",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+      "shareBps": "500",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+      "shareBps": "100",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+      "shareBps": "100",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+      "shareBps": "100",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+      "shareBps": "100",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "shareBps": "500",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+      "shareBps": "583",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+      "shareBps": "583",
+      "released": "0",
+      "releasable": "0"
+    },
+    {
+      "address": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+      "shareBps": "584",
+      "released": "0",
+      "releasable": "0"
+    }
+  ],
+  "freeMintAllowances": [],
+  "stats": [
+    "0",
+    "0",
+    "0",
+    "100000000000000",
+    "1100000000000000",
+    false,
+    "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "50000000000000",
+    "1",
+    "0",
+    "0",
+    "0",
+    "500",
+    "0",
+    "0"
+  ],
+  "publicSale": [
+    "0",
+    "0",
+    "0",
+    false,
+    "0",
+    "0",
+    "0"
+  ],
+  "publicRelicsMinted": "0",
+  "relicReservation": {
+    "quantity": 0,
+    "valueWei": "0"
+  },
+  "totalSupply": "0",
+  "totalMintReceived": "0",
+  "totalMintReleased": "0",
+  "contractBalanceWei": "0",
+  "claimedRelicMask": "0",
+  "qa": null,
+  "actions": {
+    "deploy": {
+      "transactionHash": "0x6c949b4b008f78993438a8b46205111609b0a8c4ea0d29d4ef547ecc2e0f95d9",
+      "blockNumber": 26387160,
+      "blockHash": "0xdba8ee36a75f36136cbe35d505f98b05bba9e12f639949dd547e449cef424646",
+      "confirmations": 29,
+      "gasUsed": "6423477"
+    }
+  },
+  "metadataPreviews": [
+    {
+      "kind": 1,
+      "displayId": 1,
+      "tokenId": 1,
+      "uri": "https://cdn.mons.shop/111k/1.json"
+    },
+    {
+      "kind": 1,
+      "displayId": 111111,
+      "tokenId": 111111,
+      "uri": "https://cdn.mons.shop/111k/111111.json"
+    },
+    {
+      "kind": 2,
+      "displayId": 1,
+      "tokenId": 111112,
+      "uri": "https://cdn.mons.shop/111k/111112.json"
+    },
+    {
+      "kind": 2,
+      "displayId": 5555,
+      "tokenId": 116666,
+      "uri": "https://cdn.mons.shop/111k/116666.json"
+    },
+    {
+      "kind": 3,
+      "displayId": 1,
+      "tokenId": 116667,
+      "uri": "https://cdn.mons.shop/111k/116667.json"
+    },
+    {
+      "kind": 3,
+      "displayId": 505,
+      "tokenId": 117171,
+      "uri": "https://cdn.mons.shop/111k/117171.json"
+    },
+    {
+      "kind": 4,
+      "displayId": 1,
+      "tokenId": 1000001,
+      "uri": "https://cdn.mons.shop/111k/1000001.json"
+    },
+    {
+      "kind": 4,
+      "displayId": 222222,
+      "tokenId": 1222222,
+      "uri": "https://cdn.mons.shop/111k/1222222.json"
+    },
+    {
+      "kind": 5,
+      "displayId": 1,
+      "tokenId": 2000001,
+      "uri": "https://cdn.mons.shop/111k/2000001.json"
+    },
+    {
+      "kind": 5,
+      "displayId": 5555,
+      "tokenId": 2005555,
+      "uri": "https://cdn.mons.shop/111k/2005555.json"
+    },
+    {
+      "kind": 6,
+      "displayId": 1,
+      "tokenId": 117172,
+      "uri": "https://cdn.mons.shop/111k/117172.json"
+    },
+    {
+      "kind": 6,
+      "displayId": 18,
+      "tokenId": 117189,
+      "uri": "https://cdn.mons.shop/111k/117189.json"
+    },
+    {
+      "kind": 7,
+      "displayId": 1,
+      "tokenId": 3000001,
+      "uri": "https://cdn.mons.shop/111k/3000001.json"
+    },
+    {
+      "kind": 7,
+      "displayId": 18,
+      "tokenId": 3000018,
+      "uri": "https://cdn.mons.shop/111k/3000018.json"
+    }
+  ]
+}

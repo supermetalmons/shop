@@ -1,0 +1,94 @@
+{
+  "checkedAt": "2026-11-10T20:48:53.190Z",
+  "checks": [
+    {
+      "command": "forge test --offline --match-contract '^NFT111KDeploymentTest$' --gas-snapshot-emit=false",
+      "passed": 19,
+      "failed": 0
+    },
+    {
+      "command": "npm --prefix onchain/ethereum test",
+      "passed": 293,
+      "failed": 0,
+      "skipped": 4
+    },
+    {
+      "command": "npm --prefix onchain/ethereum run discounts:check",
+      "passed": true
+    },
+    {
+      "command": "npm --prefix onchain/ethereum run free-mints:check",
+      "passed": true
+    },
+    {
+      "command": "node onchain/ethereum/scripts/generate-abi.mjs --check",
+      "passed": true
+    },
+    {
+      "command": "npm --prefix onchain/ethereum run gas:compiler-gate -- --check",
+      "passed": true
+    },
+    {
+      "command": "npm --prefix onchain/ethereum run test:111k-deployment",
+      "passed": 75,
+      "failed": 0
+    },
+    {
+      "command": "node --test scripts/111k-mainnet-deployment.test.mjs",
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "command": "node --test scripts/111k-mainnet-deployment.test.mjs scripts/111k-verification.test.mjs",
+      "passed": 48,
+      "failed": 0
+    },
+    {
+      "command": "metadata bootstrap/CLI/generic publisher/journal focused tests",
+      "passed": 65,
+      "failed": 0
+    },
+    {
+      "command": "metadata bootstrap/CLI/reveal registration/lease focused tests",
+      "passed": 66,
+      "failed": 0
+    },
+    {
+      "command": "final metadata bootstrap/CLI tests",
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "command": "npm run typecheck:tools",
+      "passed": true
+    },
+    {
+      "command": "npm run check:dead-code",
+      "passed": true
+    },
+    {
+      "command": "forge fmt --check script/Deploy111K.s.sol test/NFT111KDeployment.t.sol",
+      "passed": true
+    },
+    {
+      "command": "git diff --check",
+      "passed": true
+    }
+  ],
+  "metadata": {
+    "version": 1,
+    "manifestSha256": "db70898d1299748a7b3c45c66ac8fe946d5804640d25c487a938e515c2d3a132",
+    "objectsSha256": "2cfacbe78e9aa36526541df5d0de15a988c29743b636110c3a0c9e480b255413",
+    "objectCount": 344984,
+    "totalBytes": 88551500,
+    "templateSha256": {
+      "artwork": "0142a2a6b61d981fa0c10bfe7f37b730252842780c161d6683c61460ab6da017",
+      "crate": "cda453c48ca55df1fa0a0b0ea73b4aaea9cb35523926796d6bc14ce089c28529",
+      "warehouse": "46816d7867551e6f32fec876b589e513d1564052ccb391eaf74d8d37372d32b2",
+      "artwork_receipt": "71b6e349cb598471a7dd380c579487a00151767377d75ef725963fb626d8d5d4",
+      "crate_receipt": "2a077ac973b7827a06a4999e3b50df55b1dbfbbcc89d045275ea89c0602dbe89",
+      "relic": "75ad6f5c67e9875197c9d5a2caac69052b4eaaba655d6ac8bd7f159643ce8a8b",
+      "relic_receipt": "c9be47082d218625bd022d1ee9d08013e5cd7450c543b0152934ab0492e2a45c"
+    }
+  }
+}

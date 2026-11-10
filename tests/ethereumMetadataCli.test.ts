@@ -46,3 +46,20 @@ test('metadata CLI displays help without any command and rejects unknown flags a
   assert.throws(() => parseMetadataCliArgs(['upload', '--network', 'all', '--force']), /Unknown option/);
   assert.throws(() => parseMetadataCliArgs(['generate', 'upload']), /Usage:/);
 });
+
+test('mainnet root bootstrap requires one explicit mainnet scope and the complete collection', () => {
+  const parsed = parseMetadataCliArgs(['bootstrap-mainnet-root', '--network', 'mainnet',
+    '--directory', 'metadata', '--snapshot-directory', 'backups', '--prior-cache-root', 'prior']);
+  assert.equal(parsed?.command, 'bootstrap-mainnet-root');
+  assert.deepEqual(parsed?.networks, ['mainnet']);
+  assert.equal(parsed?.snapshotDirectory, resolve('backups'));
+  assert.equal(parsed?.prefix, undefined);
+  assert.throws(() => parseMetadataCliArgs(['bootstrap-mainnet-root']), /explicitly select/);
+  for (const network of ['sepolia', 'all']) {
+    assert.throws(() => parseMetadataCliArgs(['bootstrap-mainnet-root', '--network', network]), /requires --network mainnet/);
+  }
+  for (const prefix of ['111k/', '111k/another/']) {
+    assert.throws(() => parseMetadataCliArgs(['bootstrap-mainnet-root', '--network', 'mainnet', '--prefix', prefix]), /does not accept --prefix/);
+  }
+  assert.throws(() => parseMetadataCliArgs(['bootstrap-mainnet-root', '--network', 'mainnet', '--token-ids', '1']), /only to upload and verify/);
+});

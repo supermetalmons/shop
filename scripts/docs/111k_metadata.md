@@ -4,7 +4,7 @@ The [v17 release](../../releases/111k-sepolia-v17/README.md) publishes and verif
 
 The [testnet retirement policy](111k_reveal_ops.md#superseded-testnet-retirement) removes superseded Sepolia metadata and reveal state while preserving the replacement and all mainnet/shared media. [V16 retirement](../../releases/111k-sepolia-v17/retirement-verification.json) is complete, including the scheduler-interval absence check. Retired deployment IDs and prefixes remain reserved and cannot be republished or registered for another contract. Historical [v16 release evidence](https://github.com/supermetalmons/shop/blob/b488f92ed8347163b2a4e2d58fe80e04b360b4b8/releases/111k-sepolia-v16/README.md) and [earlier records](https://github.com/supermetalmons/shop/tree/8c3de5aea944c3c7d67f1f5c9800c78afb7d6340/releases) remain in Git history.
 
-Deployment IDs are globally unique across networks. Later replacements must choose an unused ID. A future mainnet deployment can use a distinct ID such as `mainnet-relics-v1`, with the same ID in its prefix suffix. Publish and verify the complete collection at each new prefix before deployment and registration. Existing reveal-managed prefixes remain associated with their original deployments.
+Deployment IDs are globally unique across networks. The first mainnet deployment uses internal ID `mainnet-v1` and the clean root `https://cdn.mons.shop/111k/`; its ID does not appear in token URLs. Follow the [mainnet deployment runbook](111k_mainnet.md) to replace the unregistered historical root publication safely. Later collections must use a fresh ID and dedicated prefix. Publish and verify the complete collection before deployment and registration. Existing reveal-managed prefixes remain associated with their original deployments.
 
 111K metadata uses `https://cdn.mons.shop/111k-sepolia/` on Sepolia and `https://cdn.mons.shop/111k/` on Ethereum mainnet, followed by a decimal `{tokenId}.json` filename. Replacement deployments add a unique `<deploymentId>/` namespace beneath the network prefix. Each decimal filename is the ERC-721 token ID. The current shop integration remains Sepolia/Anvil only; publishing mainnet files does not enable mainnet sales.
 
@@ -125,7 +125,7 @@ The API, storefront, checkout, and fulfillment readers accept absolute HTTPS ima
 
 ## Generate and publish
 
-Choose a new metadata revision directory and a globally unique deployment ID for the next replacement. The currently registered publication is historical input, not an upload destination; do not republish a registered prefix.
+Choose a new metadata revision directory and a globally unique deployment ID for the next replacement. The currently registered publication is historical input, not an upload destination; do not republish a registered prefix. The first mainnet clean-root publication uses the explicit `bootstrap-mainnet-root` operation described in the [mainnet runbook](111k_mainnet.md), not ordinary root upload or a replacement prefix.
 
 After a metadata prefix is registered using the [reveal operations runbook](111k_reveal_ops.md), the reveal publisher owns it permanently. Generic upload and restore refuse all mutations to that prefix. Use a fresh deployment prefix for replacement collections; never reset revealed JSONs to placeholders. Remote mutations require access to the OPS registry and its publication leases.
 

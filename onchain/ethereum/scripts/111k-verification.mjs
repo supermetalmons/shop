@@ -7,7 +7,6 @@ import { encode, decode } from '@metamask/abi-utils';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { relicReservation, verifyRelicReservationSkip } from './relic-reservation-config.mjs';
 
-const CHAIN_ID = 11155111;
 const ZERO = '0x' + '0'.repeat(40);
 const CONTRACT = 'src/NFT111K.sol:NFT111K';
 const SOURCIFY = 'https://sourcify.dev/server/v2';
@@ -30,6 +29,21 @@ const decodedValue = value => value instanceof Uint8Array ? '0x' + Buffer.from(v
 const readJson = async (directory, name) => JSON.parse(await readFile(join(directory, name), 'utf8'));
 const save = (directory, name, value) => writeFile(join(directory, name), json(value), { mode: 0o600 });
 
+function verificationChainId(manifest) {
+  assert.ok([1, 11155111].includes(manifest.chainId), 'Verification supports mainnet and Sepolia only');
+  return manifest.chainId;
+}
+
+function validateMainnetVerification(manifest, journal) {
+  if (verificationChainId(manifest) !== 1) return;
+  assert.equal(manifest.network, 'mainnet', 'Mainnet verification requires its explicit network');
+  assert.equal(manifest.metadataBaseURI, 'https://cdn.mons.shop/111k/', 'Mainnet requires the clean metadata root');
+  assert.deepEqual(manifest.relicReservation, { quantity: 0, valueWei: '0' }, 'Mainnet must not reserve relics');
+  assert.deepEqual(manifest.freeMintAllocations, [], 'Mainnet initial free allowances must be empty');
+  assert.equal(manifest.maxDiscountedMints, 500, 'Mainnet discounted mint cap changed');
+  if (journal) assert.ok(Object.keys(journal.actions).every(action => action === 'deploy'), 'Mainnet permits only deployment');
+}
+
 function immutableDeclarations(compilerOutput) {
   const names = {};
   function visit(value) {
@@ -45,6 +59,7 @@ function immutableDeclarations(compilerOutput) {
 }
 
 export function expected111kRuntime(artifact, manifest, compilerOutput) {
+  const chainId = verificationChainId(manifest);
   const runtime = artifact.deployedBytecode.object;
   assert.match(runtime, /^0x(?:[0-9a-f]{2})+$/i, 'Invalid frozen runtime');
   const short = value => {
@@ -57,11 +72,11 @@ export function expected111kRuntime(artifact, manifest, compilerOutput) {
   const hashedVersion = hash('2');
   const domain = hash(encode(['bytes32', 'bytes32', 'bytes32', 'uint256', 'address'], [
     hash('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'),
-    hashedName, hashedVersion, CHAIN_ID, manifest.contractAddress,
+    hashedName, hashedVersion, chainId, manifest.contractAddress,
   ]));
   const values = {
     _cachedDomainSeparator: domain,
-    _cachedChainId: '0x' + BigInt(CHAIN_ID).toString(16).padStart(64, '0'),
+    _cachedChainId: '0x' + BigInt(chainId).toString(16).padStart(64, '0'),
     _cachedThis: '0x' + address(manifest.contractAddress).slice(2).padStart(64, '0'),
     _hashedName: hashedName,
     _hashedVersion: hashedVersion,
@@ -90,8 +105,9 @@ export function expected111kRuntime(artifact, manifest, compilerOutput) {
 export async function load111kVerification(directory) {
   const manifestBytes = await readFile(join(directory, 'manifest.json'));
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
-  assert.equal(manifest.chainId, CHAIN_ID, 'Verification supports Sepolia only');
-  assert.equal(manifest.network, 'sepolia', 'Verification supports Sepolia only');
+  const chainId = verificationChainId(manifest);
+  assert.equal(manifest.network, chainId === 1 ? 'mainnet' : 'sepolia', 'Verification network and chain differ');
+  validateMainnetVerification(manifest);
   relicReservation(manifest);
   for (const field of ['contractAddress', 'deployer', 'owner', 'quoteSigner', 'initialDeliveryReceiver']) address(manifest[field]);
   const frozen = {};
@@ -128,14 +144,16 @@ export async function load111kVerification(directory) {
     journal = { manifestSha256, actions: {} };
   }
   assert.equal(journal.manifestSha256, manifestSha256, 'Transaction journal belongs to a different manifest');
+  validateMainnetVerification(manifest, journal);
   return { directory, manifest, manifestSha256, artifact, input, compilerOutput, journal,
     runtime: expected111kRuntime(artifact, manifest, compilerOutput) };
 }
 
-export function verificationRpc(environment = process.env, request = fetch) {
+export function verificationRpc(environment = process.env, request = fetch, chainId = 11155111) {
+  verificationChainId({ chainId });
   const apiKey = environment.ALCHEMY_API_KEY || environment.ALCHEMY_MI_NOTE_API_KEY;
   const rpcUrl = environment.ETHEREUM_111K_RPC_URL || (apiKey
-    ? 'https://eth-sepolia.g.alchemy.com/v2/' + encodeURIComponent(apiKey) : null);
+    ? `https://eth-${chainId === 1 ? 'mainnet' : 'sepolia'}.g.alchemy.com/v2/` + encodeURIComponent(apiKey) : null);
   assert.ok(rpcUrl && new URL(rpcUrl).protocol === 'https:',
     'Set an HTTPS ETHEREUM_111K_RPC_URL, ALCHEMY_API_KEY, or ALCHEMY_MI_NOTE_API_KEY');
   let id = 0;
@@ -155,6 +173,7 @@ export function verificationRpc(environment = process.env, request = fetch) {
 }
 
 async function canonicalAction(context, action, rpc, head) {
+  const chainId = verificationChainId(context.manifest);
   const entry = context.journal.actions[action];
   if (action === 'reserve' && relicReservation(context.manifest).quantity === 0) {
     await verifyRelicReservationSkip(context.manifest, entry, rpc);
@@ -173,11 +192,25 @@ async function canonicalAction(context, action, rpc, head) {
   assert.equal(transaction.input.toLowerCase(), entry.data.toLowerCase());
   assert.equal(BigInt(transaction.value), BigInt(entry.valueWei));
   assert.equal(BigInt(transaction.nonce), BigInt(entry.nonce));
-  if (transaction.chainId !== undefined && transaction.chainId !== null) assert.equal(BigInt(transaction.chainId), BigInt(CHAIN_ID));
+  if (chainId === 1) {
+    assert.equal(BigInt(transaction.nonce), BigInt(context.manifest.nonce), 'Mainnet deployment nonce changed');
+    for (const [field, stored] of [['gas', 'gasLimit'], ['gasPrice', 'gasPrice']]) {
+      assert.equal(BigInt(transaction[field]), BigInt(context.manifest[stored]), `Mainnet deployment ${stored} changed`);
+      assert.equal(BigInt(entry[stored]), BigInt(context.manifest[stored]), `Mainnet journal ${stored} changed`);
+    }
+    const maximumFee = BigInt(transaction.gas) * BigInt(transaction.gasPrice);
+    assert.equal(maximumFee, BigInt(context.manifest.maximumFeeWei), 'Mainnet fee allowance changed');
+    assert.equal(maximumFee, BigInt(entry.maximumFeeWei), 'Mainnet journal fee allowance changed');
+    assert.ok(maximumFee > 0n && maximumFee <= 2_000_000_000_000_000n, 'Mainnet deployment exceeds the approved fee ceiling');
+    assert.ok(BigInt(transaction.gas) <= 16_777_216n, 'Mainnet deployment exceeds the transaction gas limit');
+    assert.ok(BigInt(receipt.gasUsed) <= BigInt(transaction.gas), 'Mainnet receipt gas exceeds the signed allowance');
+    if (receipt.effectiveGasPrice !== undefined) assert.equal(BigInt(receipt.effectiveGasPrice), BigInt(transaction.gasPrice));
+  }
+  if (transaction.chainId !== undefined && transaction.chainId !== null) assert.equal(BigInt(transaction.chainId), BigInt(chainId));
   else {
     const recovery = BigInt(transaction.v);
     assert.ok(recovery >= 35n, 'Deployment action is not replay protected');
-    assert.equal((recovery - 35n) / 2n, BigInt(CHAIN_ID));
+    assert.equal((recovery - 35n) / 2n, BigInt(chainId));
   }
   assert.equal(transaction.blockHash, receipt.blockHash);
   assert.equal(BigInt(transaction.blockNumber), BigInt(receipt.blockNumber));
@@ -226,13 +259,23 @@ export async function verify111kCollectionURI(artifact, call) {
 
 export async function verify111kDeployment(context, rpc, stage = 'closed') {
   assert.ok(STAGES.includes(stage), 'Unknown verification stage');
-  assert.equal(BigInt(await rpc('eth_chainId')), BigInt(CHAIN_ID), 'Verification RPC chain mismatch');
+  const { manifest } = context;
+  const chainId = verificationChainId(manifest);
+  validateMainnetVerification(manifest, context.journal);
+  if (chainId === 1) assert.equal(stage, 'closed', 'Mainnet verification supports the closed stage only');
+  assert.equal(BigInt(await rpc('eth_chainId')), BigInt(chainId), 'Verification RPC chain mismatch');
   const snapshot = await rpc('eth_getBlockByNumber', ['latest', false]);
   assert.ok(snapshot && /^0x[0-9a-f]{64}$/i.test(snapshot.hash), 'Invalid verification block');
   const actions = {};
   for (const action of STAGE_ACTIONS.slice(0, STAGES.indexOf(stage) + 1)) actions[action] = await canonicalAction(context, action, rpc, snapshot);
-  const { manifest } = context;
   const reservation = relicReservation(manifest);
+  if (chainId === 1) {
+    const events = await rpc('eth_getLogs', [{ address: manifest.contractAddress,
+      fromBlock: '0x' + actions.deploy.blockNumber.toString(16), toBlock: snapshot.number,
+      topics: [['SaleStatusUpdated(bool)', 'RelicsAllocated(uint256,uint256)', 'Transfer(address,address,uint256)',
+        'FreeMintAllowanceUpdated(address,uint16,uint16,uint16)', 'PublicRelicFreeMintAllowanceUpdated(address,uint16)'].map(hash)] }]);
+    assert.ok(Array.isArray(events) && events.length === 0, 'Mainnet mint status, relic allocation, issuance, or free allowances changed after deployment');
+  }
   const reference = { blockHash: snapshot.hash, requireCanonical: true };
   const call = async (signature, resultTypes, types = [], values = []) => decodedValue(decode(resultTypes,
     await rpc('eth_call', [{ to: manifest.contractAddress, data: callData(signature, types, values) }, reference])));
@@ -260,13 +303,17 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
   assert.equal(signer[0], address(manifest.quoteSigner));
   assert.equal(uri[0], manifest.metadataBaseURI);
   const contractURI = await verify111kCollectionURI(context.artifact, call);
+  if (chainId === 1) {
+    assert.equal(contractURI, 'https://cdn.mons.shop/111k/collection.json', 'Mainnet requires collection metadata');
+    assert.equal(stats.length, 15, 'Mainnet requires public relic statistics');
+  }
   assert.equal(recipientCount[0], BigInt(manifest.proceeds.mintRecipients.length));
   assert.equal(recipientCount[0], 14n, 'Expected the fourteen-receiver mint split');
   assert.equal(deliveryCount[0], 1n);
   assert.deepEqual(deliveryConfig.slice(0, 3), [address(manifest.initialDeliveryReceiver), ZERO, 0n]);
   assert.equal(deliveryConfig[5], 0n);
   assert.ok(deliveryConfig[4] <= deliveryConfig[3]);
-  assert.deepEqual(domain, ['0x0f', '111K', '2', BigInt(CHAIN_ID), address(manifest.contractAddress), '0x' + '0'.repeat(64), []]);
+  assert.deepEqual(domain, ['0x0f', '111K', '2', BigInt(chainId), address(manifest.contractAddress), '0x' + '0'.repeat(64), []]);
   const reserved = stage !== 'closed';
   const minted = stage === 'mint-qa' || stage === 'unpack-qa';
   const unpacked = stage === 'unpack-qa';
@@ -373,7 +420,7 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
     qa = { wallet: address(manifest.deployer), crateTokenId, firstArtwork, artworkCount, tokenIds: tokens };
   }
   assert.equal((await rpc('eth_getBlockByNumber', [snapshot.number, false]))?.hash, snapshot.hash, 'Verification snapshot reorganized');
-  return { stage, chainId: CHAIN_ID, deploymentId: manifest.deploymentId, contractAddress: address(manifest.contractAddress),
+  return { stage, chainId, deploymentId: manifest.deploymentId, contractAddress: address(manifest.contractAddress),
     metadataBaseURI: manifest.metadataBaseURI, manifestSha256: context.manifestSha256, checkedAt: new Date().toISOString(),
     ...(contractURI === null ? {} : { contractURI }),
     snapshotBlock: Number(BigInt(snapshot.number)), snapshotBlockHash: snapshot.hash,
@@ -388,12 +435,14 @@ export async function verify111kDeployment(context, rpc, stage = 'closed') {
 
 export function verificationSourceRequests(context) {
   const { manifest, artifact, input, journal } = context;
+  const chainId = verificationChainId(manifest);
+  validateMainnetVerification(manifest, journal);
   const transactionHash = journal.actions.deploy?.hash;
   assert.match(transactionHash || '', /^0x[0-9a-f]{64}$/i, 'Missing deployment transaction hash');
   return {
     sourcify: { stdJsonInput: input, compilerVersion: artifact.metadata.compiler.version,
       contractIdentifier: CONTRACT, creationTransactionHash: transactionHash },
-    etherscan: { chainid: String(CHAIN_ID), module: 'contract', action: 'verifysourcecode',
+    etherscan: { chainid: String(chainId), module: 'contract', action: 'verifysourcecode',
       contractaddress: manifest.contractAddress, sourceCode: JSON.stringify(input), codeformat: 'solidity-standard-json-input',
       contractname: CONTRACT, compilerversion: 'v' + artifact.metadata.compiler.version,
       optimizationUsed: input.settings.optimizer.enabled ? '1' : '0', runs: String(input.settings.optimizer.runs),
@@ -416,14 +465,15 @@ export async function sourceVerification(context, provider, command, { rpc, requ
   assert.ok(['sourcify', 'etherscan'].includes(provider));
   assert.ok(['submit', 'status', 'verify'].includes(command));
   const { directory, manifest, artifact, input } = context;
+  const chainId = verificationChainId(manifest);
   const requests = verificationSourceRequests(context);
   if (command === 'submit') {
     assert.ok(rpc, 'Source submission requires deployment confirmation');
-    assert.equal(BigInt(await rpc('eth_chainId')), BigInt(CHAIN_ID));
+    assert.equal(BigInt(await rpc('eth_chainId')), BigInt(chainId));
     await canonicalAction(context, 'deploy', rpc, await rpc('eth_getBlockByNumber', ['latest', false]));
   }
   if (provider === 'sourcify') {
-    const contractUrl = `${SOURCIFY}/contract/${CHAIN_ID}/${manifest.contractAddress}`;
+    const contractUrl = `${SOURCIFY}/contract/${chainId}/${manifest.contractAddress}`;
     let result;
     if (command === 'submit') {
       const existing = await remoteJson(contractUrl, {}, request);
@@ -432,7 +482,7 @@ export async function sourceVerification(context, provider, command, { rpc, requ
       }
       assert.ok(existing.status === 200 || existing.status === 404);
       await save(directory, 'NFT111K.sourcify-request.json', requests.sourcify);
-      result = await remoteJson(`${SOURCIFY}/verify/${CHAIN_ID}/${manifest.contractAddress}`, {
+      result = await remoteJson(`${SOURCIFY}/verify/${chainId}/${manifest.contractAddress}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(requests.sourcify),
       }, request);
       assert.ok(result.status === 200 || result.status === 202, 'Sourcify submission failed');
@@ -449,7 +499,7 @@ export async function sourceVerification(context, provider, command, { rpc, requ
       result = await remoteJson(contractUrl + '?fields=all', {}, request);
       assert.equal(result.status, 200, 'Sourcify publication not found');
       const published = result.value;
-      assert.equal(published.chainId, String(CHAIN_ID));
+      assert.equal(published.chainId, String(chainId));
       assert.equal(address(published.address), address(manifest.contractAddress));
       for (const field of ['match', 'creationMatch', 'runtimeMatch']) assert.ok(['match', 'exact_match'].includes(published[field]), `Sourcify ${field} incomplete`);
       assert.equal(published.compilation.fullyQualifiedName, CONTRACT);
@@ -462,10 +512,10 @@ export async function sourceVerification(context, provider, command, { rpc, requ
       assert.equal(published.creationBytecode.transformationValues.constructorArguments.toLowerCase(), manifest.constructorArgs.toLowerCase());
       assert.equal(published.runtimeBytecode.onchainBytecode.toLowerCase(), context.runtime.toLowerCase());
       await save(directory, 'NFT111K.sourcify-published.json', published);
-      const report = { chainId: CHAIN_ID, contractAddress: address(manifest.contractAddress),
+      const report = { chainId, contractAddress: address(manifest.contractAddress),
         transactionHash: context.journal.actions.deploy.hash, checkedAt: new Date().toISOString(),
         creationMatch: published.creationMatch, runtimeMatch: published.runtimeMatch, frozenSourcesMatch: true,
-        runtimeAndImmutablesMatch: true, url: `https://repo.sourcify.dev/${CHAIN_ID}/${manifest.contractAddress}` };
+        runtimeAndImmutablesMatch: true, url: `https://repo.sourcify.dev/${chainId}/${manifest.contractAddress}` };
       await save(directory, 'NFT111K.sourcify-verification.json', report);
       return report;
     }
@@ -474,8 +524,8 @@ export async function sourceVerification(context, provider, command, { rpc, requ
   assert.ok(typeof apiKey === 'string' && apiKey.trim(), 'Set ETHERSCAN_API_KEY for Etherscan verification');
   const invoke = async (parameters, post = false) => {
     const query = new URLSearchParams(post
-      ? { module: parameters.module, action: parameters.action, apikey: apiKey, chainid: String(CHAIN_ID) }
-      : { ...parameters, apikey: apiKey, chainid: String(CHAIN_ID) });
+      ? { module: parameters.module, action: parameters.action, apikey: apiKey, chainid: String(chainId) }
+      : { ...parameters, apikey: apiKey, chainid: String(chainId) });
     const body = new URLSearchParams(Object.entries(parameters).filter(([key]) => !['module', 'action', 'apikey', 'chainid'].includes(key)));
     const response = await remoteJson(`${ETHERSCAN}?${query}`, post
       ? { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() } : {}, request);
@@ -514,9 +564,9 @@ export async function sourceVerification(context, provider, command, { rpc, requ
   const sources = JSON.parse(sourceText).sources;
   assert.deepEqual(Object.keys(sources).sort(), Object.keys(input.sources).sort());
   for (const [name, source] of Object.entries(input.sources)) assert.equal(sources[name].content, source.content, `Etherscan source changed: ${name}`);
-  const report = { chainId: CHAIN_ID, contractAddress: address(manifest.contractAddress), checkedAt: new Date().toISOString(),
+  const report = { chainId, contractAddress: address(manifest.contractAddress), checkedAt: new Date().toISOString(),
     frozenSourcesMatch: true, constructorArgumentsMatch: true, compilerVersion: published.CompilerVersion,
-    url: `https://sepolia.etherscan.io/address/${manifest.contractAddress}#code` };
+    url: `https://${chainId === 1 ? '' : 'sepolia.'}etherscan.io/address/${manifest.contractAddress}#code` };
   await save(directory, 'NFT111K.etherscan-verification.json', report);
   return report;
 }
@@ -535,19 +585,20 @@ export async function main(argv = process.argv.slice(2), environment = process.e
   assert.ok(command === 'verify' || options['--stage'] === undefined, '--stage applies only to verify');
   const directory = resolve(options['--directory']);
   const context = await load111kVerification(directory);
+  const chainId = verificationChainId(context.manifest);
   let result;
   if (command === 'verify') {
     const stage = options['--stage'] || 'closed';
-    result = await verify111kDeployment(context, verificationRpc(environment), stage);
+    result = await verify111kDeployment(context, verificationRpc(environment, fetch, chainId), stage);
     await save(directory, `deployment-${stage}.json`, result);
   } else if (command === 'prepare-sources') {
     const requests = verificationSourceRequests(context);
     for (const provider of ['sourcify', 'etherscan']) await save(directory, `NFT111K.${provider}-request.json`, requests[provider]);
-    result = { chainId: CHAIN_ID, contractAddress: context.manifest.contractAddress, prepared: ['sourcify', 'etherscan'] };
+    result = { chainId, contractAddress: context.manifest.contractAddress, prepared: ['sourcify', 'etherscan'] };
   } else {
     const [provider, action] = command.split('-');
     result = await sourceVerification(context, provider, action, { apiKey: environment.ETHERSCAN_API_KEY,
-      ...(action === 'submit' ? { rpc: verificationRpc(environment) } : {}) });
+      ...(action === 'submit' ? { rpc: verificationRpc(environment, fetch, chainId) } : {}) });
   }
   process.stdout.write(json(result));
   return result;

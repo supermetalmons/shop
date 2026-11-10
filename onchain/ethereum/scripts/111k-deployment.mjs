@@ -275,7 +275,7 @@ function constructorArgs(manifest) {
     manifest.maxDiscountedMints])).toString('hex')}`;
 }
 
-function frozenCompilerInput(artifact) {
+export function frozenCompilerInput(artifact) {
   const sources = {};
   for (const [source, metadata] of Object.entries(artifact.metadata.sources)) {
     const filename = path.resolve(project, source);
@@ -296,7 +296,7 @@ function frozenCompilerInput(artifact) {
     outputSelection: { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode', 'metadata'], '': ['ast'] } } } };
 }
 
-function compileFrozen(input, original) {
+export function compileFrozen(input, original) {
   const binary = [path.join(os.homedir(), 'Library/Application Support/svm/0.8.38/solc-0.8.38'),
     path.join(os.homedir(), '.svm/0.8.38/solc-0.8.38')].find(filename => fs.existsSync(filename));
   assert.ok(binary, 'Pinned Solidity 0.8.38 compiler is unavailable');

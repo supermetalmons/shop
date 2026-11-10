@@ -1,0 +1,30 @@
+{
+  "completedAt": "2026-11-10T21:26:42.715Z",
+  "chainId": 1,
+  "deploymentId": "mainnet-v1",
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "transactionHash": "0x6c949b4b008f78993438a8b46205111609b0a8c4ea0d29d4ef547ecc2e0f95d9",
+  "deploymentBlock": 26387160,
+  "metadataBaseURI": "https://cdn.mons.shop/111k/",
+  "contractURI": "https://cdn.mons.shop/111k/collection.json",
+  "catalogVersion": "111k-v8",
+  "saleActive": false,
+  "relicsAllocated": 0,
+  "allocatedCrates": 0,
+  "totalSupply": 0,
+  "publicRelicActive": false,
+  "publicRelicQuota": 0,
+  "revealState": "ready",
+  "revealActivated": false,
+  "sourceVerified": [
+    "Etherscan",
+    "Sourcify"
+  ],
+  "metadataObjectCount": 344984,
+  "gasUsed": "6423477",
+  "gasCostWei": "1204039460692890",
+  "maximumFeeWei": "1587330633153840",
+  "approvedFeeCeilingWei": "2000000000000000",
+  "temporarySigningFilesRemoved": true,
+  "temporaryLegacyCacheRemoved": true
+}

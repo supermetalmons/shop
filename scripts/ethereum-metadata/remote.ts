@@ -99,7 +99,7 @@ async function readSnapshotManifest(directory: string, storage: MetadataStorage,
     manifest.network !== network || manifest.prefix !== metadataPrefix(network, prefix) ||
     manifest.destination?.endpoint !== storage.destination.endpoint || manifest.destination.bucket !== storage.destination.bucket ||
     manifest.archive !== 'objects.jsonl.gz' || manifest.objectCount !== expectedCount || !Number.isSafeInteger(manifest.totalBytes) ||
-    manifest.totalBytes < 1 || !/^[a-f0-9]{64}$/.test(manifest.archiveSha256)) {
+    manifest.totalBytes < (expectedCount === 0 ? 0 : 1) || !/^[a-f0-9]{64}$/.test(manifest.archiveSha256)) {
     throw new Error('Snapshot does not match this destination and complete collection');
   }
   if (publicationManifestSha256 !== undefined &&
@@ -230,7 +230,11 @@ async function initializeJournal(path: string, header: string): Promise<void> {
 export async function publishObjects(args: {
   storage: MetadataStorage; network: MetadataNetwork; objects: AsyncIterable<PublishObject>; inventory: Map<string, RemoteObject>;
   journal: string; sourceHash: string; concurrency: number; total: number; progress?: Progress; restoreFiles?: ReadonlySet<string>; prefix?: string; beforePut?: () => Promise<void>; writeFence?: MetadataWriteFence; initializeOnly?: boolean;
+  bootstrapOriginals?: ReadonlyMap<string, RemoteObject>;
 }) {
+  if (args.bootstrapOriginals && (args.network !== 'mainnet' || args.prefix !== undefined || args.restoreFiles || args.initializeOnly || !args.writeFence)) {
+    throw new Error('Bootstrap publication requires the fenced mainnet root');
+  }
   const header = { version: 1, ...args.storage.destination, network: args.network, ...(args.prefix ? { prefix: metadataPrefix(args.network, args.prefix) } : {}), sourceHash: args.sourceHash };
   await mkdir(resolve(args.journal, '..'), { recursive: true });
   const completedHashes = new Map<string, string>();
@@ -265,7 +269,8 @@ export async function publishObjects(args: {
       const priorHash = completedHashes.get(object.file);
       if (priorHash && priorHash !== object.sha256) throw new Error(`Upload journal checksum mismatch: ${object.file}`);
       const current = args.inventory.get(object.file);
-      if (!current && !args.initializeOnly && !args.restoreFiles?.has(object.file)) throw new Error(`Object is not in the verified destination inventory: ${object.file}`);
+      if (args.bootstrapOriginals) requireBootstrapObject(object, current, args.bootstrapOriginals.get(object.file));
+      if (!current && !args.initializeOnly && !args.bootstrapOriginals && !args.restoreFiles?.has(object.file)) throw new Error(`Object is not in the verified destination inventory: ${object.file}`);
       if (args.initializeOnly && current && (current.bytes !== object.bytes || current.md5 !== object.md5)) {
         throw new Error(`Deployment prefix already contains different metadata: ${object.file}`);
       }
@@ -330,6 +335,168 @@ export async function selectedInventory(storage: MetadataStorage, network: Metad
     inventory.set(file, { key, bytes: body.length, md5: metadataMd5(body) });
   });
   return inventory;
+}
+
+type MainnetBootstrapIdentity = {
+  version: 1; operation: 'bootstrap-mainnet-root'; network: 'mainnet'; prefix: '111k/';
+  destination: UploadDestination; publicationManifestSha256: string; objectsSha256: string; filesSha256: string;
+};
+type MainnetBootstrapState = MainnetBootstrapIdentity & { originals: Array<{ file: string; bytes: number; md5: string }> };
+
+function requireBootstrapObject(target: ObjectDigest, current: RemoteObject | undefined, original: RemoteObject | undefined): void {
+  if (current && current.bytes === target.bytes && current.md5 === target.md5) return;
+  if (!current && !original) return;
+  if (current && original && current.bytes === original.bytes && current.md5 === original.md5) return;
+  throw new Error(`Mainnet root changed outside this bootstrap: ${target.file}`);
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try { await lstat(path); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; return false; }
+}
+
+async function bootstrapState(path: string, identity: MainnetBootstrapIdentity, files: ReadonlySet<string>,
+  inventory: Map<string, RemoteObject>, journal: string): Promise<{ originals: Map<string, RemoteObject>; sha256: string }> {
+  if (!await pathExists(path)) {
+    if (await pathExists(journal) || await pathExists(join(resolve(path, '..'), 'manifest.json')) ||
+      await pathExists(join(resolve(path, '..'), 'objects.jsonl.gz'))) {
+      throw new Error('Bootstrap evidence exists without its original inventory');
+    }
+    const originals = [...inventory.entries()].sort(([a], [b]) => a.localeCompare(b))
+      .map(([file, { bytes, md5 }]) => ({ file, bytes, md5 }));
+    await mkdir(resolve(path, '..'), { recursive: true });
+    await initializeJournal(path, `${JSON.stringify({ ...identity, originals })}\n`);
+  }
+  const source = await readFile(path, 'utf8');
+  const state: MainnetBootstrapState = JSON.parse(source);
+  if (!state || typeof state !== 'object' || !Array.isArray(state.originals) ||
+    Object.keys(state).sort().join() !== [...Object.keys(identity), 'originals'].sort().join() ||
+    Object.entries(identity).some(([key, value]) => JSON.stringify(state[key as keyof MainnetBootstrapIdentity]) !== JSON.stringify(value))) {
+    throw new Error('Bootstrap inventory belongs to a different destination or publication');
+  }
+  const originals = new Map<string, RemoteObject>();
+  for (const row of state.originals) {
+    if (!row || !files.has(row.file) || originals.has(row.file) || !Number.isSafeInteger(row.bytes) ||
+      row.bytes < 1 || row.bytes > 128 * 1024 || !/^[a-f0-9]{32}$/.test(row.md5)) {
+      throw new Error('Invalid bootstrap original inventory');
+    }
+    originals.set(row.file, { key: `111k/${row.file}`, bytes: row.bytes, md5: row.md5 });
+  }
+  return { originals, sha256: sha256(source) };
+}
+
+export async function bootstrapMainnetRootObjects(args: {
+  directory: string; snapshotDirectory: string; storage: MetadataStorage; files: Set<string>;
+  publicationManifestSha256: string; objectsSha256: string; objects: () => AsyncIterable<PublishObject>;
+  concurrency: number; priorCacheRoot?: string; progress?: Progress;
+  publicationLease?: (baseUri: string) => Promise<MetadataPublicationLease>;
+}) {
+  const concurrency = metadataUploadConcurrency(args.concurrency);
+  const allowed = expectedFiles();
+  if (args.storage.destination.bucket !== 'cdn-mons-shop' || !args.files.size || [...args.files].some(file => !allowed.has(file)) ||
+    !/^[a-f0-9]{64}$/.test(args.publicationManifestSha256) || !/^[a-f0-9]{64}$/.test(args.objectsSha256)) {
+    throw new Error('Invalid mainnet root bootstrap publication');
+  }
+  const lease = await (args.publicationLease ?? acquireMetadataPublicationLease)('https://cdn.mons.shop/111k/');
+  let renewal: Promise<void> | undefined;
+  let renewalError: unknown;
+  const heartbeat = setInterval(() => {
+    renewal ??= lease.renew().catch(error => { renewalError = error; }).finally(() => { renewal = undefined; });
+  }, 20_000);
+  heartbeat.unref();
+  const requireLease = () => {
+    if (renewalError) throw renewalError;
+    lease.signal.throwIfAborted();
+  };
+  const storage: MetadataStorage = {
+    destination: args.storage.destination,
+    async *list(prefix, range) {
+      requireLease();
+      for await (const row of args.storage.list(prefix, range)) { requireLease(); yield row; }
+    },
+    async get(key) {
+      requireLease();
+      const body = await args.storage.get(key);
+      requireLease();
+      return body;
+    },
+    async put(key, body, expectedEtag, fence) {
+      requireLease();
+      await args.storage.put(key, body, expectedEtag, fence);
+    },
+    close() {},
+  };
+  try {
+    return await withDestinationLock(storage, 'mainnet', async () => {
+      args.progress?.({ phase: 'inventory', network: 'mainnet', completed: 0, total: args.files.size });
+      const inventory = await remoteInventory(storage, '111k/', args.files, { allowMissing: true });
+      args.progress?.({ phase: 'inventory', network: 'mainnet', completed: inventory.size, total: args.files.size });
+      const journal = join(args.directory, 'uploads', 'bootstrap-mainnet-root.jsonl');
+      const frozen = await bootstrapState(join(args.snapshotDirectory, 'bootstrap.json'), {
+        version: 1, operation: 'bootstrap-mainnet-root', network: 'mainnet', prefix: '111k/',
+        destination: args.storage.destination, publicationManifestSha256: args.publicationManifestSha256,
+        objectsSha256: args.objectsSha256, filesSha256: sha256([...args.files].sort().join('\n')),
+      }, args.files, inventory, journal);
+      const snapshot = await snapshotMetadata(storage, 'mainnet', args.snapshotDirectory, frozen.originals,
+        args.publicationManifestSha256, { concurrency, priorCacheRoot: args.priorCacheRoot, progress: args.progress });
+      for await (const row of snapshotObjects(args.snapshotDirectory, snapshot, new Set(frozen.originals.keys()))) {
+        const original = frozen.originals.get(row.file)!;
+        if (original.bytes !== row.bytes || original.md5 !== row.md5) throw new Error('Bootstrap snapshot differs from its original inventory');
+      }
+      const check = async (current: Map<string, RemoteObject>, complete: boolean) => {
+        const seen = new Set<string>();
+        for await (const object of args.objects()) {
+          if (!args.files.has(object.file) || seen.has(object.file)) throw new Error('Bootstrap publication has invalid or duplicate files');
+          seen.add(object.file);
+          if (complete) {
+            const actual = current.get(object.file);
+            if (!actual || actual.bytes !== object.bytes || actual.md5 !== object.md5) {
+              throw new Error(`Mainnet root bootstrap verification failed: ${object.file}`);
+            }
+          } else requireBootstrapObject(object, current.get(object.file), frozen.originals.get(object.file));
+        }
+        if (seen.size !== args.files.size) throw new Error('Bootstrap publication is incomplete');
+      };
+      await check(inventory, false);
+      requireLease();
+      const counts = await publishObjects({ storage, network: 'mainnet', inventory,
+        bootstrapOriginals: frozen.originals, writeFence: lease, beforePut: () => lease.beforePut(),
+        objects: args.objects(), journal, sourceHash: sha256(JSON.stringify({
+          objectsSha256: args.objectsSha256, inventorySha256: frozen.sha256, snapshotSha256: snapshot.archiveSha256,
+        })), concurrency, total: args.files.size, progress: args.progress });
+      args.progress?.({ phase: 'verify', network: 'mainnet', completed: 0, total: args.files.size });
+      await check(await remoteInventory(storage, '111k/', args.files), true);
+      clearInterval(heartbeat);
+      await renewal;
+      await lease.renew();
+      requireLease();
+      args.progress?.({ phase: 'verify', network: 'mainnet', completed: args.files.size, total: args.files.size });
+      const report = { network: 'mainnet', ...args.storage.destination, prefix: '111k/', operation: 'bootstrap-mainnet-root',
+        objectsSha256: args.objectsSha256, originalInventorySha256: frozen.sha256, originalObjectCount: frozen.originals.size,
+        snapshotDirectory: resolve(args.snapshotDirectory), snapshotSha256: snapshot.archiveSha256,
+        objectCount: args.files.size, ...counts, complete: true, finishedAt: new Date().toISOString() };
+      await writeReport(join(args.directory, 'bootstrap-mainnet-root.json'), report);
+      return report;
+    });
+  } finally {
+    clearInterval(heartbeat);
+    await renewal;
+    await lease.close();
+  }
+}
+
+export async function bootstrapMainnetRootMetadata(directory: string,
+  options: Omit<CommonOptions, 'prefix'> & { snapshotDirectory?: string; priorCacheRoot?: string } = {}) {
+  if ('prefix' in options || 'tokenIds' in options || 'network' in options) throw new Error('Mainnet root bootstrap cannot select another scope');
+  const manifest = await validatedManifest(directory);
+  const concurrency = metadataUploadConcurrency(options.concurrency);
+  const storage = options.storage ?? environmentStorage(concurrency);
+  try {
+    return await bootstrapMainnetRootObjects({ directory, storage, files: expectedFiles(), concurrency,
+      publicationManifestSha256: await fileSha256(join(directory, 'manifest.json')), objectsSha256: manifest.objectsSha256,
+      objects: () => generatedObjects(directory), snapshotDirectory: join(options.snapshotDirectory ?? join(directory, 'snapshots'), 'bootstrap-mainnet-root'),
+      priorCacheRoot: options.priorCacheRoot, progress: options.progress, publicationLease: options.publicationLease });
+  } finally { if (!options.storage) storage.close(); }
 }
 
 export async function uploadMetadata(directory: string, network: MetadataNetworkSelection, options: CommonOptions & {

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { encode, decode } from '@metamask/abi-utils';
 import { keccak_256 } from '@noble/hashes/sha3';
-import { expected111kRuntime, verificationRpc, verify111kDeployment, verificationSourceRequests, sourceVerification } from './111k-verification.mjs';
+import { expected111kRuntime, load111kVerification, verificationRpc, verify111kDeployment, verificationSourceRequests, sourceVerification } from './111k-verification.mjs';
 
 const address = value => '0x' + value.toString(16).padStart(40, '0');
 const hash = value => '0x' + value.toString(16).padStart(64, '0');
@@ -39,14 +39,27 @@ for (const [name, environment, expectedUrl] of [
   assert.equal(requests, 1);
 });
 
+test('mainnet verification RPC selects its own Alchemy network and rejects unsupported chains', async () => {
+  const rpc = verificationRpc({ ALCHEMY_API_KEY: 'mainnet-key' }, async url => {
+    assert.equal(url, 'https://eth-mainnet.g.alchemy.com/v2/mainnet-key');
+    return Response.json({ result: '0x1' });
+  }, 1);
+  assert.equal(await rpc('eth_chainId'), '0x1');
+  assert.throws(() => verificationRpc({ ALCHEMY_API_KEY: 'key' }, fetch, 10), /mainnet and Sepolia only/);
+});
+
 function fixture(stage, concurrent = false, preopeningPayout = false, options = {}) {
+  const chainId = options.chainId ?? 11155111;
+  if (chainId === 1) options = { reservation: { quantity: 0, valueWei: '0' }, collectionMetadata: true, newInterface: true, ...options };
   const reservation = options.reservation ?? { quantity: 18, valueWei: '18000000000000000' };
   const publicMinted = options.publicMinted ?? 0;
   const publicLimit = options.publicLimit ?? publicMinted;
   const publicPrice = BigInt(options.publicPrice ?? '0');
-  const manifest = { chainId: 11155111, deploymentId: 'v15', owner: address(99), deployer: address(99), quoteSigner: address(98),
-    contractAddress: address(88), initialDeliveryReceiver: address(97), maxDiscountedMints: 5555,
-    metadataBaseURI: 'https://cdn.mons.shop/111k-sepolia/v15/', discountRoot: hash(3), creationCode: '0x6000', constructorArgs: '0x1234',
+  const manifest = { chainId, network: chainId === 1 ? 'mainnet' : 'sepolia', deploymentId: chainId === 1 ? 'mainnet-v1' : 'v15',
+    owner: address(99), deployer: address(99), quoteSigner: address(98),
+    contractAddress: address(88), initialDeliveryReceiver: address(97), maxDiscountedMints: chainId === 1 ? 500 : 5555,
+    metadataBaseURI: chainId === 1 ? 'https://cdn.mons.shop/111k/' : 'https://cdn.mons.shop/111k-sepolia/v15/',
+    discountRoot: hash(3), creationCode: '0x6000', constructorArgs: '0x1234',
     proceeds: { mintRecipients: Array.from({ length: 14 }, (_, i) => address(i + 1)),
       mintSharesBps: [2750, 2600, 500, 500, 500, 500, 100, 100, 100, 100, 500, 583, 583, 584] },
     freeMintAllocations: Array.from({ length: 7 }, (_, i) => ({ wallet: address(100 + i), crateLimit: 0, warehouseLimit: 0, relicLimit: i < 4 ? 3 : 2 })),
@@ -55,6 +68,7 @@ function fixture(stage, concurrent = false, preopeningPayout = false, options = 
     manifest.relicReservation = reservation;
     manifest.freeMintAllocations = reservation.quantity ? [{ wallet: address(100), crateLimit: 0, warehouseLimit: 0, relicLimit: reservation.quantity }] : [];
   }
+  if (chainId === 1) Object.assign(manifest, { nonce: '0', gasLimit: '8000000', gasPrice: '200000000', maximumFeeWei: '1600000000000000' });
   const artifact = { deployedBytecode: { object: '0x' + '00'.repeat(32 * 7),
     immutableReferences: Object.fromEntries(names.map((_, i) => [i + 1, [{ start: i * 32, length: 32 }]])) },
     metadata: { compiler: { version: '0.8.38+commit.1835d247' } } };
@@ -75,6 +89,8 @@ function fixture(stage, concurrent = false, preopeningPayout = false, options = 
     data: calldata[action], valueWei: action === 'reserve' ? reservation.valueWei : action === 'mint-qa' ? '100000000000000' : '0', nonce: i }])) };
   if (reservation.quantity === 0) journal.actions.reserve = { action: 'reserve', skipped: true, chainId: manifest.chainId,
     contractAddress: manifest.contractAddress, blockNumber: '0x2', blockHash: hash(2) };
+  if (chainId === 1) journal.actions = { deploy: { ...journal.actions.deploy,
+    gasLimit: manifest.gasLimit, gasPrice: manifest.gasPrice, maximumFeeWei: manifest.maximumFeeWei } };
   const context = { manifest, artifact, compilerOutput, journal, manifestSha256: 'f'.repeat(64),
     input: { language: 'Solidity', sources: { 'src/NFT111K.sol': { content: 'contract NFT111K {}' } },
       settings: { optimizer: { enabled: true, runs: 500 }, evmVersion: 'prague' } } };
@@ -100,7 +116,7 @@ function fixture(stage, concurrent = false, preopeningPayout = false, options = 
   register('stats(address)', ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
     [(reserved ? reservation.quantity * 111 : 0) + (minted ? 1 : 0) + (concurrent ? 1 : 0) + publicMinted * 111,
       0, (unpacked ? 20 : 0) + (concurrent ? 20 : 0), 100000000000000n, 1100000000000000n,
-      stages.indexOf(stage) >= 2, manifest.discountRoot, 50000000000000n, 1, 0, reserved ? reservation.quantity : 0, concurrent ? 1 : 0, 5555, 0]);
+      stages.indexOf(stage) >= 2, manifest.discountRoot, 50000000000000n, 1, 0, reserved ? reservation.quantity : 0, concurrent ? 1 : 0, manifest.maxDiscountedMints, 0]);
   if (options.newInterface) {
     const stats = lookup.get(selector('stats(address)'));
     stats.types.push('uint256'); stats.values.push(publicMinted);
@@ -108,17 +124,25 @@ function fixture(stage, concurrent = false, preopeningPayout = false, options = 
     register('publicRelicStats(address)', ['uint256', 'uint256', 'uint256', 'bool', 'uint256', 'uint16', 'uint16'],
       [publicLimit, publicMinted, publicPrice, active, active ? Math.min(publicLimit - publicMinted, Math.floor((5555 - stats.values[0]) / 111)) : 0, 0, 0]);
   }
-  register('eip712Domain()', ['bytes1', 'string', 'string', 'uint256', 'address', 'bytes32', 'uint256[]'], ['0x0f', '111K', '2', 11155111, manifest.contractAddress, hash(0), []]);
+  register('eip712Domain()', ['bytes1', 'string', 'string', 'uint256', 'address', 'bytes32', 'uint256[]'], ['0x0f', '111K', '2', chainId, manifest.contractAddress, hash(0), []]);
   register('totalSupply()', ['uint256'], [(unpacked ? 20 : minted ? 1 : 0) + (concurrent ? 21 : 0) + publicMinted]);
   register('totalMintReceived()', ['uint256'], [revenue]);
   register('totalMintReleased()', ['uint256'], [paid]);
   register('getRelicClaimedMask()', ['uint256'], [(1 << (publicMinted + (concurrent ? 1 : 0))) - 1]);
   register('redemptionsPaused()', ['bool'], [false]);
   const rpc = async (method, params = []) => {
-    if (method === 'eth_chainId') return hex(11155111);
+    if (method === 'eth_chainId') return hex(chainId);
+    if (method === 'eth_getLogs') {
+      assert.equal(chainId, 1);
+      const [{ topics, ...scope }] = params;
+      assert.deepEqual(scope, { address: manifest.contractAddress, fromBlock: '0x1', toBlock: '0xa' });
+      return (options.historyEvents ?? []).filter(event => event.address === scope.address
+        && BigInt(event.blockNumber) >= BigInt(scope.fromBlock) && BigInt(event.blockNumber) <= BigInt(scope.toBlock)
+        && topics[0].includes(event.topics[0]));
+    }
     if (method === 'eth_getBlockByNumber') { const n = params[0] === 'latest' ? 10 : Number(BigInt(params[0])); return { number: hex(n), hash: hash(n) }; }
     if (method === 'eth_getTransactionReceipt' || method === 'eth_getTransactionByHash') {
-      const index = actions.findIndex(action => journal.actions[action].hash === params[0]);
+      const index = actions.findIndex(action => journal.actions[action]?.hash === params[0]);
       const entry = journal.actions[actions[index]];
       const blockNumber = hex(index + 1);
       if (method === 'eth_getTransactionReceipt') {
@@ -133,7 +157,8 @@ function fixture(stage, concurrent = false, preopeningPayout = false, options = 
           contractAddress: index === 0 ? manifest.contractAddress : null, gasUsed: '0x5208', logs };
       }
       return { hash: entry.hash, from: manifest.deployer, to: index === 0 ? null : manifest.contractAddress,
-        input: entry.data, value: hex(entry.valueWei), nonce: hex(index), chainId: hex(11155111), blockHash: hash(index + 1), blockNumber };
+        input: entry.data, value: hex(entry.valueWei), nonce: hex(index), chainId: hex(chainId), blockHash: hash(index + 1), blockNumber,
+        ...(chainId === 1 ? { gas: hex(manifest.gasLimit), gasPrice: hex(manifest.gasPrice) } : {}) };
     }
     if (method === 'eth_call' && reservation.quantity === 0 && params[1]?.blockHash === hash(2)) {
       assert.deepEqual(params[1], { blockHash: hash(2), requireCanonical: true });
@@ -188,6 +213,99 @@ for (const stage of stages) test(`verifies ${stage} at one canonical block with 
   assert.equal(report.runtimeAndImmutablesMatch, true);
   assert.equal(report.totalMintReleased, 0n);
   assert.equal(Object.keys(report.actions).length, stages.indexOf(stage) + 1);
+});
+
+test('verifies mainnet as a closed zero-issuance deployment with clean metadata URLs', async () => {
+  const { context, rpc } = fixture('closed', false, false, { chainId: 1 });
+  const report = await verify111kDeployment(context, rpc);
+  assert.equal(report.chainId, 1);
+  assert.deepEqual(report.relicReservation, { quantity: 0, valueWei: '0' });
+  assert.deepEqual(report.freeMintAllowances, []);
+  assert.deepEqual(Object.keys(report.actions), ['deploy']);
+  assert.deepEqual(report.publicSale, [0n, 0n, 0n, false, 0n, 0n, 0n]);
+  assert.equal(report.stats[5], false);
+  assert.equal(report.stats[10], 0n);
+  assert.equal(report.stats[12], 500n);
+  assert.equal(report.totalSupply, 0n);
+  assert.equal(report.totalMintReceived, 0n);
+  assert.equal(report.metadataPreviews[0].uri, 'https://cdn.mons.shop/111k/1.json');
+  const sepolia = { ...context.manifest, chainId: 11155111 };
+  assert.notEqual(context.runtime, expected111kRuntime(context.artifact, sepolia, context.compilerOutput));
+  await assert.rejects(verify111kDeployment(context, (method, params) => method === 'eth_getCode'
+    ? expected111kRuntime(context.artifact, sepolia, context.compilerOutput) : rpc(method, params)), /Runtime or constructor immutables/);
+});
+
+test('mainnet rejects opening, reservation, QA stages, and extra journal actions before RPC reads', async () => {
+  const { context } = fixture('closed', false, false, { chainId: 1 });
+  const rpc = async () => assert.fail('Unexpected RPC request');
+  for (const stage of stages.slice(1)) await assert.rejects(verify111kDeployment(context, rpc, stage), /closed stage only/);
+  context.journal.actions.reserve = { skipped: true };
+  await assert.rejects(verify111kDeployment(context, rpc), /only deployment/);
+});
+
+test('mainnet rejects wrong-chain receipts and evidence of sale activation, allocation, or issuance', async () => {
+  const { context, rpc } = fixture('closed', false, false, { chainId: 1 });
+  await assert.rejects(verify111kDeployment(context, async (method, params) => method === 'eth_chainId'
+    ? hex(11155111) : rpc(method, params)), /RPC chain mismatch/);
+  await assert.rejects(verify111kDeployment(context, async (method, params) => {
+    const result = await rpc(method, params);
+    return method === 'eth_getTransactionByHash' ? { ...result, chainId: hex(11155111) } : result;
+  }));
+  for (const signature of ['SaleStatusUpdated(bool)', 'RelicsAllocated(uint256,uint256)', 'Transfer(address,address,uint256)']) {
+    const changed = fixture('closed', false, false, { chainId: 1, historyEvents: [{ address: address(88), blockNumber: '0x5',
+      topics: ['0x' + Buffer.from(keccak_256(signature)).toString('hex')] }] });
+    await assert.rejects(verify111kDeployment(changed.context, changed.rpc), /changed after deployment/);
+  }
+});
+
+for (const [signature, types, values] of [
+  ['FreeMintAllowanceUpdated(address,uint16,uint16,uint16)', ['uint16', 'uint16', 'uint16'], [1, 0, 0]],
+  ['PublicRelicFreeMintAllowanceUpdated(address,uint16)', ['uint16'], [1]],
+]) test(`mainnet detects an unlisted wallet grant through ${signature} while minting remains closed`, async () => {
+  const { context, rpc } = fixture('closed', false, false, { chainId: 1, historyEvents: [{
+    address: address(88), blockNumber: '0x5', topics: ['0x' + Buffer.from(keccak_256(signature)).toString('hex'), hash(123)],
+    data: encoded(types, values),
+  }] });
+  assert.deepEqual(context.manifest.freeMintAllocations, []);
+  await assert.rejects(verify111kDeployment(context, rpc), /free allowances changed after deployment/);
+});
+
+test('mainnet receipt verification enforces frozen nonce, gas, and the approved fee ceiling', async () => {
+  for (const changed of [{ nonce: '0x1' }, { gas: hex(8_000_001) }, { gasPrice: hex(200_000_001) }]) {
+    const { context, rpc } = fixture('closed', false, false, { chainId: 1 });
+    await assert.rejects(verify111kDeployment(context, async (method, params) => {
+      const value = await rpc(method, params);
+      return method === 'eth_getTransactionByHash' ? { ...value, ...changed } : value;
+    }));
+  }
+  const { context, rpc } = fixture('closed', false, false, { chainId: 1 });
+  context.manifest.gasPrice = context.journal.actions.deploy.gasPrice = '300000000';
+  context.manifest.maximumFeeWei = context.journal.actions.deploy.maximumFeeWei = '2400000000000000';
+  await assert.rejects(verify111kDeployment(context, rpc), /approved fee ceiling/);
+});
+
+test('mainnet requires the current metadata and public relic interfaces', async () => {
+  for (const options of [{ collectionMetadata: false }, { newInterface: false }]) {
+    const { context, rpc } = fixture('closed', false, false, { chainId: 1, ...options });
+    await assert.rejects(verify111kDeployment(context, rpc), /Mainnet requires/);
+  }
+});
+
+test('frozen mainnet loading rejects changed launch policy before reading artifacts', async t => {
+  const directory = await mkdtemp(join(tmpdir(), '111k-mainnet-policy-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { context } = fixture('closed', false, false, { chainId: 1 });
+  for (const [change, message] of [
+    [{ chainId: 10 }, /mainnet and Sepolia only/],
+    [{ network: 'sepolia' }, /network and chain differ/],
+    [{ metadataBaseURI: 'https://cdn.mons.shop/111k/mainnet-v1/' }, /clean metadata root/],
+    [{ relicReservation: { quantity: 1, valueWei: '0' } }, /must not reserve relics/],
+    [{ freeMintAllocations: [{ wallet: address(100), crateLimit: 1, warehouseLimit: 0, relicLimit: 0 }] }, /must be empty/],
+    [{ maxDiscountedMints: 5555 }, /discounted mint cap changed/],
+  ]) {
+    await writeFile(join(directory, 'manifest.json'), JSON.stringify({ ...context.manifest, ...change }));
+    await assert.rejects(load111kVerification(directory), message);
+  }
 });
 
 test('verifies the shared collection URI exposed by the frozen ABI at the canonical block', async () => {
@@ -339,35 +457,35 @@ test('post-open QA tolerates concurrent public mint, claim, and proceeds release
   assert.deepEqual(report.qa.tokenIds, Array.from({ length: 20 }, (_, index) => BigInt(index + 21)));
 });
 
-test('source requests contain frozen constructor and source data without credentials', () => {
-  const { context } = fixture('closed');
+for (const chainId of [1, 11155111]) test(`chain ${chainId} source requests contain frozen constructor and source data without credentials`, () => {
+  const { context } = fixture('closed', false, false, { chainId });
   const requests = verificationSourceRequests(context);
   assert.equal(requests.etherscan.constructorArguments, '1234');
   assert.equal(requests.etherscan.codeformat, 'solidity-standard-json-input');
-  assert.equal(requests.etherscan.chainid, '11155111');
+  assert.equal(requests.etherscan.chainid, String(chainId));
   assert.deepEqual(requests.sourcify.stdJsonInput, context.input);
   assert.equal(requests.sourcify.creationTransactionHash, context.journal.actions.deploy.hash);
   assert.equal('apikey' in requests.etherscan, false);
   assert.equal('raw' in requests.sourcify, false);
 });
 
-test('source submission refuses the wrong chain before posting anything', async () => {
-  const { context } = fixture('closed');
+for (const chainId of [1, 11155111]) test(`chain ${chainId} source submission refuses the wrong chain before posting anything`, async () => {
+  const { context } = fixture('closed', false, false, { chainId });
   let requests = 0;
-  await assert.rejects(sourceVerification(context, 'sourcify', 'submit', { rpc: async () => '0x1',
+  await assert.rejects(sourceVerification(context, 'sourcify', 'submit', { rpc: async () => hex(chainId === 1 ? 11155111 : 1),
     request: async () => { requests++; throw new Error('Unexpected network request'); } }));
   assert.equal(requests, 0);
 });
 
-for (const success of [true, false]) test(`Etherscan submission routes v2 query parameters and preserves ${success ? 'success' : 'sanitized failure'}`, async t => {
-  const { context, rpc } = fixture('closed');
+for (const chainId of [1, 11155111]) for (const success of [true, false]) test(`chain ${chainId} Etherscan submission routes v2 query parameters and preserves ${success ? 'success' : 'sanitized failure'}`, async t => {
+  const { context, rpc } = fixture('closed', false, false, { chainId });
   context.directory = await mkdtemp(join(tmpdir(), '111k-verification-'));
   t.after(() => rm(context.directory, { recursive: true, force: true }));
   const apiKey = 'test-api-secret';
   const submit = () => sourceVerification(context, 'etherscan', 'submit', { rpc, apiKey, request: async (input, init) => {
     const url = new URL(input);
     assert.equal(url.origin + url.pathname, 'https://api.etherscan.io/v2/api');
-    assert.equal(url.searchParams.get('chainid'), '11155111');
+    assert.equal(url.searchParams.get('chainid'), String(chainId));
     assert.equal(url.searchParams.get('apikey'), apiKey);
     assert.equal(url.searchParams.get('module'), 'contract');
     assert.equal(url.searchParams.get('action'), 'verifysourcecode');
@@ -396,4 +514,58 @@ test('Etherscan publication still rejects a similar match with matching construc
     request: async () => Response.json({ status: '1', result: [{ ContractName: 'NFT111K',
       CompilerVersion: 'v0.8.38+commit.1835d247', ConstructorArguments: '1234', SimilarMatch: address(77),
       ABI: '[]', SourceCode: JSON.stringify(context.input) }] }) }), /only reports a similar match/);
+});
+
+test('mainnet Sourcify submission uses chain-one lookup and submission paths', async t => {
+  const { context, rpc } = fixture('closed', false, false, { chainId: 1 });
+  context.directory = await mkdtemp(join(tmpdir(), '111k-mainnet-sourcify-'));
+  t.after(() => rm(context.directory, { recursive: true, force: true }));
+  let requests = 0;
+  const result = await sourceVerification(context, 'sourcify', 'submit', { rpc, request: async (url, init) => {
+    requests++;
+    const path = new URL(url).pathname;
+    if (!init.method) {
+      assert.equal(path, `/server/v2/contract/1/${context.manifest.contractAddress}`);
+      return Response.json({ error: 'not found' }, { status: 404 });
+    }
+    assert.equal(init.method, 'POST');
+    assert.equal(path, `/server/v2/verify/1/${context.manifest.contractAddress}`);
+    assert.deepEqual(JSON.parse(init.body), verificationSourceRequests(context).sourcify);
+    return Response.json({ verificationId: 'mainnet-verification' }, { status: 202 });
+  } });
+  assert.equal(requests, 2);
+  assert.equal(result.verificationId, 'mainnet-verification');
+});
+
+test('mainnet source publication checks exact sources and produces mainnet explorer URLs', async t => {
+  const { context } = fixture('closed', false, false, { chainId: 1 });
+  context.directory = await mkdtemp(join(tmpdir(), '111k-mainnet-publication-'));
+  t.after(() => rm(context.directory, { recursive: true, force: true }));
+  context.artifact.bytecode = { object: '0x6000' };
+  const published = {
+    chainId: '1', address: context.manifest.contractAddress, match: 'exact_match', creationMatch: 'exact_match', runtimeMatch: 'exact_match',
+    compilation: { fullyQualifiedName: 'src/NFT111K.sol:NFT111K', compilerVersion: context.artifact.metadata.compiler.version },
+    deployment: { transactionHash: context.journal.actions.deploy.hash }, sources: context.input.sources,
+    creationBytecode: { onchainBytecode: context.manifest.creationCode, recompiledBytecode: context.artifact.bytecode.object,
+      transformationValues: { constructorArguments: context.manifest.constructorArgs } },
+    runtimeBytecode: { onchainBytecode: context.runtime },
+  };
+  const sourcify = await sourceVerification(context, 'sourcify', 'verify', { request: async url => {
+    assert.equal(url, `https://sourcify.dev/server/v2/contract/1/${context.manifest.contractAddress}?fields=all`);
+    return Response.json(published);
+  } });
+  assert.equal(sourcify.chainId, 1);
+  assert.equal(sourcify.url, `https://repo.sourcify.dev/1/${context.manifest.contractAddress}`);
+  await assert.rejects(sourceVerification(context, 'sourcify', 'verify', {
+    request: async () => Response.json({ ...published, chainId: '11155111' }),
+  }));
+  const etherscan = await sourceVerification(context, 'etherscan', 'verify', { apiKey: 'test-key', request: async input => {
+    const url = new URL(input);
+    assert.equal(url.searchParams.get('chainid'), '1');
+    assert.equal(url.searchParams.get('action'), 'getsourcecode');
+    return Response.json({ status: '1', result: [{ ContractName: 'NFT111K', CompilerVersion: 'v' + context.artifact.metadata.compiler.version,
+      ConstructorArguments: '1234', SimilarMatch: '', ABI: '[]', SourceCode: JSON.stringify(context.input) }] });
+  } });
+  assert.equal(etherscan.chainId, 1);
+  assert.equal(etherscan.url, `https://etherscan.io/address/${context.manifest.contractAddress}#code`);
 });

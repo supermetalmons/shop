@@ -376,7 +376,8 @@ contract NFT111KDeploymentTest is TestSupport {
         );
     }
 
-    function testRequiresDedicatedMetadataNamespace() public view {
+    function testAcceptsMainnetRootAndDedicatedMetadataNamespaces() public view {
+        harness.validate("https://cdn.mons.shop/111k/", 1);
         harness.validate("https://cdn.mons.shop/111k/mainnet-1/", 1);
         harness.validate("https://cdn.mons.shop/111k-sepolia/test-2/", 11155111);
         harness.validate("https://cdn.mons.shop/111k/1/", 1);
@@ -385,9 +386,7 @@ contract NFT111KDeploymentTest is TestSupport {
         );
     }
 
-    function testRejectsLegacyRootsAndCrossNetworkPrefixes() public {
-        vm.expectRevert(NFT111K.InvalidBaseURI.selector);
-        harness.validate("https://cdn.mons.shop/111k/", 1);
+    function testRejectsSepoliaRootAndCrossNetworkPrefixes() public {
         vm.expectRevert(NFT111K.InvalidBaseURI.selector);
         harness.validate("https://cdn.mons.shop/111k-sepolia/", 11155111);
         vm.expectRevert(NFT111K.InvalidBaseURI.selector);
@@ -419,8 +418,7 @@ contract NFT111KDeploymentTest is TestSupport {
 
     function testFreshPublicNetworkDeploymentsStartClosedAndSupportRelicsAndReceipts() public {
         uint256[2] memory chains = [uint256(1), 11155111];
-        string[2] memory prefixes =
-            ["https://cdn.mons.shop/111k/mainnet-relics-v1/", "https://cdn.mons.shop/111k-sepolia/v9/"];
+        string[2] memory prefixes = ["https://cdn.mons.shop/111k/", "https://cdn.mons.shop/111k-sepolia/v9/"];
         DeploymentVm env = DeploymentVm(address(vm));
         env.setEnv("ETHEREUM_111K_DEPLOYER_KEY", Strings.toString(DEPLOYER_KEY));
         env.setEnv("ETHEREUM_111K_OWNER", Strings.toHexString(address(this)));

@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-type MetadataCommand = 'generate' | 'validate' | 'upload' | 'verify' | 'restore';
+type MetadataCommand = 'generate' | 'validate' | 'upload' | 'verify' | 'restore' | 'bootstrap-mainnet-root';
 type MetadataNetwork = 'sepolia' | 'mainnet';
 
 export type MetadataCliOptions = {
@@ -18,18 +18,19 @@ export type MetadataCliOptions = {
 
 const usage = `Usage: npm run ethereum:metadata -- <command> [options]
 
-Commands: generate, validate, upload, verify, restore
+Commands: generate, validate, upload, verify, restore, bootstrap-mainnet-root
 
   --directory PATH           Generated collection directory (default: .cache/111k-metadata/current)
-  --network NETWORK          Required for upload, verify and restore: sepolia, mainnet or all
+  --network NETWORK          Required for remote commands: sepolia, mainnet or all
   --prefix PREFIX            Deployment prefix, e.g. 111k-sepolia/test-2/ (one network only)
   --concurrency NUMBER       Concurrent remote requests (default: 32, maximum: 256)
   --token-ids IDS             Comma-separated token IDs for a sample upload or verification
-  --snapshot-directory PATH  Upload rollback snapshot directory
+  --snapshot-directory PATH  Upload rollback or bootstrap recovery snapshot parent
   --prior-cache-root PATH    Previous canonical dataset or legacy root with network directories
   --help                     Show this help
 
 For restore, --directory names the rollback snapshot directory.
+bootstrap-mainnet-root requires --network mainnet and publishes the complete unregistered 111k/ root.
 `;
 
 export function parseMetadataCliArgs(args: string[]): MetadataCliOptions | null {
@@ -49,13 +50,16 @@ export function parseMetadataCliArgs(args: string[]): MetadataCliOptions | null 
   });
   if (values.help) return null;
   const command = positionals[0] as MetadataCommand;
-  if (positionals.length !== 1 || !['generate', 'validate', 'upload', 'verify', 'restore'].includes(command)) {
+  if (positionals.length !== 1 || !['generate', 'validate', 'upload', 'verify', 'restore', 'bootstrap-mainnet-root'].includes(command)) {
     throw new Error(usage);
   }
   if (!values.directory.trim()) throw new Error('--directory cannot be empty');
-  const remote = ['upload', 'verify', 'restore'].includes(command);
+  const remote = ['upload', 'verify', 'restore', 'bootstrap-mainnet-root'].includes(command);
   if (remote && !['sepolia', 'mainnet', 'all'].includes(values.network ?? '')) {
     throw new Error('--network must explicitly select sepolia, mainnet or all');
+  }
+  if (command === 'bootstrap-mainnet-root' && (values.network !== 'mainnet' || values.prefix !== undefined)) {
+    throw new Error('bootstrap-mainnet-root requires --network mainnet and does not accept --prefix');
   }
   if (values.prefix !== undefined) {
     const root = values.network === 'sepolia' ? '111k-sepolia/' : values.network === 'mainnet' ? '111k/' : '';
@@ -74,8 +78,8 @@ export function parseMetadataCliArgs(args: string[]): MetadataCliOptions | null 
   if (tokenIds && (tokenIds.some(id => !/^[1-9]\d*$/.test(id)) || new Set(tokenIds).size !== tokenIds.length)) {
     throw new Error('--token-ids requires unique comma-separated decimal token IDs');
   }
-  if ((values['snapshot-directory'] !== undefined || values['prior-cache-root'] !== undefined) && command !== 'upload') {
-    throw new Error('--snapshot-directory and --prior-cache-root apply only to upload');
+  if ((values['snapshot-directory'] !== undefined || values['prior-cache-root'] !== undefined) && !['upload', 'bootstrap-mainnet-root'].includes(command)) {
+    throw new Error('--snapshot-directory and --prior-cache-root apply only to upload or bootstrap-mainnet-root');
   }
   for (const option of ['snapshot-directory', 'prior-cache-root'] as const) {
     if (values[option] !== undefined && !values[option]!.trim()) throw new Error(`--${option} cannot be empty`);
@@ -109,7 +113,14 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify(report)}\n`);
     return;
   }
-  const { uploadMetadata, verifyMetadata, restoreMetadata } = await import('./remote.ts');
+  const { uploadMetadata, verifyMetadata, restoreMetadata, bootstrapMainnetRootMetadata } = await import('./remote.ts');
+  if (command === 'bootstrap-mainnet-root') {
+    const report = await bootstrapMainnetRootMetadata(directory, { concurrency: options.concurrency,
+      snapshotDirectory: options.snapshotDirectory, priorCacheRoot: options.priorCacheRoot,
+      progress: counts => process.stderr.write(`${command}: ${JSON.stringify(counts)}\n`) });
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    return;
+  }
   for (const network of options.networks) {
     const common = {
       concurrency: options.concurrency,

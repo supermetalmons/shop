@@ -1,0 +1,9 @@
+{
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "checkedAt": "2026-11-10T21:22:06.233Z",
+  "frozenSourcesMatch": true,
+  "constructorArgumentsMatch": true,
+  "compilerVersion": "v0.8.38+commit.1835d247",
+  "url": "https://etherscan.io/address/0x08cded8258730bda384ff198001e47a1b50f7f9d#code"
+}
