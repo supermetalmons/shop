@@ -11,7 +11,7 @@ For the relic selection and claim page, use the [relic claims guide](111k_relic_
 - Allowed VVV origins: `https://vvv.so` and `https://www.vvv.so`. Browsers set `Origin` automatically; backend callers must supply it.
 - No API key, wallet session, or signature is required.
 
-Examples target the Sepolia [v17 release](../../releases/111k-sepolia-v17/README.md), using catalog `111k-v5`. The collection was deployed at block `12092412`; the release record tracks activation, opening, and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
+Examples target the current Sepolia [v17 storefront](../../releases/111k-sepolia-v17/README.md), using catalog `111k-v7`. The collection was deployed at block `12092412`; the release record tracks activation, opening, and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
 
 ## Unrevealed artwork
 
@@ -90,7 +90,7 @@ Mixed requests can include revealed and unminted IDs. When a previously unminted
 
 ## Response fields and media
 
-Both responses include `deploymentId`, `dropId`, `chainId`, `contractAddress`, `artworks`, and `retryAfterMs` (milliseconds), without a wrapper. Check the returned chain and contract. Catalog-update support adds `catalogRevision`, a nonnegative integer; treat an omitted revision as `0` during rollout.
+Both responses include `deploymentId`, `dropId`, `chainId`, `contractAddress`, `catalogRevision`, `artworks`, and `retryAfterMs` (milliseconds), without a wrapper. Check the returned chain and contract. `catalogRevision` is a nonnegative integer.
 
 Each artwork has this shape (illustrative values):
 
@@ -113,7 +113,7 @@ Each artwork has this shape (illustrative values):
 ```
 
 - `category`: `egg`, `painting`, `video`, `3d`, or `animated`.
-- `collectionBlock`: the artwork's collection-block name as a string, preserving spelling and case. Both endpoints return it immediately, without waiting for metadata enrichment. It is `null` for unhatched eggs or when collection-block information is unavailable. Accept an omitted field from older API versions as unknown.
+- `collectionBlock`: the artwork's collection-block name as a string, preserving spelling and case. Both endpoints return it immediately, without waiting for metadata enrichment. It is `null` for unhatched eggs or when collection-block information is unavailable.
 - `image`: the artwork image, video or animated poster, or square 3D preview.
 - `animation_url`: present for videos and animated artworks (MP4), and 3D models (GLB). Choose the renderer from `category`; a GLB URL is not a video source. Eggs and paintings have no `animation_url`.
 - `aspectRatio`: proportions, **not pixel dimensions**. Use CSS `aspect-ratio: width / height`.
@@ -159,7 +159,7 @@ frame, represented by the reduced ratio 466:503. Always use the returned
 future assets may differ. The fragment has the same surrounding artwork fields
 as the complete example above.
 
-The v5 catalog contains 76,642 eggs, 30,990 paintings, 58 videos, 3,000 3D
+The current `111k-v7` catalog contains 60,504 eggs, 47,128 paintings, 58 videos, 3,000 3D
 models, and 421 animated artworks: 111,111 artworks total. The token-ID range
 and request limits are unchanged. Painting alts and video posters are variants
 of those artworks, not extra tokens. Videos include 16:9, 427:240, and 54:31
@@ -175,7 +175,7 @@ exceed the cap. Historical frozen assignments outside the current unpack's token
 range do not count toward its limit.
 
 Cache media by `(chainId, contractAddress, deploymentId, tokenId)` and retain each
-item's `metadataRevision`; omitted legacy revisions mean `0`. Replace metadata
+item's `metadataRevision`, using `0` when it is omitted. Replace metadata
 only with the same or a higher token revision. Revisions encode the assignment
 revision and publication stage, so delayed base metadata cannot replace newer
 artwork or enriched traits. Use current inventory data for ownership.
