@@ -14,7 +14,7 @@ const templateJson = JSON.stringify({ name: '{{tokenId}}', image: 'https://cdn.l
   attributes: [{ trait_type: 'series', value: '111K' }] });
 const observation = { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 };
 
-function fixture(t: TestContext, catalogVersion = '111k-v7') {
+function fixture(t: TestContext, catalogVersion = '111k-v8') {
   const deployment: EthereumRevealDeployment = { deploymentId: 'collection-block-test', dropId: '111k_devnet', chainId: 11155111,
     contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/collection-block-test/',
     deploymentBlock: 100, catalogVersion, templateJson,
@@ -56,7 +56,7 @@ function fixture(t: TestContext, catalogVersion = '111k-v7') {
 test('the bundled lookup resolves every range boundary and bounds each supported catalog', () => {
   const blocks: unknown = source;
   validateRevealCollectionBlocks(blocks);
-  const current = selectRevealCollectionBlocks(blocks, getRevealCatalogDescriptor('111k-v7'));
+  const current = selectRevealCollectionBlocks(blocks, getRevealCatalogDescriptor('111k-v8'));
   assert.ok(current);
   for (const category of ['painting', 'video', '3d', 'animated'] as const) {
     let first = 1;
@@ -71,11 +71,15 @@ test('the bundled lookup resolves every range boundary and bounds each supported
   }
   assert.equal(lookupRevealCollectionBlock(current, 'egg', 1), null);
   assert.equal(lookupRevealCollectionBlock(current, 'painting', NaN), null);
-  assert.equal(selectRevealCollectionBlocks(blocks, { catalogVersion: '111k-v7', manifestSha256: '0'.repeat(64) }), null);
+  assert.equal(selectRevealCollectionBlocks(blocks, { catalogVersion: '111k-v8', manifestSha256: '0'.repeat(64) }), null);
   const ancestor = selectRevealCollectionBlocks(blocks, getRevealCatalogDescriptor('111k-v5'));
   assert.ok(ancestor);
   assert.equal(lookupRevealCollectionBlock(ancestor, 'painting', 30990), 'gpt pixel');
   assert.equal(lookupRevealCollectionBlock(ancestor, 'painting', 30991), null);
+  const predecessor = selectRevealCollectionBlocks(blocks, getRevealCatalogDescriptor('111k-v7'));
+  assert.ok(predecessor);
+  assert.equal(lookupRevealCollectionBlock(predecessor, 'painting', 47128), 'Poets, Gamblers, Fools');
+  assert.equal(lookupRevealCollectionBlock(predecessor, 'painting', 47129), null);
 });
 
 for (const size of [20, 500]) test(`response decoration adds no SQL or network operations for ${size} frozen tokens`, t => {
@@ -97,10 +101,10 @@ for (const size of [20, 500]) test(`response decoration adds no SQL or network o
 
 test('both public endpoints decorate existing frozen artworks without changing metadata or stored assignments', t => {
   const f = fixture(t);
-  const ids = f.seedFrozen([{ category: 'painting', assetId: 47128 }, { category: 'video', assetId: 58 },
+  const ids = f.seedFrozen([{ category: 'painting', assetId: 52329 }, { category: 'video', assetId: 58 },
     { category: '3d', assetId: 1000 }, { category: '3d', assetId: 1001 }, { category: 'animated', assetId: 421 }, { category: 'egg', assetId: 1 }]);
   const original = f.snapshot();
-  const expected = ['Poets, Gamblers, Fools', 'film clips', 'DrOps3 Knives', 'DrOps3 Guns', 'gifworks', null];
+  const expected = ['Apartment Traveler', 'film clips', 'DrOps3 Knives', 'DrOps3 Guns', 'gifworks', null];
   const transaction = f.store.transactionResponse(f.deployment, observation.transactionHash);
   const tokens = f.store.tokensResponse(f.deployment, ids);
   assert.deepEqual(transaction.artworks.map(artwork => artwork.collectionBlock), expected);
@@ -135,8 +139,8 @@ test('newly frozen reveals receive blocks only through the public response path'
 test('unsupported, mismatched and incomplete effective identities do not reuse origin labels', t => {
   const f = fixture(t);
   const ids = f.seedFrozen([{ category: 'painting', assetId: 1 }]);
-  for (const [version, hash] of [['111k-v999', '0'.repeat(64)], ['111k-v7', '0'.repeat(64)], ['111k-v7', null],
-    [null, getRevealCatalogDescriptor('111k-v7')!.manifestSha256]]) {
+  for (const [version, hash] of [['111k-v999', '0'.repeat(64)], ['111k-v8', '0'.repeat(64)], ['111k-v8', null],
+    [null, getRevealCatalogDescriptor('111k-v8')!.manifestSha256]]) {
     f.database.prepare('UPDATE settings SET effective_catalog_version=?,effective_catalog_sha256=?').run(version, hash);
     assert.equal(f.store.frozen(ids, { includeCollectionBlock: true })[0].collectionBlock, null);
   }

@@ -1,0 +1,231 @@
+{
+  "checkedAt": "2026-11-10T18:37:29.614Z",
+  "complete": true,
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "registry": {
+    "deploymentId": "v17",
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+    "deploymentBlock": 12092412,
+    "catalogVersion": "111k-v5",
+    "templateJson": "{\"name\":\"{{tokenId}}\",\"description\":\"\",\"image\":\"https://cdn.lil.org/nft/111k/placeholder.png\",\"attributes\":[{\"trait_type\":\"type\",\"value\":\"painting\"}],\"aspectRatio\":{\"width\":466,\"height\":503}}",
+    "templateSha256": "07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9",
+    "state": "active",
+    "revision": 12,
+    "createdAtMs": 1794164373000,
+    "updatedAtMs": 1794335779736,
+    "activatedAtMs": 1794165443000,
+    "provisionedAtMs": 1794164417699,
+    "lastError": null,
+    "effectiveCatalogVersion": "111k-v8",
+    "effectiveCatalogSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+    "catalogRevision": 3,
+    "catalogUpdateId": null,
+    "catalogUpdateStartedAtMs": null
+  },
+  "config": {
+    "url": "https://api.mons.shop/ethereum/111k/config",
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "cors": "https://mons.shop",
+    "cacheControl": "no-store",
+    "cfCacheStatus": null,
+    "sha256": "40657c49261439ca1af26e9039329c35d1929c37a1a27651b392d9322b197b24",
+    "bytes": 588,
+    "value": {
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "chainName": "Sepolia",
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+      "deploymentBlock": 12092412,
+      "explorerUrl": "https://sepolia.etherscan.io",
+      "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+      "enabled": true,
+      "testnet": true,
+      "cratePriceWei": "100000000000000",
+      "warehousePriceWei": "1100000000000000",
+      "deliveryFeeWei": "100000000000000",
+      "confirmationBlocks": 3,
+      "maxMintQuantity": 15,
+      "maxUnboxQuantity": 15,
+      "maxDeliveryItems": 50,
+      "deploymentId": "v17",
+      "catalogRevision": 3
+    }
+  },
+  "inspection": {
+    "deploymentId": "v17",
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+    "revision": 12,
+    "ready": true,
+    "frozenThroughMs": 1794332132557,
+    "frozenArtworks": 5080,
+    "frozenMetadataSha256": "bc293bf332fd303204edadf46883bcb74ffaa901a47d64bada451b033fb94004",
+    "frozenSamples": [
+      {
+        "tokenId": "1",
+        "metadataSha256": "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41"
+      },
+      {
+        "tokenId": "2",
+        "metadataSha256": "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313"
+      },
+      {
+        "tokenId": "3",
+        "metadataSha256": "357696ac6976751666ee80a9b1f69c0f8d5e308ad46f836c60bc5fdd34d8748d"
+      },
+      {
+        "tokenId": "4",
+        "metadataSha256": "f6c22d31101f2b19e5218a73dee18fbf9c18b10afadb3a1df5d8812370f573a5",
+        "enrichment": {
+          "version": "v0",
+          "sha256": "b4b49ed0eefbf7507a9fd6aea6ff3ca59a708397af1e0bc2e05d8465a8db5613",
+          "published": true
+        }
+      },
+      {
+        "tokenId": "5",
+        "metadataSha256": "fcf42e242d281339e20a0d54cfdf883b3baee9482494b3b858ef584902a141bd",
+        "enrichment": {
+          "version": "v0",
+          "sha256": "81dc7b835de4d96b6ffcef2046030282b7cc47a122405e95312c1f71fa551180",
+          "published": true
+        }
+      },
+      {
+        "tokenId": "6",
+        "metadataSha256": "1fade286f6ffbf3d5bdea9731f19d43234f908863ac1b523f8b897859c7afe0d",
+        "enrichment": {
+          "version": "v0",
+          "sha256": "c0ec06121680abc44c610fe40e11a049d439855a8bcf61d625aec1ec0e22e758",
+          "published": true
+        }
+      },
+      {
+        "tokenId": "7",
+        "metadataSha256": "555865c1716194412ddbf048c2cdc24eb5b7e2331f8d60fea08a33bb5e32b21a"
+      },
+      {
+        "tokenId": "8",
+        "metadataSha256": "485e112032f6758ed08ac4232f7dff11e160bde7e22ffcdec73b77af7523f8a0",
+        "enrichment": {
+          "version": "v0",
+          "sha256": "25ad8cb065906bea9212482c296b7e15a24427d3e220eabafad600841ed9d4cb",
+          "published": true
+        }
+      }
+    ]
+  },
+  "unchangedOriginalEvidence": {
+    "frozenThroughMs": 1794332132557,
+    "frozenArtworks": 5080,
+    "frozenMetadataSha256": "bc293bf332fd303204edadf46883bcb74ffaa901a47d64bada451b033fb94004"
+  },
+  "frozenSamples": [
+    {
+      "tokenId": "1",
+      "metadataSha256": "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41",
+      "allowedSha256": [
+        "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41"
+      ]
+    },
+    {
+      "tokenId": "2",
+      "metadataSha256": "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313",
+      "allowedSha256": [
+        "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313"
+      ]
+    },
+    {
+      "tokenId": "3",
+      "metadataSha256": "357696ac6976751666ee80a9b1f69c0f8d5e308ad46f836c60bc5fdd34d8748d",
+      "allowedSha256": [
+        "357696ac6976751666ee80a9b1f69c0f8d5e308ad46f836c60bc5fdd34d8748d"
+      ]
+    },
+    {
+      "tokenId": "4",
+      "metadataSha256": "b4b49ed0eefbf7507a9fd6aea6ff3ca59a708397af1e0bc2e05d8465a8db5613",
+      "allowedSha256": [
+        "b4b49ed0eefbf7507a9fd6aea6ff3ca59a708397af1e0bc2e05d8465a8db5613"
+      ]
+    },
+    {
+      "tokenId": "5",
+      "metadataSha256": "81dc7b835de4d96b6ffcef2046030282b7cc47a122405e95312c1f71fa551180",
+      "allowedSha256": [
+        "81dc7b835de4d96b6ffcef2046030282b7cc47a122405e95312c1f71fa551180"
+      ]
+    },
+    {
+      "tokenId": "6",
+      "metadataSha256": "c0ec06121680abc44c610fe40e11a049d439855a8bcf61d625aec1ec0e22e758",
+      "allowedSha256": [
+        "c0ec06121680abc44c610fe40e11a049d439855a8bcf61d625aec1ec0e22e758"
+      ]
+    },
+    {
+      "tokenId": "7",
+      "metadataSha256": "555865c1716194412ddbf048c2cdc24eb5b7e2331f8d60fea08a33bb5e32b21a",
+      "allowedSha256": [
+        "555865c1716194412ddbf048c2cdc24eb5b7e2331f8d60fea08a33bb5e32b21a"
+      ]
+    },
+    {
+      "tokenId": "8",
+      "metadataSha256": "25ad8cb065906bea9212482c296b7e15a24427d3e220eabafad600841ed9d4cb",
+      "allowedSha256": [
+        "25ad8cb065906bea9212482c296b7e15a24427d3e220eabafad600841ed9d4cb"
+      ]
+    }
+  ],
+  "unaffected": [
+    {
+      "tokenId": "1",
+      "metadataSha256": "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41",
+      "unchanged": true
+    },
+    {
+      "tokenId": "2",
+      "metadataSha256": "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313",
+      "unchanged": true
+    },
+    {
+      "tokenId": "3",
+      "metadataSha256": "357696ac6976751666ee80a9b1f69c0f8d5e308ad46f836c60bc5fdd34d8748d",
+      "unchanged": true
+    },
+    {
+      "tokenId": "4",
+      "metadataSha256": "b4b49ed0eefbf7507a9fd6aea6ff3ca59a708397af1e0bc2e05d8465a8db5613",
+      "unchanged": true
+    },
+    {
+      "tokenId": "5",
+      "metadataSha256": "81dc7b835de4d96b6ffcef2046030282b7cc47a122405e95312c1f71fa551180",
+      "unchanged": true
+    },
+    {
+      "tokenId": "6",
+      "metadataSha256": "c0ec06121680abc44c610fe40e11a049d439855a8bcf61d625aec1ec0e22e758",
+      "unchanged": true
+    },
+    {
+      "tokenId": "7",
+      "metadataSha256": "555865c1716194412ddbf048c2cdc24eb5b7e2331f8d60fea08a33bb5e32b21a",
+      "unchanged": true
+    },
+    {
+      "tokenId": "8",
+      "metadataSha256": "25ad8cb065906bea9212482c296b7e15a24427d3e220eabafad600841ed9d4cb",
+      "unchanged": true
+    }
+  ],
+  "affectedSamplesVerified": 8
+}

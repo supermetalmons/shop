@@ -1,0 +1,18 @@
+{
+  "recordedAt": "2026-11-10T17:37:49.565Z",
+  "command": "npm run deploy",
+  "passed": false,
+  "deployed": false,
+  "stage": "npm test",
+  "tests": 5212,
+  "passedTests": 5211,
+  "failedTests": 1,
+  "failure": {
+    "file": "tests/ethereumCollectionBlocksImport.test.ts",
+    "line": 79,
+    "expected": 20,
+    "actual": 21,
+    "description": "Current collection-block range count expectation was not advanced for v8."
+  },
+  "logSha256": "343160e3b24389db1c429d51dddb28e46e1f94148ebcb72e24d006bc2a9ff4d7"
+}

@@ -1,0 +1,173 @@
+{
+  "recordedAt": "2026-11-10T18:39:11.744Z",
+  "complete": true,
+  "allEndpointsHealthyAtEnd": true,
+  "general": {
+    "probes": 1170,
+    "passed": 1160,
+    "failed": 10,
+    "beforeApplyFailures": 5,
+    "duringOrAfterApplyFailures": 5,
+    "firstAt": "2026-11-10T17:36:04.031Z",
+    "lastAt": "2026-11-10T18:38:27.260Z",
+    "latestByEndpoint": [
+      {
+        "at": "2026-11-10T18:38:27.256Z",
+        "url": "https://api.mons.shop/ethereum/111k/config",
+        "ok": true,
+        "status": 200,
+        "ms": 1282,
+        "sha256": "40657c49261439ca1af26e9039329c35d1929c37a1a27651b392d9322b197b24",
+        "catalogRevision": 3
+      },
+      {
+        "at": "2026-11-10T18:38:27.257Z",
+        "url": "https://mons.shop/",
+        "ok": true,
+        "status": 200,
+        "ms": 271,
+        "sha256": "5be2968b5a59b1cf3ac406830aced813a378b08aa246ca1d0fb5904fb20f40a8"
+      },
+      {
+        "at": "2026-11-10T18:38:27.258Z",
+        "url": "https://www.mons.shop/",
+        "ok": true,
+        "status": 200,
+        "ms": 286,
+        "sha256": "5be2968b5a59b1cf3ac406830aced813a378b08aa246ca1d0fb5904fb20f40a8"
+      },
+      {
+        "at": "2026-11-10T18:38:27.259Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/1.json",
+        "ok": true,
+        "status": 200,
+        "ms": 658,
+        "sha256": "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41"
+      },
+      {
+        "at": "2026-11-10T18:38:27.260Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/2.json",
+        "ok": true,
+        "status": 200,
+        "ms": 783,
+        "sha256": "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313"
+      }
+    ],
+    "failures": [
+      {
+        "at": "2026-11-10T17:41:13.182Z",
+        "url": "https://api.mons.shop/ethereum/111k/config",
+        "ok": false,
+        "ms": 5,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.184Z",
+        "url": "https://mons.shop/",
+        "ok": false,
+        "ms": 3,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.185Z",
+        "url": "https://www.mons.shop/",
+        "ok": false,
+        "ms": 4,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.186Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/1.json",
+        "ok": false,
+        "ms": 3,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.186Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/2.json",
+        "ok": false,
+        "ms": 3,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.622Z",
+        "url": "https://api.mons.shop/ethereum/111k/config",
+        "ok": false,
+        "ms": 8,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.625Z",
+        "url": "https://mons.shop/",
+        "ok": false,
+        "ms": 6,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.626Z",
+        "url": "https://www.mons.shop/",
+        "ok": false,
+        "ms": 4,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.627Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/1.json",
+        "ok": false,
+        "ms": 4,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.628Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/2.json",
+        "ok": false,
+        "ms": 5,
+        "error": "fetch failed"
+      }
+    ]
+  },
+  "reveal": {
+    "probes": 179,
+    "passed": 179,
+    "failed": 0,
+    "beforeApplyFailures": 0,
+    "duringOrAfterApplyFailures": 0,
+    "firstAt": "2026-11-10T17:51:29.028Z",
+    "lastAt": "2026-11-10T18:38:22.177Z",
+    "latestByEndpoint": [
+      {
+        "at": "2026-11-10T18:38:22.177Z",
+        "endpoint": "reveal/tokens",
+        "ok": true,
+        "status": 200,
+        "catalogRevision": 3,
+        "artworks": 8,
+        "ms": 717
+      }
+    ],
+    "failures": []
+  },
+  "totalProbes": 1349,
+  "archives": {
+    "apply.log": {
+      "sha256": "d69a765676027b197ce547743490333d082e37c4151b9ccefb4e8966ba0647e7",
+      "bytes": 687824
+    },
+    "verify.log": {
+      "sha256": "eb4045bce6a1d16b5cfc249d5045357449eb046b56af15564a9edda7809b0086",
+      "bytes": 14724
+    },
+    "progress.jsonl": {
+      "sha256": "58a13fe03b12bb95f2c66d62b904be4db2d1faa1c115405d3ab2ccb76f897282",
+      "bytes": 13072
+    },
+    "availability.jsonl": {
+      "sha256": "d566d6d1fe4b3654aec652304da8dc9ce4d4a4d5b61efea490822e67b0cd21d6",
+      "bytes": 220984
+    },
+    "reveal-availability.jsonl": {
+      "sha256": "8c0d4d0cd013ce615c5408fc4e95c0597329dafc313ed461f6c9b28c84de0995",
+      "bytes": 22585
+    }
+  }
+}

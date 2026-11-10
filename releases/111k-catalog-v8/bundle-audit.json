@@ -1,0 +1,33 @@
+{
+  "checkedAt": "2026-11-10T17:35:19.266Z",
+  "verified": true,
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "sourceSha256": "af85724992e0f78de55fd8ad3ee32b56182dbec19ae1413feb739731e55c7954",
+  "predecessor": {
+    "catalogVersion": "111k-v7",
+    "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13"
+  },
+  "target": {
+    "catalogVersion": "111k-v8",
+    "manifestSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665"
+  },
+  "mappings": 5201,
+  "cutoff": {
+    "first": 55304,
+    "last": 60504
+  },
+  "counts": {
+    "eggs": 55303,
+    "paintings": 52329,
+    "videos": 58,
+    "3d": 3000,
+    "animated": 421,
+    "receipts": 85556
+  },
+  "preparedAt": "2026-11-10T17:32:42.047Z",
+  "focusedTests": {
+    "passed": 183,
+    "failed": 0
+  }
+}

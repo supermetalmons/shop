@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "checkedAt": "2026-11-10T17:46:11.858Z",
+  "complete": true,
+  "verificationScope": "Remote published Worker content downloaded from Cloudflare content/v2, bracketed by matching active 100% deployment version checks. Confirms the published bundle; does not prove each existing Durable Object has adopted the new code before its configured update delay.",
+  "accountId": "e25f90fc073ea309b54b8b5144bf28e0",
+  "worker": "mons-shop-api",
+  "workerVersion": "2ee13eee-744d-4288-8158-19d2e05e2b4c",
+  "download": {
+    "endpoint": "https://api.cloudflare.com/client/v4/accounts/e25f90fc073ea309b54b8b5144bf28e0/workers/scripts/mons-shop-api/content/v2",
+    "method": "GET",
+    "startedAt": "2026-11-10T17:46:01.735Z",
+    "contentType": "multipart/form-data; boundary=c79c1dc3a7fe4c55df2d0f3420d93c0a93279645cb39cb5492fb8e962469",
+    "entrypoint": "index.js",
+    "bytes": 30442827,
+    "sha256": "b8dd69cc09f4a5ebe46cfd5cd2e7ef81714f2e0b8583f3e96efeffd40b00a4ab",
+    "localFile": "api-remote-content.bin",
+    "cfRay": "a586dfd0d954ba2b-IST"
+  },
+  "deploymentBefore": {
+    "id": "acbfc783-e6a1-4f74-9326-22b83aa84c33",
+    "createdOn": "2026-11-10T17:45:24.348634Z",
+    "strategy": "percentage",
+    "versions": [
+      {
+        "versionId": "2ee13eee-744d-4288-8158-19d2e05e2b4c",
+        "percentage": 100
+      }
+    ]
+  },
+  "deploymentAfter": {
+    "id": "acbfc783-e6a1-4f74-9326-22b83aa84c33",
+    "createdOn": "2026-11-10T17:45:24.348634Z",
+    "strategy": "percentage",
+    "versions": [
+      {
+        "versionId": "2ee13eee-744d-4288-8158-19d2e05e2b4c",
+        "percentage": 100
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "index.js",
+      "filename": "index.js",
+      "bytes": 11345902,
+      "sha256": "bda8c195fe06a673f9619ff0d3cdd335483a763f3263314f9ab2f9eb9b9dd57a"
+    },
+    {
+      "name": "index.js.map",
+      "filename": "index.js.map",
+      "bytes": 19096492,
+      "sha256": "18885f4c35244ad2661f3a89bb08fd16b78b028d6835779254dbe1e9913bb3e7"
+    }
+  ],
+  "mainModule": {
+    "name": "index.js",
+    "filename": "index.js",
+    "sha256": "bda8c195fe06a673f9619ff0d3cdd335483a763f3263314f9ab2f9eb9b9dd57a",
+    "localFile": "api-remote-main.mjs"
+  },
+  "extraction": {
+    "method": "Acorn static JSON expression decoding; downloaded code was not executed.",
+    "declarations": [
+      {
+        "variable": "manifest_default",
+        "expressionBytes": 1659100
+      },
+      {
+        "variable": "revealCatalog_default",
+        "expressionBytes": 117
+      },
+      {
+        "variable": "revealCatalogAncestors_default",
+        "expressionBytes": 4544474
+      },
+      {
+        "variable": "collection_blocks_default",
+        "expressionBytes": 2429
+      }
+    ]
+  },
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "compiledCurrentDescriptor": {
+    "catalogVersion": "111k-v8",
+    "manifestSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665"
+  },
+  "compiledCatalogs": [
+    {
+      "catalogVersion": "111k-v5",
+      "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a",
+      "artworkCount": 111111,
+      "counts": {
+        "eggs": 76642,
+        "paintings": 30990,
+        "videos": 58,
+        "3d": 3000,
+        "animated": 421,
+        "receipts": 85556
+      }
+    },
+    {
+      "catalogVersion": "111k-v6",
+      "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+      "artworkCount": 111111,
+      "counts": {
+        "eggs": 67284,
+        "paintings": 40348,
+        "videos": 58,
+        "3d": 3000,
+        "animated": 421,
+        "receipts": 85556
+      }
+    },
+    {
+      "catalogVersion": "111k-v7",
+      "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
+      "artworkCount": 111111,
+      "counts": {
+        "eggs": 60504,
+        "paintings": 47128,
+        "videos": 58,
+        "3d": 3000,
+        "animated": 421,
+        "receipts": 85556
+      }
+    },
+    {
+      "catalogVersion": "111k-v8",
+      "manifestSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+      "artworkCount": 111111,
+      "counts": {
+        "eggs": 55303,
+        "paintings": 52329,
+        "videos": 58,
+        "3d": 3000,
+        "animated": 421,
+        "receipts": 85556
+      }
+    }
+  ],
+  "predecessorMatchesFrozenBatch": true,
+  "targetMatchesFrozenBatch": true,
+  "collectionBlocks": {
+    "sha256": "e109024d83d6b62e2604c8c034522e523bf0615b8840253e6742cf7072b36bf9",
+    "sourceSha256": "af85724992e0f78de55fd8ad3ee32b56182dbec19ae1413feb739731e55c7954",
+    "matchesLocalPromotedArtifact": true,
+    "bindings": [
+      {
+        "catalogVersion": "111k-v5",
+        "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a",
+        "counts": {
+          "painting": 30990,
+          "video": 58,
+          "3d": 3000,
+          "animated": 421
+        }
+      },
+      {
+        "catalogVersion": "111k-v6",
+        "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+        "counts": {
+          "painting": 40348,
+          "video": 58,
+          "3d": 3000,
+          "animated": 421
+        }
+      },
+      {
+        "catalogVersion": "111k-v7",
+        "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
+        "counts": {
+          "painting": 47128,
+          "video": 58,
+          "3d": 3000,
+          "animated": 421
+        }
+      },
+      {
+        "catalogVersion": "111k-v8",
+        "manifestSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+        "counts": {
+          "painting": 52329,
+          "video": 58,
+          "3d": 3000,
+          "animated": 421
+        }
+      }
+    ],
+    "samples": [
+      {
+        "assetId": 47128,
+        "collectionBlock": "Poets, Gamblers, Fools"
+      },
+      {
+        "assetId": 47129,
+        "collectionBlock": "Poets, Gamblers, Fools"
+      },
+      {
+        "assetId": 47130,
+        "collectionBlock": "Apartment Traveler"
+      },
+      {
+        "assetId": 52329,
+        "collectionBlock": "Apartment Traveler"
+      },
+      {
+        "assetId": 52330,
+        "collectionBlock": null
+      }
+    ],
+    "predecessorCutoffPreserved": true
+  }
+}

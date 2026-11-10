@@ -1,0 +1,36 @@
+{
+  "checkedAt": "2026-11-10T18:40:34.098Z",
+  "complete": true,
+  "applications": {
+    "api": {
+      "id": "acbfc783-e6a1-4f74-9326-22b83aa84c33",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "2ee13eee-744d-4288-8158-19d2e05e2b4c",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-11-10T17:45:24.348634Z"
+    },
+    "frontend": {
+      "id": "980d56e6-ad69-426b-a134-fbe51eafbec5",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "5dd2b3c0-362d-4107-94d4-8cc46c1b1808",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-11-10T17:40:44.406366Z"
+    }
+  }
+}

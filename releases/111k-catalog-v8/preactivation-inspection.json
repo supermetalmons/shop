@@ -1,0 +1,18 @@
+{
+  "recordedAt": "2026-11-10T17:49:14.822Z",
+  "result": {
+    "deploymentId": "v17",
+    "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+    "phase": "unstarted",
+    "complete": false,
+    "catalogRevision": 2,
+    "total": 0,
+    "staged": 0,
+    "applied": 0,
+    "published": 0,
+    "frozen": 0,
+    "retryAfterMs": 0,
+    "conflicts": 0,
+    "retrying": 0
+  }
+}

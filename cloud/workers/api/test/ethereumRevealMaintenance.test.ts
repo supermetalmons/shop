@@ -87,7 +87,7 @@ for (const invalid of ['missing', 'revision', 'active', 'not-retired', 'mainnet'
   });
 }
 
-for (const catalogVersion of ['111k-v1', '111k-v4', '111k-v5', '111k-v6', '111k-v7']) {
+for (const catalogVersion of ['111k-v1', '111k-v4', '111k-v5', '111k-v6', '111k-v7', '111k-v8']) {
   test(`catalog ${catalogVersion} requires an explicit retirement marker before purge`, async () => {
     const f = fixture();
     Object.assign(f.registry.row!, { catalog_version: catalogVersion, retired_at_ms: null, replacement_deployment_id: null });

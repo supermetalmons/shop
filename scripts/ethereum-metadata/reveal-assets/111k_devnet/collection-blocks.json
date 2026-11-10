@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "filename": "111k.json",
-    "sha256": "c43ff5b098c6dfe46f814a40b1ab9a3a677a2283a26387a4cccf7aa2450d2595"
+    "sha256": "af85724992e0f78de55fd8ad3ee32b56182dbec19ae1413feb739731e55c7954"
   },
   "catalogs": [
     {
@@ -30,6 +30,16 @@
       "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
       "counts": {
         "painting": 47128,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v8",
+      "manifestSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+      "counts": {
+        "painting": 52329,
         "video": 58,
         "3d": 3000,
         "animated": 421
@@ -99,8 +109,12 @@
         "little swag"
       ],
       [
-        47128,
+        47129,
         "Poets, Gamblers, Fools"
+      ],
+      [
+        52329,
+        "Apartment Traveler"
       ]
     ],
     "video": [

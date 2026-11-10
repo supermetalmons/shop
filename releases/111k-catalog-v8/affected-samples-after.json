@@ -1,0 +1,2985 @@
+{
+  "checkedAt": "2026-11-10T18:37:29.612Z",
+  "complete": true,
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "catalogRevision": 3,
+  "api": {
+    "url": "https://api.mons.shop/ethereum/111k/reveal/tokens",
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "cors": "https://mons.shop",
+    "cacheControl": "no-store",
+    "cfCacheStatus": null,
+    "sha256": "3e02f9a1ff624b53e703cb7a9a06aa26b7ea0523644e59b1f564dea41654a833",
+    "bytes": 8137,
+    "value": {
+      "deploymentId": "v17",
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "artworks": [
+        {
+          "tokenId": "32",
+          "crateTokenId": "111890",
+          "category": "painting",
+          "name": "32",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/50384.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa56e128dde062617d3f9532589bad7cb3800d12a2da498d63ab142f77aacafa7",
+            "blockNumber": 12092641,
+            "blockHash": "0x76c79e8fd42896084224ffc7afae4e3b20cde2c151c6d94bc3c3845eda637b51"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "51",
+          "crateTokenId": "111892",
+          "category": "painting",
+          "name": "51",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/48667.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x875863741f77446180b79fb9ccc7c05b7007a221489896904fc1ff42a1727d24",
+            "blockNumber": 12092652,
+            "blockHash": "0x53d6d5bc4c627ec6bf4213c8082774240818b17ca8ed2c76ce71d9080c64cce8"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "167",
+          "crateTokenId": "111925",
+          "category": "painting",
+          "name": "167",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/50644.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "174",
+          "crateTokenId": "111925",
+          "category": "painting",
+          "name": "174",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/49342.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "222",
+          "crateTokenId": "111928",
+          "category": "painting",
+          "name": "222",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/51592.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "264",
+          "crateTokenId": "111930",
+          "category": "painting",
+          "name": "264",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/48963.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "332",
+          "crateTokenId": "111933",
+          "category": "painting",
+          "name": "332",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/50688.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "350",
+          "crateTokenId": "111934",
+          "category": "painting",
+          "name": "350",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/48175.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "metadataRevision": 6,
+          "collectionBlock": "Apartment Traveler"
+        },
+        {
+          "tokenId": "1",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "1",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/38341.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "2",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "2",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/46048.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "3",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "3",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/30006.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "4",
+          "crateTokenId": "111889",
+          "category": "painting",
+          "name": "4",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/571.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "plane of existence"
+        },
+        {
+          "tokenId": "5",
+          "crateTokenId": "111889",
+          "category": "painting",
+          "name": "5",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/26962.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "gpt pixel"
+        },
+        {
+          "tokenId": "6",
+          "crateTokenId": "111889",
+          "category": "painting",
+          "name": "6",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/12046.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "Collage Paintings"
+        },
+        {
+          "tokenId": "7",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "7",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/31175.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "8",
+          "crateTokenId": "111889",
+          "category": "3d",
+          "name": "8",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/3d/825.png",
+          "animation_url": "https://cdn.lil.org/nft/111k/3d/825.glb",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "3d"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "DrOps3 Knives"
+        }
+      ],
+      "unresolved": [],
+      "retryAfterMs": 0,
+      "catalogRevision": 3
+    }
+  },
+  "samples": [
+    {
+      "tokenId": "32",
+      "eggId": 59313,
+      "paintingId": 50384,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "32",
+        "crateTokenId": "111890",
+        "category": "painting",
+        "name": "32",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/50384.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa56e128dde062617d3f9532589bad7cb3800d12a2da498d63ab142f77aacafa7",
+          "blockNumber": 12092641,
+          "blockHash": "0x76c79e8fd42896084224ffc7afae4e3b20cde2c151c6d94bc3c3845eda637b51"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/32.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "979543f31589a04f2daeb5530bf6f626c24795097018fbda8c6ed6a0d8604883",
+        "bytes": 1636,
+        "value": {
+          "name": "32",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/50384.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Unraveling"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 50,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Frantic"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 57,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 174"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 14,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 18,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 0,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Background Effect",
+              "value": "Desaturated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Faded"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Motion Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Aperture Grille"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "NN Rescale"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Darken"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Serpentine Dither"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Soft Light"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/50384.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "1c3a07f202138a013857bf5215698cc8e30aeb53fe1ccc3ad602e4b3a0af08d2",
+        "bytes": 2155,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Unraveling"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 50,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Frantic"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 57,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 174"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 14,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 18,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 0,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Background Effect",
+              "value": "Desaturated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Faded"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Motion Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Aperture Grille"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "NN Rescale"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Darken"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Serpentine Dither"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Soft Light"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tokenId": "51",
+      "eggId": 59685,
+      "paintingId": 48667,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "51",
+        "crateTokenId": "111892",
+        "category": "painting",
+        "name": "51",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/48667.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0x875863741f77446180b79fb9ccc7c05b7007a221489896904fc1ff42a1727d24",
+          "blockNumber": 12092652,
+          "blockHash": "0x53d6d5bc4c627ec6bf4213c8082774240818b17ca8ed2c76ce71d9080c64cce8"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/51.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "e8e23f01bb4e4b3c5dfbe3b792cb70f2628bc8253d40aafa3d2c351515377c15",
+        "bytes": 1512,
+        "value": {
+          "name": "51",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/48667.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Uneasy"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 22,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 33,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 145"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 11,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 5,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color Burn"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hue"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Inverted"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Crushed JPEG"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/48667.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "c02513388965818e1bb60ed1f3c244e5cde0bd86b9e8ba678229fd93208d3e92",
+        "bytes": 1979,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Uneasy"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 22,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 33,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 145"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 11,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 5,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color Burn"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hue"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Inverted"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Crushed JPEG"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tokenId": "167",
+      "eggId": 57603,
+      "paintingId": 50644,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "167",
+        "crateTokenId": "111925",
+        "category": "painting",
+        "name": "167",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/50644.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/167.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "7f8959de4e16d273b2b9cff252d3abd17690e06ac24cf526d667923dee918e6f",
+        "bytes": 1923,
+        "value": {
+          "name": "167",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/50644.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Unraveling"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 52,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Feral"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 63,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 112"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 13,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 18,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Mirror"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Edge Erosion"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Noise"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Dithered"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Darken"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Aperture Grille"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Depth Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "NN Rescale"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Crushed JPEG"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Halftone"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Kaleidoscope"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Serpentine Dither"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Wave"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/50644.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "533e4bc879b3662ca11e0b65014568f043754635bff4b766d0d6644c6f781507",
+        "bytes": 2623,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Unraveling"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 52,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Feral"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 63,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 112"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 13,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 18,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Mirror"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Edge Erosion"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Noise"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Dithered"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Darken"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Aperture Grille"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Depth Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "NN Rescale"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Crushed JPEG"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Halftone"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Kaleidoscope"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Serpentine Dither"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Wave"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tokenId": "174",
+      "eggId": 58704,
+      "paintingId": 49342,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "174",
+        "crateTokenId": "111925",
+        "category": "painting",
+        "name": "174",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/49342.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/174.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "a98d347d819e310b0a0b722457adbf719e020bf357ea900359b7f178f0254bb4",
+        "bytes": 1286,
+        "value": {
+          "name": "174",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/49342.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Uneasy"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 21,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 37,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 197"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 4,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 5,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Moire"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Darken"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Dithered"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Wave"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/49342.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "638232e100ce72d1b69c707e02da3621e4faf267c7d9d1d0ade485d23e3b033a",
+        "bytes": 1622,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Uneasy"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 21,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 37,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 197"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 4,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 5,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Moire"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Darken"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Dithered"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Wave"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tokenId": "222",
+      "eggId": 55430,
+      "paintingId": 51592,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "222",
+        "crateTokenId": "111928",
+        "category": "painting",
+        "name": "222",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/51592.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/222.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "22f3c630828c1f66115e735b6c8812ac9e98ac3ad68da9f97fdee60c9bb3e31f",
+        "bytes": 2066,
+        "value": {
+          "name": "222",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/51592.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Terminal"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 92,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Apocalyptic"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 92,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 023"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 12,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 30,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Background Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Crushed JPEG"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Rolling Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Wave"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Threshold"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Motion Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Swirl"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Line Doubled"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Palette Crush"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Exclusion"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Noise"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hard Light"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Halftone"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Interlaced"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Desaturated"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/51592.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "aaa1b9d6317e75bdad55560193da202c567e5270654b627f83d0a54810b3ca8f",
+        "bytes": 2844,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Terminal"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 92,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Apocalyptic"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 92,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 023"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 12,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 30,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Background Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Crushed JPEG"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Rolling Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Wave"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Threshold"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Motion Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Swirl"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Line Doubled"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Palette Crush"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Exclusion"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Noise"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hard Light"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Halftone"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Interlaced"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Desaturated"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tokenId": "264",
+      "eggId": 59336,
+      "paintingId": 48963,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "264",
+        "crateTokenId": "111930",
+        "category": "painting",
+        "name": "264",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/48963.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/264.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "bc3159e9fc344730780650b7f0d13236155b4c53f0606de245a9a0356a609ceb",
+        "bytes": 1295,
+        "value": {
+          "name": "264",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/48963.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Lucid"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 4,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 20,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 081"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 7,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Edge Erosion"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Overlay"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Depth Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hue"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/48963.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "3b077910ae747aba42a51e0d990b5bbb71e5fc66ce7df33803679214f08776c6",
+        "bytes": 1631,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Lucid"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 4,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 20,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 081"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 7,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 3,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Edge Erosion"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Overlay"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Depth Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hue"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tokenId": "332",
+      "eggId": 57022,
+      "paintingId": 50688,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "332",
+        "crateTokenId": "111933",
+        "category": "painting",
+        "name": "332",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/50688.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/332.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "78c79dfcb32052278a592865a373e87d20c90eb911aa677f9c1264032ab6e72f",
+        "bytes": 2073,
+        "value": {
+          "name": "332",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/50688.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Unraveling"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 53,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Feral"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 62,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 051"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 15,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 28,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 0,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Background Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "NN Rescale"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Faded"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Mirror"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Rolling Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Swirl"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Motion Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Colour Bleed"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Palette Crush"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Desaturated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Dithered"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixel Grid"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Noise"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Tracking Error"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color Burn"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color Dodge"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/50688.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "27def7fe4b787060693f146cd91b3428945facf600c6e944ec6870c06a01d46b",
+        "bytes": 2851,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Unraveling"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 53,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Feral"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 62,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 051"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 9,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 15,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 28,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 0,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Background Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "NN Rescale"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Difference"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Faded"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "RGB Split"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Mirror"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Screen"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Rolling Scanlines"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Swirl"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Motion Blur"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Colour Bleed"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Posterized"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Palette Crush"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Glitch Slices"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Desaturated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Dithered"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixel Grid"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Noise"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Tracking Error"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color Burn"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Color Dodge"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tokenId": "350",
+      "eggId": 58252,
+      "paintingId": 48175,
+      "previousMetadataRevision": 0,
+      "metadataRevision": 6,
+      "provenanceUnchanged": true,
+      "collectionBlock": "Apartment Traveler",
+      "artwork": {
+        "tokenId": "350",
+        "crateTokenId": "111934",
+        "category": "painting",
+        "name": "350",
+        "description": "",
+        "image": "https://cdn.lil.org/nft/111k/paintings/48175.png",
+        "aspectRatio": {
+          "width": 466,
+          "height": 503
+        },
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ],
+        "observation": {
+          "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+          "blockNumber": 12092989,
+          "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+        },
+        "metadataRevision": 6,
+        "collectionBlock": "Apartment Traveler"
+      },
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/350.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "5f1ec34c6b7cd2ed1dfefbba92bf7854f2ac5e9dc44845c1c4558604aee0e0f7",
+        "bytes": 1517,
+        "value": {
+          "name": "350",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/48175.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Apartment Traveler"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Lucid"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 8,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 30,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 191"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 5,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 10,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Rare Find",
+              "value": "Knives"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Lighten"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Echo"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hard Light"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Palette Crush"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Tracking Error"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Overlay"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      },
+      "traits": {
+        "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/48175.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "55794d0f96bc0ca6c42d1e9d3cb58e281fa3a3ef7b3c150590773feec198b630",
+        "bytes": 1983,
+        "value": {
+          "collection block": "Apartment Traveler",
+          "attributes": [
+            {
+              "trait_type": "Edition",
+              "value": "Pure 2D"
+            },
+            {
+              "trait_type": "Madness",
+              "value": "Lucid"
+            },
+            {
+              "trait_type": "Madness Score",
+              "value": 8,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Restless"
+            },
+            {
+              "trait_type": "Chaos Score",
+              "value": 30,
+              "display_type": "number",
+              "max_value": 100
+            },
+            {
+              "trait_type": "Home",
+              "value": "Apt 191"
+            },
+            {
+              "trait_type": "Worlds Bled",
+              "value": 5,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Layers",
+              "value": 10,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Effects Applied",
+              "value": 8,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Odd Blends",
+              "value": 6,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Untouched Layers",
+              "value": 1,
+              "display_type": "number"
+            },
+            {
+              "trait_type": "Rare Find",
+              "value": "Knives"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Pixelated"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Gaussian Blur"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Lighten"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Echo"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Hue Shift"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Hard Light"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Displaced"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Luminosity"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Palette Crush"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Multiply"
+            },
+            {
+              "trait_type": "Effect",
+              "value": "Tracking Error"
+            },
+            {
+              "trait_type": "Blend",
+              "value": "Overlay"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "unaffected": [
+    {
+      "tokenId": "1",
+      "metadataSha256": "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41",
+      "unchanged": true
+    },
+    {
+      "tokenId": "2",
+      "metadataSha256": "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313",
+      "unchanged": true
+    },
+    {
+      "tokenId": "3",
+      "metadataSha256": "357696ac6976751666ee80a9b1f69c0f8d5e308ad46f836c60bc5fdd34d8748d",
+      "unchanged": true
+    },
+    {
+      "tokenId": "4",
+      "metadataSha256": "b4b49ed0eefbf7507a9fd6aea6ff3ca59a708397af1e0bc2e05d8465a8db5613",
+      "unchanged": true
+    },
+    {
+      "tokenId": "5",
+      "metadataSha256": "81dc7b835de4d96b6ffcef2046030282b7cc47a122405e95312c1f71fa551180",
+      "unchanged": true
+    },
+    {
+      "tokenId": "6",
+      "metadataSha256": "c0ec06121680abc44c610fe40e11a049d439855a8bcf61d625aec1ec0e22e758",
+      "unchanged": true
+    },
+    {
+      "tokenId": "7",
+      "metadataSha256": "555865c1716194412ddbf048c2cdc24eb5b7e2331f8d60fea08a33bb5e32b21a",
+      "unchanged": true
+    },
+    {
+      "tokenId": "8",
+      "metadataSha256": "25ad8cb065906bea9212482c296b7e15a24427d3e220eabafad600841ed9d4cb",
+      "unchanged": true
+    }
+  ]
+}

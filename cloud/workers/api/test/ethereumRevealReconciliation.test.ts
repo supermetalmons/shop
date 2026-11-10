@@ -27,8 +27,8 @@ function fixture(count: number, failId?: string) {
         bind(...values: unknown[]) {
           return {
             async all<T>() {
-              assert.match(sql, /WHERE COALESCE\(effective_catalog_version,catalog_version\)\s+IN \(\?,\?,\?\) AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100/);
-              assert.deepEqual(values, ['111k-v5', '111k-v6', '111k-v7']);
+              assert.match(sql, /WHERE COALESCE\(effective_catalog_version,catalog_version\)\s+IN \(\?,\?,\?,\?\) AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100/);
+              assert.deepEqual(values, ['111k-v5', '111k-v6', '111k-v7', '111k-v8']);
               return { results: rows.filter(row => values.includes(row.effective_catalog_version ?? row.catalog_version) && row.retired_at_ms === null)
                 .sort((a, b) => a.updated_at_ms - b.updated_at_ms).slice(0, 100).map(row => ({ ...row })) as T[] };
             },
@@ -97,13 +97,14 @@ test('watchdog keeps normal recovery and publication running during an online ca
   assert.equal(rows[0].state, 'active');
 });
 
-test('watchdog serves the current v7 catalog and retained v5 and v6 deployments', async () => {
-  const { env, visited, rows } = fixture(3);
+test('watchdog serves the current v8 catalog and retained v5, v6 and v7 deployments', async () => {
+  const { env, visited, rows } = fixture(4);
   rows[1].catalog_version = '111k-v6';
   rows[2].catalog_version = '111k-v7';
+  rows[3].catalog_version = '111k-v8';
   const result = await reconcileEthereumReveals(env, new AbortController().signal);
-  assert.equal(result.completed, 3);
-  assert.deepEqual(visited, ['test-000', 'test-001', 'test-002']);
+  assert.equal(result.completed, 4);
+  assert.deepEqual(visited, ['test-000', 'test-001', 'test-002', 'test-003']);
 });
 
 for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`watchdog excludes retired catalog ${catalogVersion} before its bounded page without changing historical rows`, async () => {

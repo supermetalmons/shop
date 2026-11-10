@@ -11,7 +11,7 @@ For the relic selection and claim page, use the [relic claims guide](111k_relic_
 - Allowed VVV origins: `https://vvv.so` and `https://www.vvv.so`. Browsers set `Origin` automatically; backend callers must supply it.
 - No API key, wallet session, or signature is required.
 
-Examples target the current Sepolia [v17 storefront](../../releases/111k-sepolia-v17/README.md), using catalog `111k-v7`. The collection was deployed at block `12092412`; the release record tracks activation, opening, and acceptance. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
+Examples target the current Sepolia [v17 storefront](../../releases/111k-sepolia-v17/README.md). The collection was deployed at block `12092412`; the release record tracks activation, opening, and acceptance. Online catalog updates preserve this identity and advance the response's `catalogRevision`. Mons supplies the chain ID and contract address for other deployments. Send only the fields shown.
 
 ## Unrevealed artwork
 
@@ -159,7 +159,7 @@ frame, represented by the reduced ratio 466:503. Always use the returned
 future assets may differ. The fragment has the same surrounding artwork fields
 as the complete example above.
 
-The current `111k-v7` catalog contains 60,504 eggs, 47,128 paintings, 58 videos, 3,000 3D
+The `111k-v8` catalog contains 55,303 eggs, 52,329 paintings, 58 videos, 3,000 3D
 models, and 421 animated artworks: 111,111 artworks total. The token-ID range
 and request limits are unchanged. Painting alts and video posters are variants
 of those artworks, not extra tokens. Videos include 16:9, 427:240, and 54:31

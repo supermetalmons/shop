@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-11-10T18:39:58.675Z",
+  "complete": true,
+  "files": [
+    {
+      "filename": "api-remote-content.bin",
+      "bytes": 30442827,
+      "sha256": "b8dd69cc09f4a5ebe46cfd5cd2e7ef81714f2e0b8583f3e96efeffd40b00a4ab",
+      "removed": true
+    },
+    {
+      "filename": "api-remote-main.mjs",
+      "bytes": 11345902,
+      "sha256": "bda8c195fe06a673f9619ff0d3cdd335483a763f3263314f9ab2f9eb9b9dd57a",
+      "removed": true
+    }
+  ]
+}

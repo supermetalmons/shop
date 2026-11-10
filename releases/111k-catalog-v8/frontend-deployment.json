@@ -1,0 +1,39 @@
+{
+  "recordedAt": "2026-11-10T17:40:57.302Z",
+  "startedAt": "2026-11-10T17:38:19.402Z",
+  "command": "npm run deploy",
+  "versionId": "5dd2b3c0-362d-4107-94d4-8cc46c1b1808",
+  "passed": true,
+  "sourceCommit": "ff0ea39a53ddd7e0c3cacc6ba16a54d3646fa740",
+  "catalogVersion": "111k-v8",
+  "catalogSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "testSuiteCounts": [
+    4,
+    29,
+    1,
+    5212
+  ],
+  "logSha256": "cd11632d3abbad4feb6d595ca4c7dd629082f8c91c7a5526e2e665424294e24c",
+  "liveDeployment": {
+    "checkedAt": "2026-11-10T17:41:30.535Z",
+    "deploymentId": "980d56e6-ad69-426b-a134-fbe51eafbec5",
+    "createdAt": "2026-11-10T17:40:44.406366Z",
+    "versionId": "5dd2b3c0-362d-4107-94d4-8cc46c1b1808",
+    "percentage": 100
+  },
+  "frontendVerification": {
+    "complete": true,
+    "filesPerDomain": 68,
+    "origins": [
+      "https://mons.shop",
+      "https://www.mons.shop"
+    ],
+    "buildManifestSha256": "c6edf2708ad0b2e0deedcf665216807aa547c45e97fb32de8e41ed9fb80f167c",
+    "revisionSupport": {
+      "catalogRevision": true,
+      "metadataRevision": true
+    }
+  }
+}

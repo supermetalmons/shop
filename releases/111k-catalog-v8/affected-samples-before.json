@@ -1,0 +1,1198 @@
+{
+  "checkedAt": "2026-11-10T17:35:48.282Z",
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "identity": {
+    "deploymentId": "v17",
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+    "deploymentBlock": 12092412
+  },
+  "originalRegistryRevision": 9,
+  "originalCatalogRevision": 2,
+  "scanned": 360,
+  "samples": [
+    {
+      "tokenId": "32",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/32.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "811798e1d281f480ebcaa997f8698ace5d145f564630bb3959f93a54bb264014",
+        "bytes": 289,
+        "value": {
+          "name": "32",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/59313.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 59313,
+      "paintingId": 50384
+    },
+    {
+      "tokenId": "51",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/51.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "272560f1f12efb18497cbc1f93c1efd49fc4b3661094b6b8937d1c464ed9df12",
+        "bytes": 289,
+        "value": {
+          "name": "51",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/59685.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 59685,
+      "paintingId": 48667
+    },
+    {
+      "tokenId": "167",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/167.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "17425ed62de0f166e32cc8ef43554a7201d8815e914c85609a6cf2a8b897c901",
+        "bytes": 290,
+        "value": {
+          "name": "167",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/57603.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 57603,
+      "paintingId": 50644
+    },
+    {
+      "tokenId": "174",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/174.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "1e38bb908b2124ca26950d1e2432c5fcd4ce568d28322bebea61988d2a2e6c15",
+        "bytes": 290,
+        "value": {
+          "name": "174",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/58704.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 58704,
+      "paintingId": 49342
+    },
+    {
+      "tokenId": "222",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/222.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "c479ce715468c601706b102701b751d3110c1949c0c0d110887324335fe1b71d",
+        "bytes": 290,
+        "value": {
+          "name": "222",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/55430.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 55430,
+      "paintingId": 51592
+    },
+    {
+      "tokenId": "264",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/264.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "eb6ca1f4d058f2fa0ec67568773e1613d421e9979a1390021abc32454df2fff0",
+        "bytes": 290,
+        "value": {
+          "name": "264",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/59336.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 59336,
+      "paintingId": 48963
+    },
+    {
+      "tokenId": "332",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/332.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "7a98a6dc632122cd8d6cd29600fe290f3f76860e33d1216894aff9148b5e0ffb",
+        "bytes": 290,
+        "value": {
+          "name": "332",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/57022.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 57022,
+      "paintingId": 50688
+    },
+    {
+      "tokenId": "350",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/350.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "cfb18045e9b6ba5eb6b61955edc0c1684e92572e3765e9f7d3b5133013f8385f",
+        "bytes": 290,
+        "value": {
+          "name": "350",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/58252.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      },
+      "eggId": 58252,
+      "paintingId": 48175
+    }
+  ],
+  "unaffected": [
+    {
+      "tokenId": "1",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/1.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "69989fc8ff76a607261ad41a9c3794ea37b9249b759380d47244d763151aba41",
+        "bytes": 288,
+        "value": {
+          "name": "1",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/38341.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      }
+    },
+    {
+      "tokenId": "2",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/2.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "23720a3878f317dc8dc481cef87b5e3b4c5bfde5d100e113fb34ef7623924313",
+        "bytes": 288,
+        "value": {
+          "name": "2",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/46048.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      }
+    },
+    {
+      "tokenId": "3",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/3.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "357696ac6976751666ee80a9b1f69c0f8d5e308ad46f836c60bc5fdd34d8748d",
+        "bytes": 288,
+        "value": {
+          "name": "3",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/30006.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      }
+    },
+    {
+      "tokenId": "4",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/4.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "b4b49ed0eefbf7507a9fd6aea6ff3ca59a708397af1e0bc2e05d8465a8db5613",
+        "bytes": 2829,
+        "value": {
+          "name": "4",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/571.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "plane of existence"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Chaos",
+              "value": "Lively"
+            },
+            {
+              "trait_type": "Paint mark chaos",
+              "value": "Quiet"
+            },
+            {
+              "trait_type": "Paint mark count",
+              "value": 3
+            },
+            {
+              "trait_type": "Chain network",
+              "value": "extending chain"
+            },
+            {
+              "trait_type": "Chain connected objects",
+              "value": 2
+            },
+            {
+              "trait_type": "paint GAN 1",
+              "value": "01044_seed3233078013_psi1.5892"
+            },
+            {
+              "trait_type": "paint GAN 2",
+              "value": "01617_seed1971225951_psi1.0939"
+            },
+            {
+              "trait_type": "isolated paint mark 1",
+              "value": "0052 - Unbleached Titanium"
+            },
+            {
+              "trait_type": "isolated paint mark 2",
+              "value": "1362 - Burnt Sienna"
+            },
+            {
+              "trait_type": "isolated paint mark 3",
+              "value": "0393 - Unbleached Titanium"
+            },
+            {
+              "trait_type": "small paint mark 1",
+              "value": "0525"
+            },
+            {
+              "trait_type": "small paint mark 2",
+              "value": "0670"
+            },
+            {
+              "trait_type": "small paint mark 3",
+              "value": "1596"
+            },
+            {
+              "trait_type": "perspective ground grid 1",
+              "value": "Perspective ground grid"
+            },
+            {
+              "trait_type": "wire box 1",
+              "value": "double chamber"
+            },
+            {
+              "trait_type": "object ground shadow 1",
+              "value": "Soft fitted ground shadow"
+            },
+            {
+              "trait_type": "architecture 1",
+              "value": "111k crate"
+            },
+            {
+              "trait_type": "object ground shadow 2",
+              "value": "Fitted item contact shadow"
+            },
+            {
+              "trait_type": "architecture 2",
+              "value": "Backpack"
+            },
+            {
+              "trait_type": "character shadow 1",
+              "value": "subtle ground shadow"
+            },
+            {
+              "trait_type": "Character 1",
+              "value": "M2main"
+            },
+            {
+              "trait_type": "Character 1 - M2main / 1Aura",
+              "value": "lord ghostface"
+            },
+            {
+              "trait_type": "Character 1 - M2main / 2Eyes",
+              "value": "shimmer"
+            },
+            {
+              "trait_type": "Character 1 - M2main / 3Hats",
+              "value": "earmuffs prideful"
+            },
+            {
+              "trait_type": "Character 1 - M2main / 4Left wield",
+              "value": "skull cursed"
+            },
+            {
+              "trait_type": "Character 1 - M2main / 5Right wield",
+              "value": "bow evil"
+            },
+            {
+              "trait_type": "Paint GAN box face 1",
+              "value": "00639_seed2909866295_psi1.5181"
+            },
+            {
+              "trait_type": "Paint GAN box face 1 / panel",
+              "value": "right"
+            },
+            {
+              "trait_type": "wire box 2",
+              "value": "reference proportions"
+            },
+            {
+              "trait_type": "character shadow 2",
+              "value": "subtle ground shadow"
+            },
+            {
+              "trait_type": "Character 2 - Little Swag World",
+              "value": "little swag poncho batch 50 - 01 / 24 - Poncho Swag"
+            },
+            {
+              "trait_type": "pointer 1",
+              "value": "Hand pointer"
+            },
+            {
+              "trait_type": "pixel color block 1",
+              "value": "#ADE45E"
+            },
+            {
+              "trait_type": "pixel color block 2",
+              "value": "#44D827"
+            },
+            {
+              "trait_type": "pixel color block 3",
+              "value": "#C0359C"
+            },
+            {
+              "trait_type": "pixel color block 4",
+              "value": "#AEF877"
+            },
+            {
+              "trait_type": "pixel color block 5",
+              "value": "#B198F0"
+            },
+            {
+              "trait_type": "pixel color block 6",
+              "value": "#6CD75E"
+            },
+            {
+              "trait_type": "pixel color block 7",
+              "value": "#32A4A1"
+            },
+            {
+              "trait_type": "Chain shape",
+              "value": "Slack"
+            },
+            {
+              "trait_type": "character chain 1",
+              "value": "Slack pixel chain"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      }
+    },
+    {
+      "tokenId": "5",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/5.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "81dc7b835de4d96b6ffcef2046030282b7cc47a122405e95312c1f71fa551180",
+        "bytes": 364,
+        "value": {
+          "name": "5",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/26962.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "gpt pixel"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "gen number",
+              "value": "20260928-172728-0390b8-00030-full.png"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      }
+    },
+    {
+      "tokenId": "6",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/6.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "c0ec06121680abc44c610fe40e11a049d439855a8bcf61d625aec1ec0e22e758",
+        "bytes": 1456,
+        "value": {
+          "name": "6",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/12046.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "Collage Paintings"
+            },
+            {
+              "trait_type": "type",
+              "value": "painting"
+            },
+            {
+              "trait_type": "Underpaintings",
+              "value": "4"
+            },
+            {
+              "trait_type": "Mask",
+              "value": "Mixed"
+            },
+            {
+              "trait_type": "Panels",
+              "value": "3 Top Middle Bottom"
+            },
+            {
+              "trait_type": "Collage",
+              "value": "2"
+            },
+            {
+              "trait_type": "Overlay",
+              "value": "None"
+            },
+            {
+              "trait_type": "Sprites",
+              "value": "29 Mixed"
+            },
+            {
+              "trait_type": "Faded",
+              "value": "24"
+            },
+            {
+              "trait_type": "Rauschenberg",
+              "value": "On"
+            },
+            {
+              "trait_type": "Underpainting 1 Color",
+              "value": "Pale Amber"
+            },
+            {
+              "trait_type": "Underpainting 2 Color",
+              "value": "Muted Vermilion"
+            },
+            {
+              "trait_type": "Sprite 1 Color",
+              "value": "Deep Purple"
+            },
+            {
+              "trait_type": "Sprite 2 Color",
+              "value": "Rebecca Purple"
+            },
+            {
+              "trait_type": "Sprite 3 Color",
+              "value": "Dim Yellow"
+            },
+            {
+              "trait_type": "Sprite 4 Color",
+              "value": "Slate Blue"
+            },
+            {
+              "trait_type": "Sprite 5 Color",
+              "value": "Charcoal"
+            },
+            {
+              "trait_type": "Sprite 6 Color",
+              "value": "Dim Magenta"
+            },
+            {
+              "trait_type": "Sprite 7 Color",
+              "value": "Light Slate Gray"
+            },
+            {
+              "trait_type": "Sprite 8 Color",
+              "value": "Dark Orchid"
+            },
+            {
+              "trait_type": "Sprite 9 Color",
+              "value": "Ink"
+            },
+            {
+              "trait_type": "Sprite 10 Color",
+              "value": "Muted Scarlet"
+            },
+            {
+              "trait_type": "Sprite 11 Color",
+              "value": "Dim Violet"
+            },
+            {
+              "trait_type": "Sprite 12 Color",
+              "value": "Turquoise"
+            },
+            {
+              "trait_type": "Sprite 13 Color",
+              "value": "Deep Azure"
+            }
+          ],
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "category": "painting",
+          "revealStatus": "revealed"
+        }
+      }
+    },
+    {
+      "tokenId": "7",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/7.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "555865c1716194412ddbf048c2cdc24eb5b7e2331f8d60fea08a33bb5e32b21a",
+        "bytes": 288,
+        "value": {
+          "name": "7",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/31175.png",
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "category": "egg",
+          "revealStatus": "revealed"
+        }
+      }
+    },
+    {
+      "tokenId": "8",
+      "metadata": {
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/8.json",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "cors": "*",
+        "cacheControl": "no-store",
+        "cfCacheStatus": "DYNAMIC",
+        "sha256": "25ad8cb065906bea9212482c296b7e15a24427d3e220eabafad600841ed9d4cb",
+        "bytes": 325,
+        "value": {
+          "name": "8",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/3d/825.png",
+          "attributes": [
+            {
+              "trait_type": "collection block",
+              "value": "DrOps3 Knives"
+            },
+            {
+              "trait_type": "type",
+              "value": "3d"
+            }
+          ],
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "animation_url": "https://cdn.lil.org/nft/111k/3d/825.glb",
+          "category": "3d",
+          "revealStatus": "revealed"
+        }
+      }
+    }
+  ],
+  "api": {
+    "url": "https://api.mons.shop/ethereum/111k/reveal/tokens",
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "cors": "https://mons.shop",
+    "cacheControl": "no-store",
+    "cfCacheStatus": null,
+    "sha256": "a699ff9160a83739728f6baf6adadd39bb701d44f165aa9dcfb2930ba43c49f3",
+    "bytes": 7689,
+    "value": {
+      "deploymentId": "v17",
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "artworks": [
+        {
+          "tokenId": "32",
+          "crateTokenId": "111890",
+          "category": "egg",
+          "name": "32",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/59313.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa56e128dde062617d3f9532589bad7cb3800d12a2da498d63ab142f77aacafa7",
+            "blockNumber": 12092641,
+            "blockHash": "0x76c79e8fd42896084224ffc7afae4e3b20cde2c151c6d94bc3c3845eda637b51"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "51",
+          "crateTokenId": "111892",
+          "category": "egg",
+          "name": "51",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/59685.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x875863741f77446180b79fb9ccc7c05b7007a221489896904fc1ff42a1727d24",
+            "blockNumber": 12092652,
+            "blockHash": "0x53d6d5bc4c627ec6bf4213c8082774240818b17ca8ed2c76ce71d9080c64cce8"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "167",
+          "crateTokenId": "111925",
+          "category": "egg",
+          "name": "167",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/57603.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "174",
+          "crateTokenId": "111925",
+          "category": "egg",
+          "name": "174",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/58704.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "222",
+          "crateTokenId": "111928",
+          "category": "egg",
+          "name": "222",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/55430.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "264",
+          "crateTokenId": "111930",
+          "category": "egg",
+          "name": "264",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/59336.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "332",
+          "crateTokenId": "111933",
+          "category": "egg",
+          "name": "332",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/57022.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "350",
+          "crateTokenId": "111934",
+          "category": "egg",
+          "name": "350",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/58252.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0xa5733e201bd3efe63694bb2190340d6f9aaeaf2be35a45b470f5ec1b23d0ca80",
+            "blockNumber": 12092989,
+            "blockHash": "0xbdd47f708171c605c2d2e3bdca891e79451d6876e24cffc1be7c3f9440270387"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "1",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "1",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/38341.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "2",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "2",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/46048.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "3",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "3",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/30006.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "4",
+          "crateTokenId": "111889",
+          "category": "painting",
+          "name": "4",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/571.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "plane of existence"
+        },
+        {
+          "tokenId": "5",
+          "crateTokenId": "111889",
+          "category": "painting",
+          "name": "5",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/26962.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "gpt pixel"
+        },
+        {
+          "tokenId": "6",
+          "crateTokenId": "111889",
+          "category": "painting",
+          "name": "6",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/paintings/12046.png",
+          "aspectRatio": {
+            "width": 466,
+            "height": 503
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "painting"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "Collage Paintings"
+        },
+        {
+          "tokenId": "7",
+          "crateTokenId": "111889",
+          "category": "egg",
+          "name": "7",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/eggs/31175.png",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "egg"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": null
+        },
+        {
+          "tokenId": "8",
+          "crateTokenId": "111889",
+          "category": "3d",
+          "name": "8",
+          "description": "",
+          "image": "https://cdn.lil.org/nft/111k/3d/825.png",
+          "animation_url": "https://cdn.lil.org/nft/111k/3d/825.glb",
+          "aspectRatio": {
+            "width": 1,
+            "height": 1
+          },
+          "attributes": [
+            {
+              "trait_type": "type",
+              "value": "3d"
+            }
+          ],
+          "observation": {
+            "transactionHash": "0x5743e59fff67cfa18b5faf46b3b00b069db0083638591fff676f9a993b1d17c4",
+            "blockNumber": 12092638,
+            "blockHash": "0xae7c7933cdafcdb88114708ef51db613bda8597e1b74e6e0621013fcc89d3494"
+          },
+          "collectionBlock": "DrOps3 Knives"
+        }
+      ],
+      "unresolved": [],
+      "retryAfterMs": 0,
+      "catalogRevision": 2
+    }
+  }
+}

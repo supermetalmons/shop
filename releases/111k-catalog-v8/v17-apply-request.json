@@ -1,0 +1,14 @@
+{
+  "checkedAt": "2026-11-10T17:50:57.320Z",
+  "deploymentId": "v17",
+  "expectedRevision": 9,
+  "originalCatalogRevision": 2,
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "deploymentBlock": 12092412,
+  "codeUpdateElapsedMs": 322427,
+  "apiVersionId": "2ee13eee-744d-4288-8158-19d2e05e2b4c"
+}

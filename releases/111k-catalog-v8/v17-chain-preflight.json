@@ -1,0 +1,16 @@
+{
+  "checkedAt": "2026-11-10T17:37:15.231Z",
+  "verified": true,
+  "verification": "current-chain-code-and-base-uri",
+  "provider": "https://ethereum-sepolia-rpc.publicnode.com",
+  "deploymentId": "v17",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "deploymentBlock": 12092412,
+  "blockNumber": 12106157,
+  "blockHash": "0x4874869e71e6f2972a6c2d3dd4d8f9cadfc1e30e00009f598930f36f0543bb3e",
+  "saleActive": true,
+  "historicalCreationRechecked": false,
+  "historicalCreationLimitation": "Public RPC pruned history before block12096083; creation blocks12092411–12092412 unavailable. Existing immutable v17 deployment evidence retained."
+}

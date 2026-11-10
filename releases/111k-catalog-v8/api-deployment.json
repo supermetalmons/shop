@@ -1,0 +1,19 @@
+{
+  "recordedAt": "2026-11-10T17:46:08.979Z",
+  "command": "npm run deploy:api",
+  "versionId": "2ee13eee-744d-4288-8158-19d2e05e2b4c",
+  "passed": true,
+  "testSuiteCounts": [
+    3292,
+    63
+  ],
+  "testFailures": [
+    0,
+    0
+  ],
+  "logSha256": "744cfd09f50bdcec22a5fbe125a146a4a1ca2d8b53fc1bc7f928cf7ba10d3777",
+  "newMigrationsApplied": false,
+  "sourceCommit": "ff0ea39a53ddd7e0c3cacc6ba16a54d3646fa740",
+  "commandFinishedAt": "2026-11-10T17:45:32.851Z",
+  "durableObjectCodeUpdateDelayMs": 300000
+}

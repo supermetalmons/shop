@@ -1,0 +1,209 @@
+{
+  "completedAt": "2026-11-10T18:37:29.614Z",
+  "kind": "111k-online-catalog-update",
+  "status": "complete",
+  "deploymentId": "v17",
+  "chainId": 11155111,
+  "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "deploymentBlock": 12092412,
+  "originalRegistryRevision": 9,
+  "finalRegistryRevision": 12,
+  "originCatalogVersion": "111k-v5",
+  "predecessorCatalogVersion": "111k-v7",
+  "effectiveCatalogVersion": "111k-v8",
+  "catalogRevision": 3,
+  "catalogSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+  "sourceSha256": "af85724992e0f78de55fd8ad3ee32b56182dbec19ae1413feb739731e55c7954",
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "addedPaintings": {
+    "first": 47129,
+    "last": 52329,
+    "count": 5201
+  },
+  "removedEggs": {
+    "first": 55304,
+    "last": 60504,
+    "count": 5201
+  },
+  "counts": {
+    "eggs": 55303,
+    "paintings": 52329,
+    "videos": 58,
+    "3d": 3000,
+    "animated": 421
+  },
+  "artworkSupply": 111111,
+  "updatedRevealedEggs": 164,
+  "mappingApplied": 5201,
+  "conflicts": 0,
+  "retrying": 0,
+  "completedObservationAndCleanup": true,
+  "verificationPages": 21,
+  "finalVerificationCursor": null,
+  "originalFrozenArtworkEvidenceUnchanged": {
+    "frozenThroughMs": 1794332132557,
+    "frozenArtworks": 5080,
+    "frozenMetadataSha256": "bc293bf332fd303204edadf46883bcb74ffaa901a47d64bada451b033fb94004"
+  },
+  "affectedSamplesVerified": 8,
+  "unaffectedSamplesVerified": 8,
+  "apiVersionId": "2ee13eee-744d-4288-8158-19d2e05e2b4c",
+  "frontendVersionId": "5dd2b3c0-362d-4107-94d4-8cc46c1b1808",
+  "availabilityProbes": 1349,
+  "failedAvailabilityProbes": 10,
+  "generalAvailability": {
+    "probes": 1170,
+    "failures": 10,
+    "beforeApplyFailures": 5,
+    "duringOrAfterApplyFailures": 5,
+    "startedAt": "2026-11-10T17:36:04.031Z",
+    "endedAt": "2026-11-10T18:38:27.260Z",
+    "failedProbes": [
+      {
+        "at": "2026-11-10T17:41:13.182Z",
+        "url": "https://api.mons.shop/ethereum/111k/config",
+        "ok": false,
+        "ms": 5,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.184Z",
+        "url": "https://mons.shop/",
+        "ok": false,
+        "ms": 3,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.185Z",
+        "url": "https://www.mons.shop/",
+        "ok": false,
+        "ms": 4,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.186Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/1.json",
+        "ok": false,
+        "ms": 3,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T17:41:13.186Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/2.json",
+        "ok": false,
+        "ms": 3,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.622Z",
+        "url": "https://api.mons.shop/ethereum/111k/config",
+        "ok": false,
+        "ms": 8,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.625Z",
+        "url": "https://mons.shop/",
+        "ok": false,
+        "ms": 6,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.626Z",
+        "url": "https://www.mons.shop/",
+        "ok": false,
+        "ms": 4,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.627Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/1.json",
+        "ok": false,
+        "ms": 4,
+        "error": "fetch failed"
+      },
+      {
+        "at": "2026-11-10T18:12:18.628Z",
+        "url": "https://cdn.mons.shop/111k-sepolia/v17/2.json",
+        "ok": false,
+        "ms": 5,
+        "error": "fetch failed"
+      }
+    ],
+    "logSha256": "d566d6d1fe4b3654aec652304da8dc9ce4d4a4d5b61efea490822e67b0cd21d6"
+  },
+  "revealAvailability": {
+    "probes": 179,
+    "failures": 0,
+    "beforeApplyFailures": 0,
+    "duringOrAfterApplyFailures": 0,
+    "startedAt": "2026-11-10T17:51:29.028Z",
+    "endedAt": "2026-11-10T18:38:22.177Z",
+    "failedProbes": [],
+    "logSha256": "8c0d4d0cd013ce615c5408fc4e95c0597329dafc313ed461f6c9b28c84de0995"
+  },
+  "contractReplaced": false,
+  "saleOrCommercePaused": false,
+  "testMintsCreated": false,
+  "onchainRefreshSent": false,
+  "applyLogSha256": "d69a765676027b197ce547743490333d082e37c4151b9ccefb4e8966ba0647e7",
+  "evidenceFiles": [
+    "activated.json",
+    "affected-samples-after.json",
+    "affected-samples-before.json",
+    "api-catalog-audit.json",
+    "api-deploy.log.gz",
+    "api-deployment.json",
+    "api-deployments-after.json",
+    "api-deployments-before.json",
+    "apply.log.gz",
+    "availability-summary.json",
+    "availability.jsonl.gz",
+    "browser-postflight.json",
+    "browser-verification.json",
+    "bundle-audit.json",
+    "deployment-validation.json",
+    "final-application-versions.json",
+    "final-registry.json",
+    "frontend-deploy-attempt1.log.gz",
+    "frontend-deploy.log.gz",
+    "frontend-deployment-attempt1.json",
+    "frontend-deployment.json",
+    "frontend-deployments-after.json",
+    "frontend-deployments-before.json",
+    "frontend-verification.json",
+    "local-audit-cleanup.json",
+    "local-e2e-results.json",
+    "local-e2e.log.gz",
+    "metadata-refresh-unsigned.json",
+    "post-observation-progress.json",
+    "postflight.json",
+    "preactivation-inspection.json",
+    "progress.jsonl.gz",
+    "publication-progress.json",
+    "publication-verified.json",
+    "registry-before.json",
+    "reveal-availability.jsonl.gz",
+    "staging.json",
+    "target.json",
+    "tools-typecheck.log.gz",
+    "v17-apply-request.json",
+    "v17-before.json",
+    "v17-chain-preflight.json",
+    "v17.journal.json",
+    "v17.media-preflight.json",
+    "verification.json",
+    "verify.log.gz"
+  ],
+  "postApplyBrowserVerified": {
+    "checkedAt": "2026-11-10T18:37:53.058Z",
+    "reloadedAfterApplyCompleted": true,
+    "consoleErrors": 0,
+    "transactionsSubmitted": false
+  },
+  "finalizedAt": "2026-11-10T18:40:34.098Z",
+  "finalApplicationVersionsVerified": true,
+  "localAuditDownloadsCleaned": true
+}

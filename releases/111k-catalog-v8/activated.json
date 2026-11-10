@@ -1,0 +1,22 @@
+{
+  "observedAt": "2026-11-10T18:24:12.449Z",
+  "deploymentId": "v17",
+  "expectedRevision": 9,
+  "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+  "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+  "result": {
+    "deploymentId": "v17",
+    "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+    "phase": "publishing",
+    "complete": false,
+    "catalogRevision": 3,
+    "total": 5201,
+    "staged": 5201,
+    "applied": 5201,
+    "published": 6,
+    "frozen": 164,
+    "retryAfterMs": 1000,
+    "conflicts": 0,
+    "retrying": 0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "checkedAt": "2026-11-10T18:37:53.058Z",
+  "complete": true,
+  "url": "https://mons.shop/111k_devnet",
+  "reloadedAfterApplyCompleted": true,
+  "visible": {
+    "crateImageLoaded": true,
+    "availableCrates": 4336,
+    "totalCrates": 5555,
+    "mintLabel": "Mint 1 crate 0.0001 ETH",
+    "inventorySection": true,
+    "shipmentsSection": true,
+    "receiptsSection": true
+  },
+  "consoleErrors": [],
+  "transactionsSubmitted": false
+}

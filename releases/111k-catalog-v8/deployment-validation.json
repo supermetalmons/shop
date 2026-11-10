@@ -1,0 +1,114 @@
+{
+  "recordedAt": "2026-11-10T17:48:10.897Z",
+  "sourceCommit": "ff0ea39a53ddd7e0c3cacc6ba16a54d3646fa740",
+  "workingDiffSha256": "c106b8295f5430a75c67d17f1628369da86d5991d949fd85c2e25f923bf4d8b4",
+  "gates": {
+    "api": {
+      "recordedAt": "2026-11-10T17:46:08.979Z",
+      "command": "npm run deploy:api",
+      "versionId": "2ee13eee-744d-4288-8158-19d2e05e2b4c",
+      "passed": true,
+      "testSuiteCounts": [
+        3292,
+        63
+      ],
+      "testFailures": [
+        0,
+        0
+      ],
+      "logSha256": "744cfd09f50bdcec22a5fbe125a146a4a1ca2d8b53fc1bc7f928cf7ba10d3777",
+      "newMigrationsApplied": false,
+      "sourceCommit": "ff0ea39a53ddd7e0c3cacc6ba16a54d3646fa740",
+      "commandFinishedAt": "2026-11-10T17:45:32.851Z",
+      "durableObjectCodeUpdateDelayMs": 300000
+    },
+    "frontend": {
+      "recordedAt": "2026-11-10T17:40:57.302Z",
+      "startedAt": "2026-11-10T17:38:19.402Z",
+      "command": "npm run deploy",
+      "versionId": "5dd2b3c0-362d-4107-94d4-8cc46c1b1808",
+      "passed": true,
+      "sourceCommit": "ff0ea39a53ddd7e0c3cacc6ba16a54d3646fa740",
+      "catalogVersion": "111k-v8",
+      "catalogSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+      "batchId": "catalog-7b90d8d14802fe3e6bfa0a9bbef4f0f6",
+      "batchSha256": "7b90d8d14802fe3e6bfa0a9bbef4f0f6b247d4cbf20032dae27e473d6dc6cc64",
+      "testSuiteCounts": [
+        4,
+        29,
+        1,
+        5212
+      ],
+      "logSha256": "cd11632d3abbad4feb6d595ca4c7dd629082f8c91c7a5526e2e665424294e24c",
+      "liveDeployment": {
+        "checkedAt": "2026-11-10T17:41:30.535Z",
+        "deploymentId": "980d56e6-ad69-426b-a134-fbe51eafbec5",
+        "createdAt": "2026-11-10T17:40:44.406366Z",
+        "versionId": "5dd2b3c0-362d-4107-94d4-8cc46c1b1808",
+        "percentage": 100
+      },
+      "frontendVerification": {
+        "complete": true,
+        "filesPerDomain": 68,
+        "origins": [
+          "https://mons.shop",
+          "https://www.mons.shop"
+        ],
+        "buildManifestSha256": "c6edf2708ad0b2e0deedcf665216807aa547c45e97fb32de8e41ed9fb80f167c",
+        "revisionSupport": {
+          "catalogRevision": true,
+          "metadataRevision": true
+        }
+      }
+    },
+    "toolsTypecheck": {
+      "passed": true,
+      "command": "npm run typecheck:tools"
+    },
+    "localE2e": {
+      "passed": true,
+      "command": "npm run test:ethereum:e2e",
+      "evidence": "local-e2e-results.json"
+    },
+    "catalogFocusedTests": {
+      "passed": 183,
+      "failed": 0
+    },
+    "collectionBlockImportTests": {
+      "passed": 9,
+      "failed": 0
+    }
+  },
+  "logs": {
+    "api-deploy.log": {
+      "bytes": 420792,
+      "sha256": "744cfd09f50bdcec22a5fbe125a146a4a1ca2d8b53fc1bc7f928cf7ba10d3777",
+      "evidence": "api-deploy.log.gz"
+    },
+    "frontend-deploy.log": {
+      "bytes": 565559,
+      "sha256": "cd11632d3abbad4feb6d595ca4c7dd629082f8c91c7a5526e2e665424294e24c",
+      "evidence": "frontend-deploy.log.gz"
+    },
+    "frontend-deploy-attempt1.log": {
+      "bytes": 558122,
+      "sha256": "343160e3b24389db1c429d51dddb28e46e1f94148ebcb72e24d006bc2a9ff4d7",
+      "evidence": "frontend-deploy-attempt1.log.gz"
+    },
+    "tools-typecheck.log": {
+      "bytes": 84,
+      "sha256": "70d6d696e83e6b05146bb20c710947dfcc17dcc8ed45df60dce9bae0299950c0",
+      "evidence": "tools-typecheck.log.gz"
+    },
+    "local-e2e.log": {
+      "bytes": 43541,
+      "sha256": "7fe2285a0164fa7a5662f8e4766a70b4397df8935d86f814c885678f69521c1c",
+      "evidence": "local-e2e.log.gz"
+    }
+  },
+  "initialFrontendFailure": {
+    "cause": "Current collection-block fixture still expected 20 ranges and 50607 non-egg artworks; corrected to 21 and 55808.",
+    "resolved": true,
+    "evidence": "frontend-deployment-attempt1.json"
+  }
+}
