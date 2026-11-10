@@ -113,6 +113,7 @@ Release evidence describes the recorded verification time, not live service stat
 | Ethereum metadata and CDN | [111K metadata](scripts/docs/111k_metadata.md) |
 | 111K web images and companion URLs | [111K Web Assets](scripts/docs/111k_web_assets.md) |
 | Ethereum unpack reveals and VVV integration | [111K reveals](scripts/docs/111k_reveal.md) |
+| Hatch 111K eggs from an updated `111k.json` | [Egg hatching workflow](scripts/docs/111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs) |
 | Ethereum reveal registration and operations | [111K reveal operations](scripts/docs/111k_reveal_ops.md) |
 | Metadata fields | [Drop metadata](scripts/docs/drop_metadata.md) |
 | One-off Worker-signed transactions | [Worker transactions](scripts/docs/worker_transactions.md) |

@@ -1,5 +1,19 @@
 Avoid code comments except for TODOs or essential context.
 
+## 111k egg hatching
+
+When the user asks to hatch eggs and supplies an updated `111k.json`, follow
+`scripts/docs/111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs` end to end.
+That request includes the required catalog preparation, promotion, checks,
+application deployments, live apply, and completion verification unless the user
+asks for inspection/preparation only. Default to the current active Sepolia 111k
+storefront; discover its identity and revision rather than copying release values.
+Resume existing matching bundles with their original journal revision. Finish
+publication, scheduler observation, and temporary-generation cleanup before
+reporting completion. This is an in-place catalog expansion, not a testnet
+replacement. Mainnet application and sending marketplace-refresh transactions
+require explicit instructions; keep refresh calldata unsigned by default.
+
 ## 111k testnet replacements
 
 Every replacement of the 111k testnet includes purging the superseded deployment

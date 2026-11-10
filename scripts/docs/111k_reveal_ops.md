@@ -61,116 +61,202 @@ The contract owner can change `baseURI()`, but the registered reveal prefix is i
 
 ## Adding artworks and cutting off eggs
 
-Use `npm run ethereum:catalog-update` for repeated additive batches. This operation
-keeps the deployment, contract, token IDs, metadata prefix, and total supply intact.
-It is not a testnet replacement and does not retire or purge a deployment. Keep
-the replacement retirement procedure for actual replacement contracts.
+**Hatch eggs from an updated `111k.json`.** An explicit hatch request authorizes this
+flow through deployment, application, and verification; honor inspection/preparation-only
+requests. Default to the current active Sepolia 111k storefront. Mainnet or another
+deployment requires explicit scope. Do not reconfirm already-requested steps.
 
-The input is a complete path-to-dimensions JSON. Existing paths and exact dimensions
-must remain unchanged; primary category IDs must append without gaps. Painting
-alternatives may be absent or sparse and never count as additional artworks.
-The operation removes exactly the highest remaining egg IDs, regardless of
-whether they are free, privately reserved, or already revealed. Every removed egg is
-paired with a distinct newly added artwork using one cryptographically shuffled
-bijection, frozen before reading deployment allocation states and reused across
-retries and deployments. Each new artwork has the same assignment probability
-for every cutoff egg; revealed tokens receive no preferential or leftover pool.
+Use `npm run ethereum:catalog-update`. Preserve the contract, token IDs, ownership,
+metadata prefix, and 111111-artwork supply. Hatching does not require replacement,
+retirement, sales pauses, live test mints, or onchain transactions.
 
-Inspect without writes, then prepare an immutable local bundle when approved:
+### 1. Discover the target and check for an existing batch
+
+For the default storefront, read `https://api.mons.shop/ethereum/111k/config` with
+`Origin: https://mons.shop` and a browser-like User-Agent. Resolve other explicit
+targets from the registry and the requested chain/contract, then inspect:
 
 ```sh
-npm run ethereum:catalog-update -- inspect --source /path/to/111k.json
-npm run ethereum:catalog-update -- prepare --source /path/to/111k.json --catalog-version 111k-v8 --bundle /path/to/batch
-npm run ethereum:catalog-update -- verify --bundle /path/to/batch
+hatch_deployment='<selected deploymentId>'
+npm run ethereum-reveal-control -- status --deployment-id "$hatch_deployment"
 ```
 
-`inspect` does not save a candidate or access the network. `prepare` saves the exact
-old and new source bytes, both catalog descriptors/manifests, and the frozen
-mapping plus a cryptographic operation nonce; it does not change the default
-catalog or any remote data. Repeating prepare against the same bundle with
-identical inputs returns its existing nonce and mapping. Different inputs or
-tampered hashes fail. Preserve the bundle until every intended deployment is
-updated; never prepare a replacement bundle to resume an interrupted operation.
+Check the selected registration's chain, contract, metadata URI, deployment block,
+expected state, both revisions, and pending `catalogUpdateId`. Match global config
+only for the storefront target. Other targets use their scoped registry/API/CDN
+identity while the global storefront identity stays unchanged. For a new batch, live
+`effectiveCatalogVersion`/`effectiveCatalogSha256` must match the local predecessor.
+If null, resolve the immutable origin `catalogVersion` through the catalog registry.
+Never reuse historical deployment IDs, revisions, or hashes as current values.
 
-Promote the prepared catalog separately when scheduling activation:
+Compare the source SHA-256 with retained bundles and deployment journals before
+preparing. Resume ordinary interruptions with the exact bundle and original `expectedRevision`;
+see Recovery for failed initial claims. For a batch completed on the selected deployment,
+skip to verification below. First application of an existing bundle to another explicitly
+requested deployment uses that deployment's current revision and must match the bundle's
+frozen predecessor. Finish pending work first; never overwrite or rerandomize a bundle.
+
+### 2. Inspect and freeze a new batch
+
+Input is a complete relative-path-to-`[width, height]` JSON object. Existing paths
+and dimensions stay unchanged; primary IDs append without gaps. Alternatives add
+no slots. No new primary artworks or incompatible input means no hatch: report the
+validation result, without silently switching to a replacement deployment.
+
+Media must already be published under `https://cdn.lil.org/nft/111k/`, including
+required MP4/GLB companions and `{family}/json/v0/{assetId}.json` trait sources.
+The manifest workflow does not upload or render missing media.
+
+For a new batch, run from the repository root:
 
 ```sh
-npm run ethereum:catalog-update -- promote --bundle /path/to/batch --write
+hatch_source='/absolute/path/to/111k.json'
+npm run ethereum:catalog-update -- inspect --source "$hatch_source"
+hatch_catalog='<targetVersion returned by inspect>'
+hatch_bundle="releases/111k-catalog-${hatch_catalog#111k-}"
+npm run ethereum:catalog-update -- prepare --source "$hatch_source" --catalog-version "$hatch_catalog" --bundle "$hatch_bundle"
+npm run ethereum:catalog-update -- verify --bundle "$hatch_bundle"
+```
+
+Inspect derives the next version without writes/network access; review additions,
+egg count, cutoff, and supply. Prepare freezes exact sources, catalogs, nonce, and
+one cryptographically shuffled bijection before reading allocation states. It pairs
+highest remaining egg IDs with new artworks equally across free, reserved, and
+revealed eggs. Identical preparation is idempotent; changed inputs fail.
+
+After freezing, capture both original revisions, contract identity, frozen evidence,
+and fresh affected/unaffected samples using this batch's mapping. For the active Sepolia
+storefront, call `inspectReplacement` through `withEthereumRevealMaintenance` in
+`scripts/shared/ethereumRevealMaintenance.ts` before apply and after completion, with
+no pending update. Postflight reuses preflight `frozenThroughMs` with the **current**
+registry revision; catalog apply/verify retain the **original** operation revision.
+Other explicit targets use registry/API/CDN snapshots; this helper is Sepolia-only.
+
+### 3. Promote, validate, and deploy
+
+Promote a new catalog below. For an older retained bundle, skip promotion and keep
+the newer local default; require both exact catalog hashes in the local registry
+and deployed Worker. Run the asset check in either case.
+
+```sh
+npm run ethereum:catalog-update -- promote --bundle "$hatch_bundle" --write
 npm run check:ethereum-assets
 ```
 
-Promotion changes local canonical inputs for future deployments and retains the
-predecessor in the supported catalog registry. It does not update an existing
-deployment. Deploy OPS migration `0012_ethereum_reveal_catalog_updates.sql`, the
-compatible API Worker, and the frontend revision support before live application.
-Reload sessions opened before that first frontend upgrade; subsequent batches are
-detected through the existing config polling and revision-aware caches.
-The Worker must contain both exact predecessor and target catalog
-hashes; a globally promoted default must not change an existing deployment's pool
-or metadata interpretation before its own activation transaction commits.
+Promotion changes the local default and retains the exact predecessor; it does not
+activate the live pool. Update current-catalog counts, boundary/ratio expectations,
+supported-version assertions, and allocation docs. Preserve historical fixtures.
 
-After deploying catalog support, allow the default five-minute
-[Durable Object code update delay](https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/)
-before applying the batch. Active coordinators can keep their previous code during
-that interval. If the catalog-support guard rejects an early attempt, confirm the
-deployment and original registry revision, then retry the same frozen bundle after
-the delay; do not regenerate the mapping or change catalog hashes.
-
-Select each deployment explicitly with its original registry revision. Apply the
-same frozen bundle independently to testnet and, when requested, mainnet:
+Immediately before deployment, re-read the live storefront config and require the
+chain, contract, metadata URI, and deployment block in `cloud/workers/api/wrangler.jsonc`
+to match it. Resolve drift before deploying; never repoint the storefront at a separate
+hatch target.
 
 ```sh
-npm run ethereum:catalog-update -- apply --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4 --write
-npm run ethereum:catalog-update -- inspect --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4
-npm run ethereum:catalog-update -- verify --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4
+npm run typecheck:tools
+npm run test:ethereum:e2e
+npm run deploy:api
+npm run deploy
 ```
 
-Before the first remote mutation, apply checks every new primary image and required
-MP4/GLB companion using bounded public requests, content types, and anonymous CORS.
-Missing media blocks activation. The runtime stages and validates every added
-artwork's collection block and traits while normal reads, reveals, and publication
-continue. Staging has no effect on allocation and can be cancelled.
+API deployment runs release gates and pending migrations, including OPS `0012`.
+Require both exact catalog hashes in the deployed Worker and frontend revision/cache
+support before activation; reload sessions predating that support. Existing pools
+keep their effective catalog until explicit activation. Do not skip release gates.
 
-Activation atomically installs the complete mapping and advances the coordinator's
-catalog revision. A concurrent reveal resolves the same mapped artwork whether its
-egg was free, reserved, or revealed before activation. Allocation stays at 111111;
-repeated batches can replace every remaining egg. Token IDs, ownership, crate slots,
-and reveal provenance remain intact. The coordinator is authoritative immediately;
-the registry mirror catches up without disabling requests or cancelling recovery.
+Wait for the configured Durable Object code update delay after API deployment
+(default [five minutes](https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/)).
+Coordinators can retain old code meanwhile. On an early catalog-support rejection,
+check the deployment and retry the same bundle after the delay; do not change hashes
+or force a reset. This is separate from the postactivation observation period.
 
-Replacement metadata publishes gradually at unchanged token URLs. Per-token
-revisions and conditional publication prevent stale jobs from restoring old eggs.
-The API resolves current artwork from the coordinator while CDN and marketplace
-copies catch up. The operation does not pause the collection or drain all writers,
-and it does not introduce maintenance 503 responses. It verifies its finite activation set, observes another
-five-minute scheduler interval, and verifies again before reporting completion.
+### 4. Apply and follow through to completion
 
-Apply records progress beside the immutable bundle and resumes with the same
-deployment ID, original expected revision, and batch hash. Do not edit the journal
-or pass a newer revision on retry. Inspect and verify are read-only; verify pages
-through its checks without advancing operation state. An interrupted apply keeps
-the collection available and resumes the same mapping. Publication failures affect
-their token jobs, not unrelated reveals. Conflicting metadata can delay completion;
-inspect the reported conflict before retrying, and never overwrite foreign bytes.
+Recheck live identity and predecessor before the first apply. For a new operation,
+use its captured registry revision; for a resume, use the journal or recorded apply
+request's original revision. Investigate unexpected state changes before continuing.
 
 ```sh
-npm run ethereum:catalog-update -- cancel --bundle /path/to/batch --deployment-id '<deployment-id>' --expected-revision 4 --write
+hatch_revision='<original expected registry revision for this operation>'
+npm run ethereum:catalog-update -- apply --bundle "$hatch_bundle" --deployment-id "$hatch_deployment" --expected-revision "$hatch_revision" --write
 ```
 
-Cancellation is available only before logical activation. A
-cancelled bundle remains terminal and is retained as audit evidence. To retry an
-explicitly cancelled operation, prepare a new bundle directory from that bundle:
+Before remote mutation, apply checks every new image and companion with bounded
+public requests, content types, and CORS. It stages all traits and allocation while
+reads/reveals continue. Activation atomically installs the mapping and advances the
+catalog revision; concurrent reveals resolve the same artwork. The coordinator is
+authoritative immediately while its registry mirror catches up.
+
+Metadata publishes at unchanged URLs with conditional writes and revisions blocking
+stale eggs. API artwork can precede CDN/marketplace updates. Follow publication,
+verification, a five-minute scheduler observation, re-verification, and obsolete
+allocation/mapping-page cleanup. Only `phase: complete` finishes apply.
+
+### 5. Verify and record the result
 
 ```sh
-npm run ethereum:catalog-update -- prepare --from-bundle /path/to/cancelled-batch --bundle /path/to/new-batch
+npm run ethereum:catalog-update -- verify --bundle "$hatch_bundle" --deployment-id "$hatch_deployment" --expected-revision "$hatch_revision"
+npm run ethereum-reveal-control -- status --deployment-id "$hatch_deployment"
 ```
 
-This preserves the exact catalog and mapping while issuing a new nonce, including
-after local promotion and when only one new artwork exists. Use the deployment's
-new current registry revision for the new operation.
-After activation, finish the original batch. A returned metadata-refresh transaction is
-unsigned owner calldata; review and submit it separately to refresh marketplace
-caches. The catalog tool never signs or sends an onchain transaction.
+- Require complete verification through its final page, `published === frozen`,
+  zero conflicts/retries, the selected registry in the intended state, and a cleared
+  update pointer. Latest-batch completion requires its exact target hash and a catalog
+  revision increase of one. For an older completed batch, verify its operation evidence
+  with the original revision and accept a newer live catalog; do not promote or reapply it.
+- Match global config to the registry for the storefront target; for other targets,
+  verify their scoped API/CDN results and confirm the storefront identity stayed unchanged.
+- Check the storefront and sampled public API/CDN results. Changed tokens must match
+  the frozen mapping, media ratios, increased metadata revision, and unchanged crate
+  and transaction provenance. Verify unaffected samples and original frozen evidence.
+- API artwork carries base attributes; enriched CDN JSON contains `collection block`,
+  base attributes, then source traits. Do not require those arrays to be identical.
+  Use the existing attribute/metadata JSON helpers to preserve exact numeric literals.
+- Retain the immutable bundle, journal, original apply request, deployment versions,
+  validation results, before/after evidence, availability checks, and final summary.
+  Report added artworks separately from `frozen` already-revealed eggs that hatched,
+  remaining egg slots, and confirmed observation/cleanup completion.
+
+Save marketplace-refresh calldata unsigned; submission is a separate explicit owner
+action. The [v7 release](../../releases/111k-catalog-v7/README.md) illustrates evidence
+formats, not values or cached scripts to reuse.
+
+### Recovery
+
+Inspect and verify are read-only. After an interruption, inspect before retrying:
+
+```sh
+npm run ethereum:catalog-update -- inspect --bundle "$hatch_bundle" --deployment-id "$hatch_deployment" --expected-revision "$hatch_revision"
+```
+
+Resume ordinary interruptions with the same apply command, bundle, batch hash,
+and original revision.
+Never edit the journal or frozen files. Fix missing media/traits upstream before
+resuming; investigate metadata conflicts without overwriting foreign bytes. Partial
+publication does not stop unrelated reveals. After activation, finish the batch.
+
+If a concurrent revision change invalidated the initial claim, confirm no activation
+or registry ownership (`catalogUpdateId` is null), and preserve any concurrent pause:
+
+- `inspect` reports `unstarted`: no server record exists; skip cancellation.
+- An unactivated server record exists: cancel it with the original revision first.
+
+Cancel only an existing record, for that recovery or an explicit preactivation cancellation:
+
+```sh
+npm run ethereum:catalog-update -- cancel --bundle "$hatch_bundle" --deployment-id "$hatch_deployment" --expected-revision "$hatch_revision" --write
+```
+
+For either failed-claim case, or to retry a cancellation, prepare from the frozen bundle:
+
+```sh
+npm run ethereum:catalog-update -- prepare --from-bundle "$hatch_bundle" --bundle '<new-attempt-directory>'
+```
+
+Keep the original bundle. The new attempt preserves the exact mapping/catalog
+with a new nonce, including after promotion. Use the new bundle
+directory and the deployment's current registry revision. Do not cancel ordinary
+network interruptions or an activated batch.
 
 ## Registration and credentials
 
