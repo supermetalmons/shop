@@ -9,6 +9,7 @@ import { ethereumRouteDefinition } from './ethereumRouteDefinitions.js';
 import { ethereumRelics } from './ethereumRelics.js';
 import { ethereumReveal } from './ethereumReveal.js';
 import { ethereumPublicRequest } from './ethereumPublic.js';
+import type { DeferredWork } from './deferredWork.js';
 
 function unregisteredPathHandler(path: string) {
   if (path.startsWith('/ethereum/111k/checkout/')) return ethereumCheckout;
@@ -18,6 +19,7 @@ function unregisteredPathHandler(path: string) {
 
 export async function handleEthereumRequest(request: Request, env: EthereumEnvironment, path: string, dependencies: {
   nowMs?: () => number; fetch?: typeof fetch;
+  cache?: Pick<Cache, 'match' | 'put'> | null; defer?: DeferredWork;
 } = {}): Promise<Response> {
   try {
     const route = ethereumRouteDefinition(path);
@@ -35,7 +37,7 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
     if (route?.publicRateLimit) await limitEthereumRequest(request, context, path, env.PUBLIC_SHOP_RATE_LIMITER, isAllowedOrigin);
     const handler = route?.handler || unregisteredPathHandler(path);
     const result = handler === ethereumRelics ? await ethereumRelics(request, context)
-      : handler === ethereumReveal ? await ethereumReveal(request, context, path)
+      : handler === ethereumReveal ? await ethereumReveal(request, context, path, dependencies)
       : handler === ethereumPublicRequest ? await ethereumPublicRequest(request, context, path)
       : await handler(request, { ...context, config: ethereumConfig(env) }, path);
     return jsonResponse(result, 200);

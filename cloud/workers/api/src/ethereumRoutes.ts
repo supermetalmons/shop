@@ -10,4 +10,5 @@ export const ethereumRoutes: readonly ExactWorkerRoute[] = Object.entries(ethere
   profileOriginGate: route.originPolicy === 'profile', staff: 'skip', unexpectedError: 'profile',
 }, async (context) => ({ response: await handleEthereumRequest(context.request, context.env, path, {
   fetch: trackProviderFetch(context.dependencies.providerFetch, context.metrics),
+  cache: context.dependencies.cache, defer: context.defer,
 }) })));

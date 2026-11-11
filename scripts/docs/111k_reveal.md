@@ -206,6 +206,14 @@ responses use their top-level `status`; token responses use `artworks` and `unre
 
 ## Errors and retries
 
+Fully revealed `/reveal/tokens` batches can use an internal edge cache for five
+seconds, or two seconds while non-egg attributes are still being enriched. The
+cache is scoped to the deployment and catalog revision, checks the live registry
+before returning a hit, and is bypassed during catalog updates. Pending,
+unminted, and error responses are not cached; transaction responses remain live.
+Clients still receive `Cache-Control: no-store` and should preserve newer
+`metadataRevision` values when requests complete out of order.
+
 Errors contain `error.code` and `error.message`. For normal polling, follow `retryAfterMs`.
 
 | HTTP status | Action |

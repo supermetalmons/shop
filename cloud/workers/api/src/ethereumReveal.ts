@@ -7,6 +7,9 @@ import { limitEthereumRequest } from './ethereumAuth.js';
 import { isAllowedEthereumCheckoutStatusOrigin } from './ethereumCheckoutOrigin.js';
 import { EthereumApiError, ethereumErrorResponse, readEthereumBody } from './ethereumError.js';
 import type { EthereumRequestContext } from './ethereumRuntime.js';
+import type { DeferredWork } from './deferredWork.js';
+import { cacheEthereumReveal, createEthereumRevealCacheRequest, readCachedEthereumReveal,
+  sameEthereumRevealCacheScope } from './ethereumRevealCache.js';
 
 const scope = {
   chainId: z.number().int().refine(value => [1, 11155111, 31337].includes(value)),
@@ -15,7 +18,9 @@ const scope = {
 const transactionSchema = z.object({ ...scope, transactionHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/) }).strict();
 const tokensSchema = z.object({ ...scope, tokenIds: z.array(z.string().max(78)).min(1).max(ETHEREUM_REVEAL_MAX_TOKEN_IDS) }).strict();
 
-export async function ethereumReveal(request: Request, context: EthereumRequestContext, path: string): Promise<unknown> {
+export async function ethereumReveal(request: Request, context: EthereumRequestContext, path: string, dependencies: {
+  cache?: Pick<Cache, 'match' | 'put'> | null; defer?: DeferredWork;
+} = {}): Promise<unknown> {
   const deadlineMs = Date.now() + 2_000;
   const transaction = path === ETHEREUM_REVEAL_PATHS.transaction;
   if (!transaction && path !== ETHEREUM_REVEAL_PATHS.tokens) throw new EthereumApiError('not-found', 'Reveal method not found.');
@@ -35,6 +40,20 @@ export async function ethereumReveal(request: Request, context: EthereumRequestC
   }
   const namespace = context.env.ETHEREUM_REVEAL;
   if (!namespace) throw new EthereumApiError('unavailable', 'Reveal is temporarily unavailable.');
+  const cache = dependencies.cache;
+  const cacheKey = !transaction && cache && dependencies.defer
+    ? await createEthereumRevealCacheRequest(request, deployment, ids) : null;
+  if (cache && cacheKey) {
+    const cached = await readCachedEthereumReveal(cache, cacheKey, deployment, ids, context.signal);
+    if (cached) {
+      const current = await readEthereumRevealDeployment(context.env.OPS_DB, deployment);
+      if (!current || current.deploymentId !== deployment.deploymentId || current.retiredAtMs != null) {
+        throw new EthereumApiError('unavailable', 'Reveal is temporarily unavailable.');
+      }
+      context.signal.throwIfAborted();
+      if (Date.now() < cached.expiresAtMs && sameEthereumRevealCacheScope(deployment, current)) return cached.value;
+    }
+  }
   const object = namespace.getByName(`${deployment.chainId}:${deployment.contractAddress}`);
   const admission = async () => limitEthereumRequest(request, context, 'reveal-admission',
     context.env.ETHEREUM_REVEAL_ADMISSION_RATE_LIMITER || context.env.PUBLIC_SHOP_RATE_LIMITER, isAllowedEthereumCheckoutStatusOrigin);
@@ -43,7 +62,7 @@ export async function ethereumReveal(request: Request, context: EthereumRequestC
       throw new EthereumApiError('unavailable', 'Reveal is temporarily unavailable.');
     }
   };
-  const resolve = async <T>(operation: (admit: boolean) => Promise<EthereumRevealResult<T>>): Promise<T> => {
+  const resolve = async <T>(operation: (admit: boolean) => Promise<EthereumRevealResult<T>>) => {
     let result = await call(() => operation(false));
     if (result.kind === 'admission') {
       if (deployment.state !== 'active') throw new EthereumApiError('failed-precondition', 'Reveal is not active for this collection.');
@@ -56,13 +75,17 @@ export async function ethereumReveal(request: Request, context: EthereumRequestC
     if (!current || current.deploymentId !== deployment.deploymentId || current.retiredAtMs != null) {
       throw new EthereumApiError('unavailable', 'Reveal is temporarily unavailable.');
     }
-    return result.value;
+    return { value: result.value, deployment: current };
   };
   if ('transactionHash' in body) {
     const hash = body.transactionHash.toLowerCase();
-    return resolve(admit => object.revealTransaction(deployment, hash, admit, deadlineMs));
+    return (await resolve(admit => object.revealTransaction(deployment, hash, admit, deadlineMs))).value;
   }
-  return resolve(admit => object.revealTokens(deployment, ids, admit, deadlineMs));
+  const result = await resolve(admit => object.revealTokens(deployment, ids, admit, deadlineMs));
+  if (cache && cacheKey && dependencies.defer && sameEthereumRevealCacheScope(deployment, result.deployment)) {
+    cacheEthereumReveal(cache, cacheKey, deployment, ids, result.value, dependencies.defer);
+  }
+  return result.value;
 }
 
 export function applyEthereumRevealCors(request: Request, response: Response): Response {
