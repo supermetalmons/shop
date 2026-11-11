@@ -22,7 +22,6 @@ type Request = Parameters<EIP1193Provider['request']>[0];
 const clients: InstanceType<typeof QueryClient>[] = [];
 let prepareCalls = 0;
 const NETWORKS = [
-  { network: 'mainnet', chain: '0x1', wrongChain: '0xaa36a7', chainName: 'Ethereum', rpcUrl: 'https://ethereum-rpc.publicnode.com', explorerUrl: 'https://etherscan.io' },
   { network: 'devnet', chain: '0xaa36a7', wrongChain: '0x1', chainName: 'Sepolia', rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com', explorerUrl: 'https://sepolia.etherscan.io' },
 ] as const;
 
@@ -49,7 +48,7 @@ beforeEach(context => {
 });
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
 
-function walletFixture(chain = '0x1') {
+function walletFixture(chain = '0xaa36a7') {
   const requests: Request[] = [];
   const handlers = new Map<string, (request: Request) => unknown | Promise<unknown>>();
   const listeners = new Map<string, Set<EthereumProviderListener>>();
@@ -76,7 +75,7 @@ function walletFixture(chain = '0x1') {
       { detail: { provider, info: { uuid: name, name, rdns: `com.example.${name}`, icon: '' } } }))); } };
 }
 function deferred() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>(done => { resolve = done; }); return { promise, resolve }; }
-function page(network: Pre111kNetwork = 'mainnet') {
+function page(network: Pre111kNetwork = 'devnet') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }); clients.push(client);
   const view = render(createElement(QueryClientProvider, { client }, createElement(DirectPaymentPage, { network })), { reactStrictMode: true });
   const button = () => view.getByRole('button', { name: `Reserve · ${network === 'mainnet' ? '2.23' : '0.00333'} ETH` }) as HTMLButtonElement;
@@ -92,6 +91,48 @@ function page(network: Pre111kNetwork = 'mainnet') {
         assert.equal(button().disabled, false);
       }, { timeout: 3_000 });
     } };
+}
+
+for (const savedCode of [null, 'OUTDATED']) {
+  test(`mainnet is a public VVV page with ${savedCode ? 'a stale saved code' : 'no saved code'} and never connects or queries reservations`, async t => {
+    if (savedCode) window.localStorage.setItem('mons.shop.pre111k.access-code', savedCode);
+    else window.localStorage.removeItem('mons.shop.pre111k.access-code');
+    window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
+    const wallet = walletFixture('0x1');
+    wallet.install();
+    const access = t.mock.method(pre111kApi, 'verifyAccess');
+    const status = t.mock.method(pre111kApi, 'status');
+    const prepare = t.mock.method(pre111kApi, 'prepare');
+    const confirm = t.mock.method(pre111kApi, 'confirm');
+    const view = render(createElement(DirectPaymentPage, { network: 'mainnet' }), { reactStrictMode: true });
+    await act(async () => {});
+
+    view.getByRole('main');
+    view.getByText('111K Relics');
+    view.getByText('Live');
+    view.getByRole('img', { name: '111K relics on display in a warehouse' });
+    view.getByRole('link', { name: 'Go to mons.shop home' });
+    const claim = view.getByRole('link', { name: 'Claim on VVV' });
+    assert.equal(claim.getAttribute('href'), 'https://www.vvv.so/111k');
+    assert.equal(claim.getAttribute('target'), '_blank');
+    assert.equal(claim.getAttribute('rel'), 'noopener noreferrer');
+    assert.equal(claim.closest('[inert], [aria-hidden="true"]'), null);
+    assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
+    assert.equal(view.queryByRole('button', { name: /Reserve|Connect Wallet|111K Relics info/ }), null);
+    assert.equal(view.container.querySelector('.relic-preorder__reserved'), null);
+    assert.equal(view.container.querySelector('.relic-preorder__feedback'), null);
+    assert.equal(view.container.querySelector('.relic-access'), null);
+    assert.equal(wallet.requests.length, 0);
+    assert.equal(wallet.listenerCount(), 0);
+    assert.equal(access.mock.callCount(), 0);
+    assert.equal(status.mock.callCount(), 0);
+    assert.equal(prepare.mock.callCount(), 0);
+    assert.equal(confirm.mock.callCount(), 0);
+    assert.equal(window.localStorage.getItem('mons.shop.pre111k.access-code'), savedCode);
+    assert.equal(document.body.classList.contains('relic-page-body'), true);
+    view.unmount();
+    assert.equal(document.body.classList.contains('relic-page-body'), false);
+  });
 }
 
 for (const restored of [true, false]) {
@@ -133,7 +174,7 @@ for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NET
     assert.ok(methods.indexOf('wallet_switchEthereumChain') < methods.indexOf('eth_sendTransaction'));
     const transaction = (wallet.calls('eth_sendTransaction')[0].params as Array<{ to: string; chainId: string; value: string; data: string }>)[0];
     assert.equal(transaction.chainId, chain); assert.equal(transaction.to, CONTRACT);
-    assert.equal(BigInt(transaction.value), network === 'mainnet' ? 2230000000000000000n : 3330000000000000n);
+    assert.equal(BigInt(transaction.value), 3330000000000000n);
     assert.notEqual(transaction.data, '0x');
   });
   test(`unknown ${network} uses the fixed add-network fallback`, async () => {
@@ -158,10 +199,10 @@ for (const interruption of ['account change', 'chain change', 'disconnect', 'unm
     await waitFor(() => assert.equal(wallet.calls('eth_chainId').length, 1));
     await act(async () => {
       if (interruption === 'account change') wallet.emit('accountsChanged', [OTHER]);
-      else if (interruption === 'chain change') wallet.emit('chainChanged', '0xaa36a7');
+      else if (interruption === 'chain change') wallet.emit('chainChanged', '0x1');
       else if (interruption === 'disconnect') wallet.emit('disconnect');
       else view.unmount();
-      pending.resolve('0x1');
+      pending.resolve('0xaa36a7');
     });
     assert.equal(wallet.calls('eth_sendTransaction').length, 0);
     view.unmount(); assert.equal(wallet.listenerCount(), 0);

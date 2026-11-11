@@ -123,6 +123,8 @@ const UPCOMING_ROUTES = [
     previewImageUrl: 'https://cdn.lil.org/nft/111k/placeholder.png',
     previewAspectRatio: 932 / 1006,
     boxNamePrefix: 'drop',
+    statusText: 'Live',
+    externalAction: { buttonText: 'Mint on VVV', href: 'https://www.vvv.so/111k' },
   },
 ] as const;
 

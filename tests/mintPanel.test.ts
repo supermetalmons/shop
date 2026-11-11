@@ -101,7 +101,7 @@ for (const { path, family, title, image } of [
   { path: '/doge_day_2026', family: 'doge_day_2026', title: 'Doge Day 2026', image: '/drops/doge_day_2026/cover.jpg' },
   { path: '/111k', family: '111k', title: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png' },
 ]) {
-  test(`${title} displays its cover and subscribes to its family without purchase controls`, async t => {
+  test(`${title} displays its cover and ${path === '/111k' ? 'links to VVV' : 'subscribes to its family'} without purchase controls`, async t => {
     const route = resolveAppRoute({ pathname: `${path}/` });
     const requests: unknown[] = [];
     const announcements: string[] = [];
@@ -150,7 +150,7 @@ for (const { path, family, title, image } of [
 
     const view = render(createElement(Announcement));
     assert.ok(view.getByText(title));
-    assert.ok(view.getByText('Soon'));
+    assert.ok(view.getByText(path === '/111k' ? 'Live' : 'Soon'));
     const cover = view.container.querySelector<HTMLImageElement>('.mint-panel__preview img');
     assert.equal(cover?.getAttribute('src'), image);
     if (path === '/doge_day_2026') assert.ok(cover?.closest('.mint-panel__preview--doge-day-2026'));
@@ -158,6 +158,18 @@ for (const { path, family, title, image } of [
     assert.equal(view.queryByRole('button', { name: /Mint|Checkout|Pay/i }), null);
     assert.equal(view.container.querySelector('form'), null);
     assert.equal(view.queryByRole('dialog'), null);
+
+    if (path === '/111k') {
+      const link = view.getByRole('link', { name: 'Mint on VVV' });
+      assert.equal(link.getAttribute('href'), 'https://www.vvv.so/111k');
+      assert.equal(link.getAttribute('target'), '_blank');
+      assert.ok(link.getAttribute('rel')?.includes('noreferrer'));
+      fireEvent.click(link);
+      assert.equal(view.queryByRole('button', { name: 'Notify Me' }), null);
+      assert.equal(view.queryByRole('dialog'), null);
+      assert.deepEqual(requests, []);
+      return;
+    }
 
     fireEvent.click(view.getByRole('button', { name: 'Notify Me' }));
     assert.ok(view.getByRole('dialog', { name: 'Notify me' }));

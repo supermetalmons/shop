@@ -25,6 +25,7 @@ export default {
     name: `pre111k-access-${name}`, main, compatibility_date: production.compatibility_date,
     compatibility_flags: production.compatibility_flags, ratelimits: production.ratelimits,
     vars: { ...production.vars, ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: '',
+      ETHEREUM_PRE111K_MAINNET_ENABLED: 'true', ETHEREUM_PRE111K_MAINNET_PRICE_WEI: 'invalid',
       ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI: '1700000000000001',
       ETHEREUM_PRE111K_ACCESS_CODES: name === 'configured' ? '["RUNTIMEONE","RUNTIMETWO"]' : '' },
   } })) });
@@ -48,9 +49,21 @@ export default {
       assert.deepEqual(await access.json(), { ok: true });
     }
     for (const code of [undefined, 'INCORRECT']) {
-      const denied = await call(PRE111K_API_PATHS.prepare, { network: 'mainnet', wallet: `0x${'22'.repeat(20)}`, code });
+      const denied = await call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: `0x${'22'.repeat(20)}`, code });
       assert.equal(denied.status, 401);
       assert.deepEqual(await denied.json(), { ok: false, error: { code: 'unauthenticated', message: 'Enter a valid secret code.' } });
+    }
+    for (const name of ['configured', 'missing']) {
+      for (const code of [undefined, 'INCORRECT', 'RUNTIMEONE']) {
+        const closed = await server.getWorker(`pre111k-access-${name}`).fetch(`https://api.mons.shop${PRE111K_API_PATHS.prepare}`, {
+          method: 'POST', headers, body: JSON.stringify({ network: 'mainnet', wallet: `0x${'22'.repeat(20)}`, code }),
+        });
+        assert.equal(closed.status, 409);
+        assert.equal(closed.headers.get('Cache-Control'), 'no-store');
+        assert.deepEqual(await closed.json(), { ok: false, error: {
+          code: 'failed-precondition', message: 'Relic reservations are closed. Claim on VVV.',
+        } });
+      }
     }
     const noConfig = await server.getWorker('pre111k-access-missing').fetch(`https://api.mons.shop${PRE111K_API_PATHS.access}`, {
       method: 'POST', headers, body: JSON.stringify({ code: 'RUNTIMEONE' }),

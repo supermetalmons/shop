@@ -32,12 +32,12 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   const { dom } = setupFrontendDom();
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
-  t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
-  t.mock.method(pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({
+  const access = t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
+  const confirmation = t.mock.method(pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({
     status: 'pending', confirmations: 0, transactionHash, reservationNonce: null,
   }));
   document.body.innerHTML = '<div id="root"></div>';
-  window.history.replaceState(null, '', '/111k/relics');
+  window.history.replaceState(null, '', '/111k/relics_devnet');
   const { act, fireEvent, getByRole, getByText, getByTitle, queryByRole, waitFor } = await import('@testing-library/react');
   const { default: ReactDOM } = await import('react-dom/client');
   const { QueryClient } = await import('@tanstack/react-query');
@@ -54,7 +54,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   t.mock.method(ReactDOM, 'createRoot', (...args: Parameters<typeof createRoot>) => { root = createRoot(...args); return root; });
 
   let address = OWNER;
-  let chain = '0x1';
+  let chain = '0xaa36a7';
   const requests: Parameters<EIP1193Provider['request']>[0][] = [];
   const listeners = new Map<string, Set<EthereumProviderListener>>();
   let pendingSend: ReturnType<typeof deferred<string>> | null = null;
@@ -74,7 +74,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
   let prepareGate: ReturnType<typeof deferred<Pre111kPrepareResponse>> | null = null;
   let prepareCalls = 0;
-  t.mock.method(pre111kApi, 'status', async (network, wallet) => ({ config: config(network), wallet,
+  const status = t.mock.method(pre111kApi, 'status', async (network, wallet) => ({ config: config(network), wallet,
     totalReserved: 0, reservedRelics: wallet ? 0 : null, remainingRelics: 17, observedBlock: 1, blockHash: `0x${'aa'.repeat(32)}` }));
   t.mock.method(pre111kApi, 'prepare', async (network, wallet) => { prepareCalls++; return prepareGate ? prepareGate.promise : prepared(network, wallet); });
   let resolveDestination!: () => void;
@@ -98,7 +98,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
     },
   });
   t.after(async () => {
-    await act(async () => { root?.unmount(); resolveDestination(); pendingSend?.resolve(HASH); prepareGate?.resolve(prepared('mainnet', OWNER)); });
+    await act(async () => { root?.unmount(); resolveDestination(); pendingSend?.resolve(HASH); prepareGate?.resolve(prepared('devnet', OWNER)); });
     clients.forEach(client => client.clear());
     imports.deregister(); Reflect.deleteProperty(globalThis, '__directPaymentRoutingTest'); dom.window.close();
   });
@@ -110,16 +110,35 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
       assert.equal(reserveButton(network).disabled, false);
     }, { timeout: 3_000 });
   };
+  const activity = () => ({
+    wallet: requests.length,
+    access: access.mock.callCount(),
+    status: status.mock.callCount(),
+    preparation: prepareCalls,
+    confirmation: confirmation.mock.callCount(),
+  });
+  const visitMainnet = async () => {
+    const before = activity();
+    await act(async () => navigate('/111k/relics'));
+    const claim = getByRole(document.body, 'link', { name: 'Claim on VVV' });
+    assert.equal(claim.getAttribute('href'), 'https://www.vvv.so/111k');
+    getByText(document.body, 'Live');
+    assert.equal(queryByRole(document.body, 'textbox', { name: 'Secret code' }), null);
+    assert.equal(queryByRole(document.body, 'button', { name: /Reserve|Connect Wallet|Confirm in your wallet/ }), null);
+    assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
+    assert.equal([...listeners.values()].reduce((count, entries) => count + entries.size, 0), 0);
+    assert.deepEqual(activity(), before);
+  };
   await act(async () => { await import('../src/main.tsx'); });
-  await ready('mainnet');
+  await ready('devnet');
 
   await t.test('leaving for a loading route cancels an outstanding authorization', async () => {
     prepareGate = deferred<Pre111kPrepareResponse>();
-    fireEvent.click(reserveButton('mainnet'));
+    fireEvent.click(reserveButton('devnet'));
     await waitFor(() => assert.equal(prepareCalls, 1));
     await act(async () => navigate('/fulfillment'));
     await waitFor(() => assert.equal(bridge.loads, 1));
-    await act(async () => prepareGate!.resolve(prepared('mainnet', OWNER)));
+    await act(async () => prepareGate!.resolve(prepared('devnet', OWNER)));
     assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 0);
     assert.equal(document.body.classList.contains('drif-body'), false);
     prepareGate = null;
@@ -142,26 +161,27 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   });
 
   await t.test('a prepared response for the previous account never opens a transaction request', async () => {
-    await act(async () => navigate('/111k/relics'));
-    await ready('mainnet');
+    await act(async () => navigate('/111k/relics_devnet'));
+    await ready('devnet');
     prepareGate = deferred<Pre111kPrepareResponse>();
-    fireEvent.click(reserveButton('mainnet'));
+    fireEvent.click(reserveButton('devnet'));
     await waitFor(() => assert.equal(prepareCalls, 2));
     await act(async () => { address = OTHER; for (const listener of listeners.get('accountsChanged') ?? []) listener([OTHER]); });
-    await act(async () => prepareGate!.resolve(prepared('mainnet', OWNER)));
+    await act(async () => prepareGate!.resolve(prepared('devnet', OWNER)));
     prepareGate = null;
-    await ready('mainnet');
+    await ready('devnet');
     assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 0);
     getByText(document.body, '0x2222…2222');
     await act(async () => { address = OWNER; for (const listener of listeners.get('accountsChanged') ?? []) listener([OWNER]); });
-    await ready('mainnet');
+    await ready('devnet');
   });
 
   await t.test('network navigation releases the old attempt and late wallet responses cannot finish the next attempt', async () => {
     const abandonedSend = deferred<string>();
     pendingSend = abandonedSend;
-    fireEvent.click(reserveButton('mainnet'));
+    fireEvent.click(reserveButton('devnet'));
     await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 1));
+    await visitMainnet();
     await act(async () => navigate('/111k/relics_devnet'));
     await ready('devnet');
     pendingSend = deferred<string>();
@@ -189,22 +209,22 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
     assert.equal(window.localStorage.getItem(`mons.shop.pre111k.pending:11155111:${contracts.devnet}:${OWNER}`), null);
   });
 
-  await t.test('transaction links only appear for the current visit when navigating between networks', async () => {
-    await act(async () => navigate('/111k/relics'));
-    await ready('mainnet');
-    assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
-    assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 2);
-    fireEvent.click(reserveButton('mainnet'));
-    await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3));
-    await ready('mainnet');
-    assert.equal(window.localStorage.getItem(transactionKey('mainnet')), null);
-    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://etherscan.io/tx/${HASH}`);
+  await t.test('transaction links only appear for the current devnet visit and never on public mainnet', async () => {
+    await visitMainnet();
     await act(async () => navigate('/111k/relics_devnet'));
     await ready('devnet');
     assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
-    await act(async () => navigate('/111k/relics'));
-    await ready('mainnet');
+    assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 2);
+    fireEvent.click(reserveButton('devnet'));
+    await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3));
+    await ready('devnet');
+    assert.equal(window.localStorage.getItem(transactionKey('devnet')), null);
+    assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${HASH}`);
+    await visitMainnet();
+    await act(async () => navigate('/111k/relics_devnet'));
+    await ready('devnet');
     assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
+    await visitMainnet();
     assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3);
   });
 });

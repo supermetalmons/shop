@@ -212,7 +212,7 @@ for (const unavailable of ['API failure', 'disabled reservations'] as const) {
   });
 }
 
-for (const network of ['mainnet', 'devnet'] as const) {
+for (const network of ['devnet'] as const) {
   for (const [remaining, availability] of [[17, '17 / 18 left'], [1, '01 / 18 left']] as const) {
     test(`${network} displays and allows purchase with ${remaining} remaining while preserving purchase counts and nonce`, async () => {
       reserved = 17 - remaining;
@@ -475,7 +475,6 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
     const view = page(); await view.ready(); view.reserve();
     await waitFor(() => assert.equal(sendCount, 1));
     let current = view;
-    let currentNetwork: Pre111kNetwork = 'devnet';
     if (interruption === 'disconnect') {
       await disconnectProvider();
       await waitFor(() => assert.equal(view.primary().disabled, false));
@@ -486,8 +485,9 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
         for (const listener of listeners.get('accountsChanged') ?? []) listener([OTHER]);
       });
     } else if (interruption === 'network change') {
-      currentNetwork = 'mainnet';
-      view.rerenderNetwork(currentNetwork);
+      view.rerenderNetwork('mainnet');
+      view.getByRole('link', { name: 'Claim on VVV' });
+      view.rerenderNetwork('devnet');
     } else {
       view.unmount();
       current = page();
@@ -500,8 +500,8 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
     await act(async () => oldSend.resolve(HASH));
     assert.equal(current.queryByRole('alert'), null);
     assert.equal(current.primary().disabled, false);
-    assert.equal(window.localStorage.getItem(lastTransactionKey(currentNetwork, address)), null);
-    assert.equal(current.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `${currentNetwork === 'mainnet' ? 'https://etherscan.io' : 'https://sepolia.etherscan.io'}/tx/${NEXT_HASH}`);
+    assert.equal(window.localStorage.getItem(lastTransactionKey('devnet', address)), null);
+    assert.equal(current.getByRole('link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`);
     if (interruption === 'account change' || interruption === 'network change') {
       assert.equal(window.localStorage.getItem(lastTransactionKey()), null);
     }
@@ -584,19 +584,19 @@ test('switching accounts clears old counts and preserves the latest network pric
   view.getByRole('button', { name: 'Reserve · 0 ETH' });
 });
 
-test('undeployed mainnet remains closed and never displays a fake count', async () => {
+test('undeployed devnet remains closed and never displays a fake count', async () => {
   statusImpl = async (network, wallet) => ({ config: testPre111kConfig(network), wallet, totalReserved: null, reservedRelics: null,
     remainingRelics: null, observedBlock: null, blockHash: null });
-  const view = page('mainnet');
+  const view = page('devnet');
   await waitFor(() => view.getByText('0x1111…1111'));
   await waitFor(() => view.getByText('Reservations are not open yet.'));
   assert.equal(view.queryByText('Reservations unavailable'), null);
   assert.equal(view.reservedLabel(), null);
   assert.equal(view.queryByText('Loading reservations…'), null);
-  assert.equal((view.getByRole('button', { name: 'Reserve · 2.23 ETH' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Reserve · 0.00333 ETH' }) as HTMLButtonElement).disabled, true);
 });
 
-for (const network of ['mainnet', 'devnet'] as const) {
+for (const network of ['devnet'] as const) {
   test(`${network} hides the header and keeps reservation content inactive until code verification`, async () => {
     window.localStorage.removeItem(ACCESS_KEY);
     const view = page(network);
@@ -766,7 +766,7 @@ test('a background service failure preserves saved approval while reservation pr
   assert.deepEqual(preparedCodes, [ACCESS_CODE]);
 });
 
-test('a verified code is reused when moving between the devnet and mainnet pages', async () => {
+test('visiting the public mainnet page preserves devnet approval without revalidating it', async () => {
   window.localStorage.removeItem(ACCESS_KEY);
   const devnet = page();
   const input = devnet.getByRole('textbox', { name: 'Secret code' });
@@ -776,7 +776,12 @@ test('a verified code is reused when moving between the devnet and mainnet pages
   devnet.unmount();
   const mainnet = page('mainnet');
   assert.equal(mainnet.queryByRole('textbox', { name: 'Secret code' }), null);
-  await mainnet.ready();
+  mainnet.getByRole('link', { name: 'Claim on VVV' });
+  assert.deepEqual(verifiedCodes, [ACCESS_CODE]);
+  assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
+  mainnet.unmount();
+  const restored = page('devnet');
+  await restored.ready();
   assert.deepEqual(verifiedCodes, [ACCESS_CODE, ACCESS_CODE]);
   assert.equal(sendCount, 0);
 });
@@ -829,7 +834,7 @@ test('verification remains usable and survives a remount when localStorage is un
   fireEvent.submit(input.closest('form')!);
   await waitFor(() => assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true));
   view.unmount();
-  const remounted = page('mainnet', false);
+  const remounted = page('devnet', false);
   assert.equal(remounted.queryByRole('textbox', { name: 'Secret code' }), null);
   await waitFor(() => assert.deepEqual(verifiedCodes, [ACCESS_CODE, ACCESS_CODE]));
   assert.equal(sendCount, 0);

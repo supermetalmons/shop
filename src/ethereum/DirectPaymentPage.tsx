@@ -31,7 +31,48 @@ function RelicCount({ value, digits, loadingLabel }: { value: string | number | 
   </span>;
 }
 
+function RelicArtwork() {
+  return <picture className="relic-page__picture">
+    <source media="(max-aspect-ratio: 10/13)" srcSet="/images/111k-relics-portrait.webp" width={1309} height={1630} />
+    <img className="relic-page__artwork" src="/images/111k-relics.webp" width={1448} height={1086} alt="111K relics on display in a warehouse" draggable={false} />
+  </picture>;
+}
+
+function RelicClaimPage() {
+  return <div className="relic-page relic-page--unlocked">
+    <ShopHeader scrollHomeToTop showXLink />
+    <main className="relic-page__content">
+      <section className="relic-preorder" aria-label="Claim a relic">
+        <MintPanelFrame quantity={1} quantityLabel="Relic"
+          previewContent={<div className="mint-panel__preview relic-preorder__preview"><RelicArtwork /></div>}>
+          <MintPanelPurchaseFooter hasControls={false}
+            info={<>
+              <MintPanelTitle title="111K Relics" />
+              <div className="mint-panel__remaining mint-panel__availability"><span>Live</span></div>
+            </>}
+            controls={null}
+            actions={<div className="mint-panel__cta">
+              <a className="mint-panel__secondary" href="https://www.vvv.so/111k" target="_blank" rel="noopener noreferrer">
+                <span className="mint-panel__secondary-text">Claim on VVV</span>
+              </a>
+            </div>}
+          />
+        </MintPanelFrame>
+      </section>
+    </main>
+  </div>;
+}
+
 export default function DirectPaymentPage({ network }: { network: Pre111kNetwork }) {
+  useEffect(() => {
+    document.body.classList.add('relic-page-body');
+    return () => { document.body.classList.remove('relic-page-body'); };
+  }, []);
+
+  return network === 'mainnet' ? <RelicClaimPage /> : <RelicReservationPage network={network} />;
+}
+
+function RelicReservationPage({ network }: { network: 'devnet' }) {
   const narrowFooter = useSyncExternalStore(subscribeToFooterWidth, () => narrowFooterQuery().matches, () => false);
   const access = usePre111kAccess();
   const approved = Boolean(access.code);
@@ -65,11 +106,6 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   const hasFeedback = Boolean(model.statusQuery.isError || status && !status.config.enabled || model.error || explorerLink);
 
   useEffect(() => {
-    document.body.classList.add('relic-page-body');
-    return () => { document.body.classList.remove('relic-page-body'); };
-  }, []);
-
-  useEffect(() => {
     if (approved && !previouslyApproved.current) {
       if (document.activeElement instanceof window.HTMLInputElement) document.activeElement.blur();
       reservationSection.current?.focus({ preventScroll: true });
@@ -84,12 +120,6 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
   };
   const cancelChoice = () => { wallet.cancel(); requestAnimationFrame(() => walletTrigger.current?.focus()); };
 
-  const artwork = (
-    <picture className="relic-page__picture">
-      <source media="(max-aspect-ratio: 10/13)" srcSet="/images/111k-relics-portrait.webp" width={1309} height={1630} />
-      <img className="relic-page__artwork" src="/images/111k-relics.webp" width={1448} height={1086} alt="111K relics on display in a warehouse" draggable={false} />
-    </picture>
-  );
   const reserveLabel = model.stage ?? (soldOut ? 'Preorders ended' : null);
   const reserve = <button type="button"
     className={`relic-preorder__reserve${approved ? ` mint-panel__submit${reserveLabel ? ' mint-panel__submit--busy' : ''}` : ''}`}
@@ -138,12 +168,12 @@ export default function DirectPaymentPage({ network }: { network: Pre111kNetwork
       <div className="relic-page__content" role={approved ? 'main' : undefined} inert={!approved || undefined} aria-hidden={!approved || undefined}>
         {!approved ? <main className="relic-page__main">
           <figure className="relic-page__showcase">
-            {artwork}
+            <RelicArtwork />
           </figure>
         </main> : null}
         <section ref={reservationSection} className="relic-preorder" aria-label="Reserve a relic" tabIndex={-1}>
           {approved ? <MintPanelFrame quantity={1} quantityLabel="Relic"
-            previewContent={<div className="mint-panel__preview relic-preorder__preview">{artwork}</div>}>
+            previewContent={<div className="mint-panel__preview relic-preorder__preview"><RelicArtwork /></div>}>
             <MintPanelPurchaseFooter hasControls={false}
               info={<>
                 <MintPanelTitle title="111K Relics" helpContent={<>

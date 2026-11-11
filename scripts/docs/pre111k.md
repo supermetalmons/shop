@@ -1,9 +1,18 @@
 # pre111k relic reservations
 
-`/111k/relics` uses Ethereum mainnet and `/111k/relics_devnet` uses Sepolia. Each
+`/111k/relics` is a public page with a `Live` badge and a `Claim on VVV` link to
+`https://www.vvv.so/111k`. Mainnet reservations are closed: the backend never
+issues new mainnet authorizations, even if `ETHEREUM_PRE111K_MAINNET_ENABLED` is
+set to `true`. Mainnet status still returns chain counts with `config.enabled`
+set to `false`, and existing reservation transactions remain confirmable.
+Authorizations issued before closure can remain valid for up to ten minutes.
+Closing backend admission does not change existing reservations or the contract.
+
+`/111k/relics_devnet` retains its secret-code gate and Sepolia reservation flow. Each
 successful `reserveRelic(uint256 nonce,uint256 deadline,bytes signature)` call
 reserves one relic for its caller and holds the payment in `Pre111K`. The backend
-sets the price per network, currently 2.23 ETH on mainnet and 0.00333 ETH on Sepolia.
+sets the Sepolia price, currently 0.00333 ETH. Historical mainnet reservations
+used the configured mainnet price, initially 2.23 ETH.
 Each deployment has a lifetime maximum of seventeen reservations. The storefront
 initially shows `17 / 18 left` because there are eighteen physical relics.
 Wallets may reserve multiple times, one call at a time. There is no NFT, transfer, cancellation, refund, or relic-ID selection in
@@ -11,8 +20,8 @@ this contract. Existing NFT111K relic claims remain independent.
 
 ## Authorization and counts
 
-The API approves a wallet only when its request includes a valid secret code,
-that network is enabled, and supply remains. It signs EIP-712
+The API approves a Sepolia wallet only when its request includes a valid secret code,
+Sepolia is enabled, and supply remains. It signs EIP-712
 `ReserveRelic(address wallet,uint256 nonce,uint256 deadline,uint256 priceWei)`
 using domain name `pre111k`, version `2`, the chain ID, and the deployed contract address. The wallet's `reservedRelics(address)` count is its next nonce.
 An authorization must be unexpired and no more than ten minutes in the future.
@@ -46,9 +55,12 @@ The API routes are:
 - `POST /ethereum/pre111k/confirm` with network, wallet, and `transactionHash`.
 
 Use the existing allowed storefront origin and `X-Mons-CSRF: 1` for POST requests.
-Preparation is rate limited by IP and wallet and observes commerce maintenance.
+Preparation observes commerce maintenance. Sepolia preparation is rate limited by IP and wallet.
+Valid mainnet preparation requests return `409 failed-precondition` with
+`Relic reservations are closed. Claim on VVV.` before configuration, access-code,
+RPC, or signing work. Method, origin, CSRF, and request-shape validation still apply.
 Access verification is rate limited by IP and remains available during maintenance.
-Both access and preparation trim and uppercase the supplied code before checking
+Access verification and Sepolia preparation trim and uppercase the supplied code before checking
 the server allowlist. Missing or invalid codes return `401 unauthenticated`;
 missing or invalid server configuration returns `503 unavailable`. No code is
 returned in API responses or sent to the chain. Status and confirmation do not
@@ -90,8 +102,9 @@ funds-transfer capability.
    `setQuoteSigner(address)` and wait for confirmation.
 3. Update the corresponding Worker signer secret using Wrangler's prompt or
    standard input. Never pass its value as a command argument or commit it.
-4. Verify the onchain signer matches the backend key and check preparation with
-   a non-broadcast simulation. Re-enable admission and deploy the API.
+4. On Sepolia, verify the onchain signer matches the backend key and check
+   preparation with a non-broadcast simulation. Re-enable Sepolia admission and
+   deploy the API. Mainnet admission remains closed independently of its flag.
 
 Disabling admission stops new quotes. Existing quotes can remain valid for up to
 ten minutes; replacing the onchain signer invalidates quotes from the old signer.
@@ -101,10 +114,11 @@ Withdrawal remains permissionless regardless of backend availability.
 
 The API has independent `ETHEREUM_PRE111K_MAINNET_*` and
 `ETHEREUM_PRE111K_SEPOLIA_*` settings: `CONTRACT_ADDRESS`, `DEPLOYMENT_BLOCK`,
-`ENABLED`, `PRICE_WEI`, and `SIGNER_SECRET`. Set `PRICE_WEI` in
+`ENABLED`, `PRICE_WEI`, and `SIGNER_SECRET`. The mainnet `ENABLED` flag is `false`;
+the backend also enforces mainnet closure in code. For Sepolia, set `PRICE_WEI` in
 `cloud/workers/api/wrangler.jsonc` and the matching `INITIAL_PRICE_WEI` in
 `src/ethereum/DirectPaymentPage.tsx` to the same canonical unsigned decimal wei
-string (`devnet` for Sepolia). Deploy both the Worker and storefront. The button
+string for `devnet`. Deploy both the Worker and storefront. The devnet button
 shows that price immediately and updates if status reports a different price.
 The storefront requires a fresh click if the prepared price changes.
 RPC reads reuse `ALCHEMY_MI_NOTE_API_KEY`.
@@ -115,12 +129,10 @@ local signer, preserve its complete keystore and its encryption password.
 Deployment records identify the public signer addresses. A disabled network
 has no direct-transfer fallback.
 
-`ETHEREUM_PRE111K_ACCESS_CODES` is a required Worker secret shared by both
-networks. Its value is a JSON array of nonempty code strings; provision it through
+`ETHEREUM_PRE111K_ACCESS_CODES` remains a required Worker secret for Sepolia
+reservations. Its value is a JSON array of nonempty code strings; provision it through
 Wrangler's secret input rather than frontend configuration or source files.
-Deploy the API requirement before the storefront gate. Authorizations issued
-before rollout can remain valid for up to ten minutes; no signer or contract
-change is required. The storefront stores the approved code locally, restores
+The devnet storefront stores the approved code locally, restores
 the reservation UI immediately on reload, revalidates in the background, and
 includes it with every preparation request. The local
 development API uses the fixture code `LOCALRELICS`; production codes must not be

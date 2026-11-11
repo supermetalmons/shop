@@ -94,8 +94,10 @@ export function ShopPurchaseSection({
       dropId={upcomingDropRoute.dropFamily}
       terminalAction={{
         statusText: upcomingDropRoute.statusText || 'Soon',
-        buttonText: 'Notify Me',
-        onClick: handleOpenNotify,
+        ...(upcomingDropRoute.externalAction ?? {
+          buttonText: 'Notify Me',
+          onClick: handleOpenNotify,
+        }),
       }}
     />
   ) : !routeDrop ? (

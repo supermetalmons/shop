@@ -89,8 +89,17 @@ function fixture(network: Pre111kNetwork = 'devnet') {
     assert.equal(result.response.status, 200);
     return result.body as unknown as Pre111kPrepareResponse;
   }
-  async function mined(status = '0x1') {
-    const quote = await prepared();
+  function historicalQuote(): Pre111kPrepareResponse {
+    const nonce = state.reserved;
+    const deadline = NOW / 1000 + 600;
+    const signature = signDigest(KEY, pre111kReservationDigest({ chainId: config.chainId,
+      contractAddress: CONTRACT, wallet: WALLET, nonce, deadline, priceWei: config.priceWei }));
+    return { network, wallet: WALLET, nonce, deadline, expiresAtMs: deadline * 1000, signature,
+      transaction: { to: CONTRACT, chainId: config.chainId, value: ethereumHexQuantity(BigInt(config.priceWei)),
+        data: encodePre111kReservation(nonce, deadline, signature) } };
+  }
+  async function mined(status = '0x1', historical?: Pre111kPrepareResponse) {
+    const quote = historical ?? await prepared();
     state.transaction = { hash: HASH, from: WALLET, to: CONTRACT, input: quote.transaction.data, value: quote.transaction.value,
       chainId: ethereumHexQuantity(config.chainId), blockNumber: '0x62', blockHash: BLOCK_HASH };
     state.receipt = { transactionHash: HASH, from: WALLET, to: CONTRACT, blockNumber: '0x62', blockHash: BLOCK_HASH, status,
@@ -100,7 +109,7 @@ function fixture(network: Pre111kNetwork = 'devnet') {
     return quote;
   }
   const confirm = () => call(PRE111K_API_PATHS.confirm, { network, wallet: WALLET, transactionHash: HASH });
-  return { env, config, state, call, prepared, mined, confirm };
+  return { env, config, state, call, prepared, historicalQuote, mined, confirm };
 }
 
 test('pre111k digest and calldata match the Solidity fixture', () => {
@@ -127,24 +136,60 @@ test('pre111k verifies either access code without a wallet, signer, deployment, 
   assert.equal(f.state.calls.length, 0);
 });
 
-test('pre111k rejects missing and invalid codes before chain reads or authorization', async () => {
-  for (const network of ['mainnet', 'devnet'] as const) {
-    const f = fixture(network);
-    for (const code of [undefined, null, '', ' ', 'WRONGCODE', 123, [ACCESS_CODE], {}, 'A'.repeat(65)]) {
-      for (const path of [PRE111K_API_PATHS.access, PRE111K_API_PATHS.prepare]) {
-        const result = await f.call(path, path === PRE111K_API_PATHS.access ? { code } : { network, wallet: WALLET, code });
-        assert.equal(result.response.status, 401);
-        assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
-        assert.deepEqual(result.body, { ok: false, error: { code: 'unauthenticated', message: 'Enter a valid secret code.' } });
-      }
-    }
-    assert.equal(f.state.calls.length, 0);
-    for (const code of [ACCESS_CODE, ` ${SECOND_ACCESS_CODE.toLowerCase()} `]) {
-      const result = await f.call(PRE111K_API_PATHS.prepare, { network, wallet: WALLET, code });
-      assert.equal(result.response.status, 200);
-      assert.equal(typeof result.body.signature, 'string');
+test('pre111k devnet rejects missing and invalid codes before chain reads or authorization', async () => {
+  const f = fixture();
+  for (const code of [undefined, null, '', ' ', 'WRONGCODE', 123, [ACCESS_CODE], {}, 'A'.repeat(65)]) {
+    for (const path of [PRE111K_API_PATHS.access, PRE111K_API_PATHS.prepare]) {
+      const result = await f.call(path, path === PRE111K_API_PATHS.access ? { code } : { network: 'devnet', wallet: WALLET, code });
+      assert.equal(result.response.status, 401);
+      assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
+      assert.deepEqual(result.body, { ok: false, error: { code: 'unauthenticated', message: 'Enter a valid secret code.' } });
     }
   }
+  assert.equal(f.state.calls.length, 0);
+  for (const code of [ACCESS_CODE, ` ${SECOND_ACCESS_CODE.toLowerCase()} `]) {
+    const result = await f.call(PRE111K_API_PATHS.prepare, { network: 'devnet', wallet: WALLET, code });
+    assert.equal(result.response.status, 200);
+    assert.equal(typeof result.body.signature, 'string');
+  }
+});
+
+test('pre111k mainnet rejects preparation before configuration, access checks, or chain reads', async () => {
+  for (const mutate of [
+    (f: ReturnType<typeof fixture>) => { f.env.ETHEREUM_PRE111K_MAINNET_ENABLED = 'true'; },
+    (f: ReturnType<typeof fixture>) => { f.env.ETHEREUM_PRE111K_MAINNET_ENABLED = 'false'; },
+    (f: ReturnType<typeof fixture>) => { delete f.env.ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET; },
+    (f: ReturnType<typeof fixture>) => { delete f.env.ETHEREUM_PRE111K_ACCESS_CODES; },
+    (f: ReturnType<typeof fixture>) => { f.env.ETHEREUM_PRE111K_ACCESS_CODES = 'invalid'; },
+    (f: ReturnType<typeof fixture>) => { Reflect.deleteProperty(f.env, 'ETHEREUM_PRE111K_MAINNET_PRICE_WEI'); },
+    (f: ReturnType<typeof fixture>) => { f.env.ETHEREUM_PRE111K_MAINNET_PRICE_WEI = 'invalid'; },
+    (f: ReturnType<typeof fixture>) => { f.env.ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS = 'invalid'; },
+  ]) {
+    const f = fixture('mainnet');
+    mutate(f);
+    for (const code of [ACCESS_CODE, undefined, '', 'WRONGCODE']) {
+      const result = await f.call(PRE111K_API_PATHS.prepare, { network: 'mainnet', wallet: WALLET, code });
+      assert.equal(result.response.status, 409);
+      assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
+      assert.deepEqual(result.body, { ok: false, error: {
+        code: 'failed-precondition', message: 'Relic reservations are closed. Claim on VVV.',
+      } });
+    }
+    assert.equal(f.state.calls.length, 0);
+  }
+});
+
+test('pre111k validates mainnet preparation requests before reporting closure', async () => {
+  const f = fixture('mainnet');
+  for (const body of [{ wallet: WALLET }, { network: 'mainnet', wallet: 'invalid' },
+    { network: 'mainnet', wallet: WALLET, priceWei: '0' }]) {
+    assert.equal((await f.call(PRE111K_API_PATHS.prepare, body)).response.status, 400);
+  }
+  const body = { network: 'mainnet', wallet: WALLET };
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare, body, { origin: 'https://evil.example' })).response.status, 403);
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare, body, { csrf: '' })).response.status, 403);
+  assert.equal((await f.call(PRE111K_API_PATHS.prepare)).response.status, 405);
+  assert.equal(f.state.calls.length, 0);
 });
 
 test('pre111k accepts 64-character access codes at the input and configuration boundary', async () => {
@@ -219,28 +264,48 @@ test('pre111k status and existing reservation confirmation do not require access
 });
 
 for (const network of ['mainnet', 'devnet'] as const) {
-  test(`pre111k ${network} status and prepare use exact deployment, price, wallet count, and signature`, async () => {
+  test(`pre111k ${network} status uses exact deployment, price, and wallet count`, async () => {
     const f = fixture(network);
     const result = await f.call(`${PRE111K_API_PATHS.status}?network=${network}&wallet=${WALLET}`);
     assert.equal(result.response.status, 200);
     const status = result.body as unknown as Pre111kStatus;
-    assert.equal(status.config.enabled, true);
+    assert.equal(status.config.enabled, network === 'devnet');
     assert.equal(status.config.chainId, f.config.chainId);
     assert.equal(status.config.priceWei, prices[network]);
     assert.equal(status.totalReserved, 4);
     assert.equal(status.reservedRelics, 2);
     assert.equal(status.remainingRelics, 13);
-    const quote = await f.prepared();
-    assert.equal(quote.transaction.value, ethereumHexQuantity(BigInt(f.config.priceWei)));
-    assert.equal(quote.deadline, NOW / 1000 + 600);
-    assert.equal(quote.expiresAtMs, quote.deadline * 1000);
-    assert.equal(quote.nonce, 2);
-    assert.equal(recoverEthereumAddress(pre111kReservationDigest({ chainId: f.config.chainId, contractAddress: CONTRACT,
-      wallet: WALLET, nonce: quote.nonce, deadline: quote.deadline, priceWei: prices[network] }), quote.signature), SIGNER);
-    assert.equal(quote.transaction.data, encodePre111kReservation(quote.nonce, quote.deadline, quote.signature));
     assert.ok(f.state.urls.every(url => url.startsWith(network === 'mainnet' ? 'https://eth-mainnet.' : 'https://eth-sepolia.')));
   });
 }
+
+test('pre111k devnet preparation signs the exact deployment, price, and wallet nonce', async () => {
+  const f = fixture();
+  const quote = await f.prepared();
+  assert.equal(quote.transaction.value, ethereumHexQuantity(BigInt(f.config.priceWei)));
+  assert.equal(quote.deadline, NOW / 1000 + 600);
+  assert.equal(quote.expiresAtMs, quote.deadline * 1000);
+  assert.equal(quote.nonce, 2);
+  assert.equal(recoverEthereumAddress(pre111kReservationDigest({ chainId: f.config.chainId, contractAddress: CONTRACT,
+    wallet: WALLET, nonce: quote.nonce, deadline: quote.deadline, priceWei: prices.devnet }), quote.signature), SIGNER);
+  assert.equal(quote.transaction.data, encodePre111kReservation(quote.nonce, quote.deadline, quote.signature));
+});
+
+test('pre111k mainnet confirms historical reservations without signing or access configuration', async () => {
+  const f = fixture('mainnet');
+  const quote = f.historicalQuote();
+  await f.mined('0x1', quote);
+  delete f.env.ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET;
+  delete f.env.ETHEREUM_PRE111K_ACCESS_CODES;
+  Reflect.deleteProperty(f.env, 'ETHEREUM_PRE111K_MAINNET_PRICE_WEI');
+  f.env.ETHEREUM_PRE111K_MAINNET_ENABLED = 'false';
+  f.state.blockNumber = 99;
+  assert.equal((await f.confirm()).body.status, 'pending');
+  f.state.blockNumber = 100;
+  const result = await f.confirm();
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body, { status: 'confirmed', confirmations: 3, transactionHash: HASH, reservationNonce: quote.nonce });
+});
 
 test('pre111k status works without a wallet or signer and stays unavailable before deployment', async () => {
   const f = fixture();

@@ -36,6 +36,7 @@ export type UpcomingDropRouteConfig = {
   previewAspectRatio?: number;
   boxNamePrefix?: string;
   statusText?: string;
+  externalAction?: { buttonText: string; href: string };
 };
 
 export const LEGACY_DROP_ROUTE_ALIASES = {
@@ -55,6 +56,8 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     previewImageUrl: 'https://cdn.lil.org/nft/111k/placeholder.png',
     previewAspectRatio: 932 / 1006,
     boxNamePrefix: 'drop',
+    statusText: 'Live',
+    externalAction: { buttonText: 'Mint on VVV', href: 'https://www.vvv.so/111k' },
   },
   {
     path: '/doge_day_2026',

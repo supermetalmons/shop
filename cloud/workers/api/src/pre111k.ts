@@ -39,7 +39,7 @@ function deploymentSettings(env: Pre111kEnvironment, network: Pre111kNetwork) {
   return {
     contractAddress: mainnet ? env.ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS : env.ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS,
     deploymentBlock: mainnet ? env.ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK : env.ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK,
-    enabled: (mainnet ? env.ETHEREUM_PRE111K_MAINNET_ENABLED : env.ETHEREUM_PRE111K_SEPOLIA_ENABLED) === 'true',
+    enabled: !mainnet && env.ETHEREUM_PRE111K_SEPOLIA_ENABLED === 'true',
   };
 }
 
@@ -247,6 +247,9 @@ export async function handlePre111kRequest(request: Request, env: Pre111kEnviron
       const body = await readEthereumBody(request, signal, requestSchema.extend(accessSchema.shape));
       network = body.network;
       wallet = ethereumAddress(body.wallet);
+      if (network === 'mainnet') {
+        throw new EthereumApiError('failed-precondition', 'Relic reservations are closed. Claim on VVV.');
+      }
       code = body.code;
     } else {
       const body = await readEthereumBody(request, signal, requestSchema.extend({ transactionHash: z.string() }).strict());
