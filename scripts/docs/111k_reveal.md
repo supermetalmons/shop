@@ -165,8 +165,8 @@ and request limits are unchanged. Painting alts and video posters are variants
 of those artworks, not extra tokens. Videos include 16:9, 427:240, and 54:31
 ratios; use the returned ratio instead of assuming a fixed widescreen frame.
 
-New assignments use a soft cap of eight eggs per crate, including the final
-31-artwork crate. Once the current allocation reaches eight eggs, additional
+New assignments use a soft cap of six eggs per crate, including the final
+31-artwork crate. Once the current allocation reaches six eggs, additional
 draws use non-egg categories while any have free inventory. Eggs can exceed the
 cap when free non-egg inventory is exhausted; assets reserved by other crates
 are unavailable. Eligible categories retain their original catalog weights.

@@ -29,7 +29,7 @@ export type RevealPublicationJob = {
 export type RevealPublicationResult = { job: RevealPublicationJob; status: 'published' | 'conflict' | 'retry' | 'superseded' };
 export type RevealSearchRange = { fromBlock: number; toBlock?: number };
 
-const REVEAL_CRATE_EGG_LIMIT = 8;
+const REVEAL_CRATE_EGG_LIMIT = 6;
 const NORMAL_PUBLICATION = `NOT EXISTS (SELECT 1 FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
   WHERE a.category='egg' AND a.asset_id=m.egg_id AND g.activated_at_ms IS NOT NULL AND a.assignment_revision<g.target_revision)`;
 

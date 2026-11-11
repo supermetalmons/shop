@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-11-11T11:38:44.375Z",
+  "worker": "mons-shop-api",
+  "workerVersion": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+  "deployment": {
+    "id": "6dd0c404-189c-486d-a919-a717e5b43722",
+    "createdAt": "2026-11-11T11:35:39.716758Z",
+    "versions": [
+      {
+        "version_id": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+        "percentage": 100
+      }
+    ]
+  },
+  "cap": 6,
+  "thresholdAndNonEggFilterPresent": true,
+  "entrypoint": "index.js",
+  "entrypointSha256": "adfbd3b7eb17acb3b617d0d7781192eee2d923241b73e7006b75e5298bafd925",
+  "contentSha256": "89812834ab66cebb26c483232a3ea24acf164d8923f6bb37045dd5f33c927566",
+  "bytes": 30442827,
+  "codeUpdateStrategy": {
+    "mode": "deferred",
+    "maxDelaySeconds": 300,
+    "source": "Cloudflare default; no configured override"
+  }
+}

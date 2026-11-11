@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-11-11T11:41:04.025Z",
+  "saleAndRelicAllocationStatesPreserved": true,
+  "contracts": [
+    {
+      "deploymentId": "mainnet-v1",
+      "chainId": 1,
+      "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "blockNumber": 26391444,
+      "saleActive()": "0",
+      "relicsAllocated()": "0",
+      "totalSupply()": "0"
+    },
+    {
+      "deploymentId": "v17",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "blockNumber": 12111519,
+      "saleActive()": "1",
+      "relicsAllocated()": "7",
+      "totalSupply()": "6551"
+    }
+  ]
+}

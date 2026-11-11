@@ -1,0 +1,109 @@
+{
+  "completedAt": "2026-11-11T11:41:43.044Z",
+  "worker": "mons-shop-api",
+  "workerVersion": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+  "previousSoftCap": 8,
+  "softCap": 6,
+  "scope": "New reveal assignments on Ethereum mainnet and Sepolia, including 20- and 31-artwork crates",
+  "existingReservationsAndRevealsPreserved": true,
+  "exhaustionFallbackPreserved": true,
+  "catalogAndSchemaUnchanged": true,
+  "contractTransactionsSubmitted": 0,
+  "activationStatesPreserved": true,
+  "sourceSha256": {
+    "cloud/workers/api/src/ethereumRevealStore.ts": "064c71a9d7473e5aec6f3990dd0d481523b796e952127af26d3e6f69f7deeb94",
+    "cloud/workers/api/test/ethereumRevealStore.test.ts": "f689140ccd99f7ed88f513842b33a90c5d65082d7dec72267deba50d18fcf621",
+    "scripts/docs/111k_reveal.md": "fe8dc80c583c9db35f065b7b9b4968ff3df4b80335f4bef4123dd63d9d95fa22"
+  },
+  "checks": {
+    "revealStoreTests": 117,
+    "focusedEggCapTests": 19,
+    "apiTests": 3297,
+    "apiRuntimeTests": 63,
+    "failures": 0,
+    "schemaCatalogAndTypeChecksPassed": true,
+    "bundleAndStartupChecksPassed": true,
+    "pendingDatabaseMigrations": 0,
+    "commerceReadinessPassed": true,
+    "commerceReadRequests": 240,
+    "transportRetriesDuringSuccessfulAudit": 0
+  },
+  "rollout": {
+    "checkedAt": "2026-11-11T11:41:19.706Z",
+    "deploymentId": "6dd0c404-189c-486d-a919-a717e5b43722",
+    "workerVersion": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+    "percentage": 100,
+    "createdAt": "2026-11-11T11:35:39.716758Z",
+    "elapsedMs": 339990,
+    "defaultCodeUpdateWindowElapsed": true,
+    "healthEvents": [
+      {
+        "deploymentId": "mainnet-v1",
+        "timestamp": 1794397209569,
+        "outcome": "ok",
+        "worker": "mons-shop-api",
+        "version": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+        "versionFilter": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+        "exceptions": 0
+      },
+      {
+        "deploymentId": "v17",
+        "timestamp": 1794397254176,
+        "outcome": "ok",
+        "worker": "mons-shop-api",
+        "version": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+        "versionFilter": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+        "exceptions": 0
+      },
+      {
+        "deploymentId": "v17",
+        "timestamp": 1794397269895,
+        "outcome": "ok",
+        "worker": "mons-shop-api",
+        "version": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+        "versionFilter": "4c3cdcd4-a5ca-4fea-b67a-becfc88ee0f1",
+        "exceptions": 0
+      }
+    ],
+    "deployments": [
+      {
+        "deployment_id": "mainnet-v1",
+        "drop_id": "111k",
+        "chain_id": 1,
+        "contract_address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "metadata_base_uri": "https://cdn.mons.shop/111k/",
+        "state": "ready",
+        "revision": 2,
+        "catalog_version": "111k-v8",
+        "effective_catalog_version": null,
+        "effective_catalog_sha256": null,
+        "catalog_revision": 0,
+        "retired_at_ms": null,
+        "updated_at_ms": 1794397209537,
+        "last_error": null
+      },
+      {
+        "deployment_id": "v17",
+        "drop_id": "111k_devnet",
+        "chain_id": 11155111,
+        "contract_address": "0xaca342968965ddb20badb1943b99ee6523658619",
+        "metadata_base_uri": "https://cdn.mons.shop/111k-sepolia/v17/",
+        "state": "active",
+        "revision": 12,
+        "catalog_version": "111k-v5",
+        "effective_catalog_version": "111k-v8",
+        "effective_catalog_sha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+        "catalog_revision": 3,
+        "retired_at_ms": null,
+        "updated_at_ms": 1794397209424,
+        "last_error": null
+      }
+    ]
+  },
+  "publicApi": {
+    "url": "https://mons.shop/api/ethereum/111k/config",
+    "status": 200,
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619"
+  }
+}
