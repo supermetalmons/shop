@@ -56,15 +56,33 @@ npm run db:migrate:commerce
 npm run db:migrate:api
 npm run check:pack-status-d1
 npm run check:ops-d1
-npm run check:commerce-d1
+npm run check:commerce-ready
 npm run deploy:api
 ```
 
 `db:migrate:api` applies all three D1 migration sets. `deploy:api` runs
 the API checks, applies all pending remote D1 migration sets, checks remote
-pack-status, ops-state, and commerce read-model integrity, and then publishes the API Worker with
+pack-status, ops-state, and bounded Commerce readiness, and then publishes the API Worker with
 native `wrangler deploy --strict`. This order ensures the deployed code never
 expects a schema that has not been applied.
+
+The routine Commerce gate checks schema compatibility, required storage controls,
+and configured inventory readiness. It does not download and validate every
+business record or inventory assignment.
+
+Use the full audit when the release changes persisted Commerce schemas or row
+semantics; after data migrations, backfills, restores, repairs, inventory
+initialization or manifest changes; or when investigating suspected corruption:
+
+```bash
+npm run deploy:api:full
+```
+
+This follows the same release sequence but runs the full Commerce audit after
+migrations and before publication. `npm run check:commerce-d1` also remains
+available as a standalone full audit. UI, documentation, and unrelated reveal
+allocation changes use the routine gate. Do not repeat a full audit already
+completed for the same unchanged maintenance flow.
 
 API deployment disables automatic resource provisioning with
 `--experimental-provision=false`. Its named databases, queues, and R2 bucket

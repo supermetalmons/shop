@@ -29,7 +29,7 @@ generations and overlapping claims, and retries reuse an existing box assignment
 ## Inspect current state
 
 ```sh
-npm run check:commerce-d1
+npm run check:commerce-ready
 npm run dude-inventory-control -- status
 npm run notification-outbox-control -- status
 npm run stripe-checkout-state-control -- status
@@ -39,10 +39,20 @@ npm run commerce-authority-control -- status
 npm run check:queue-backlogs
 ```
 
-The database check requires the latest schema, initialized inventory, active
-state tables, matching parent records, and valid indexes and query plans.
-`--for-deployment` remains supported by the deployment gate and runs the same
-complete validation as inspection. Small checks use batched queries; documents,
+The routine `check:commerce-ready` gate checks the latest schema, initialized
+inventory metadata, and required storage-control states without paging business
+records. It is the Commerce gate used by `deploy:api`.
+
+`npm run check:commerce-d1` is the full integrity audit. Its optional
+`--for-deployment` flag retains the same complete validation. Use this audit for
+persisted schema or row-semantics changes, data migrations/backfills, restores,
+repairs, inventory initialization/manifest changes, or suspected corruption.
+`npm run deploy:api:full` includes it after migrations and before publication.
+The explicit full checks in the maintenance procedures below remain required;
+do not run them twice for the same unchanged maintenance flow.
+
+The full audit additionally validates parent records, indexes, and query plans.
+Small checks use batched queries; documents,
 outboxes, checkout state, recovery state, and dispute history are validated in
 pages of at most 100 rows. Every shared row parser and integrity check still runs.
 Total database work and transferred data grow with the records being checked;

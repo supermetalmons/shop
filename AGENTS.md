@@ -1,5 +1,18 @@
 Avoid code comments except for TODOs or essential context.
 
+## API rollout validation
+
+Use `npm run deploy:api` for routine API releases. It runs bounded Commerce
+schema, control-state, and inventory-readiness checks without paging business
+records. Do not run the full Commerce audit merely because code is being deployed.
+
+Use `npm run deploy:api:full`, or explicitly run `npm run check:commerce-d1`,
+when changes affect persisted Commerce schemas or row semantics, after data
+migrations, backfills, restores, repairs, or inventory initialization/manifest
+changes, or when investigating suspected data corruption. Unrelated UI,
+documentation, and reveal-allocation tuning do not require it. Avoid repeating
+a successful full audit within the same unchanged maintenance flow.
+
 ## 111k egg hatching
 
 When the user asks to hatch eggs and supplies an updated `111k.json`, follow

@@ -110,6 +110,7 @@ function assertPublicationPolicy(scripts = packageJson.scripts) {
   for (const [name, config, envFile, prerequisite] of [
     ['deploy', 'wrangler.jsonc', 'cloud/workers/frontend/release.env', 'check:frontend'],
     ['deploy:api', 'cloud/workers/api/wrangler.jsonc', 'cloud/workers/api/release.env', 'check:api'],
+    ['deploy:api:full', 'cloud/workers/api/wrangler.jsonc', 'cloud/workers/api/release.env', 'check:api'],
   ]) {
     const { stages, position, options } = deploymentStage(name, scripts);
     requiredChecks(name, [prerequisite], scripts);
@@ -120,18 +121,25 @@ function assertPublicationPolicy(scripts = packageJson.scripts) {
     assert.ok(!options.has('--dry-run'));
     assert.equal(options.get('--config'), config);
     assert.equal(options.get('--env-file'), envFile);
-    assert.equal(options.get('--experimental-provision'), name === 'deploy:api' ? 'false' : undefined);
+    assert.equal(options.get('--experimental-provision'), name.startsWith('deploy:api') ? 'false' : undefined);
   }
 
-  const stages = commandStages('deploy:api', scripts);
-  const checks = ['check:api', 'db:migrate:api', 'check:pack-status-d1', 'check:ops-d1', 'check:commerce-d1'];
-  let previous = -1;
-  for (const check of checks) {
-    const position = stages.findIndex((stage) => stage === `npm run ${check}` || stage.startsWith(`npm run ${check} `));
-    assert.ok(position > previous, `${check} must run in order before publication`);
-    previous = position;
+  for (const [name, commerceGate] of [
+    ['deploy:api', 'npm run check:commerce-ready'],
+    ['deploy:api:full', 'npm run check:commerce-d1 -- --for-deployment'],
+  ]) {
+    const stages = commandStages(name, scripts);
+    const checks = ['npm run check:api', 'npm run db:migrate:api', 'npm run check:pack-status-d1', 'npm run check:ops-d1', commerceGate];
+    let previous = -1;
+    for (const check of checks) {
+      const position = stages.indexOf(check);
+      assert.ok(position > previous, `${name}: ${check} must run in order before publication`);
+      previous = position;
+    }
+    assert.equal(previous, stages.length - 2);
   }
-  assert.ok(stages[previous].split(/\s+/).includes('--for-deployment'));
+  assert.ok(!commandStages('deploy:api', scripts).some(stage => /^npm run check:commerce-d1(?:\s|$)/.test(stage)));
+  assert.deepEqual(commandStages('check:commerce-ready', scripts), ['node --import tsx scripts/ops/checkCommerceReadiness.ts']);
 }
 
 test('publication uses strict native Wrangler with isolated production configuration after checks', () => {
@@ -139,11 +147,23 @@ test('publication uses strict native Wrangler with isolated production configura
 });
 
 test('API publication uses existing infrastructure without automatic resource provisioning', () => {
-  for (const replacement of ['', '--experimental-provision=true', '--experimental-provision=false --experimental-provision=false']) {
+  for (const name of ['deploy:api', 'deploy:api:full']) for (const replacement of ['', '--experimental-provision=true', '--experimental-provision=false --experimental-provision=false']) {
     assert.throws(() => assertPublicationPolicy({ ...packageJson.scripts,
-      'deploy:api': packageJson.scripts['deploy:api'].replace('--experimental-provision=false', replacement),
+      [name]: packageJson.scripts[name].replace('--experimental-provision=false', replacement),
     }), assert.AssertionError);
   }
+});
+
+test('full Commerce audit is explicit and cannot replace or be added to the routine gate', () => {
+  for (const replacement of ['npm run check:commerce-d1 -- --for-deployment',
+    'npm run check:commerce-ready && npm run check:commerce-d1 -- --for-deployment']) {
+    assert.throws(() => assertPublicationPolicy({ ...packageJson.scripts,
+      'deploy:api': packageJson.scripts['deploy:api'].replace('npm run check:commerce-ready', replacement),
+    }), assert.AssertionError);
+  }
+  assert.throws(() => assertPublicationPolicy({ ...packageJson.scripts,
+    'check:commerce-ready': 'npm run check:commerce-d1 -- --for-deployment',
+  }), assert.AssertionError);
 });
 
 function assertDryRunPolicy(scripts = packageJson.scripts) {
@@ -180,7 +200,8 @@ test('dry runs cannot publish and keep API bundle validation tied to their outpu
 test('release policies reject ignored prerequisite failures and missing checks', () => {
   for (const [name, prerequisite, policy] of [
     ['deploy', 'npm run check:frontend', assertPublicationPolicy],
-    ['deploy:api', 'npm run check:commerce-d1 -- --for-deployment', assertPublicationPolicy],
+    ['deploy:api', 'npm run check:commerce-ready', assertPublicationPolicy],
+    ['deploy:api:full', 'npm run check:commerce-d1 -- --for-deployment', assertPublicationPolicy],
     ['dry-run:frontend', 'npm run check:frontend', assertDryRunPolicy],
   ] as const) {
     for (const replacement of [`${prerequisite} || true`, `${prerequisite}; true`, `${prerequisite} & true`, 'true']) {
@@ -220,6 +241,7 @@ test('release policies reject additional or aliased Wrangler options', () => {
   for (const [name, policy] of [
     ['deploy', assertPublicationPolicy],
     ['deploy:api', assertPublicationPolicy],
+    ['deploy:api:full', assertPublicationPolicy],
     ['dry-run:frontend', assertDryRunPolicy],
     ['dry-run:api', assertDryRunPolicy],
   ] as const) {
