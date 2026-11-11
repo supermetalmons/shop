@@ -1,0 +1,88 @@
+{
+  "result": "passed",
+  "method": "Anvil fork; actual deployed Safe execTransaction direct ETH transfer operation 0; local owner impersonation and fork-only approveHash; three separate deployer calls",
+  "forkBlock": {
+    "number": 26391653,
+    "hash": "0x17a5fde8cec135af6cac886e084568674ae89a32eaf528c3c6f19a856b143671",
+    "timestamp": 1794399767,
+    "timestampIso": "2026-11-11T12:22:47.000Z",
+    "tag": "latest-pinned"
+  },
+  "safeTransactionHash": "0x9a4162443ff6474cd2ccadb8962aab5ee2d4babf9d58965690a782d30edf17c5",
+  "safeNonce": "0",
+  "safeThreshold": 2,
+  "assertions": {
+    "safeExecutionSuccess": true,
+    "directTransferOperation": 0,
+    "deployerReceivedExactlyWei": "22300000000000000000",
+    "deployerBalanceNotArtificiallyIncreased": true,
+    "relicsAllocated": 12,
+    "allocatedCrates": 1332,
+    "correctWalletAllowances": true,
+    "previousFreeCrateWalletsPreserved": 14,
+    "previousFreeCrateAllowancesPreserved": 62,
+    "otherSettingsPreserved": true,
+    "ownershipUnchanged": true,
+    "pendingOwnerRemainsZero": true,
+    "saleStillClosed": true,
+    "totalSupply": 0,
+    "repeatedAllocationRejected": true,
+    "allPaymentCreditedToFixedSplit": true
+  },
+  "collectionBalanceIncreaseWei": "22300000000000000000",
+  "safeBalanceDecreaseWei": "22300000000000000000",
+  "deployerBalanceBeforeWei": "12408623811949331",
+  "deployerBalanceAfterWei": "11951792892422505",
+  "deployerGasCostWei": "456830919526826",
+  "gasRecords": [
+    {
+      "label": "fork-only Safe hash approval",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "gasUsed": 52753,
+      "effectiveGasPriceWei": "1062128901",
+      "gasCostWei": "56030485914453",
+      "forkOnlyTransactionHash": "0x2881d89871ae8a36f7b0a062b12257e51dacd92058a418b73ea5680d732065bc"
+    },
+    {
+      "label": "fork-only Safe hash approval",
+      "from": "0xe4790dd79c334e3f848904975272ec17f9f70366",
+      "gasUsed": 52753,
+      "effectiveGasPriceWei": "1054376445",
+      "gasCostWei": "55621520603085",
+      "forkOnlyTransactionHash": "0x02208b28bbe9d47439be5b40c37705e1d352fd3a82ef71a9ea62f1eb8c86ea8e"
+    },
+    {
+      "label": "Safe sends 22.3 ETH to deployer",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "gasUsed": 77119,
+      "effectiveGasPriceWei": "1047591342",
+      "gasCostWei": "80789196703698",
+      "forkOnlyTransactionHash": "0x338d1a10cf9be5d2a4b60f8fecbfa3e300095fe023cb1d1ddfc1d1a6ebc1d7df"
+    },
+    {
+      "label": "deployer allocates 12 relics with 22.3 ETH",
+      "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "gasUsed": 96243,
+      "effectiveGasPriceWei": "1041657717",
+      "gasCostWei": "100252263657231",
+      "forkOnlyTransactionHash": "0xd67304bfa3d5cf7afa3383bc3d7a907de3c0277e0dc4de620bc03be5f7eda578"
+    },
+    {
+      "label": "deployer grants 1 relic to each of 10 buyers",
+      "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "gasUsed": 293905,
+      "effectiveGasPriceWei": "1036467208",
+      "gasCostWei": "304622894767240",
+      "forkOnlyTransactionHash": "0x175223ebbedb366bf23e73a8aed9e6551a6472cb787f75905ab2ba2ea513bf30"
+    },
+    {
+      "label": "deployer grants 2 additional relics to deployer",
+      "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "gasUsed": 50347,
+      "effectiveGasPriceWei": "1031953465",
+      "gasCostWei": "51955761102355",
+      "forkOnlyTransactionHash": "0x731978b4ebd4f0b38d2f43642ee1a1505f71e4e424687c57ef478df1060a8757"
+    }
+  ],
+  "realTransactionsSent": 0
+}

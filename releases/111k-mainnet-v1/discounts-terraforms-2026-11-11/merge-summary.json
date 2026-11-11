@@ -1,0 +1,51 @@
+{
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "terraformsContract": "0x4e1f41613c9084fdb9e34e11fae9412427480e56",
+  "originalAddressCount": 1343,
+  "terraformsHolderCount": 1978,
+  "overlappingAddresses": 79,
+  "addedAddresses": 1899,
+  "finalAddressCount": 3242,
+  "previousRoot": "0x82c0c6789afcb5823edc8914fc140a7da6bb582918857b7827d2dd1d838e13a6",
+  "root": "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b",
+  "snapshot": {
+    "chainId": 1,
+    "collection": "0x4e1f41613c9084fdb9e34e11fae9412427480e56",
+    "name": "Terraforms",
+    "blockNumber": 26391733,
+    "blockHash": "0x8a27150df15c313310e346ad53e1e04825a7004e0e01096b5cf095e6c7d89552",
+    "blockTimestamp": "2026-11-11T12:38:47.000Z",
+    "blockTag": "0x192b4b5",
+    "finality": "finalized",
+    "totalSupply": 9911,
+    "method": "Enumerate every tokenByIndex at the pinned finalized block, then call ownerOf for every enumerated token at that same block.",
+    "chunkSize": 50,
+    "createdAt": "2026-11-11T12:55:14.982Z",
+    "status": "complete",
+    "completedAt": "2026-11-11T12:55:55.842Z",
+    "holderCount": 1978,
+    "tokensEnumerated": 9911,
+    "uniqueTokenIds": 9911,
+    "minimumTokenId": "1",
+    "maximumTokenId": "9911",
+    "holdersSha256": "85d0f9b8450a62ecdd6f52d01471ef986f9025b0ae5f35d7603b0da9b63df4a2",
+    "tokenOwnersSha256": "a133f8f76fda969f39d148d181c26ec8f7d09c775df41920ee6d0ead8eb8e727",
+    "canonicalBlockRechecked": true,
+    "transport": {
+      "protocol": "Ethereum JSON-RPC eth_call",
+      "directBatches": true,
+      "multicall3": "0xca11bde05977b3631167028862be2a173976ca11",
+      "callBlockTag": "0x192b4b5"
+    }
+  },
+  "checksums": {
+    "previous-final.txt": "232a97258c78e26b9e86effd476ba41c009dd1219cb355f794f48f091d00049a",
+    "terraforms-holders.txt": "85d0f9b8450a62ecdd6f52d01471ef986f9025b0ae5f35d7603b0da9b63df4a2",
+    "terraforms-token-owners.csv": "a133f8f76fda969f39d148d181c26ec8f7d09c775df41920ee6d0ead8eb8e727",
+    "terraforms-source.json": "dce0d1e1cc223a7e5c3c2078565100da560a3ec233197d8d15b286504a4560b7",
+    "final.txt": "e51356698212a892068834edefe7ed5245c91e4c2f56635d7dae6f0fd70f3560",
+    "proofs.json": "429881cdd045b70f0323a0842c70eae66eef0536bb7c1490146ba2e2798f438b",
+    "merkle-tree.json": "6fc3b2f138ad74de99d1b07fd34a74d754795a68ec7446cb25468385d6963c07"
+  }
+}

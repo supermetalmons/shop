@@ -1,0 +1,40 @@
+{
+  "chainId": 1,
+  "from": "0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93",
+  "expectedNonce": "9",
+  "to": "0x08cDed8258730bda384FF198001E47a1B50f7f9d",
+  "value": "0",
+  "data": "0x9d0d5a7c00000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "contractMethod": {
+    "inputs": [
+      {
+        "name": "wallets",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "crateLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "warehouseLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "relicLimit",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "name": "setFreeMintAllowances",
+    "payable": false
+  },
+  "contractInputsValues": {
+    "wallets": "[\"0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93\"]",
+    "crateLimit": "0",
+    "warehouseLimit": "0",
+    "relicLimit": "2"
+  }
+}

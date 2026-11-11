@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "maximumTotalFeeWei": "2000000000000000",
+  "sourceSha256": "e51356698212a892068834edefe7ed5245c91e4c2f56635d7dae6f0fd70f3560",
+  "addressCount": 3242,
+  "previousRoot": "0x82c0c6789afcb5823edc8914fc140a7da6bb582918857b7827d2dd1d838e13a6",
+  "root": "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b",
+  "allowance": 1,
+  "prices": {
+    "crate": "30000000000000000",
+    "warehouse": "300000000000000000",
+    "discountCrate": "15000000000000000"
+  },
+  "proofsSha256": "429881cdd045b70f0323a0842c70eae66eef0536bb7c1490146ba2e2798f438b",
+  "treeSha256": "6fc3b2f138ad74de99d1b07fd34a74d754795a68ec7446cb25468385d6963c07",
+  "preservationSha256": {
+    "src/ethereum/discounts/111k.json": "a1daf47d60ed412c5ca8109cf3ce1510c88309749d94dd0e8bc8a71e5aa36186",
+    "shared/ethereum/config.ts": "fa7339c69cf225defd8e31ee4fc3f5f0a1eaa5dad29b6509ddb7256018808dbb",
+    "cloud/workers/api/wrangler.jsonc": "50fd977e85f0bf1fd8d0dc0ad7be69fbd916fa2b32b30281b932041760d23f1c"
+  },
+  "calls": [
+    {
+      "group": "discount",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0",
+      "data": "0x922cb2d6dc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ],
+  "sourceFile": "eligible-addresses.txt",
+  "transactions": [
+    {
+      "transactionHash": "0xd722b19cf2e2c66b908d52da89e1a1ce4206123c9de8110d972361c13488d97c",
+      "nonce": "10",
+      "gasCostWei": "3804459793842"
+    }
+  ]
+}

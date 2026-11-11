@@ -1,0 +1,307 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-11T12:19:06.146Z",
+  "chainId": 1,
+  "block": {
+    "number": 26391541,
+    "hash": "0x079f724ef9b26e0289e238fb1aea221c70165da95ad0dde82cd6f37a6f97e89b",
+    "timestamp": 1794398423,
+    "timestampIso": "2026-11-11T12:00:23.000Z",
+    "tag": "finalized"
+  },
+  "pre111k": {
+    "address": "0xd1432dd5ec5dba6861bd4c6a56212f54abcbc0b9",
+    "deploymentBlock": 26348338,
+    "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+    "totalReserved": 10,
+    "balanceWei": "0",
+    "balanceEth": "0"
+  },
+  "payments": {
+    "reservationCount": 10,
+    "uniqueWalletCount": 10,
+    "totalWei": "22300000000000000000",
+    "totalEth": "22.3",
+    "reservations": [
+      {
+        "wallet": "0x2ad5c6af6c0977412beeedb7c08aa2d75c9a227e",
+        "nonce": 0,
+        "totalReservedAfter": 1,
+        "transactionHash": "0x7ed478f72dfa5f41d1760f34cb4fc335e7d8165b1daff6866891069d072deba4",
+        "blockNumber": 26357310,
+        "blockHash": "0x15ccc2b29c073c164bb8ef6c8af2a8f065478d6b7909620b243aa6199dd14d5d",
+        "logIndex": 194,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0x57524efc73e194e4f19dc1606fb7a3e1dbf719b3",
+        "nonce": 0,
+        "totalReservedAfter": 2,
+        "transactionHash": "0x44e6b7d6ca300dfa5567fe0bd84d12c554862d79db9dbe95ef86ba416520fab7",
+        "blockNumber": 26357358,
+        "blockHash": "0x2823c8cb36fec827fa0085cbc9b75949792163ff0b38704fc93649bcb2b2f89e",
+        "logIndex": 423,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0x1d4b9b250b1bd41daa35d94bf9204ec1b0494ee3",
+        "nonce": 0,
+        "totalReservedAfter": 3,
+        "transactionHash": "0xc951b500d8b7fb630e673f408027a77ef51d0b564637d29b84600a9c8c1c601d",
+        "blockNumber": 26357540,
+        "blockHash": "0x5610364f750f8b0ec5c286ed7741f992a6b1cdb515707f9e07a51b2da630aed8",
+        "logIndex": 701,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0x6f3f5ccfc70d49cf5786cb406498a952afd43826",
+        "nonce": 0,
+        "totalReservedAfter": 4,
+        "transactionHash": "0x34d6e3fe322f1eee41ef7c6e1ad4cf75ec8ce1f6fb9b17d52f676c13943f1720",
+        "blockNumber": 26357974,
+        "blockHash": "0x019b604921f92e4155b12304e4a68b789ed672be07648a314128550362385e65",
+        "logIndex": 821,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0x09ce5cb3313038043af9bbdf4c6b069aa4d72274",
+        "nonce": 0,
+        "totalReservedAfter": 5,
+        "transactionHash": "0x3568fd9015cf51707b5a3c2496ca1887c2f58f661103f4064500ed35fb9342a8",
+        "blockNumber": 26358113,
+        "blockHash": "0x770065be5da52e492428d5936a2c46894f0128021d8811033c096fd608235163",
+        "logIndex": 366,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0x0c14b195dee48595368621390184d38a73d3041f",
+        "nonce": 0,
+        "totalReservedAfter": 6,
+        "transactionHash": "0xb9f83c1095562e54bd857c32818009f2184e59d6c7c57759f8e5c6875ec52763",
+        "blockNumber": 26360051,
+        "blockHash": "0xb7df8eff13b9fd9aba5dbf553bb6a99c90b2d6f2fb9d6b50d3592936fe4d3cf1",
+        "logIndex": 237,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0xfc3c962fad2c1cc77f1a0d46e7b8a2de79a21774",
+        "nonce": 0,
+        "totalReservedAfter": 7,
+        "transactionHash": "0x4e34e9ad58d410e20ae8891e2d5e98e4f67a9b0f50d77de8cd77a034c77bc507",
+        "blockNumber": 26379940,
+        "blockHash": "0x7a28b5d69fea84a3361c43fcef4cfd7a108c9e65d1616c7f4cefe979f44d5817",
+        "logIndex": 630,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0xd1acbe05a739c855f2c54f42f0f1e3df662da56d",
+        "nonce": 0,
+        "totalReservedAfter": 8,
+        "transactionHash": "0xb38f4a62371e80b9e1a1668be8ac407618bb7b1aa2f2bebe85e7e6c7c423c43f",
+        "blockNumber": 26380996,
+        "blockHash": "0x23c54ac8dc2bc2e3c2002c6e967ae7af9ad474bb9f3e8f4158fdfdd11a8c10b3",
+        "logIndex": 100,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0x8e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+        "nonce": 0,
+        "totalReservedAfter": 9,
+        "transactionHash": "0x1b2344a02c705104f46607ad4b87126becc9d03e6b7810cc4b78fd705c27e580",
+        "blockNumber": 26384803,
+        "blockHash": "0x3cd67510022f09b24720eb8edac12a09695c36bc975aaa85288ffaf84c11d181",
+        "logIndex": 340,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      },
+      {
+        "wallet": "0x906311f58e48b49c903b9dca8a905091298d6508",
+        "nonce": 0,
+        "totalReservedAfter": 10,
+        "transactionHash": "0xdff9d41f14304ed70a5e7f11d3dd5b9dbc1bd8365076f9a52b2e0eb359d4281d",
+        "blockNumber": 26390123,
+        "blockHash": "0x7cd189820e659d778e3e628d8d50d19e66e8f6d9619010c24ffc50404e0a5390",
+        "logIndex": 299,
+        "valueWei": "2230000000000000000",
+        "valueEth": "2.23",
+        "receiptStatus": "success",
+        "receiptVerified": true
+      }
+    ]
+  },
+  "withdrawals": {
+    "count": 1,
+    "totalWei": "22300000000000000000",
+    "totalEth": "22.3",
+    "events": [
+      {
+        "treasury": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+        "amountWei": "22300000000000000000",
+        "amountEth": "22.3",
+        "transactionHash": "0x2ecc468446063ec37cb4351c710659857c423930fd330602c99696baf7b949cf",
+        "from": "0x3560e8d7a2f9f1022abce233d70330e50c2fa19c",
+        "to": "0xd1432dd5ec5dba6861bd4c6a56212f54abcbc0b9",
+        "blockNumber": 26390634,
+        "blockHash": "0xf36a7bd515e8af8ec456a193b81708e7200970b86b85eb57e6456ebb7dbc508a",
+        "logIndex": 281,
+        "receiptStatus": "success",
+        "receiptVerified": true
+      }
+    ]
+  },
+  "reconciliation": {
+    "paymentMinusWithdrawalWei": "0",
+    "matchesPre111kBalance": true
+  },
+  "safe": {
+    "address": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+    "balanceWei": "22301230000000000000",
+    "balanceEth": "22.30123",
+    "version": "1.5.0",
+    "nonce": "0",
+    "threshold": 2,
+    "owners": [
+      "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "0xe4790dd79c334e3f848904975272ec17f9f70366",
+      "0xe938ebb66b92692ab01f76c99cfac1928482e7b9"
+    ]
+  },
+  "nft111k": {
+    "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "balanceWei": "0",
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "pendingOwner": "0x0000000000000000000000000000000000000000",
+    "relicsAllocated": 0,
+    "relicsMinted": 0,
+    "allocatedCrates": 0,
+    "totalMintReceivedWei": "0",
+    "saleActive": false,
+    "freeMintAllowances": [
+      {
+        "wallet": "0x2ad5c6af6c0977412beeedb7c08aa2d75c9a227e",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0x57524efc73e194e4f19dc1606fb7a3e1dbf719b3",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0x1d4b9b250b1bd41daa35d94bf9204ec1b0494ee3",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0x6f3f5ccfc70d49cf5786cb406498a952afd43826",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0x09ce5cb3313038043af9bbdf4c6b069aa4d72274",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0x0c14b195dee48595368621390184d38a73d3041f",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0xfc3c962fad2c1cc77f1a0d46e7b8a2de79a21774",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0xd1acbe05a739c855f2c54f42f0f1e3df662da56d",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0x8e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0x906311f58e48b49c903b9dca8a905091298d6508",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      },
+      {
+        "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "crateLimit": 0,
+        "warehouseLimit": 0,
+        "relicLimit": 0,
+        "cratesUsed": 0,
+        "warehousesUsed": 0,
+        "relicsUsed": 0
+      }
+    ]
+  }
+}

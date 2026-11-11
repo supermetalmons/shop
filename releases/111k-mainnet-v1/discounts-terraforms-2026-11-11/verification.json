@@ -1,0 +1,1401 @@
+{
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "approvalSha256": "62080b4a90593d8b08be844a5de5d900fec86088ac7c0a25c7973b87882b0f1d",
+  "verifiedAt": "2026-11-11T12:57:03.848Z",
+  "eligibleWallets": 3242,
+  "root": "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b",
+  "discountAllowance": "1",
+  "pricesWei": {
+    "crate": "30000000000000000",
+    "warehouse": "300000000000000000",
+    "discountCrate": "15000000000000000"
+  },
+  "maxDiscountedMints": "500",
+  "totalDiscountedMints": "0",
+  "previousRoot": "0x82c0c6789afcb5823edc8914fc140a7da6bb582918857b7827d2dd1d838e13a6",
+  "rootOnlyUpdate": true,
+  "freeMintAllowances": [
+    {
+      "wallet": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x09ce5cb3313038043af9bbdf4c6b069aa4d72274",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x0c14b195dee48595368621390184d38a73d3041f",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x1d4b9b250b1bd41daa35d94bf9204ec1b0494ee3",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x2ad5c6af6c0977412beeedb7c08aa2d75c9a227e",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+      "values": [
+        "25",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x57524efc73e194e4f19dc1606fb7a3e1dbf719b3",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x6f3f5ccfc70d49cf5786cb406498a952afd43826",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "values": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+      "values": [
+        "25",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x8e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x906311f58e48b49c903b9dca8a905091298d6508",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xd1acbe05a739c855f2c54f42f0f1e3df662da56d",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "values": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xfc3c962fad2c1cc77f1a0d46e7b8a2de79a21774",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    }
+  ],
+  "freeCrateAllowances": [
+    {
+      "wallet": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x09ce5cb3313038043af9bbdf4c6b069aa4d72274",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x0c14b195dee48595368621390184d38a73d3041f",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x1d4b9b250b1bd41daa35d94bf9204ec1b0494ee3",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x2ad5c6af6c0977412beeedb7c08aa2d75c9a227e",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+      "values": [
+        "25",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x57524efc73e194e4f19dc1606fb7a3e1dbf719b3",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x6f3f5ccfc70d49cf5786cb406498a952afd43826",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "values": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+      "values": [
+        "25",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x8e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x906311f58e48b49c903b9dca8a905091298d6508",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xd1acbe05a739c855f2c54f42f0f1e3df662da56d",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "values": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xfc3c962fad2c1cc77f1a0d46e7b8a2de79a21774",
+      "values": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ]
+    }
+  ],
+  "freeCrateAllowancesPreserved": true,
+  "saleActive": false,
+  "allocatedCrates": "1332",
+  "relicsAllocated": "12",
+  "totalSupply": "0",
+  "mintProceedsUnchanged": true,
+  "publicRelicAllowancesUnchanged": true,
+  "relicClaimsPreserved": true,
+  "deliveryConfigsUnchanged": true,
+  "after": {
+    "checkedAt": "2026-11-11T12:57:03.847Z",
+    "blockNumber": 26391824,
+    "blockHash": "0xc118fbffe2a76194673425653ce78ed0c44cb79dafc61575a1f461652c1d12d9",
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "runtime": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+    "stats": [
+      "1332",
+      "0",
+      "0",
+      "30000000000000000",
+      "300000000000000000",
+      false,
+      "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b",
+      "15000000000000000",
+      "1",
+      "0",
+      "12",
+      "0",
+      "500",
+      "0",
+      "0"
+    ],
+    "supply": "0",
+    "uri": "https://cdn.mons.shop/111k/",
+    "recipients": [
+      {
+        "wallet": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+        "shareBps": "2750",
+        "released": "0",
+        "releasable": "6132500000000000000"
+      },
+      {
+        "wallet": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+        "shareBps": "2600",
+        "released": "0",
+        "releasable": "5798000000000000000"
+      },
+      {
+        "wallet": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+        "shareBps": "500",
+        "released": "0",
+        "releasable": "1115000000000000000"
+      },
+      {
+        "wallet": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+        "shareBps": "500",
+        "released": "0",
+        "releasable": "1115000000000000000"
+      },
+      {
+        "wallet": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+        "shareBps": "500",
+        "released": "0",
+        "releasable": "1115000000000000000"
+      },
+      {
+        "wallet": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+        "shareBps": "500",
+        "released": "0",
+        "releasable": "1115000000000000000"
+      },
+      {
+        "wallet": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+        "shareBps": "100",
+        "released": "0",
+        "releasable": "223000000000000000"
+      },
+      {
+        "wallet": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+        "shareBps": "100",
+        "released": "0",
+        "releasable": "223000000000000000"
+      },
+      {
+        "wallet": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+        "shareBps": "100",
+        "released": "0",
+        "releasable": "223000000000000000"
+      },
+      {
+        "wallet": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+        "shareBps": "100",
+        "released": "0",
+        "releasable": "223000000000000000"
+      },
+      {
+        "wallet": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+        "shareBps": "500",
+        "released": "0",
+        "releasable": "1115000000000000000"
+      },
+      {
+        "wallet": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+        "shareBps": "583",
+        "released": "0",
+        "releasable": "1300090000000000000"
+      },
+      {
+        "wallet": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+        "shareBps": "583",
+        "released": "0",
+        "releasable": "1300090000000000000"
+      },
+      {
+        "wallet": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+        "shareBps": "584",
+        "released": "0",
+        "releasable": "1302320000000000000"
+      }
+    ],
+    "allowances": [
+      {
+        "wallet": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x09ce5cb3313038043af9bbdf4c6b069aa4d72274",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x0c14b195dee48595368621390184d38a73d3041f",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x1d4b9b250b1bd41daa35d94bf9204ec1b0494ee3",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x2ad5c6af6c0977412beeedb7c08aa2d75c9a227e",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+        "values": [
+          "25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x57524efc73e194e4f19dc1606fb7a3e1dbf719b3",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x6f3f5ccfc70d49cf5786cb406498a952afd43826",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+        "values": [
+          "25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x8e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x906311f58e48b49c903b9dca8a905091298d6508",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xd1acbe05a739c855f2c54f42f0f1e3df662da56d",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "values": [
+          "0",
+          "0",
+          "2",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xfc3c962fad2c1cc77f1a0d46e7b8a2de79a21774",
+        "values": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      }
+    ],
+    "publicRelics": [
+      {
+        "wallet": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x09ce5cb3313038043af9bbdf4c6b069aa4d72274",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x0c14b195dee48595368621390184d38a73d3041f",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x1d4b9b250b1bd41daa35d94bf9204ec1b0494ee3",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x2ad5c6af6c0977412beeedb7c08aa2d75c9a227e",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x57524efc73e194e4f19dc1606fb7a3e1dbf719b3",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x6f3f5ccfc70d49cf5786cb406498a952afd43826",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x8e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0x906311f58e48b49c903b9dca8a905091298d6508",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xd1acbe05a739c855f2c54f42f0f1e3df662da56d",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      {
+        "wallet": "0xfc3c962fad2c1cc77f1a0d46e7b8a2de79a21774",
+        "values": [
+          "0",
+          "0",
+          "0",
+          false,
+          "0",
+          "0",
+          "0"
+        ]
+      }
+    ],
+    "pendingOwner": "0x0000000000000000000000000000000000000000",
+    "contractUri": "https://cdn.mons.shop/111k/collection.json",
+    "received": "22300000000000000000",
+    "released": "0",
+    "balance": "22300000000000000000",
+    "settings": {
+      "quoteSigner()": "0x00000000000000000000000043c829cbb3648cc5eb8ebaa15fb7cfab21ecc2ea",
+      "redemptionsPaused()": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "relicClaimedMask": "0",
+    "relicFirstCrates": [
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    "deliveries": [
+      {
+        "id": 1,
+        "values": [
+          "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+          "0x0000000000000000000000000000000000000000",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      }
+    ]
+  },
+  "snapshotBlock": 26391824,
+  "snapshotBlockHash": "0xc118fbffe2a76194673425653ce78ed0c44cb79dafc61575a1f461652c1d12d9",
+  "transactions": [
+    {
+      "group": "discount",
+      "transactionHash": "0xd722b19cf2e2c66b908d52da89e1a1ce4206123c9de8110d972361c13488d97c",
+      "nonce": "10",
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x22d3019",
+        "logs": [
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0x899ec5a0a8c3cc5ecfdfee7283f7aa996256dee8d21762abfc5d2e255a17f9d8"
+            ],
+            "data": "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b0000000000000000000000000000000000000000000000000000000000000001",
+            "blockHash": "0x5ea7c9d51fe66868271502c06901acbeebfbf7baec2ae7c9ca0a4fdb6baef4c7",
+            "blockNumber": "0x192b50e",
+            "blockTimestamp": "0x6af46603",
+            "transactionHash": "0xd722b19cf2e2c66b908d52da89e1a1ce4206123c9de8110d972361c13488d97c",
+            "transactionIndex": "0x1c3",
+            "logIndex": "0x350",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000800000000000000000000000000000000008000000000000000000000000000000000000000100000000000000400000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "transactionHash": "0xd722b19cf2e2c66b908d52da89e1a1ce4206123c9de8110d972361c13488d97c",
+        "transactionIndex": "0x1c3",
+        "blockHash": "0x5ea7c9d51fe66868271502c06901acbeebfbf7baec2ae7c9ca0a4fdb6baef4c7",
+        "blockNumber": "0x192b50e",
+        "gasUsed": "0x806a",
+        "effectiveGasPrice": "0x6e5e095",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "contractAddress": null
+      },
+      "gasCostWei": "3804459793842"
+    }
+  ]
+}

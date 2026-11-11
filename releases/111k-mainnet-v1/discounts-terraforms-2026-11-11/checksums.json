@@ -1,0 +1,14 @@
+{
+  "README.md": "6fa0744b63656bd2dbac82f5e760205e24fcbbeac123f7399a2fa903da2e9bf8",
+  "eligible-addresses.txt": "e51356698212a892068834edefe7ed5245c91e4c2f56635d7dae6f0fd70f3560",
+  "holder-balance-verification.json": "6c373bf4bd001f114e2e501f77fb7299bdbf096bc1800084e459b0de3bd9383c",
+  "independent-onchain-verification.json": "715a10008d7bb25f26064d893ac0dc2518401b72d898c73cb1ec55bc5c1a28de",
+  "merge-summary.json": "51ffe5bd4eeb80ed5c61c440d051f6a3f22d12115460e78f373298fa9d80f3ce",
+  "merkle-tree.json": "6fc3b2f138ad74de99d1b07fd34a74d754795a68ec7446cb25468385d6963c07",
+  "operation.json": "9b3860738bdb19840e009fb960f795f6a1db3983154a9c3f148da5c7c5579a87",
+  "proofs.json": "429881cdd045b70f0323a0842c70eae66eef0536bb7c1490146ba2e2798f438b",
+  "terraforms-holders.txt": "85d0f9b8450a62ecdd6f52d01471ef986f9025b0ae5f35d7603b0da9b63df4a2",
+  "terraforms-source.json": "dce0d1e1cc223a7e5c3c2078565100da560a3ec233197d8d15b286504a4560b7",
+  "terraforms-token-owners.csv": "a133f8f76fda969f39d148d181c26ec8f7d09c775df41920ee6d0ead8eb8e727",
+  "verification.json": "201eb308a3b15bb6621807a1895e34faa0ec495d0b75e706131e03b172bf7ab3"
+}

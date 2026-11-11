@@ -1,0 +1,17 @@
+{
+  "chainId": 1,
+  "safe": "0x72D0c5623A05033F9eE4495D408BC6c05DF8367d",
+  "safeTransactionHashAtObservedNonce": "0x9a4162443ff6474cd2ccadb8962aab5ee2d4babf9d58965690a782d30edf17c5",
+  "transaction": {
+    "to": "0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93",
+    "value": "22300000000000000000",
+    "data": "0x",
+    "operation": 0,
+    "safeTxGas": "0",
+    "baseGas": "0",
+    "gasPrice": "0",
+    "gasToken": "0x0000000000000000000000000000000000000000",
+    "refundReceiver": "0x0000000000000000000000000000000000000000",
+    "nonce": "0"
+  }
+}

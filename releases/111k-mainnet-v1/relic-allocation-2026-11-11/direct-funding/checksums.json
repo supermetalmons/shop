@@ -1,0 +1,14 @@
+{
+  "source-snapshot.json": "bb3bee075126800bd8f69f7eb7aabf2b9e11501f210db817ad07ca9a65f09496",
+  "01-safe-transfer.json": "3de8ed80e72ec4ebbe50dc424307f4342865effcfdfe650c14661bb494f5d495",
+  "01-safe-transaction.json": "e5a619573de39316653eb6c39f58095b0a7a353368eaf75685af0cab8ded6d05",
+  "02-deployer-allocate.json": "890eadf00c057809b9bd54577a2db5c7d1a16be6ddb75ff9417a4afc9f6d84f0",
+  "03-deployer-buyers.json": "3883caf2e35b7a86ccf95fb9fd8fd7cf717955118791686cefdac23174bc1291",
+  "04-deployer-extra-relics.json": "00ae77ff95f4e3a7fcab7783012b4a32b0d56f78519db451498078aa16d55c28",
+  "operation.json": "3ff1da23b81bef032efa273702bef3d75478af51c3768aaea06f022a22793596",
+  "simulation.json": "4ba2529afacc1a7ab9e9a2d7f6d57ac476e556313f2a0b20a95f8ea61409b4e3",
+  "README.md": "f402d2f4f64d0900c08c1b67fc652d1e5cd91d184a363d441c341ec3b8f30cdc",
+  "safe-transfer-status.json": "c7198097fe08f6d6b6ec49eb93120998fcbf8f3c7a48dded1d0a63126a1a5320",
+  "execution-approved.json": "914cc902622de7ffb50584a58a23f8280e9ded226be882d971a4e7a1018a5cf5",
+  "execution-verification.json": "354c07b95d7627797e71a6e8a5e3c78c23144d371570c99f1ceffec14e0552c1"
+}

@@ -1,0 +1,22 @@
+{
+  "chainId": 1,
+  "from": "0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93",
+  "expectedNonce": "7",
+  "to": "0x08cDed8258730bda384FF198001E47a1B50f7f9d",
+  "value": "22300000000000000000",
+  "data": "0x40e3d87c000000000000000000000000000000000000000000000000000000000000000c",
+  "contractMethod": {
+    "inputs": [
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "name": "allocateRelics",
+    "payable": true
+  },
+  "contractInputsValues": {
+    "quantity": "12"
+  }
+}

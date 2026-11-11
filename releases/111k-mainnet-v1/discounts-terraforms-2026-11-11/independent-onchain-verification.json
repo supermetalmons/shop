@@ -1,0 +1,18 @@
+{
+  "verifiedAt": "2026-11-11T12:57:13.844Z",
+  "provider": "PublicNode",
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "blockNumber": 26391824,
+  "blockHash": "0xc118fbffe2a76194673425653ce78ed0c44cb79dafc61575a1f461652c1d12d9",
+  "transactionHash": "0xd722b19cf2e2c66b908d52da89e1a1ce4206123c9de8110d972361c13488d97c",
+  "confirmations": 3,
+  "eligibleAddresses": 3242,
+  "allExportedProofsVerifiedAgainstLiveRoot": true,
+  "root": "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b",
+  "discountAllowance": 1,
+  "discountPriceWei": "15000000000000000",
+  "maxDiscountedMints": 500,
+  "totalDiscountedMints": 0,
+  "saleActive": false
+}

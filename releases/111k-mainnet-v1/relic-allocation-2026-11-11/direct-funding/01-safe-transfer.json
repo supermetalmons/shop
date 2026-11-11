@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "chainId": "1",
+  "createdAt": 1794399780237,
+  "meta": {
+    "name": "111K: transfer 22.3 ETH to deployer",
+    "description": "Transfer the 10 paid relic reservations to the existing NFT111K owner. The deployer then calls allocateRelics(12) with exactly 22.3 ETH and grants 1 relic to each of 10 buyers and 2 relics to itself using three separate owner transactions.",
+    "createdFromSafeAddress": "0x72D0c5623A05033F9eE4495D408BC6c05DF8367d",
+    "createdFromOwnerAddress": "",
+    "checksum": "0xb488658dfe28d937157841ede70d6af518a4df114badefdb59fa8c64eac88838"
+  },
+  "transactions": [
+    {
+      "to": "0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93",
+      "value": "22300000000000000000",
+      "data": "0x",
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "status": "funding-confirmed",
+  "chainId": 1,
+  "transactionHash": "0x3f0565493ff503ef87359800e3f0d025190ad01f3bc87b51391212c743b3c0c8",
+  "safeTransactionHash": "0x9a4162443ff6474cd2ccadb8962aab5ee2d4babf9d58965690a782d30edf17c5",
+  "fromSafe": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+  "to": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "valueWei": "22300000000000000000",
+  "data": "0x",
+  "operation": 0,
+  "blockNumber": 26391672,
+  "blockHash": "0xdd0a77f4f106f1938bf6bb148200bf7c6a8a412732fc36a3366666a30adad8aa",
+  "confirmations": 4,
+  "observedBlock": 26391675,
+  "safeBalanceWei": "1230000000000000",
+  "deployerBalanceWei": "22312408623811949331",
+  "deployerCallsStatus": "executed-and-confirmed",
+  "allocationVerificationFile": "execution-verification.json"
+}

@@ -1,0 +1,481 @@
+{
+  "status": "complete",
+  "route": "direct-funding",
+  "chainId": 1,
+  "collection": "0x08cDed8258730bda384FF198001E47a1B50f7f9d",
+  "safe": "0x72D0c5623A05033F9eE4495D408BC6c05DF8367d",
+  "owner": "0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93",
+  "paymentWei": "22300000000000000000",
+  "paymentEth": "22.3",
+  "reservedRelics": 12,
+  "reservedCrates": 1332,
+  "allocations": [
+    {
+      "wallet": "0x09ce5cb3313038043Af9bbDF4C6b069AA4d72274",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0x0C14B195deE48595368621390184D38A73d3041F",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0x1d4B9b250B1Bd41DAA35d94BF9204Ec1b0494eE3",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0x2ad5C6af6c0977412beeEDb7C08aa2d75C9a227E",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0x57524EfC73e194e4F19DC1606FB7a3E1Dbf719B3",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0x6F3f5Ccfc70D49cF5786CB406498A952AfD43826",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0x8e2AD92D1986C37D4CC9618C13ae9950f4d3192B",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0x906311f58E48b49c903b9Dca8a905091298D6508",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0xd1AcbE05a739c855f2C54f42f0F1e3dF662da56D",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0xFc3C962FAD2C1cC77f1a0d46e7B8a2De79A21774",
+      "relicLimit": 1
+    },
+    {
+      "wallet": "0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93",
+      "relicLimit": 2
+    }
+  ],
+  "safeTransaction": {
+    "to": "0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93",
+    "value": "22300000000000000000",
+    "data": "0x",
+    "operation": 0,
+    "safeTxGas": "0",
+    "baseGas": "0",
+    "gasPrice": "0",
+    "gasToken": "0x0000000000000000000000000000000000000000",
+    "refundReceiver": "0x0000000000000000000000000000000000000000",
+    "nonce": "0"
+  },
+  "deployerCalls": [
+    {
+      "to": "0x08cDed8258730bda384FF198001E47a1B50f7f9d",
+      "value": "22300000000000000000",
+      "data": "0x40e3d87c000000000000000000000000000000000000000000000000000000000000000c",
+      "contractMethod": {
+        "inputs": [
+          {
+            "name": "quantity",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "name": "allocateRelics",
+        "payable": true
+      },
+      "contractInputsValues": {
+        "quantity": "12"
+      }
+    },
+    {
+      "to": "0x08cDed8258730bda384FF198001E47a1B50f7f9d",
+      "value": "0",
+      "data": "0x9d0d5a7c0000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000009ce5cb3313038043af9bbdf4c6b069aa4d722740000000000000000000000000c14b195dee48595368621390184d38a73d3041f0000000000000000000000001d4b9b250b1bd41daa35d94bf9204ec1b0494ee30000000000000000000000002ad5c6af6c0977412beeedb7c08aa2d75c9a227e00000000000000000000000057524efc73e194e4f19dc1606fb7a3e1dbf719b30000000000000000000000006f3f5ccfc70d49cf5786cb406498a952afd438260000000000000000000000008e2ad92d1986c37d4cc9618c13ae9950f4d3192b000000000000000000000000906311f58e48b49c903b9dca8a905091298d6508000000000000000000000000d1acbe05a739c855f2c54f42f0f1e3df662da56d000000000000000000000000fc3c962fad2c1cc77f1a0d46e7b8a2de79a21774",
+      "contractMethod": {
+        "inputs": [
+          {
+            "name": "wallets",
+            "type": "address[]",
+            "internalType": "address[]"
+          },
+          {
+            "name": "crateLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "warehouseLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "relicLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          }
+        ],
+        "name": "setFreeMintAllowances",
+        "payable": false
+      },
+      "contractInputsValues": {
+        "wallets": "[\"0x09ce5cb3313038043Af9bbDF4C6b069AA4d72274\",\"0x0C14B195deE48595368621390184D38A73d3041F\",\"0x1d4B9b250B1Bd41DAA35d94BF9204Ec1b0494eE3\",\"0x2ad5C6af6c0977412beeEDb7C08aa2d75C9a227E\",\"0x57524EfC73e194e4F19DC1606FB7a3E1Dbf719B3\",\"0x6F3f5Ccfc70D49cF5786CB406498A952AfD43826\",\"0x8e2AD92D1986C37D4CC9618C13ae9950f4d3192B\",\"0x906311f58E48b49c903b9Dca8a905091298D6508\",\"0xd1AcbE05a739c855f2C54f42f0F1e3dF662da56D\",\"0xFc3C962FAD2C1cC77f1a0d46e7B8a2De79A21774\"]",
+        "crateLimit": "0",
+        "warehouseLimit": "0",
+        "relicLimit": "1"
+      }
+    },
+    {
+      "to": "0x08cDed8258730bda384FF198001E47a1B50f7f9d",
+      "value": "0",
+      "data": "0x9d0d5a7c00000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "contractMethod": {
+        "inputs": [
+          {
+            "name": "wallets",
+            "type": "address[]",
+            "internalType": "address[]"
+          },
+          {
+            "name": "crateLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "warehouseLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "relicLimit",
+            "type": "uint16",
+            "internalType": "uint16"
+          }
+        ],
+        "name": "setFreeMintAllowances",
+        "payable": false
+      },
+      "contractInputsValues": {
+        "wallets": "[\"0xD58d143cA63D9BaCcc33fDF69Ea203F59c58aE93\"]",
+        "crateLimit": "0",
+        "warehouseLimit": "0",
+        "relicLimit": "2"
+      }
+    }
+  ],
+  "preflight": {
+    "block": {
+      "number": 26391653,
+      "hash": "0x17a5fde8cec135af6cac886e084568674ae89a32eaf528c3c6f19a856b143671",
+      "timestamp": 1794399767,
+      "timestampIso": "2026-11-11T12:22:47.000Z",
+      "tag": "latest-pinned"
+    },
+    "safe": {
+      "address": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "balanceWei": "22301230000000000000",
+      "version": "1.5.0",
+      "nonce": "0",
+      "threshold": 2,
+      "owners": [
+        "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "0xe4790dd79c334e3f848904975272ec17f9f70366",
+        "0xe938ebb66b92692ab01f76c99cfac1928482e7b9"
+      ]
+    },
+    "deployer": {
+      "address": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "balanceWei": "12408623811949331",
+      "nonce": "7"
+    },
+    "collection": {
+      "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "pendingOwner": "0x0000000000000000000000000000000000000000",
+      "relicsAllocated": 0,
+      "relicsMinted": 0,
+      "allocatedCrates": 0,
+      "totalMintReceivedWei": "0",
+      "saleActive": false
+    }
+  },
+  "priorFreeCrateAllowances": [
+    {
+      "wallet": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+      "values": [
+        "25",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+      "values": [
+        "25",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+      "values": [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "wallet": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "values": [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    }
+  ],
+  "proceeds": {
+    "depositedToCollectionAfterDeployerCall": true,
+    "releasedByOperation": false,
+    "futureReleasable": [
+      {
+        "recipient": "0x51Ec8729331E284c4B5e8EcA8e0D184FeD18632F",
+        "sharesBps": 2750,
+        "releasableWei": "6132500000000000000"
+      },
+      {
+        "recipient": "0x8B573abc736c82216D738Af3024F3a45fC3b18E3",
+        "sharesBps": 2600,
+        "releasableWei": "5798000000000000000"
+      },
+      {
+        "recipient": "0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9",
+        "sharesBps": 500,
+        "releasableWei": "1115000000000000000"
+      },
+      {
+        "recipient": "0x1B591f88d9bFcF7d057DF2c5a50b59Da2cBa349f",
+        "sharesBps": 500,
+        "releasableWei": "1115000000000000000"
+      },
+      {
+        "recipient": "0x07d2d89b4A6E3fdA8858Da3510b76e2219eE6969",
+        "sharesBps": 500,
+        "releasableWei": "1115000000000000000"
+      },
+      {
+        "recipient": "0x603C39B3D0E0f33772d79695A4F6819FCc987113",
+        "sharesBps": 500,
+        "releasableWei": "1115000000000000000"
+      },
+      {
+        "recipient": "0xa07E7932f5C981aA769A1Cf9400B5c94AdB944c4",
+        "sharesBps": 100,
+        "releasableWei": "223000000000000000"
+      },
+      {
+        "recipient": "0x2236Fb6C35f78A092F0DdA655f3b49d0e8Bf6581",
+        "sharesBps": 100,
+        "releasableWei": "223000000000000000"
+      },
+      {
+        "recipient": "0x71d0318BB33d961f323C81a7a4Ca095b549F7E6E",
+        "sharesBps": 100,
+        "releasableWei": "223000000000000000"
+      },
+      {
+        "recipient": "0xc4275E6D4109e0288cDc9b064E32F3f54bcDA61F",
+        "sharesBps": 100,
+        "releasableWei": "223000000000000000"
+      },
+      {
+        "recipient": "0x72D0c5623A05033F9eE4495D408BC6c05DF8367d",
+        "sharesBps": 500,
+        "releasableWei": "1115000000000000000"
+      },
+      {
+        "recipient": "0x0AdF7B78c952E038d4eA4B5bF84B9d3D22C60Ce9",
+        "sharesBps": 583,
+        "releasableWei": "1300090000000000000"
+      },
+      {
+        "recipient": "0xB0B4EC16bE55af47109947F0dC84C4561A020A4B",
+        "sharesBps": 583,
+        "releasableWei": "1300090000000000000"
+      },
+      {
+        "recipient": "0xd9488d6687d656a55B3F1a36998d149f9b1bE2Cc",
+        "sharesBps": 584,
+        "releasableWei": "1302320000000000000"
+      }
+    ]
+  },
+  "executionOrder": [
+    "01-safe-transfer.json",
+    "02-deployer-allocate.json",
+    "03-deployer-buyers.json",
+    "04-deployer-extra-relics.json"
+  ],
+  "safeTransferStatusFile": "safe-transfer-status.json",
+  "fundingTransactionHash": "0x3f0565493ff503ef87359800e3f0d025190ad01f3bc87b51391212c743b3c0c8",
+  "executedAt": "2026-11-11T12:31:44.967Z",
+  "executionVerificationFile": "execution-verification.json",
+  "transactions": [
+    {
+      "step": "allocate-12-relics",
+      "transactionHash": "0x6030d8dd3d625cfa38dc4b470466fc2fd0d5ddd4f76dc18ed84ebb32b65300dc",
+      "nonce": "7",
+      "valueWei": "22300000000000000000",
+      "gasCostWei": "10119380921496",
+      "blockNumber": 26391687
+    },
+    {
+      "step": "grant-10-buyers",
+      "transactionHash": "0x52f70084d89cc2323356c2360ad4c112bf3ea10373c0ce0b7f862ea6109c19f9",
+      "nonce": "8",
+      "valueWei": "0",
+      "gasCostWei": "32027681644025",
+      "blockNumber": 26391692
+    },
+    {
+      "step": "grant-2-deployer-relics",
+      "transactionHash": "0x3234ff77045950b33b3e31aedfa39fc39d409393d3f0303ed1267e39a42734c7",
+      "nonce": "9",
+      "valueWei": "0",
+      "gasCostWei": "5980921769735",
+      "blockNumber": 26391695
+    }
+  ],
+  "totalGasCostWei": "48127984335256"
+}

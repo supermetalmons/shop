@@ -1,0 +1,13 @@
+{
+  "verifiedAt": "2026-11-11T12:56:16.850Z",
+  "provider": "Alchemy",
+  "chainId": 1,
+  "collection": "0x4e1f41613c9084fdb9e34e11fae9412427480e56",
+  "blockNumber": 26391733,
+  "blockHash": "0x8a27150df15c313310e346ad53e1e04825a7004e0e01096b5cf095e6c7d89552",
+  "holdersChecked": 1978,
+  "tokensAccountedFor": 9911,
+  "everyBalanceMatchesTokenSnapshot": true,
+  "sumOfBalancesEqualsTotalSupply": true,
+  "holdersSha256": "85d0f9b8450a62ecdd6f52d01471ef986f9025b0ae5f35d7603b0da9b63df4a2"
+}
