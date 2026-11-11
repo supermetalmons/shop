@@ -1,0 +1,40 @@
+{
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "sourceFile": "final.txt",
+  "sourceSha256": "232a97258c78e26b9e86effd476ba41c009dd1219cb355f794f48f091d00049a",
+  "eligibleWallets": 1343,
+  "root": "0x82c0c6789afcb5823edc8914fc140a7da6bb582918857b7827d2dd1d838e13a6",
+  "discountAllowance": 1,
+  "pricesWei": {
+    "crate": "30000000000000000",
+    "warehouse": "300000000000000000",
+    "discountCrate": "15000000000000000"
+  },
+  "lifetimeDiscountedMintCap": 500,
+  "proofsSha256": "f7950f62b43a0b51147337e6b8bc2d236aeadf62086f9906667086a7f8d7972e",
+  "treeSha256": "5dd960acc89d03d8326bcd1ed503c7be2e25bad77d44f8b9dc08d316c942c61e",
+  "approvedCalls": [
+    {
+      "group": "prices",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0",
+      "data": "0xa88fe42d000000000000000000000000000000000000000000000000006a94d74f4300000000000000000000000000000000000000000000000000000429d069189e000000000000000000000000000000000000000000000000000000354a6ba7a18000"
+    },
+    {
+      "group": "discount",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0",
+      "data": "0x922cb2d682c0c6789afcb5823edc8914fc140a7da6bb582918857b7827d2dd1d838e13a60000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ],
+  "maximumTotalFeeWei": "2000000000000000",
+  "gasCostWei": "6042628977417",
+  "preservedConfigurationSha256": {
+    "src/ethereum/discounts/111k.json": "a1daf47d60ed412c5ca8109cf3ce1510c88309749d94dd0e8bc8a71e5aa36186",
+    "shared/ethereum/config.ts": "fa7339c69cf225defd8e31ee4fc3f5f0a1eaa5dad29b6509ddb7256018808dbb",
+    "cloud/workers/api/wrangler.jsonc": "e1c3b15ba1ead019372a523f4d0570161f08e4bb5bce8a11dd0586ddab9bd463"
+  },
+  "verifiedAt": "2026-11-11T10:53:21.135Z"
+}

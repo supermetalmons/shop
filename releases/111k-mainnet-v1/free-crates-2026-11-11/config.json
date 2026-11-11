@@ -1,0 +1,34 @@
+{
+  "groups": [
+    {
+      "name": "25-crates",
+      "crates": 25,
+      "warehouses": 0,
+      "relics": 0,
+      "wallets": [
+        "0x51Ec8729331E284c4B5e8EcA8e0D184FeD18632F",
+        "0x8B573abc736c82216D738Af3024F3a45fC3b18E3"
+      ]
+    },
+    {
+      "name": "1-crate",
+      "crates": 1,
+      "warehouses": 0,
+      "relics": 0,
+      "wallets": [
+        "0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9",
+        "0x1B591f88d9bFcF7d057DF2c5a50b59Da2cBa349f",
+        "0x07d2d89b4A6E3fdA8858Da3510b76e2219eE6969",
+        "0x603C39B3D0E0f33772d79695A4F6819FCc987113",
+        "0xa07E7932f5C981aA769A1Cf9400B5c94AdB944c4",
+        "0x2236Fb6C35f78A092F0DdA655f3b49d0e8Bf6581",
+        "0x71d0318BB33d961f323C81a7a4Ca095b549F7E6E",
+        "0xc4275E6D4109e0288cDc9b064E32F3f54bcDA61F",
+        "0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE",
+        "0x0AdF7B78c952E038d4eA4B5bF84B9d3D22C60Ce9",
+        "0xB0B4EC16bE55af47109947F0dC84C4561A020A4B",
+        "0xd9488d6687d656a55B3F1a36998d149f9b1bE2Cc"
+      ]
+    }
+  ]
+}
