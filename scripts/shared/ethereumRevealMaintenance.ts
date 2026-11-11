@@ -1,10 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import type { GetPlatformProxyOptions } from 'wrangler';
+import type { RelicImagesRequest, RelicImagesResult } from '../../shared/ethereum/relicImages.ts';
 import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealRetirementRequest, EthereumRevealRetirementResult, EthereumRevealRetirementCancellation, EthereumRevealReplacementRequest,
   EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  relicImages?(request: RelicImagesRequest): Promise<RelicImagesResult>;
   catalogUpdate?(request: EthereumRevealCatalogUpdateRequest): Promise<EthereumRevealCatalogUpdateResult>;
   backfillAttributes?(request: EthereumRevealAttributeBackfillRequest): Promise<EthereumRevealAttributeBackfillPage>;
   purgeRetired(request: EthereumRevealMaintenanceRequest): Promise<EthereumRevealPurgeResult>;
@@ -42,7 +44,15 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async catalogUpdate(request) {
+    return await run({ async relicImages(request) {
+      const result = await call(() => proxy.env.REVEAL_MAINTENANCE.relicImages!(request));
+      if (result.action === 'apply') return { action: result.action, tokenId: result.tokenId, status: result.status };
+      return { action: result.action, objects: Array.from({ length: result.objects.length }, (_, index) => {
+        const object = result.objects[index];
+        return { tokenId: object.tokenId, beforeJson: object.beforeJson, afterJson: object.afterJson,
+          beforeSha256: object.beforeSha256, afterSha256: object.afterSha256, etag: object.etag };
+      }) };
+    }, async catalogUpdate(request) {
       const result = await call(() => proxy.env.REVEAL_MAINTENANCE.catalogUpdate!(request));
       return { deploymentId: result.deploymentId, batchId: result.batchId, phase: result.phase, complete: result.complete,
         catalogRevision: result.catalogRevision, total: result.total, staged: result.staged, applied: result.applied,

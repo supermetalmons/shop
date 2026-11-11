@@ -1,0 +1,166 @@
+{
+  "checkedAt": "2026-11-11T14:04:38.336Z",
+  "frontendVersion": "af0e53e5-3256-4620-b44b-30e71fea94ea",
+  "liveUrl": "https://mons.shop/111k_devnet",
+  "liveGrid": {
+    "imageCount": 18,
+    "allLoaded": true,
+    "images": [
+      {
+        "id": 1,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/1.webp",
+        "width": 1320,
+        "height": 1858,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 2,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/2.webp",
+        "width": 1320,
+        "height": 986,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 3,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/3.webp",
+        "width": 1320,
+        "height": 1320,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 4,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/4.webp",
+        "width": 1320,
+        "height": 990,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 5,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/5.webp",
+        "width": 1320,
+        "height": 990,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 6,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/6.webp",
+        "width": 1279,
+        "height": 1230,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 7,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/7.webp",
+        "width": 1320,
+        "height": 1974,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 8,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/8.webp",
+        "width": 1320,
+        "height": 1492,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 9,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/9.webp",
+        "width": 1060,
+        "height": 1484,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 10,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/10.webp",
+        "width": 1320,
+        "height": 1548,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 11,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/11.webp",
+        "width": 1320,
+        "height": 1519,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 12,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/12.webp",
+        "width": 1320,
+        "height": 1349,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 13,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/13.webp",
+        "width": 1320,
+        "height": 1980,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 14,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/14.webp",
+        "width": 1320,
+        "height": 1821,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 15,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/15.webp",
+        "width": 1320,
+        "height": 1760,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 16,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/16.webp",
+        "width": 1320,
+        "height": 1760,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 17,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/17.webp",
+        "width": 1320,
+        "height": 880,
+        "loaded": true,
+        "objectFit": "contain"
+      },
+      {
+        "id": 18,
+        "url": "https://cdn.lil.org/nft/111k/relics/mid/18.webp",
+        "width": 1320,
+        "height": 750,
+        "loaded": true,
+        "objectFit": "contain"
+      }
+    ]
+  },
+  "localComponents": {
+    "sameSource": true,
+    "canonicalMetadataInput": true,
+    "gridImages": 18,
+    "fullscreenViewerIds": [
+      1,
+      18
+    ],
+    "allLoaded": true,
+    "proportionsCorrect": true
+  }
+}

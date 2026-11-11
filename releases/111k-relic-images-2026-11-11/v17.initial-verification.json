@@ -1,0 +1,12 @@
+{
+  "deploymentId": "v17",
+  "journalSha256": "48522d13d22858811023a1725ad98ab138d89aef791713cadcd708984f05e48a",
+  "verifiedAt": "2026-11-11T14:10:15.958Z",
+  "complete": true,
+  "objectCount": 18,
+  "storageVerified": 18,
+  "cdnVerified": 18,
+  "apiVerified": 18,
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+  "expectedRevision": 12
+}

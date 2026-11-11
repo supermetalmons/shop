@@ -40,7 +40,7 @@ The separately cataloged 85,556 receipts all use
 artwork allocation or a per-category receipt metadata mapping. Unrevealed artwork
 and every artwork, crate, and relic receipt metadata template use this same
 placeholder. Crates use `crate.webp` at 4:3 and warehouses use `warehouse.webp` at
-3:2 under the same CDN root. New relic publications use `relics/{id}.webp` for
+3:2 under the same CDN root. New relic publications use `relics/{id}.png` for
 IDs 1–18 under that root; existing publications retain their recorded image URLs.
 
 ## Import an updated dimensions map

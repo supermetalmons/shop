@@ -4,7 +4,7 @@ For mainnet identity and request changes, use the [VVV mainnet checklist](111k_m
 
 ## Display
 
-Show **Relic #1–#18** using `https://cdn.lil.org/nft/111k/relics/{id}.webp`. Always show all eighteen choices; the allocated supply limits total claims, not selectable IDs. No metadata, stats, or inventory API is needed for this page.
+Show **Relic #1–#18** using the storefront images `https://cdn.lil.org/nft/111k/relics/mid/{id}.webp`. Canonical NFT metadata uses `https://cdn.lil.org/nft/111k/relics/{id}.png`. Always show all eighteen choices; the allocated supply limits total claims, not selectable IDs. No metadata, stats, or inventory API is needed for this page.
 
 ## Read availability and wallet allowance
 

@@ -2,6 +2,7 @@ import type { Ethereum111kConfig, EthereumInventoryItem, EthereumSession } from 
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_UNBOX_QUANTITY, ethereumAssetId, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import type { InventoryItem } from '../types';
 import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
+import { relicDisplayMedia } from './relicMedia';
 import { decodeReturn, encodeCall } from '../../shared/ethereum/abi';
 import { ethereumCatalogKey } from './catalogRevision';
 
@@ -35,7 +36,8 @@ export function ethereumInventoryQueryKey(scope: string | null, catalog?: Pick<E
 }
 
 export function ethereumInventoryView(item: EthereumInventoryItem, dropId = '111k_devnet'): EthereumInventoryView {
-  const containerMedia = item.kind === 'crate' || item.kind === 'warehouse' ? ETHEREUM_CONTAINER_MEDIA[item.kind] : undefined;
+  const containerMedia = item.kind === 'crate' || item.kind === 'warehouse' ? ETHEREUM_CONTAINER_MEDIA[item.kind]
+    : item.kind === 'relic' ? relicDisplayMedia(item.image) : undefined;
   return {
     id: ethereumAssetId(item.chainId, item.contractAddress, item.tokenId),
     dropId, name: item.name, image: containerMedia?.src ?? item.image,

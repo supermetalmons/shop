@@ -1,3 +1,5 @@
+import { relicDisplayMedia } from './relicMedia';
+
 export const ETHEREUM_CONTAINER_MEDIA = {
   crate: {
     label: 'Crate',
@@ -18,9 +20,6 @@ export const ETHEREUM_CONTAINER_MEDIA = {
   relic: {
     label: 'Relic',
     pluralLabel: 'Relics',
-    src: 'https://cdn.lil.org/nft/111k/relics/1.webp',
-    width: 1400,
-    height: 1400,
-    aspectRatio: 1,
+    ...relicDisplayMedia('https://cdn.lil.org/nft/111k/relics/mid/1.webp')!,
   },
 } as const;

@@ -1,0 +1,283 @@
+{
+  "operation": "relic-images-webp-to-png",
+  "deployments": [
+    {
+      "scope": {
+        "deploymentId": "v17",
+        "chainId": 11155111,
+        "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+        "expectedRevision": 12
+      },
+      "preparedAt": "2026-11-11T14:08:44.566Z",
+      "journalSha256": "48522d13d22858811023a1725ad98ab138d89aef791713cadcd708984f05e48a",
+      "objects": [
+        {
+          "tokenId": "117172",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/1.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/1.png",
+          "beforeSha256": "b4b9b39f725f149da670df96f76b49b9a1d6574d4c6283af0a3c0d28c91aacb9",
+          "afterSha256": "4a920e6f3c05cd4db5ac1adcd7c23d9a33973a0e777533a6745563e982786ee2"
+        },
+        {
+          "tokenId": "117173",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/2.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/2.png",
+          "beforeSha256": "c8cf1e7d29721827957c568129bc6411eedcc8f28c88c1c1f486bd8b8618322b",
+          "afterSha256": "6c7851676d25960f9c8703217d9e6c1150206d541edaff5a00fe02133ccbf022"
+        },
+        {
+          "tokenId": "117174",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/3.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/3.png",
+          "beforeSha256": "18d6c6667090782975e71ed6aa8f69df168ccbe9b276191c5bedf845df8148e5",
+          "afterSha256": "38bca60788fe4eea7b9d09b1b11305b9c86fe30263771862f464a5d99138ec78"
+        },
+        {
+          "tokenId": "117175",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/4.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/4.png",
+          "beforeSha256": "229a957a48fd2e8d84c8730d8a0f0d5a10cc72045253925853a3da60ef50f045",
+          "afterSha256": "f51ddde663f2255c9ee2636ff2f30569fe0a86aec1583a01e658e96cfc8c23c1"
+        },
+        {
+          "tokenId": "117176",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/5.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/5.png",
+          "beforeSha256": "32e70d7daf7d89c5e787c87a45eb60af89a0de4d6d2852fa86b55be55af4588e",
+          "afterSha256": "bd790953ce0f33e23a72dd71836514e3edff7629650dc15cb924e968ca6a13d1"
+        },
+        {
+          "tokenId": "117177",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/6.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/6.png",
+          "beforeSha256": "c1208d5ca8250c0d03ff97a7a43dd1c5ae3f1d1e61383964208df284ded0c9b0",
+          "afterSha256": "bc1774854cc4d92b82f59ff758715468673f3362cc25f58d1e1de71be11b964d"
+        },
+        {
+          "tokenId": "117178",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/7.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/7.png",
+          "beforeSha256": "eb06c1cf9c1947ae40eb95d752bbbdf2a69a44fb930363e761a52f9f7329fd93",
+          "afterSha256": "72251456a527e6ece91d2150807cb43403f1f492c6e6d0491c5036a7b0a85beb"
+        },
+        {
+          "tokenId": "117179",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/8.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/8.png",
+          "beforeSha256": "3ec3c917148d3132497e599d7a113981227b7c60fdaf4ccbf3e04e4a035a6524",
+          "afterSha256": "d23f053ee3cb600edc7ed9f5eb9ca02dde9b50c71479d6c2e62ea755ca4c192c"
+        },
+        {
+          "tokenId": "117180",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/9.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/9.png",
+          "beforeSha256": "9a0dbdd1d8ae419af9a3c684d3083c3043f95bd948d594286c57ad8c27e1bafd",
+          "afterSha256": "61d437f5013b0e196f701cc6711a894dedf3f4c0f6722e55ddde15f04e9b4343"
+        },
+        {
+          "tokenId": "117181",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/10.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/10.png",
+          "beforeSha256": "2baea7de43b285b0ca6a0cd221bd2f9a4357e532693995aa2ea8a47253a2b73a",
+          "afterSha256": "39f96ad092ab95ce9244c6467faed1327fcf9e76685dfa29815366dc63a4cdfb"
+        },
+        {
+          "tokenId": "117182",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/11.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/11.png",
+          "beforeSha256": "fc20c10f60c4255638b3fb906238acf3fb3897a542ac820fa196ad0437475ac6",
+          "afterSha256": "2a0c67c5f55b8f1d96ca4e1de156bd3b80445d679462faab2b76aeaef042fc01"
+        },
+        {
+          "tokenId": "117183",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/12.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/12.png",
+          "beforeSha256": "14565eb23cbaa0b06945f9c94f6777cd6b1de539f366bb89b612202d868e7502",
+          "afterSha256": "2f727885754bbb05c36b9293b4423008e3eb992dea52db2a8985cdfc5c423542"
+        },
+        {
+          "tokenId": "117184",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/13.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/13.png",
+          "beforeSha256": "77b0cc4699a97e846c0b9337d1704217a19d13940966dec7d88aea32ad13e72b",
+          "afterSha256": "b5b7c807525322f0d6e018ca2bbca944fe64f5b6084c911e0c4a04bedde0cd6a"
+        },
+        {
+          "tokenId": "117185",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/14.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/14.png",
+          "beforeSha256": "997e0faacb55570ecda4a796138441d01c229782ca9266f6b7839ac23e2068e3",
+          "afterSha256": "46aa6daf6c2af3a0d27c37691db688c51743b6521c0967c296c325c76e2ed5a6"
+        },
+        {
+          "tokenId": "117186",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/15.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/15.png",
+          "beforeSha256": "ee5588e3554449340f9fdde263381a8377937cf767034e509e91d012f33379f1",
+          "afterSha256": "8c0a91fd3dc895c8820ef2b39beadee041b392901ee28166c7e195384762016d"
+        },
+        {
+          "tokenId": "117187",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/16.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/16.png",
+          "beforeSha256": "7c3424b19e02ab77e7f09122ce96bd7a424048f5811fd7733b30d102a8ca2dd4",
+          "afterSha256": "d9b7d439a0783284e0c3984d2b0ce80287f22d002c867579bc771f4a94b087a6"
+        },
+        {
+          "tokenId": "117188",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/17.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/17.png",
+          "beforeSha256": "673e21c63c8d9d5cb6c8836c5599aed46dcb2fca6e6d225b5a38ac892a7f8e01",
+          "afterSha256": "f82a758cc359529fa5c96f2efb77b0ceb9c227c97046c4bf0695196a2fa30c31"
+        },
+        {
+          "tokenId": "117189",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/18.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/18.png",
+          "beforeSha256": "8d84db1b44ccb03993327bbcf9cf1f7a58fcc86ab69d1ef353e36d29fe9dbb30",
+          "afterSha256": "8a8dd6930151c6790645727ced469e36aef7db206309a52f2e336cec65b1b384"
+        }
+      ]
+    },
+    {
+      "scope": {
+        "deploymentId": "mainnet-v1",
+        "chainId": 1,
+        "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "metadataBaseUri": "https://cdn.mons.shop/111k/",
+        "expectedRevision": 3
+      },
+      "preparedAt": "2026-11-11T14:10:37.629Z",
+      "journalSha256": "59c973a2baec4a84d69e54ad016fe30e1c9f87ecdc5581e980307c23ce8d439f",
+      "objects": [
+        {
+          "tokenId": "117172",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/1.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/1.png",
+          "beforeSha256": "b4b9b39f725f149da670df96f76b49b9a1d6574d4c6283af0a3c0d28c91aacb9",
+          "afterSha256": "4a920e6f3c05cd4db5ac1adcd7c23d9a33973a0e777533a6745563e982786ee2"
+        },
+        {
+          "tokenId": "117173",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/2.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/2.png",
+          "beforeSha256": "c8cf1e7d29721827957c568129bc6411eedcc8f28c88c1c1f486bd8b8618322b",
+          "afterSha256": "6c7851676d25960f9c8703217d9e6c1150206d541edaff5a00fe02133ccbf022"
+        },
+        {
+          "tokenId": "117174",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/3.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/3.png",
+          "beforeSha256": "18d6c6667090782975e71ed6aa8f69df168ccbe9b276191c5bedf845df8148e5",
+          "afterSha256": "38bca60788fe4eea7b9d09b1b11305b9c86fe30263771862f464a5d99138ec78"
+        },
+        {
+          "tokenId": "117175",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/4.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/4.png",
+          "beforeSha256": "229a957a48fd2e8d84c8730d8a0f0d5a10cc72045253925853a3da60ef50f045",
+          "afterSha256": "f51ddde663f2255c9ee2636ff2f30569fe0a86aec1583a01e658e96cfc8c23c1"
+        },
+        {
+          "tokenId": "117176",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/5.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/5.png",
+          "beforeSha256": "32e70d7daf7d89c5e787c87a45eb60af89a0de4d6d2852fa86b55be55af4588e",
+          "afterSha256": "bd790953ce0f33e23a72dd71836514e3edff7629650dc15cb924e968ca6a13d1"
+        },
+        {
+          "tokenId": "117177",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/6.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/6.png",
+          "beforeSha256": "c1208d5ca8250c0d03ff97a7a43dd1c5ae3f1d1e61383964208df284ded0c9b0",
+          "afterSha256": "bc1774854cc4d92b82f59ff758715468673f3362cc25f58d1e1de71be11b964d"
+        },
+        {
+          "tokenId": "117178",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/7.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/7.png",
+          "beforeSha256": "eb06c1cf9c1947ae40eb95d752bbbdf2a69a44fb930363e761a52f9f7329fd93",
+          "afterSha256": "72251456a527e6ece91d2150807cb43403f1f492c6e6d0491c5036a7b0a85beb"
+        },
+        {
+          "tokenId": "117179",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/8.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/8.png",
+          "beforeSha256": "3ec3c917148d3132497e599d7a113981227b7c60fdaf4ccbf3e04e4a035a6524",
+          "afterSha256": "d23f053ee3cb600edc7ed9f5eb9ca02dde9b50c71479d6c2e62ea755ca4c192c"
+        },
+        {
+          "tokenId": "117180",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/9.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/9.png",
+          "beforeSha256": "9a0dbdd1d8ae419af9a3c684d3083c3043f95bd948d594286c57ad8c27e1bafd",
+          "afterSha256": "61d437f5013b0e196f701cc6711a894dedf3f4c0f6722e55ddde15f04e9b4343"
+        },
+        {
+          "tokenId": "117181",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/10.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/10.png",
+          "beforeSha256": "2baea7de43b285b0ca6a0cd221bd2f9a4357e532693995aa2ea8a47253a2b73a",
+          "afterSha256": "39f96ad092ab95ce9244c6467faed1327fcf9e76685dfa29815366dc63a4cdfb"
+        },
+        {
+          "tokenId": "117182",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/11.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/11.png",
+          "beforeSha256": "fc20c10f60c4255638b3fb906238acf3fb3897a542ac820fa196ad0437475ac6",
+          "afterSha256": "2a0c67c5f55b8f1d96ca4e1de156bd3b80445d679462faab2b76aeaef042fc01"
+        },
+        {
+          "tokenId": "117183",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/12.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/12.png",
+          "beforeSha256": "14565eb23cbaa0b06945f9c94f6777cd6b1de539f366bb89b612202d868e7502",
+          "afterSha256": "2f727885754bbb05c36b9293b4423008e3eb992dea52db2a8985cdfc5c423542"
+        },
+        {
+          "tokenId": "117184",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/13.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/13.png",
+          "beforeSha256": "77b0cc4699a97e846c0b9337d1704217a19d13940966dec7d88aea32ad13e72b",
+          "afterSha256": "b5b7c807525322f0d6e018ca2bbca944fe64f5b6084c911e0c4a04bedde0cd6a"
+        },
+        {
+          "tokenId": "117185",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/14.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/14.png",
+          "beforeSha256": "997e0faacb55570ecda4a796138441d01c229782ca9266f6b7839ac23e2068e3",
+          "afterSha256": "46aa6daf6c2af3a0d27c37691db688c51743b6521c0967c296c325c76e2ed5a6"
+        },
+        {
+          "tokenId": "117186",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/15.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/15.png",
+          "beforeSha256": "ee5588e3554449340f9fdde263381a8377937cf767034e509e91d012f33379f1",
+          "afterSha256": "8c0a91fd3dc895c8820ef2b39beadee041b392901ee28166c7e195384762016d"
+        },
+        {
+          "tokenId": "117187",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/16.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/16.png",
+          "beforeSha256": "7c3424b19e02ab77e7f09122ce96bd7a424048f5811fd7733b30d102a8ca2dd4",
+          "afterSha256": "d9b7d439a0783284e0c3984d2b0ce80287f22d002c867579bc771f4a94b087a6"
+        },
+        {
+          "tokenId": "117188",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/17.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/17.png",
+          "beforeSha256": "673e21c63c8d9d5cb6c8836c5599aed46dcb2fca6e6d225b5a38ac892a7f8e01",
+          "afterSha256": "f82a758cc359529fa5c96f2efb77b0ceb9c227c97046c4bf0695196a2fa30c31"
+        },
+        {
+          "tokenId": "117189",
+          "beforeImage": "https://cdn.lil.org/nft/111k/relics/18.webp",
+          "afterImage": "https://cdn.lil.org/nft/111k/relics/18.png",
+          "beforeSha256": "8d84db1b44ccb03993327bbcf9cf1f7a58fcc86ab69d1ef353e36d29fe9dbb30",
+          "afterSha256": "8a8dd6930151c6790645727ced469e36aef7db206309a52f2e336cec65b1b384"
+        }
+      ]
+    }
+  ]
+}

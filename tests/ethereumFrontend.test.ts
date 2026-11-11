@@ -609,12 +609,13 @@ test('relic metadata requests stay bounded and preserve ID order across out-of-o
     maximum = Math.max(maximum, active);
     await new Promise(resolve => setTimeout(resolve, (19 - id) % 4));
     active--;
-    return Response.json({ name: `Relic #${id}`, image: `https://cdn.lil.org/nft/111k/relics/${id}.webp` });
+    return Response.json({ name: `Relic #${id}`, image: `https://cdn.lil.org/nft/111k/relics/${id}.png` });
   });
   const metadata = await ethereumApi.relicMetadata(config);
   assert.equal(maximum, 4);
   assert.deepEqual(requested.sort((a, b) => a - b), Array.from({ length: 18 }, (_, index) => index + 1));
   assert.deepEqual(metadata.map(item => item.name), Array.from({ length: 18 }, (_, index) => `Relic #${index + 1}`));
+  assert.deepEqual(metadata.map(item => item.image), Array.from({ length: 18 }, (_, index) => `https://cdn.lil.org/nft/111k/relics/${index + 1}.png`));
 });
 
 test('relic confirmation requires the exact zero-value ID claim event even after the NFT moves', async t => {

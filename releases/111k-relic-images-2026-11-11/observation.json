@@ -1,0 +1,23 @@
+{
+  "startedAt": "2026-11-11T14:12:05.008Z",
+  "notBefore": "2026-11-11T14:17:05.008Z",
+  "requiredSeconds": 300,
+  "complete": true,
+  "completedAt": "2026-11-11T14:18:03.439Z",
+  "elapsedSeconds": 358.431,
+  "verifiedMetadataObjects": 36,
+  "healthyDeployments": 2,
+  "unchangedCanaries": 8,
+  "finalVerification": [
+    {
+      "deploymentId": "v17",
+      "verifiedAt": "2026-11-11T14:17:54.720Z",
+      "journalSha256": "48522d13d22858811023a1725ad98ab138d89aef791713cadcd708984f05e48a"
+    },
+    {
+      "deploymentId": "mainnet-v1",
+      "verifiedAt": "2026-11-11T14:17:55.471Z",
+      "journalSha256": "59c973a2baec4a84d69e54ad016fe30e1c9f87ecdc5581e980307c23ce8d439f"
+    }
+  ]
+}

@@ -11,6 +11,18 @@ dom.window.close();
 beforeEach(() => { ({ dom } = setupFrontendDom()); });
 afterEach(() => { cleanup(); dom.window.close(); });
 
+test('the selection grid displays all mid previews while retaining canonical PNG metadata', () => {
+  const metadata = Array.from({ length: 18 }, (_, index) => Object.freeze({ name: `Relic #${index + 1}`,
+    image: `https://cdn.lil.org/nft/111k/relics/${index + 1}.png` }));
+  const view = render(createElement(RelicClaimGrid, { metadata, claimedMask: 0, selectedId: null, disabled: false, onSelect() {} }));
+  const images = [...view.container.querySelectorAll('img')];
+  assert.deepEqual(images.map(image => image.getAttribute('src')),
+    metadata.map((_item, index) => `https://cdn.lil.org/nft/111k/relics/mid/${index + 1}.webp`));
+  assert.deepEqual([images[0].width, images[0].height], [1320, 1858]);
+  assert.deepEqual([images[17].width, images[17].height], [1320, 750]);
+  assert.ok(metadata.every(item => item.image.endsWith('.png')));
+});
+
 for (const [width, height, viewport] of [[288, 188, 320], [343, 240, 375], [900, 350, 1280], [700, 200, 1024]]) {
   test(`all eighteen relic tiles fit inside ${width}×${height} without setting a larger preview height`, () => {
     const view = render(createElement(RelicClaimGrid, { claimedMask: 0, selectedId: null, disabled: false, onSelect() {} }));

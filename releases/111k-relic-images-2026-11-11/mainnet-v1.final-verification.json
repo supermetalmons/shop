@@ -1,0 +1,12 @@
+{
+  "deploymentId": "mainnet-v1",
+  "journalSha256": "59c973a2baec4a84d69e54ad016fe30e1c9f87ecdc5581e980307c23ce8d439f",
+  "verifiedAt": "2026-11-11T14:17:55.471Z",
+  "complete": true,
+  "objectCount": 18,
+  "storageVerified": 18,
+  "cdnVerified": 18,
+  "apiVerified": 18,
+  "metadataBaseUri": "https://cdn.mons.shop/111k/",
+  "expectedRevision": 3
+}

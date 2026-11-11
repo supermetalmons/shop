@@ -57,13 +57,42 @@ function fixture() {
 test('private reveal maintenance accepts only explicit identities and revisions', async () => {
   const f = fixture();
   assert.deepEqual(Object.getOwnPropertyNames(EthereumRevealMaintenance.prototype).sort(),
-    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'inspectReplacement', 'inspectRetired', 'purgeRetired', 'retireForReplacement']);
+    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'inspectReplacement', 'inspectRetired', 'purgeRetired', 'relicImages', 'retireForReplacement']);
   for (const value of [null, {}, { ...request, expectedRevision: 0 }, { ...request, expectedRevision: '4' },
     { ...request, deploymentId: '../old' }, { ...request, contractAddress: currentContract }]) {
     await assert.rejects(f.maintenance.purgeRetired(value), /Invalid reveal maintenance/);
     await assert.rejects(f.maintenance.inspectRetired(value), /Invalid reveal maintenance/);
   }
   assert.deepEqual(f.calls, []);
+});
+
+for (const chainId of [1, 11155111]) test(`private relic maintenance forwards only the verified ${chainId} identity`, async () => {
+  const scope = { deploymentId: chainId === 1 ? 'mainnet-v1' : 'relic-test', chainId, contractAddress: oldContract,
+    metadataBaseUri: chainId === 1 ? 'https://cdn.mons.shop/111k/' : 'https://cdn.mons.shop/111k-sepolia/relic-test/', expectedRevision: 4 };
+  const registration = { ...row, deployment_id: scope.deploymentId, chain_id: chainId,
+    drop_id: chainId === 1 ? '111k' : '111k_devnet', metadata_base_uri: scope.metadataBaseUri,
+    state: chainId === 1 ? 'ready' : 'active', catalog_version: '111k-v8', retired_at_ms: null, replacement_deployment_id: null };
+  const calls: unknown[] = [];
+  const deferred = createDeferredWorkCollector();
+  const environment = { OPS_DB: { prepare: () => ({ bind: (...values: unknown[]) => {
+    assert.deepEqual(values, [chainId, oldContract]);
+    return { first: async () => registration };
+  } }) }, ETHEREUM_REVEAL_PUBLISHER: { getByName(name: string) {
+    assert.equal(name, `${chainId}:${oldContract}`);
+    return { relicImages: async (value: unknown, deadline: number) => {
+      assert.ok(deadline > Date.now() && deadline <= Date.now() + 25_000);
+      calls.push(value);
+      return { action: 'inspect', objects: [] };
+    } };
+  } } } as unknown as Env;
+  const maintenance = new EthereumRevealMaintenance({ waitUntil: deferred.defer } as ExecutionContext, environment);
+  const request = { scope, action: 'inspect' };
+  assert.deepEqual(await maintenance.relicImages(request), { action: 'inspect', objects: [] });
+  assert.deepEqual(calls, [request]);
+  registration.revision++;
+  await assert.rejects(maintenance.relicImages(request), /identity, revision, or maintenance state/);
+  assert.equal(calls.length, 1);
+  await deferred.drain();
 });
 
 for (const invalid of ['missing', 'revision', 'active', 'not-retired', 'mainnet', 'drop', 'configured', 'commerce', 'reset'] as const) {

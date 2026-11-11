@@ -5,6 +5,7 @@ import { attributePublisherName } from '../src/ethereumRevealAttributes.ts';
 import type { RevealPublicationJob } from '../src/ethereumRevealStore.ts';
 import type { MetadataWrite } from '../src/ethereumRevealPublisherObject.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
+import { prepareRelicImagePatch, RELIC_IMAGE_TOKEN_IDS, type RelicImagesRequest } from '../../../../shared/ethereum/relicImages.ts';
 
 const { EthereumRevealPublisherObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealPublisherObject.ts'));
 const scope = { deploymentId: 'test-sepolia', chainId: 11155111, contractAddress: `0x${'11'.repeat(20)}`,
@@ -32,7 +33,7 @@ const control = { paused: 0, revision: 4, paused_at_ms: null, chain_id: 11155111
 
 function fixture() {
   const registry = { row: { ...registration } as Record<string, unknown> | null };
-  const objects = new Map<string, { body: string; etag: string; httpMetadata?: R2HTTPMetadata }>();
+  const objects = new Map<string, { body: string; etag: string; httpMetadata?: R2HTTPMetadata; customMetadata?: Record<string, string> }>();
   const writes: Array<{ key: string; body: string; options: R2PutOptions }> = [];
   const desired = new Map<string, MetadataWrite>();
   const publishers = new Map<string, InstanceType<typeof EthereumRevealPublisherObject>>();
@@ -42,7 +43,7 @@ function fixture() {
     async get(objectKey: string) {
       reads++;
       const current = objects.get(objectKey);
-      return current ? { size: new TextEncoder().encode(current.body).byteLength, etag: current.etag, httpMetadata: current.httpMetadata,
+      return current ? { size: new TextEncoder().encode(current.body).byteLength, etag: current.etag, httpMetadata: current.httpMetadata, customMetadata: current.customMetadata,
         arrayBuffer: async () => new TextEncoder().encode(current.body).buffer } as R2ObjectBody : null;
     },
     async put(objectKey: string, body: string, options: R2PutOptions) {
@@ -51,7 +52,7 @@ function fixture() {
       const condition = options.onlyIf as R2Conditional;
       if (condition.etagMatches ? current?.etag !== condition.etagMatches : current !== undefined) return null;
       assert.ok(!(options.httpMetadata instanceof Headers));
-      objects.set(objectKey, { body, etag: `etag-${writes.length}`, httpMetadata: options.httpMetadata });
+      objects.set(objectKey, { body, etag: `etag-${writes.length}`, httpMetadata: options.httpMetadata, customMetadata: options.customMetadata });
       return { etag: `etag-${writes.length}` } as R2Object;
     },
   };
@@ -584,4 +585,147 @@ test('attribute preparation bounds source reads and retirement waits for aborted
     assert.deepEqual(await prepare(), { status: 'source-unavailable' });
     assert.equal(f.writes.length, 0);
   } finally { release.resolve(); await work; }
+});
+
+const relicJson = (tokenId = '117172') => `{ "name": "Relic", "description": "", "image": "https://cdn.lil.org/nft/111k/relics/${Number(tokenId) - 117171}.webp", "attributes": [{"trait_type":"number","value":12345678901234567890}] }\n`;
+const relicScope = { ...scope, expectedRevision: 3 };
+const relicRequest = (): RelicImagesRequest => ({ scope: relicScope, action: 'apply',
+  patch: prepareRelicImagePatch('117172', relicJson(), 'original') });
+
+test('relic maintenance inspects exactly 18 objects and applies only the prepared image bytes and checksum', async () => {
+  const f = fixture();
+  for (const tokenId of RELIC_IMAGE_TOKEN_IDS) f.objects.set(key(tokenId), { body: relicJson(tokenId), etag: 'original',
+    httpMetadata: jsonHeaders, customMetadata: { sha256: 'old', preserved: 'yes' } });
+  const result = await f.publisher.relicImages({ scope: relicScope, action: 'inspect' });
+  assert.equal(result.action, 'inspect');
+  if (result.action !== 'inspect') return;
+  assert.equal(result.objects.length, 18);
+  assert.deepEqual(result.objects.map(patch => patch.tokenId), RELIC_IMAGE_TOKEN_IDS);
+  assert.equal(f.reads(), 18);
+  assert.equal(f.writes.length, 0);
+  const patch = result.objects[0];
+  assert.deepEqual(await f.publisher.relicImages({ scope: relicScope, action: 'apply', patch }),
+    { action: 'apply', tokenId: '117172', status: 'updated' });
+  assert.deepEqual(f.writes[0].options, { onlyIf: { etagMatches: 'original' }, httpMetadata: jsonHeaders,
+    customMetadata: { sha256: patch.afterSha256, preserved: 'yes' } });
+  assert.equal(f.objects.get(key('117172'))?.body, patch.afterJson);
+  assert.deepEqual(await f.publisher.relicImages({ scope: relicScope, action: 'apply', patch }),
+    { action: 'apply', tokenId: '117172', status: 'unchanged' });
+  assert.equal(f.writes.length, 1);
+  const second = await f.publisher.relicImages({ scope: relicScope, action: 'inspect' });
+  assert.equal(second.action === 'inspect' && second.objects[0].beforeJson, patch.afterJson);
+});
+
+for (const invalid of ['revision', 'retired', 'catalog-update', 'deployment', 'prefix', 'missing', 'drop', 'provisioning']) {
+  test(`relic maintenance rejects ${invalid} before accessing R2`, async () => {
+    const f = fixture();
+    if (invalid === 'missing') f.registry.row = null;
+    if (invalid === 'revision') f.registry.row!.revision = 4;
+    if (invalid === 'retired') f.retire();
+    if (invalid === 'catalog-update') Object.assign(f.registry.row!, { catalog_update_id: 'pending', catalog_update_started_at_ms: 1 });
+    if (invalid === 'deployment') f.registry.row!.deployment_id = 'different';
+    if (invalid === 'prefix') f.registry.row!.metadata_base_uri = 'https://cdn.mons.shop/111k-sepolia/different/';
+    if (invalid === 'drop') f.registry.row!.drop_id = 'other';
+    if (invalid === 'provisioning') f.registry.row!.state = 'provisioning';
+    await assert.rejects(f.publisher.relicImages(relicRequest()), /identity, revision, or maintenance state/);
+    assert.equal(f.reads(), 0);
+    assert.equal(f.writes.length, 0);
+  });
+}
+
+test('relic maintenance rechecks registry changes after reading the object', async () => {
+  const f = fixture();
+  f.objects.set(key('117172'), { body: relicJson(), etag: 'original', httpMetadata: jsonHeaders });
+  const get = f.bucket.get;
+  f.bucket.get = async key => { const result = await get(key); f.registry.row!.revision = 4; return result; };
+  await assert.rejects(f.publisher.relicImages(relicRequest()), /identity, revision, or maintenance state/);
+  assert.equal(f.writes.length, 0);
+});
+
+test('relic maintenance rejects stale ETags, foreign bytes and concurrent writes', async () => {
+  const f = fixture();
+  for (const value of [{ body: relicJson(), etag: 'new-etag' }, { body: relicJson().replace('Relic', 'Foreign'), etag: 'original' }]) {
+    f.objects.set(key('117172'), { ...value, httpMetadata: jsonHeaders });
+    await assert.rejects(f.publisher.relicImages(relicRequest()), /changed since preparation/);
+    assert.equal(f.writes.length, 0);
+  }
+  f.objects.set(key('117172'), { body: relicJson(), etag: 'original', httpMetadata: jsonHeaders });
+  const put = f.bucket.put;
+  f.bucket.put = async (...args) => { f.objects.set(key('117172'), { body: 'foreign', etag: 'concurrent' }); return put(...args); };
+  await assert.rejects(f.publisher.relicImages(relicRequest()), /conditional write conflicted/);
+  assert.equal(f.objects.get(key('117172'))?.body, 'foreign');
+});
+
+test('relic maintenance reconciles an acknowledged-lost write on retry', async () => {
+  const f = fixture();
+  f.objects.set(key('117172'), { body: relicJson(), etag: 'original', httpMetadata: jsonHeaders });
+  const put = f.bucket.put;
+  f.bucket.put = async (...args) => { await put(...args); throw new Error('Lost acknowledgment'); };
+  await assert.rejects(f.publisher.relicImages(relicRequest()), /Lost acknowledgment/);
+  assert.deepEqual(await f.publisher.relicImages(relicRequest()), { action: 'apply', tokenId: '117172', status: 'unchanged' });
+  assert.equal(f.writes.length, 1);
+});
+
+test('relic maintenance leaves ordinary artwork guards intact and rejects attribute publisher routing', async () => {
+  const f = fixture();
+  assert.throws(() => f.publisher.publishBatch(scope, [job('117172')]), /Invalid reveal publication metadata/);
+  assert.throws(() => f.reopen(attributePublisherName(scope)).relicImages(relicRequest()), /object does not match/);
+  assert.equal(f.reads(), 0);
+});
+
+test('relic maintenance bounds stalled reads and blocks overlapping operations', async () => {
+  const f = fixture();
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<R2ObjectBody | null>();
+  f.bucket.get = () => { entered.resolve(); return release.promise; };
+  const operation = f.publisher.relicImages(relicRequest(), Date.now() + 20);
+  await entered.promise;
+  assert.throws(() => f.publisher.relicImages(relicRequest()), /already running maintenance/);
+  await assert.rejects(operation, /timed out/);
+  release.resolve(null);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(f.aborts(), 1);
+  assert.equal(f.writes.length, 0);
+});
+
+test('retirement drains an in-flight relic write before confirming storage is quiet', async () => {
+  const f = fixture();
+  f.objects.set(key('117172'), { body: relicJson(), etag: 'original', httpMetadata: jsonHeaders });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const put = f.bucket.put;
+  f.bucket.put = async (...args) => { entered.resolve(); await release.promise; return put(...args); };
+  const operation = f.publisher.relicImages(relicRequest());
+  const rejected = assert.rejects(operation, /unavailable/);
+  await entered.promise;
+  f.retire();
+  let drained = false;
+  const drain = f.publisher.drainRetired({ deploymentId: scope.deploymentId, expectedRevision: 4 }).then(() => { drained = true; });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(drained, false);
+  release.resolve();
+  await rejected;
+  await drain;
+  assert.equal(drained, true);
+  assert.equal(f.writes.length, 1);
+});
+
+test('relic maintenance rejects noncanonical headers before inspection, update, or unchanged success', async () => {
+  const f = fixture();
+  const patch = prepareRelicImagePatch('117172', relicJson(), 'original');
+  for (const httpMetadata of [undefined, { ...jsonHeaders, contentType: 'application/octet-stream' },
+    { ...jsonHeaders, cacheControl: 'public,max-age=3600' }, { ...jsonHeaders, contentEncoding: 'gzip' }]) {
+    for (const body of [patch.beforeJson, patch.afterJson]) {
+      f.objects.set(key('117172'), { body, etag: 'original', httpMetadata });
+      await assert.rejects(f.publisher.relicImages({ scope: relicScope, action: 'inspect' }), /HTTP headers are not canonical/);
+      await assert.rejects(f.publisher.relicImages({ scope: relicScope, action: 'apply', patch }), /HTTP headers are not canonical/);
+    }
+  }
+  assert.equal(f.writes.length, 0);
+});
+
+test('relic maintenance rejects a body whose byte length differs from its declared size', async () => {
+  const f = fixture();
+  f.bucket.get = async () => ({ size: 1, etag: 'original', httpMetadata: jsonHeaders,
+    arrayBuffer: async () => new TextEncoder().encode(relicJson()).buffer } as R2ObjectBody);
+  await assert.rejects(f.publisher.relicImages(relicRequest()), /size is invalid/);
+  assert.equal(f.writes.length, 0);
 });

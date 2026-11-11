@@ -130,6 +130,22 @@ for (const kind of ['crate', 'warehouse'] as const) test(`${kind} framing leaves
   }
 });
 
+for (const [id, width, height] of [[1, 1320, 1858], [18, 1320, 750]]) {
+  test(`relic ${id} viewer uses its mid preview and native aspect ratio`, () => {
+    const relic = { ...item(String(117171 + id), 'relic'), displayId: id,
+      image: `https://cdn.lil.org/nft/111k/relics/${id}.png`, aspectRatio: undefined };
+    const view = presentationView(options());
+    act(() => { view.presentation.openViewer(relic); });
+    const target = view.presentation.overlay!.targetRect;
+    assert.ok(Math.abs(target.height - target.width * height / width) < 1);
+    const image = view.getByRole('img', { name: relic.name });
+    assert.equal(image.getAttribute('src'), `https://cdn.lil.org/nft/111k/relics/mid/${id}.webp`);
+    assert.equal(image.getAttribute('width'), String(width));
+    assert.equal(image.getAttribute('height'), String(height));
+    assert.equal(relic.image, `https://cdn.lil.org/nft/111k/relics/${id}.png`);
+  });
+}
+
 test('opening unpack submits immediately and only its own results are presented', async () => {
   const submitted = Promise.withResolvers<string | null>();
   let sends = 0;

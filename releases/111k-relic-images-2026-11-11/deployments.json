@@ -1,0 +1,32 @@
+{
+  "recordedAt": "2026-11-11T14:08:44.582Z",
+  "api": {
+    "command": "npm run deploy:api",
+    "versionId": "792359a8-655d-48a5-9a25-53aaeeac91bc",
+    "unitTests": 3320,
+    "runtimeTests": 70,
+    "passed": true,
+    "pendingMigrations": 0,
+    "boundedReadinessPassed": true,
+    "fullCommerceAudit": false
+  },
+  "frontend": {
+    "command": "npm run deploy",
+    "versionId": "af0e53e5-3256-4620-b44b-30e71fea94ea",
+    "tests": 5240,
+    "passed": true
+  },
+  "tools": {
+    "typecheckPassed": true,
+    "cliTests": 8
+  },
+  "retry": {
+    "initialApiRuntimeFailures": [
+      "lifecycle-repair transient phase assertion",
+      "same-catalog replacement Miniflare RPC bridge assertion"
+    ],
+    "isolatedRetestPassed": true,
+    "fullApiGateRetestPassed": true,
+    "productionChangesForFailures": false
+  }
+}

@@ -58,12 +58,12 @@ test('a public CDN body mismatch is rejected before fetching its media', async (
 });
 
 test('frozen v16 relic images remain verifiable alongside newly published CDN relics', async () => {
-  for (const [metadataScope, root] of [
-    [{ chainId: 11155111, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v16/' }, 'https://wip.lil.org/111k/'],
-    [scope, 'https://cdn.lil.org/nft/111k/'],
+  for (const [metadataScope, root, extension] of [
+    [{ chainId: 11155111, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v16/' }, 'https://wip.lil.org/111k/', 'webp'],
+    [scope, 'https://cdn.lil.org/nft/111k/', 'png'],
   ] as const) {
     const bodies = Object.fromEntries(Array.from({ length: 18 }, (_, index) => [`${117172 + index}.json`, metadata(index + 1,
-      { name: `Relic #${index + 1}`, image: `${root}relics/${index + 1}.webp`, attributes: [{ trait_type: 'type', value: 'relic' }] })]));
+      { name: `Relic #${index + 1}`, image: `${root}relics/${index + 1}.${extension}`, attributes: [{ trait_type: 'type', value: 'relic' }] })]));
     const images: string[] = [];
     await verify111kReplacementPublicSamples(metadataScope,
       Object.fromEntries(Object.entries(bodies).map(([file, body]) => [file, sha256(body)])), {
@@ -71,10 +71,10 @@ test('frozen v16 relic images remain verifiable alongside newly published CDN re
           const url = String(input);
           if (init?.method === 'GET') return new Response(bodies[url.slice(metadataScope.metadataBaseUri.length)], { headers: jsonHeaders });
           images.push(url);
-          return new Response(null, { headers: { ...mediaHeaders(url), 'Content-Type': 'image/webp' } });
+          return new Response(null, { headers: { ...mediaHeaders(url), 'Content-Type': `image/${extension}` } });
         }) as typeof fetch,
       });
-    assert.deepEqual(images.sort(), Array.from({ length: 18 }, (_, index) => `${root}relics/${index + 1}.webp`).sort());
+    assert.deepEqual(images.sort(), Array.from({ length: 18 }, (_, index) => `${root}relics/${index + 1}.${extension}`).sort());
   }
 });
 

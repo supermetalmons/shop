@@ -1,0 +1,67 @@
+{
+  "checkedAt": "2026-11-11T14:17:47.675Z",
+  "deployments": [
+    {
+      "deploymentId": "mainnet-v1",
+      "chainId": 1,
+      "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "metadataBaseUri": "https://cdn.mons.shop/111k/",
+      "revision": 3,
+      "state": "active",
+      "lastError": null,
+      "catalogRevision": 0
+    },
+    {
+      "deploymentId": "v17",
+      "chainId": 11155111,
+      "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+      "revision": 12,
+      "state": "active",
+      "lastError": null,
+      "catalogRevision": 3
+    }
+  ],
+  "canaries": [
+    {
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/111112.json",
+      "sha256": "7587469fef0faed966d57b8d24725c25ef684d7b8c7016fab19563428a3f1644",
+      "unchanged": true
+    },
+    {
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/116667.json",
+      "sha256": "0e0b4c575a79ef224d544dd7dd6d86f55675c2ba50be6baf7bea24c0c2e7a607",
+      "unchanged": true
+    },
+    {
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/3000001.json",
+      "sha256": "d8e4e3f7c655508d83a19cb5bd3d87f15c70b7fd154b061f452fcd24ffc1842a",
+      "unchanged": true
+    },
+    {
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/3000018.json",
+      "sha256": "e691f68e4519fe7ce7ba9f30e80b7209c17bb46deab9a1b1730604fd6a7f2bc7",
+      "unchanged": true
+    },
+    {
+      "url": "https://cdn.mons.shop/111k/111112.json",
+      "sha256": "7587469fef0faed966d57b8d24725c25ef684d7b8c7016fab19563428a3f1644",
+      "unchanged": true
+    },
+    {
+      "url": "https://cdn.mons.shop/111k/116667.json",
+      "sha256": "0e0b4c575a79ef224d544dd7dd6d86f55675c2ba50be6baf7bea24c0c2e7a607",
+      "unchanged": true
+    },
+    {
+      "url": "https://cdn.mons.shop/111k/3000001.json",
+      "sha256": "d8e4e3f7c655508d83a19cb5bd3d87f15c70b7fd154b061f452fcd24ffc1842a",
+      "unchanged": true
+    },
+    {
+      "url": "https://cdn.mons.shop/111k/3000018.json",
+      "sha256": "e691f68e4519fe7ce7ba9f30e80b7209c17bb46deab9a1b1730604fd6a7f2bc7",
+      "unchanged": true
+    }
+  ]
+}

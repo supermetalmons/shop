@@ -10,6 +10,9 @@ import { attributePublisherName, fetchRevealAttributes, InvalidRevealAttributes,
 import type { RevealPublicationJob } from './ethereumRevealStore.js';
 import { requireRetiredRevealDeployment, requireRevealObjectIdentity } from './ethereumRevealMaintenanceSupport.js';
 import { revealDeploymentCatalog } from './ethereumRevealCatalog.js';
+import { MAX_RELIC_METADATA_BYTES, parseRelicImagesRequest, prepareRelicImagePatch, RELIC_IMAGE_TOKEN_IDS,
+  type RelicImagePatch, type RelicImagesRequest, type RelicImagesResult } from '../../../../shared/ethereum/relicImages.js';
+import { requireRelicImagesDeployment } from './ethereumRelicImages.js';
 
 export type PublicationScope = Pick<EthereumRevealDeployment, 'deploymentId' | 'chainId' | 'contractAddress' | 'metadataBaseUri'>;
 export type RevealPublicationOutcome = { tokenId: string; status: 'published' | 'conflict' | 'retry' | 'superseded' };
@@ -28,6 +31,79 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
   private readonly sourceReads = new Set<Promise<unknown>>();
   private resetting = false;
   private retiring = false;
+  private relicMaintenance: Promise<RelicImagesResult> | null = null;
+
+  relicImages(value: unknown, deadlineMs = Date.now() + 25_000): Promise<RelicImagesResult> {
+    const request = parseRelicImagesRequest(value);
+    requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL_PUBLISHER, request.scope);
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= Date.now() || this.retiring || this.resetting || this.relicMaintenance) {
+      throw new Error('Relic image publisher is unavailable or already running maintenance.');
+    }
+    const work = this.maintainRelicImages(request, Math.min(deadlineMs, Date.now() + 25_000))
+      .finally(() => { this.relicMaintenance = null; });
+    this.relicMaintenance = work;
+    this.ctx.waitUntil(work.then(() => undefined, () => undefined));
+    return work;
+  }
+
+  private async maintainRelicImages(request: RelicImagesRequest, deadlineMs: number): Promise<RelicImagesResult> {
+    const timeout = createTimedAbortScope(undefined, { timeoutMs: Math.max(1, deadlineMs - Date.now()),
+      timeoutMessage: 'Relic image publication timed out.' });
+    const signal = timeout.signal;
+    const requireCurrent = async () => {
+      signal.throwIfAborted();
+      if (this.retiring || this.resetting || Date.now() >= deadlineMs) throw new Error('Relic image publisher is unavailable.');
+      await raceWithSignal(requireRelicImagesDeployment(this.env, request.scope), signal);
+      signal.throwIfAborted();
+      if (this.retiring || this.resetting || Date.now() >= deadlineMs) throw new Error('Relic image publisher is unavailable.');
+    };
+    const read = async (tokenId: string) => {
+      signal.throwIfAborted();
+      const key = new URL(ethereumTokenMetadataUri(request.scope, tokenId)).pathname.slice(1);
+      const object = await raceWithSignal(this.trackStorage(this.env.ETHEREUM_REVEAL_METADATA.get(key)), signal);
+      if (!object || object.size > MAX_RELIC_METADATA_BYTES) throw new Error('Relic metadata is missing or oversized.');
+      if (object.httpMetadata?.contentType !== JSON_HTTP_METADATA.contentType ||
+        object.httpMetadata.cacheControl !== JSON_HTTP_METADATA.cacheControl || object.httpMetadata.contentEncoding !== undefined) {
+        throw new Error('Relic metadata HTTP headers are not canonical.');
+      }
+      const bytes = await raceWithSignal(this.trackStorage(object.arrayBuffer()), signal);
+      if (bytes.byteLength !== object.size || bytes.byteLength > MAX_RELIC_METADATA_BYTES) throw new Error('Relic metadata size is invalid.');
+      const json = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+      signal.throwIfAborted();
+      return { key, object, json };
+    };
+    try {
+      await requireCurrent();
+      if (request.action === 'inspect') {
+        const objects: RelicImagePatch[] = [];
+        for (const tokenId of RELIC_IMAGE_TOKEN_IDS) {
+          if (this.retiring || this.resetting) throw new Error('Relic image publisher is unavailable.');
+          const { object, json } = await read(tokenId);
+          objects.push(prepareRelicImagePatch(tokenId, json, object.etag));
+        }
+        await requireCurrent();
+        return { action: 'inspect', objects };
+      }
+      const patch = request.patch;
+      const { key, object, json } = await read(patch.tokenId);
+      await requireCurrent();
+      if (json === patch.afterJson) return { action: 'apply', tokenId: patch.tokenId, status: 'unchanged' };
+      if (json !== patch.beforeJson || object.etag !== patch.etag) throw new Error('Relic metadata changed since preparation.');
+      const written = await raceWithSignal(this.trackStorage(this.env.ETHEREUM_REVEAL_METADATA.put(key, patch.afterJson, {
+        onlyIf: { etagMatches: patch.etag }, httpMetadata: JSON_HTTP_METADATA,
+        customMetadata: { ...object.customMetadata, sha256: patch.afterSha256 },
+      })), signal);
+      if (!written) throw new Error('Relic metadata conditional write conflicted.');
+      await requireCurrent();
+      return { action: 'apply', tokenId: patch.tokenId, status: 'updated' };
+    } catch (error) {
+      if (timeout.timedOut() && !this.resetting) {
+        this.resetting = true;
+        this.ctx.abort('Relic image publication I/O timed out.');
+      }
+      throw error;
+    } finally { timeout.dispose(); }
+  }
 
   publishBatch(scope: PublicationScope, jobs: RevealPublicationJob[], deadlineMs = Date.now() + 25_000): Promise<RevealPublicationOutcome[]> {
     if (!Array.isArray(jobs) || jobs.length > 8) throw new Error('Invalid reveal publication batch.');
@@ -195,8 +271,9 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
       do {
         await raceWithSignal(Promise.allSettled([
           ...[...this.publications.values()].map(entry => entry.result), ...this.storageOperations, ...this.sourceReads,
+          ...(this.relicMaintenance ? [this.relicMaintenance] : []),
         ]), timeout.signal);
-      } while (this.publications.size || this.storageOperations.size || this.sourceReads.size);
+      } while (this.publications.size || this.storageOperations.size || this.sourceReads.size || this.relicMaintenance);
       await raceWithSignal(requireRetiredRevealDeployment(this.env, value), timeout.signal);
       if (this.resetting) throw new Error('Retired reveal publisher must restart before its drain can be confirmed.');
       return { drained: true };

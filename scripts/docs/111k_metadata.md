@@ -106,7 +106,7 @@ Each template contains `name`, `description`, `image`, and `attributes`. The six
 | --- | --- | --- | --- | --- |
 | `artwork.json` | `{{tokenId}}` | `placeholder.png` | 466:503 | `painting` |
 | `warehouse.json` | `Warehouse #{{displayId}}` | `warehouse.webp` | 3:2 | `warehouse` |
-| `relic.json` | `Relic #{{displayId}}` | `relics/{{displayId}}.webp` | Unchanged | `relic` |
+| `relic.json` | `Relic #{{displayId}}` | `relics/{{displayId}}.png` | Unchanged | `relic` |
 | `crate.json` | `Crate #{{displayId}}` | `crate.webp` | 4:3 | `crate` |
 | `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `crate receipt` |
 | `artwork_receipt.json` | `Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `receipt` |
@@ -119,7 +119,7 @@ metadata. The complete baseline still uses `artwork.json` for all 111,111 artwor
 tokens. The reveal runtime combines that registered template with the assigned
 asset's media and exact ratio after confirmation.
 
-All image filenames above are rooted at `https://cdn.lil.org/nft/111k/`, including `relics/{{displayId}}.webp` for new relic publications. Historical publication records retain their original image URLs; editing a template does not rewrite them, and retirement can remove their hosted objects. Aspect ratios are reduced from the actual asset dimensions: crate 1448 × 1086, warehouse 1536 × 1024, and placeholder 932 × 1006. Reveal registration requires the canonical CDN placeholder with its 466:503 ratio; confirmed reveals replace that ratio with the assigned artwork’s catalog ratio. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
+All image filenames above are rooted at `https://cdn.lil.org/nft/111k/`, including `relics/{{displayId}}.png` for new relic publications. Historical publication records retain their original image URLs; editing a template does not rewrite them. Use the dedicated relic image maintenance procedure below to migrate registered live metadata. Storefront displays use the corresponding `relics/mid/{id}.webp` derivatives while API metadata retains the PNG URL. Aspect ratios are reduced from the actual asset dimensions: crate 1448 × 1086, warehouse 1536 × 1024, and placeholder 932 × 1006. Reveal registration requires the canonical CDN placeholder with its 466:503 ratio; confirmed reveals replace that ratio with the assigned artwork’s catalog ratio. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
 
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
@@ -127,7 +127,7 @@ The API, storefront, checkout, and fulfillment readers accept absolute HTTPS ima
 
 Choose a new metadata revision directory and a globally unique deployment ID for the next replacement. The currently registered publication is historical input, not an upload destination; do not republish a registered prefix. The first mainnet clean-root publication uses the explicit `bootstrap-mainnet-root` operation described in the [mainnet runbook](111k_mainnet.md), not ordinary root upload or a replacement prefix.
 
-After a metadata prefix is registered using the [reveal operations runbook](111k_reveal_ops.md), the reveal publisher owns it permanently. Generic upload and restore refuse all mutations to that prefix. Use a fresh deployment prefix for replacement collections; never reset revealed JSONs to placeholders. Remote mutations require access to the OPS registry and its publication leases.
+After a metadata prefix is registered using the [reveal operations runbook](111k_reveal_ops.md), the reveal publisher owns it permanently. Generic upload and restore refuse all mutations to that prefix. Approved relic image changes use the private maintenance procedure below. Use a fresh deployment prefix for replacement collections; never reset revealed JSONs to placeholders. Remote mutations require access to the OPS registry and its publication leases.
 
 After upload or restore attempts any writes, its prefix remains locked for 65 seconds after the command exits, even on failure, to let outstanding storage requests drain. Wait for that interval before another upload, restore, or reveal registration for the same prefix. Read-only verification may run during the interval.
 
@@ -144,7 +144,7 @@ npm run ethereum:metadata -- generate --directory "$metadata_dir"
 npm run ethereum:metadata -- validate --directory "$metadata_dir"
 ```
 
-Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344984 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Relic display IDs 1–18 generate files `117172.json`–`117189.json` with images `relics/1.webp`–`relics/18.webp`.
+Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344984 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Relic display IDs 1–18 generate files `117172.json`–`117189.json` with images `relics/1.png`–`relics/18.png`.
 
 A completed revision directory can be reused for both networks after validation. Do not rerun generation into a completed directory. A shared generated revision does not imply a shared deployment ID.
 
@@ -186,6 +186,25 @@ Full verification checks every direct token JSON against its expected key, byte 
 Registration repeats full verification from `publicationDirectory` rather than trusting a sample or a saved success report. It also verifies the onchain deployment and exact metadata URI. Wait 65 seconds after the last upload before registration. After registration, the reveal publisher permanently owns the prefix and generic upload or restore is blocked. Preparing or registering a collection does not activate the shop; storefront activation remains a separate launch step.
 
 Snapshot restoration, when used for an unregistered destination, requires a complete 344984-object snapshot matching that destination and network. Historical five-kind and six-kind backups are not supported by this baseline. Restoration rewrites the snapshot bytes and headers and verifies the complete inventory; it cannot reset a registered reveal prefix. New deployment recovery normally consists of resuming the validated fresh-prefix publication before registration.
+
+## Updating live relic images
+
+Relic metadata uses `https://cdn.lil.org/nft/111k/relics/{id}.png` for display IDs 1–18. Storefront images use the matching `relics/mid/{id}.webp` derivatives and their measured dimensions; the API and raw inventory metadata keep the canonical PNG URL. Relic receipts continue to use the shared placeholder.
+
+Use the dedicated maintenance command to migrate registered relics in place. It changes only the canonical image URL in tokens `117172`–`117189`, without regenerating the collection or changing any artwork assignments. The private publisher verifies the deployment identity and revision, rejects retired deployments, and conditionally writes the exact prepared bytes. Generic upload and restore remain blocked for registered prefixes.
+
+Discover the active targets through live configuration and `ethereum-reveal-control status`. Prepare separate directories for each deployment; apply and verify Sepolia before mainnet. Mainnet writes require an explicit mainnet update request.
+
+```sh
+relic_directory='.cache/111k-relic-images/<deployment-id>'
+npm run ethereum:relic-images -- prepare --directory "$relic_directory" --deployment-id '<deployment-id>'
+npm run ethereum:relic-images -- apply --directory "$relic_directory"
+npm run ethereum:relic-images -- verify --directory "$relic_directory"
+```
+
+Preparation freezes all eighteen before/after objects, checksums, and the original deployment revision. Resume with the same directory after interruption; never replace its journal to hide a conflict. Exact target bytes are idempotent, while unexpected content or a changed registration requires investigation. Verification checks storage, public CDN metadata, and the public metadata API for every relic. Retain the journal and a concise verification record separately from immutable historical publication snapshots, whose relic hashes describe the pre-migration publication. Recheck the final metadata after a scheduler interval. No contract transaction or marketplace refresh is sent by these commands.
+
+Template and storefront changes require their normal tests. Deploy any maintenance support with `npm run deploy:api`, and deploy changed storefront code with `npm run deploy`; this image-only change does not require a full Commerce audit.
 
 ## Serving and freshness
 

@@ -12,8 +12,23 @@ import { verifyRevealDeployment } from './ethereumRevealChain.js';
 import { parseCatalogUpdateRequest } from './ethereumRevealCatalogUpdate.js';
 import { ETHEREUM_REVEAL_DEPLOYMENTS_SQL, parseEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import type { EthereumRevealCatalogUpdateResult } from '../../../../shared/ethereum/revealMaintenance.js';
+import { parseRelicImagesRequest, type RelicImagesResult } from '../../../../shared/ethereum/relicImages.js';
+import { requireRelicImagesDeployment } from './ethereumRelicImages.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async relicImages(value: unknown): Promise<RelicImagesResult> {
+    const request = parseRelicImagesRequest(value);
+    const deadline = Date.now() + 25_000;
+    const timeout = createTimedAbortScope(undefined, { timeoutMs: 25_000, timeoutMessage: 'Relic image maintenance timed out.' });
+    try {
+      const deployment = await raceWithSignal(requireRelicImagesDeployment(this.env, request.scope), timeout.signal);
+      const operation = this.env.ETHEREUM_REVEAL_PUBLISHER.getByName(`${deployment.chainId}:${deployment.contractAddress}`)
+        .relicImages(request, deadline);
+      this.ctx.waitUntil(operation.then(() => undefined, () => undefined));
+      return await raceWithSignal<RelicImagesResult>(operation, timeout.signal);
+    } finally { timeout.dispose(); }
+  }
+
   async catalogUpdate(value: unknown): Promise<EthereumRevealCatalogUpdateResult> {
     const request = parseCatalogUpdateRequest(value);
     const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)

@@ -2,6 +2,7 @@ import type { EthereumInventoryItem } from '../../shared/ethereum/api';
 import type { EthereumContainerKind } from '../../shared/ethereum/protocol';
 import type { InventoryItem } from '../types';
 import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
+import { relicDisplayMedia } from './relicMedia';
 import { ethereumInventoryView } from './state';
 
 export type EthereumPendingMint = {
@@ -28,12 +29,15 @@ export function buildEthereumInventoryItems({ items, pendingMints, solanaItems, 
     .sort((left, right) => right.submittedAt - left.submittedAt)
     .flatMap(mint => {
       const media = ETHEREUM_CONTAINER_MEDIA[mint.kind];
+      const image = mint.image ?? media.src;
+      const relicMedia = mint.kind === 'relic' ? relicDisplayMedia(image) : undefined;
+      const displayMedia = mint.kind === 'relic' ? relicMedia : media;
       return Array.from({ length: mint.quantity }, (_, index) => ({
         id: `ethereum-pending:${mint.id}:${index}`,
         dropId,
         name: `Pending ${media.label.toLowerCase()}`,
-        image: mint.image ?? media.src,
-        imageDimensions: { width: media.width, height: media.height },
+        image: relicMedia?.src ?? image,
+        ...(displayMedia ? { imageDimensions: { width: displayMedia.width, height: displayMedia.height } } : {}),
         kind: 'box' as const,
         status: 'pending' as const,
       }));

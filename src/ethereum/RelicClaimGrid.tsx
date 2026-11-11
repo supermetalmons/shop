@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { ETHEREUM_MAX_RELICS, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { MediaWithFallback } from '../components/MediaWithFallback';
+import { relicDisplayMedia } from './relicMedia';
 
 type RelicClaimGridProps = {
   metadata?: readonly EthereumMetadata[];
@@ -55,6 +56,8 @@ export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, at
         const id = index + 1;
         const claimed = (claimedMask & (1 << index)) !== 0;
         const image = metadata?.[index]?.image;
+        const media = relicDisplayMedia(image);
+        const source = media?.src ?? image;
         return <label key={id} className="ethereum111k__relic" data-claimed={claimed} data-disabled={disabled || claimed}>
           <input type="radio" name="ethereum-relic" value={id} checked={selectedId === id}
             disabled={disabled || claimed} aria-label={`Relic #${id}${claimed ? ', claimed' : ''}`}
@@ -63,8 +66,8 @@ export function RelicClaimGrid({ metadata, claimedMask, selectedId, disabled, at
           <span className="ethereum111k__relic-image">
             {attentionToken > 0 && selectedId === null && !disabled && !claimed && <span key={attentionToken}
               className="ethereum111k__relic-attention" aria-hidden="true" onAnimationEnd={() => onAttentionEnd?.(attentionToken)} />}
-            <MediaWithFallback imageSources={image ? [image] : []} showPlaceholderWhileLoading
-              imageProps={{ alt: '', draggable: false, loading: 'eager', decoding: 'async', onDragStart: event => event.preventDefault() }}
+            <MediaWithFallback imageSources={source ? [source] : []} showPlaceholderWhileLoading
+              imageProps={{ alt: '', width: media?.width, height: media?.height, draggable: false, loading: 'eager', decoding: 'async', onDragStart: event => event.preventDefault() }}
               renderPlaceholder={hidden => <span hidden={hidden} className="ethereum111k__relic-placeholder" aria-hidden="true" />} />
           </span>
         </label>;

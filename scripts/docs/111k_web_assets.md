@@ -71,7 +71,7 @@ Fresh publications use `crate.webp` (1448 × 1086, 4:3) and `warehouse.webp`
 kinds use `placeholder.png` (932 × 1006, 466:503). Their metadata includes
 the corresponding `aspectRatio`; display these images without stretching.
 
-New relic publications use `relics/{id}.webp` for IDs 1–18 at the same CDN root.
+New relic publications use `relics/{id}.png` for IDs 1–18 at the same CDN root.
 Existing publications retain their recorded `metadata.image` URLs. The access
 logo is `111k.webp`.
 
