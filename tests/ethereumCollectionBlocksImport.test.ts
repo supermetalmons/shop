@@ -76,7 +76,7 @@ test('the saved manifest reproduces all collection blocks and every real range b
   const source = JSON.parse(await readFile(new URL(`../${ASSETS}/collection-blocks.source.json`, import.meta.url), 'utf8')) as Record<string, [number, number, string]>;
   const value: unknown = JSON.parse(await readFile(new URL(`../${ASSETS}/collection-blocks.json`, import.meta.url), 'utf8'));
   validateRevealCollectionBlocks(value);
-  assert.equal(Object.values(value.ranges).reduce((sum, ranges) => sum + ranges.length, 0), 21);
+  assert.equal(Object.values(value.ranges).reduce((sum, ranges) => sum + ranges.length, 0), 28);
   const lookup = selectRevealCollectionBlocks(value, value.catalogs.at(-1)!);
   let count = 0;
   for (const [category, family, extension] of [['painting', 'paintings', 'png'], ['video', 'videos', 'mp4'], ['3d', '3d', 'png'], ['animated', 'animated', 'png']] as const) {
@@ -85,7 +85,7 @@ test('the saved manifest reproduces all collection blocks and every real range b
       count++;
     }
   }
-  assert.equal(count, 55808);
+  assert.equal(count, 72459);
 });
 
 test('generation rejects incomplete, malformed and conflicting labels or changed dimensions', () => {

@@ -1,0 +1,14 @@
+{
+  "knownSource": "https://cdn.lil.org/nft/111k/paintings/json/v0/64946.json",
+  "sourceBytes": 249388,
+  "sourceAttributes": 2792,
+  "enrichedBytes": 177027,
+  "enrichedAttributes": 2794,
+  "maxBytes": 262144,
+  "syntheticSample": {
+    "tokenId": "111111",
+    "crateTokenId": "116666",
+    "sha256": "33d7a57c8f8feb6f705b77febfc1e1b5bd018e4cd1bb1f4d1f0c99b40402f72a"
+  },
+  "validation": "Known source passed the changed loader; exact-limit and one-byte-overflow tests passed. No exhaustive rescan."
+}

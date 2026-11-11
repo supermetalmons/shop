@@ -1,0 +1,9 @@
+{
+  "deploymentId": "mainnet-v1",
+  "expectedRevision": 3,
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "metadataBaseUri": "https://cdn.mons.shop/111k/",
+  "originalCatalogRevision": 0,
+  "batchId": "catalog-231235b610618f2a16c131864f66ebef"
+}

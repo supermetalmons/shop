@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sha256 } from '../scripts/ethereum-metadata/catalog.ts';
 import { verify111kReplacementPublicSamples } from '../scripts/shared/ethereum111kReplacementPublicVerification.ts';
+import { MAX_REVEAL_METADATA_BYTES } from '../cloud/workers/api/src/ethereumRevealAttributes.ts';
 
 const scope = { chainId: 11155111, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v99/' };
 const metadata = (id: number, extra: Record<string, unknown> = {}) => `${JSON.stringify({ name: `Artwork ${id}`, description: '',
@@ -144,12 +145,26 @@ for (const image of ['https://127.0.0.1/private.png', 'https://cdn.lil.org.evil.
 
 test('metadata reads are size bounded and require the expected public headers', async () => {
   const body = metadata(1);
-  for (const headers of [{ ...jsonHeaders, 'Content-Length': String(128 * 1024 + 1) },
+  for (const headers of [{ ...jsonHeaders, 'Content-Length': String(MAX_REVEAL_METADATA_BYTES + 1) },
     { ...jsonHeaders, 'CF-Cache-Status': 'HIT' }, { ...jsonHeaders, 'Content-Type': 'text/html' }]) {
     await assert.rejects(verify111kReplacementPublicSamples(scope, { '1.json': sha256(body) }, {
       fetch: (async () => new Response(body, { headers })) as typeof fetch,
     }), /invalid/);
   }
+});
+
+test('live metadata verification accepts the exact runtime UTF-8 limit and rejects an extra byte', async () => {
+  const make = (value: string) => metadata(1, { attributes: [{ trait_type: 'Text', value }] });
+  const room = MAX_REVEAL_METADATA_BYTES - Buffer.byteLength(make(''));
+  const value = 'é'.repeat(Math.floor(room / 2)) + 'x'.repeat(room % 2);
+  const accepted = make(value);
+  assert.equal(Buffer.byteLength(accepted), MAX_REVEAL_METADATA_BYTES);
+  const fetchBody = (body: string): typeof fetch => async (input, init) => init?.method === 'HEAD'
+    ? new Response(null, { headers: mediaHeaders(String(input)) })
+    : new Response(body, { headers: jsonHeaders });
+  await verify111kReplacementPublicSamples(scope, { '1.json': sha256(accepted) }, { fetch: fetchBody(accepted) });
+  const oversized = make(value + 'x');
+  await assert.rejects(verify111kReplacementPublicSamples(scope, { '1.json': sha256(oversized) }, { fetch: fetchBody(oversized) }), /invalid/);
 });
 
 test('transient HTTP errors retry once with bounded backoff; permanent failures do not retry', async () => {

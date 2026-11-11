@@ -4,7 +4,7 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-New deployments use catalog version `111k-v8`: 55,303 eggs, 52,329 paintings,
+New deployments use catalog version `111k-v9`: 38,652 eggs, 68,980 paintings,
 58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
 111,111-artwork supply from 76,700 available eggs after counting all non-egg
 artworks. The runtime supports the current catalog and explicitly retained ancestor
@@ -230,6 +230,42 @@ Save marketplace-refresh calldata unsigned; submission is a separate explicit ow
 action. The [v7 release](../../releases/111k-catalog-v7/README.md) illustrates evidence
 formats, not values or cached scripts to reuse.
 
+### Empty mainnet pool rebuild
+
+For an explicitly requested prelaunch mainnet rebuild, `ethereum:empty-pool`
+can install the frozen target catalog directly when no artwork inventory has
+been assigned or reserved. It preserves the contract, metadata prefix, immutable
+origin registration, and existing relics. New artworks follow normal per-reveal
+trait enrichment instead of retaining egg-migration mappings.
+
+First inspect any existing catalog operation. Cancel only an unactivated operation
+with its original revision and preserve its bundle and journal. Pause the selected
+reveal deployment using its current registry revision. Freeze one new operation ID
+of the form `empty-` followed by 32 hexadecimal characters and retain the paused
+revision for every retry:
+
+```sh
+npm run ethereum:empty-pool -- apply --bundle "$hatch_bundle" --deployment-id "$hatch_deployment" --operation-id "$empty_operation" --expected-revision "$paused_revision" --write
+npm run ethereum:empty-pool -- verify --bundle "$hatch_bundle" --deployment-id "$hatch_deployment" --operation-id "$empty_operation" --expected-revision "$paused_revision"
+```
+
+The private operation acquires a persistent SQL writer fence, drains for at least
+65 seconds, and verifies zero assignments, reservations, publications, enrichment,
+and pending recovery work. It also requires a closed onchain sale and zero minted
+artworks. Existing work is never deleted to qualify. After exact 111111-slot
+verification, activation atomically installs the new allocation base and releases
+the fence; the registry resumes reveal availability. Five-minute observation and
+bounded obsolete-generation cleanup must finish before `complete` is returned.
+
+This path performs no exhaustive media availability scan. Keep the previously
+verified media evidence or explicit operator waiver with the release. `inspect`
+and `verify` are read-only. Retry interrupted `apply` with the same operation ID,
+bundle, and original paused revision. Preactivation `cancel --write` preserves the
+paused state and any newer administrative revision; an activated operation must
+finish forward. Never use a reset or modify an immutable origin to recover it.
+After activation, retain Worker support for the new allocation base; recover with
+a forward fix rather than rolling back to code that predates empty-pool rebuilds.
+
 ### Recovery
 
 Inspect and verify are read-only. After an interruption, inspect before retrying:
@@ -281,7 +317,7 @@ Create a private local manifest using the deployment ID and prefix chosen above:
   "contractAddress": "<deployed contract address>",
   "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/<new-sepolia-deployment-id>/",
   "deploymentBlock": 0,
-  "catalogVersion": "111k-v8",
+  "catalogVersion": "111k-v9",
   "publicationDirectory": "./published-metadata"
 }
 ```

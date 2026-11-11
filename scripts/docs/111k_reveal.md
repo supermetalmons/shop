@@ -160,7 +160,7 @@ frame, represented by the reduced ratio 466:503. Always use the returned
 future assets may differ. The fragment has the same surrounding artwork fields
 as the complete example above.
 
-The `111k-v8` catalog contains 55,303 eggs, 52,329 paintings, 58 videos, 3,000 3D
+The `111k-v9` catalog contains 38,652 eggs, 68,980 paintings, 58 videos, 3,000 3D
 models, and 421 animated artworks: 111,111 artworks total. The token-ID range
 and request limits are unchanged. Painting alts and video posters are variants
 of those artworks, not extra tokens. Videos include 16:9, 427:240, and 54:31

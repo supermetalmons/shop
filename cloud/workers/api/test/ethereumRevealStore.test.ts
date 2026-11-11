@@ -92,9 +92,9 @@ function reserveEggSlots(database: DatabaseSync, crateTokenId: string, slots: nu
   }
 }
 
-test('current v8 catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
+test('current v9 catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
   validateRevealCatalog();
-  assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 55303, painting: 52329, video: 58 });
+  assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 38652, painting: 68980, video: 58 });
   assert.equal(Object.values(REVEAL_CATEGORY_COUNTS).reduce<number>((sum, value) => sum + value, 0), REVEAL_ARTWORK_COUNT);
   const imageUrls = new Set<string>();
   const mediaFor = (category: keyof typeof REVEAL_CATEGORY_COUNTS, assetId: number) => buildRevealedArtwork({
@@ -166,11 +166,11 @@ test('current v8 catalog preserves all category counts, exact ratios, posters, a
     assert.equal(animated.placeholderJson, result.placeholderJson);
   }
   for (const assetId of [0, 422]) assert.throws(() => mediaFor('animated', assetId), /Invalid reveal asset/);
-  assert.equal(mediaFor('painting', 52329).image, 'https://cdn.lil.org/nft/111k/paintings/52329.png');
-  assert.deepEqual(mediaFor('painting', 52329).aspectRatio, { width: 466, height: 503 });
-  assert.throws(() => mediaFor('painting', 52330), /Invalid reveal asset/);
-  assert.equal(mediaFor('egg', 55303).image, 'https://cdn.lil.org/nft/111k/eggs/55303.png');
-  assert.throws(() => mediaFor('egg', 55304), /Invalid reveal asset/);
+  assert.equal(mediaFor('painting', 68980).image, 'https://cdn.lil.org/nft/111k/paintings/68980.png');
+  assert.deepEqual(mediaFor('painting', 68980).aspectRatio, { width: 1, height: 1 });
+  assert.throws(() => mediaFor('painting', 68981), /Invalid reveal asset/);
+  assert.equal(mediaFor('egg', 38652).image, 'https://cdn.lil.org/nft/111k/eggs/38652.png');
+  assert.throws(() => mediaFor('egg', 38653), /Invalid reveal asset/);
   assert.throws(() => mediaFor('video', 59), /Invalid reveal asset/);
   assert.equal(revealCrateSize('116666'), 31);
   for (const id of ['0111112', '111111', '116667', '1.0']) assert.throws(() => revealCrateSize(id));
@@ -182,9 +182,9 @@ test('current v8 catalog preserves all category counts, exact ratios, posters, a
 });
 
 for (const [version, eggCount, paintingCount] of [
-  ['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348], ['111k-v7', 60504, 47128],
+  ['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348], ['111k-v7', 60504, 47128], ['111k-v8', 55303, 52329],
 ] as const) {
-  test(`historical ${version} deployments retain their original egg and painting boundaries after v8 promotion`, () => {
+  test(`historical ${version} deployments retain their original egg and painting boundaries after v9 promotion`, () => {
     const historical = getRevealCatalog(version)!;
     const mediaFor = (category: 'egg' | 'painting', assetId: number) => buildRevealedArtwork({
       templateJson, tokenId: '1', crateTokenId: crateId(0), category, assetId, observation: observation(1), catalog: historical,

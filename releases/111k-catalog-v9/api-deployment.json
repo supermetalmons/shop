@@ -1,0 +1,19 @@
+{
+  "deployment": {
+    "id": "0851fd9f-8cef-4f2e-92ec-66e206eec05e",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "5666e657-c3c6-47cf-b124-7c2eb424cd40",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-11T15:02:19.298691Z"
+  },
+  "codeUpdateDelayMs": 300000,
+  "codeReadyAt": "2026-11-11T15:07:19.298Z"
+}

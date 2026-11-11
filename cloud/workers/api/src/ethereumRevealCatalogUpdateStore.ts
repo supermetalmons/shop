@@ -9,7 +9,7 @@ import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revea
 import type { RevealSql } from './ethereumRevealStore.js';
 import { buildRevealedArtwork } from './ethereumRevealCatalog.js';
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
-import { applyRevealAttributePayload } from './ethereumRevealAttributes.js';
+import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
 
@@ -28,11 +28,12 @@ export type RevealCatalogUpdateStatus = {
   sourceRevision: number; targetRevision: number; startedAtMs: number; activatedAtMs: number | null;
   phase: 'mapping' | 'staging' | 'ready' | 'active' | 'complete' | 'cancelled';
   total: number; mapped: number; metadataStaged: number; generationSeeded: number; frozen: number; published: number; retrying: number; conflicts: number;
+  mode?: 'empty-rebuild'; categoryCounts?: Record<EthereumArtworkCategory, number>;
 };
 type Operation = {
   batch_id: string; batch_sha256: string; predecessor_json: string; target_json: string; target_manifest_json: string;
   source_revision: number; target_revision: number; mapping_count: number; mapping_sha256: string; phase: RevealCatalogUpdateStatus['phase'];
-  started_at_ms: number; activated_at_ms: number | null; seeded: number; frozen_count: number;
+  started_at_ms: number; activated_at_ms: number | null; seeded: number; frozen_count: number; mode: 'online' | 'empty-rebuild';
 };
 type Mapping = { batch_id: string; egg_id: number; category: EthereumArtworkCategory; asset_id: number;
   attributes_json: string | null; attributes_sha256: string | null };
@@ -40,6 +41,8 @@ type Assignment = { category: EthereumArtworkCategory; asset_id: number; token_i
   artwork_json: string; metadata_json: string; placeholder_json: string; frozen_at_ms: number; assignment_revision: number };
 const CATEGORIES = ['egg', 'painting', 'video', '3d', 'animated'] as const;
 const TOTAL = 111_111;
+const ALLOCATION_BASE_REVISION = `COALESCE((SELECT target_revision FROM reveal_catalog_generations
+  WHERE batch_id=(SELECT allocation_base_generation FROM settings WHERE id=1)),0)`;
 const hash = (json: string) => bytesToHex(sha256(json));
 const counts = (catalog: RevealAssetCatalog): Record<EthereumArtworkCategory, number> => ({ egg: catalog.categories.eggs.count,
   painting: catalog.categories.paintings.count, video: catalog.categories.videos.count, '3d': catalog.categories['3d'].count,
@@ -88,7 +91,7 @@ const SCHEMA = [
 ];
 
 export class EthereumRevealCatalogUpdateStore {
-  private originCounts: Record<EthereumArtworkCategory, number> | undefined;
+  private originCounts: { generation: string | null; counts: Record<EthereumArtworkCategory, number> } | undefined;
   private readonly catalogs = new Map<string, RevealAssetCatalog>();
   constructor(private readonly sql: RevealSql, private readonly transaction: <T>(action: () => T) => T) {}
 
@@ -97,9 +100,15 @@ export class EthereumRevealCatalogUpdateStore {
       for (const statement of SCHEMA) this.sql.exec(statement);
       const columns = new Set(this.sql.exec<{ name: string }>('PRAGMA table_info(settings)').toArray().map(row => row.name));
       for (const [name, type] of [['effective_catalog_version', 'TEXT'], ['effective_catalog_sha256', 'TEXT'],
-        ['catalog_revision', 'INTEGER NOT NULL DEFAULT 0'], ['active_catalog_generation', 'TEXT'], ['candidate_catalog_generation', 'TEXT']]) {
+        ['catalog_revision', 'INTEGER NOT NULL DEFAULT 0'], ['active_catalog_generation', 'TEXT'], ['candidate_catalog_generation', 'TEXT'],
+        ['allocation_base_generation', 'TEXT']]) {
         if (!columns.has(name)) this.sql.exec(`ALTER TABLE settings ADD COLUMN ${name} ${type}`);
       }
+      if (!this.sql.exec<{ name: string }>('PRAGMA table_info(reveal_catalog_generations)').toArray().some(row => row.name === 'mode')) {
+        this.sql.exec("ALTER TABLE reveal_catalog_generations ADD COLUMN mode TEXT NOT NULL DEFAULT 'online' CHECK(mode IN ('online','empty-rebuild'))");
+      }
+      this.sql.exec(`CREATE TRIGGER IF NOT EXISTS reveal_catalog_mode_immutable BEFORE UPDATE ON reveal_catalog_generations
+        WHEN NEW.mode IS NOT OLD.mode BEGIN SELECT RAISE(ABORT,'Catalog generation mode is immutable'); END`);
       for (const [table, name] of [['assignments', 'assignment_revision'], ['publication', 'metadata_revision']]) {
         if (!this.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().some(row => row.name === name)) {
           this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${name} INTEGER NOT NULL DEFAULT 0`);
@@ -130,13 +139,16 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   private settings(): { deployment_json: string; catalog_revision: number; active_catalog_generation: string | null;
-    candidate_catalog_generation: string | null; effective_catalog_version: string | null; effective_catalog_sha256: string | null } | null {
+    candidate_catalog_generation: string | null; allocation_base_generation: string | null;
+    effective_catalog_version: string | null; effective_catalog_sha256: string | null } | null {
     if (!this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='settings'").toArray().length) return null;
     const row = this.sql.exec<{ deployment_json: string; catalog_revision?: number; active_catalog_generation?: string | null;
-      candidate_catalog_generation?: string | null; effective_catalog_version?: string | null; effective_catalog_sha256?: string | null }>(
+      candidate_catalog_generation?: string | null; allocation_base_generation?: string | null;
+      effective_catalog_version?: string | null; effective_catalog_sha256?: string | null }>(
       'SELECT * FROM settings WHERE id=1').toArray()[0];
     return row ? { deployment_json: row.deployment_json, catalog_revision: row.catalog_revision ?? 0,
       active_catalog_generation: row.active_catalog_generation ?? null, candidate_catalog_generation: row.candidate_catalog_generation ?? null,
+      allocation_base_generation: row.allocation_base_generation ?? null,
       effective_catalog_version: row.effective_catalog_version ?? null, effective_catalog_sha256: row.effective_catalog_sha256 ?? null } : null;
   }
 
@@ -180,12 +192,15 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   private originalCounts(): Record<EthereumArtworkCategory, number> {
-    if (this.originCounts) return this.originCounts;
     const saved = this.settings();
+    const generation = saved?.allocation_base_generation ?? null;
+    if (this.originCounts?.generation === generation) return this.originCounts.counts;
     const origin = saved && JSON.parse(saved.deployment_json) as EthereumRevealDeployment | null;
-    const catalog = origin && getRevealCatalog(origin.catalogVersion);
+    const catalog = generation ? JSON.parse(this.operation(generation).target_manifest_json) as RevealAssetCatalog
+      : origin && getRevealCatalog(origin.catalogVersion);
     if (!catalog) throw new Error('Original catalog is unavailable.');
-    return this.originCounts = counts(catalog);
+    this.originCounts = { generation, counts: counts(catalog) };
+    return this.originCounts.counts;
   }
 
   private ordinal(unit: RevealOriginUnit): number {
@@ -211,13 +226,15 @@ export class EthereumRevealCatalogUpdateStore {
     if (unit.category !== 'egg') return;
     return this.sql.exec<Mapping & { target_revision: number }>(`SELECT m.*,g.target_revision FROM reveal_catalog_mappings m
       JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id WHERE m.egg_id=? AND
-      (g.activated_at_ms IS NOT NULL OR g.batch_id=?) ORDER BY g.target_revision DESC LIMIT 1`, unit.assetId, candidate ?? '').toArray()[0];
+      g.target_revision>${ALLOCATION_BASE_REVISION} AND (g.activated_at_ms IS NOT NULL OR g.batch_id=?) ORDER BY g.target_revision DESC LIMIT 1`,
+      unit.assetId, candidate ?? '').toArray()[0];
   }
 
   resolveUnit(unit: RevealOriginUnit, assignmentRevision = this.settings()?.catalog_revision ?? 0, candidate?: string): RevealEffectiveUnit {
     const mapping = unit.category === 'egg' ? this.sql.exec<{ category: EthereumArtworkCategory; asset_id: number; target_revision: number }>(
       `SELECT m.category,m.asset_id,g.target_revision FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
-        WHERE m.egg_id=? AND (g.activated_at_ms IS NOT NULL OR g.batch_id=?) ORDER BY g.target_revision DESC LIMIT 1`, unit.assetId, candidate ?? '').toArray()[0] : undefined;
+        WHERE m.egg_id=? AND g.target_revision>${ALLOCATION_BASE_REVISION} AND (g.activated_at_ms IS NOT NULL OR g.batch_id=?) ORDER BY g.target_revision DESC LIMIT 1`,
+      unit.assetId, candidate ?? '').toArray()[0] : undefined;
     return mapping ? { category: mapping.category, assetId: mapping.asset_id,
       assignmentRevision: Math.max(assignmentRevision, mapping.target_revision) } : { ...unit, assignmentRevision };
   }
@@ -290,6 +307,9 @@ export class EthereumRevealCatalogUpdateStore {
   takeFree(category: EthereumArtworkCategory, index: number): RevealOriginUnit {
     return this.transaction(() => {
       const saved = this.settings()!;
+      if (saved.candidate_catalog_generation && this.operation(saved.candidate_catalog_generation).mode === 'empty-rebuild') {
+        throw new Error('Empty pool rebuild is fenced.');
+      }
       let unit: RevealOriginUnit;
       if (saved.active_catalog_generation) {
         const row = this.sql.exec<{ origin_category: EthereumArtworkCategory; origin_asset_id: number }>(
@@ -318,6 +338,9 @@ export class EthereumRevealCatalogUpdateStore {
   releaseFree(unit: RevealOriginUnit): void {
     this.transaction(() => {
       const saved = this.settings()!;
+      if (saved.candidate_catalog_generation && this.operation(saved.candidate_catalog_generation).mode === 'empty-rebuild') {
+        throw new Error('Empty pool rebuild is fenced.');
+      }
       if (saved.active_catalog_generation) this.insertFree(saved.active_catalog_generation, unit);
       else {
         const pool = this.sql.exec<{ available: number }>('SELECT available FROM pools WHERE category=?', unit.category).toArray()[0];
@@ -328,6 +351,150 @@ export class EthereumRevealCatalogUpdateStore {
         this.insertFree(saved.candidate_catalog_generation, unit);
       }
     });
+  }
+
+  private assertEmptyRebuildInventory(): void {
+    const saved = this.settings();
+    if (!saved || (JSON.parse(saved.deployment_json) as EthereumRevealDeployment).chainId !== 1) {
+      throw new Error('Empty pool rebuild requires a mainnet deployment.');
+    }
+    if (this.sql.exec('SELECT 1 FROM assignments LIMIT 1').toArray().length ||
+      this.sql.exec('SELECT 1 FROM publication LIMIT 1').toArray().length) {
+      throw new Error('Empty pool rebuild requires zero assignments, reservations, and publications.');
+    }
+  }
+
+  private emptyRebuildOperation(operationId: string): Operation {
+    const operation = this.operation(operationId);
+    if (operation.mode !== 'empty-rebuild') throw new Error('Catalog operation is not an empty pool rebuild.');
+    return operation;
+  }
+
+  beginEmptyRebuild(input: { operationId: string; batch: RevealCatalogUpdateBatch; now?: number }): RevealCatalogUpdateStatus {
+    const { operationId, batch, now = Date.now() } = input;
+    if (!/^[a-z0-9][a-z0-9-]{0,127}$/.test(operationId) || operationId === batch.batchId) {
+      throw new Error('Empty pool rebuild requires a distinct operation identity.');
+    }
+    validateRevealCatalogUpdateBatch(batch);
+    this.initialize();
+    const existing = this.status(operationId);
+    if (existing) {
+      if (existing.mode !== 'empty-rebuild' || existing.batchSha256 !== batch.batchSha256 || existing.phase === 'cancelled') {
+        throw new Error('Empty pool rebuild replay does not match.');
+      }
+      return existing;
+    }
+    return this.transaction(() => {
+      this.assertEmptyRebuildInventory();
+      const saved = this.settings()!;
+      const current = this.effectiveCatalog()!;
+      if (saved.candidate_catalog_generation || current.catalogVersion !== batch.predecessor.descriptor.catalogVersion ||
+        current.manifestSha256 !== batch.predecessor.descriptor.manifestSha256) throw new Error('Empty pool rebuild predecessor changed.');
+      if (!getRevealCatalog(batch.target.descriptor.catalogVersion, batch.target.descriptor.manifestSha256)) {
+        throw new Error('Empty pool rebuild target is not supported.');
+      }
+      if (!this.sql.exec('SELECT 1 FROM settings WHERE id=1 AND ready=1').toArray().length) throw new Error('Reveal inventory is not ready.');
+      if (this.sql.exec("SELECT 1 FROM reveal_catalog_generations WHERE phase='active' LIMIT 1").toArray().length) {
+        throw new Error('Finish the previous catalog operation first.');
+      }
+      this.sql.exec(`INSERT INTO reveal_catalog_generations(batch_id,batch_sha256,predecessor_json,target_json,target_manifest_json,
+        source_revision,target_revision,mapping_count,mapping_sha256,phase,started_at_ms,mode)
+        VALUES(?,?,?,?,?,?,?,0,?,'staging',?,'empty-rebuild')`, operationId, batch.batchSha256,
+        JSON.stringify(batch.predecessor.descriptor), JSON.stringify(batch.target.descriptor), JSON.stringify(batch.target.manifest),
+        current.catalogRevision, current.catalogRevision + 1, hash('[]'), now);
+      const target = counts(batch.target.manifest);
+      for (const category of CATEGORIES) this.sql.exec('INSERT INTO reveal_catalog_pools(generation,category,total) VALUES(?,?,?)',
+        operationId, category, target[category]);
+      this.sql.exec('UPDATE settings SET candidate_catalog_generation=? WHERE id=1', operationId);
+      return this.status(operationId)!;
+    });
+  }
+
+  stageEmptyRebuild(operationId: string, pageSize = 4096): RevealCatalogUpdateStatus {
+    limit(pageSize, 4096);
+    return this.transaction(() => {
+      const operation = this.emptyRebuildOperation(operationId);
+      if (['ready', 'active', 'complete'].includes(operation.phase)) return this.status(operationId)!;
+      this.assertEmptyRebuildInventory();
+      const saved = this.settings()!;
+      if (operation.phase !== 'staging' || saved.candidate_catalog_generation !== operationId ||
+        saved.catalog_revision !== operation.source_revision) throw new Error('Empty pool rebuild is not staging.');
+      let remaining = pageSize;
+      let seeded = operation.seeded;
+      const pools = this.sql.exec<RevealPool>('SELECT category,total,seeded,available FROM reveal_catalog_pools WHERE generation=? ORDER BY category', operationId).toArray();
+      if (pools.length !== CATEGORIES.length || pools.reduce((sum, pool) => sum + pool.seeded, 0) !== seeded) {
+        throw new Error('Empty pool rebuild counters are inconsistent.');
+      }
+      for (const pool of pools) {
+        const count = Math.min(remaining, pool.total - pool.seeded);
+        if (!count) continue;
+        if (count < 0 || pool.seeded !== pool.available) throw new Error('Empty pool rebuild counters are inconsistent.');
+        this.sql.exec(`WITH RECURSIVE ids(id) AS (SELECT ? UNION ALL SELECT id+1 FROM ids WHERE id<?)
+          INSERT INTO reveal_catalog_free(generation,category,slot,origin_category,origin_asset_id,asset_id)
+          SELECT ?,?,id-1,?,id,id FROM ids`, pool.seeded + 1, pool.seeded + count, operationId, pool.category, pool.category);
+        this.sql.exec('UPDATE reveal_catalog_pools SET seeded=seeded+?,available=available+? WHERE generation=? AND category=?',
+          count, count, operationId, pool.category);
+        seeded += count;
+        remaining -= count;
+        if (!remaining) break;
+      }
+      this.sql.exec('UPDATE reveal_catalog_generations SET seeded=? WHERE batch_id=?', seeded, operationId);
+      return this.status(operationId)!;
+    });
+  }
+
+  verifyEmptyRebuild(operationId: string): RevealCatalogUpdateStatus {
+    const operation = this.emptyRebuildOperation(operationId);
+    this.assertEmptyRebuildInventory();
+    const saved = this.settings()!;
+    if (operation.seeded !== TOTAL || operation.phase === 'cancelled' ||
+      (operation.activated_at_ms === null
+        ? saved.candidate_catalog_generation !== operationId || saved.catalog_revision !== operation.source_revision
+        : saved.active_catalog_generation !== operationId || saved.allocation_base_generation !== operationId ||
+          saved.catalog_revision !== operation.target_revision)) throw new Error('Empty pool rebuild generation is incomplete or stale.');
+    this.verifyGeneration(operationId);
+    if (operation.mapping_count !== 0 || operation.mapping_sha256 !== hash('[]') || operation.frozen_count !== 0 ||
+      this.sql.exec('SELECT 1 FROM reveal_catalog_mappings WHERE batch_id=? LIMIT 1', operationId).toArray().length ||
+      this.sql.exec('SELECT 1 FROM reveal_catalog_publications WHERE batch_id=? LIMIT 1', operationId).toArray().length) {
+      throw new Error('Empty pool rebuild cannot contain mappings or publications.');
+    }
+    if (this.sql.exec(`SELECT 1 FROM reveal_catalog_free f JOIN reveal_catalog_pools p
+      ON p.generation=f.generation AND p.category=f.category WHERE f.generation=? AND
+      (f.origin_category!=f.category OR f.origin_asset_id!=f.asset_id OR f.asset_id<1 OR f.asset_id>p.total OR f.slot!=f.asset_id-1) LIMIT 1`,
+      operationId).toArray().length) throw new Error('Empty pool rebuild asset identities are inconsistent.');
+    return this.status(operationId)!;
+  }
+
+  sealEmptyRebuild(operationId: string): RevealCatalogUpdateStatus {
+    return this.transaction(() => {
+      const operation = this.emptyRebuildOperation(operationId);
+      if (operation.phase === 'ready') return this.verifyEmptyRebuild(operationId);
+      if (operation.phase !== 'staging') throw new Error('Empty pool rebuild is not staging.');
+      this.verifyEmptyRebuild(operationId);
+      this.sql.exec("UPDATE reveal_catalog_generations SET phase='ready' WHERE batch_id=?", operationId);
+      return this.status(operationId)!;
+    });
+  }
+
+  activateEmptyRebuild(operationId: string, now = Date.now()): RevealCatalogUpdateStatus {
+    return this.transaction(() => {
+      const operation = this.emptyRebuildOperation(operationId);
+      if (operation.activated_at_ms !== null) return this.status(operationId)!;
+      if (operation.phase !== 'ready') throw new Error('Empty pool rebuild is not ready.');
+      this.verifyEmptyRebuild(operationId);
+      const target = JSON.parse(operation.target_json) as RevealAssetCatalogDescriptor;
+      this.sql.exec("UPDATE reveal_catalog_generations SET phase='active',activated_at_ms=? WHERE batch_id=?", now, operationId);
+      this.sql.exec(`UPDATE settings SET active_catalog_generation=?,allocation_base_generation=?,candidate_catalog_generation=NULL,
+        effective_catalog_version=?,effective_catalog_sha256=?,catalog_revision=? WHERE id=1`,
+        operationId, operationId, target.catalogVersion, target.manifestSha256, operation.target_revision);
+      this.originCounts = undefined;
+      return this.status(operationId)!;
+    });
+  }
+
+  pruneEmptyRebuild(operationId: string, pageSize = 4096): { remaining: number } {
+    this.emptyRebuildOperation(operationId);
+    return this.prune(operationId, pageSize);
   }
 
   begin(batch: RevealCatalogUpdateBatch, now: number): RevealCatalogUpdateStatus {
@@ -415,7 +582,7 @@ export class EthereumRevealCatalogUpdateStore {
       const catalog = JSON.parse(operation.target_manifest_json) as RevealAssetCatalog;
       for (const row of rows) {
         const attributes: unknown = parseMetadataJson(row.attributesJson);
-        if (new TextEncoder().encode(row.attributesJson).byteLength > 128 * 1024 || hash(row.attributesJson) !== row.sha256 ||
+        if (new TextEncoder().encode(row.attributesJson).byteLength > MAX_REVEAL_METADATA_BYTES || hash(row.attributesJson) !== row.sha256 ||
           !Array.isArray(attributes) || !attributes.length || !attributes.every(value => value && typeof value === 'object' &&
             typeof value.trait_type === 'string' && value.trait_type && (typeof value.value === 'string' || Number.isFinite(metadataNumber(value.value)))) ||
           attributes[0].trait_type !== 'collection block' || typeof attributes[0].value !== 'string' || !attributes[0].value.trim()) {
@@ -440,6 +607,7 @@ export class EthereumRevealCatalogUpdateStore {
     limit(pageSize);
     this.transaction(() => {
       const operation = this.operation(batchId);
+      if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild staging.');
       if (operation.phase !== 'staging') throw new Error('Catalog generation is not staging.');
       if (this.sql.exec('SELECT 1 FROM reveal_catalog_mappings WHERE batch_id=? AND attributes_json IS NULL LIMIT 1', batchId).toArray().length) {
         throw new Error('Stage every new artwork before building the candidate pool.');
@@ -461,6 +629,7 @@ export class EthereumRevealCatalogUpdateStore {
 
   seal(batchId: string): RevealCatalogUpdateStatus {
     const operation = this.operation(batchId);
+    if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild sealing.');
     if (operation.phase === 'ready') return this.status(batchId)!;
     if (operation.phase !== 'staging' || operation.seeded !== TOTAL) throw new Error('Catalog generation is incomplete.');
     this.verifyGeneration(batchId);
@@ -471,6 +640,7 @@ export class EthereumRevealCatalogUpdateStore {
   activate(batchId: string, now = Date.now()): RevealCatalogUpdateStatus {
     return this.transaction(() => {
       const operation = this.operation(batchId);
+      if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild activation.');
       if (operation.activated_at_ms !== null) return this.status(batchId)!;
       const saved = this.settings()!;
       if (operation.phase !== 'ready' || saved.candidate_catalog_generation !== batchId || saved.catalog_revision !== operation.source_revision) {
@@ -638,8 +808,8 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   prune(batchId: string, pageSize = 256): { remaining: number } {
-    limit(pageSize);
     const operation = this.operation(batchId);
+    limit(pageSize, operation.mode === 'empty-rebuild' ? 4096 : 256);
     if (!['complete', 'cancelled'].includes(operation.phase)) throw new Error('Finish or cancel the operation before pruning.');
     const saved = this.settings()!;
     this.transaction(() => {
@@ -677,6 +847,7 @@ export class EthereumRevealCatalogUpdateStore {
     return { batchId: row.batch_id, batchSha256: row.batch_sha256, predecessor: JSON.parse(row.predecessor_json), target: JSON.parse(row.target_json),
       sourceRevision: row.source_revision, targetRevision: row.target_revision, startedAtMs: row.started_at_ms,
       activatedAtMs: row.activated_at_ms, phase: row.phase, total: row.mapping_count, mapped: progress.mapped,
-      metadataStaged: progress.staged, generationSeeded: row.seeded, frozen: row.frozen_count, ...publications };
+      metadataStaged: progress.staged, generationSeeded: row.seeded, frozen: row.frozen_count, ...publications,
+      ...(row.mode === 'empty-rebuild' ? { mode: row.mode, categoryCounts: counts(JSON.parse(row.target_manifest_json) as RevealAssetCatalog) } : {}) };
   }
 }

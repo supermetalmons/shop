@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "complete": true,
+  "startedAt": "2026-11-11T15:04:53.098Z",
+  "completedAt": "2026-11-11T15:05:00.546Z",
+  "worker": "mons-shop",
+  "workerVersion": "31679b44-2a4d-46d1-a0a2-97457feda7f1",
+  "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+  "batchSha256": "231235b610618f2a16c131864f66ebeff10382ac9c11be17c98423cec75c71d9",
+  "targetDescriptor": {
+    "catalogVersion": "111k-v9",
+    "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+  },
+  "deploymentBefore": {
+    "deploymentId": "5b99440f-7478-4d03-b381-fce3980235ea",
+    "createdAt": "2026-11-11T15:04:32.109142Z",
+    "versions": [
+      {
+        "versionId": "31679b44-2a4d-46d1-a0a2-97457feda7f1",
+        "percentage": 100
+      }
+    ]
+  },
+  "deploymentAfter": {
+    "deploymentId": "5b99440f-7478-4d03-b381-fce3980235ea",
+    "createdAt": "2026-11-11T15:04:32.109142Z",
+    "versions": [
+      {
+        "versionId": "31679b44-2a4d-46d1-a0a2-97457feda7f1",
+        "percentage": 100
+      }
+    ]
+  },
+  "revisionSupport": {
+    "catalogRevision": true,
+    "metadataRevision": true,
+    "catalogChangeRecovery": true,
+    "backgroundRefresh": true,
+    "preserveNewerMetadata": true
+  },
+  "buildInventorySha256": "a7f2ab0e8a5829cf0906969635afbced758994ff7715ebe6759338021ac5c18a",
+  "totalFilesPerDomain": 68,
+  "totalBytesPerDomain": 8191494,
+  "javascriptFiles": 60,
+  "cssFiles": 7,
+  "sourceFingerprints": [
+    {
+      "path": "src/ethereum/catalogRevision.ts",
+      "sha256": "5c5648db01d36e4ee8c529473a46d152902d1495d9aac0366b653f7a0190f5ae"
+    },
+    {
+      "path": "src/ethereum/useEthereum111k.ts",
+      "sha256": "95eb81266ea5f794125d4b3e6dd2fc872d85682b89caf55824e48ac65fe75dcb"
+    }
+  ],
+  "domains": [
+    {
+      "origin": "https://mons.shop",
+      "complete": true,
+      "matchedFiles": 68,
+      "root": {
+        "path": "/",
+        "matches": true,
+        "status": 200,
+        "sha256": "5cd160db38eb203d7dd7f974dc342650ae46a3fc4b876e66d68567e49af6ad09",
+        "cacheControl": "public, max-age=0, must-revalidate",
+        "cacheStatus": "HIT"
+      },
+      "verificationSha256": "af062594ecb1c884f1142df0816e9df7349515f8825587f2a9537dbdbf17ddf0",
+      "cacheControlValues": [
+        "public, max-age=0, must-revalidate"
+      ]
+    },
+    {
+      "origin": "https://www.mons.shop",
+      "complete": true,
+      "matchedFiles": 68,
+      "root": {
+        "path": "/",
+        "matches": true,
+        "status": 200,
+        "sha256": "5cd160db38eb203d7dd7f974dc342650ae46a3fc4b876e66d68567e49af6ad09",
+        "cacheControl": "public, max-age=0, must-revalidate",
+        "cacheStatus": "HIT"
+      },
+      "verificationSha256": "4c60923ca561d1be46e418d18c7335b4ea96642a1c1342f3ce3469838a08b5d4",
+      "cacheControlValues": [
+        "public, max-age=0, must-revalidate"
+      ]
+    }
+  ],
+  "failures": []
+}

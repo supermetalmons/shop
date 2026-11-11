@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { attributePublisherName } from '../src/ethereumRevealAttributes.ts';
+import { attributePublisherName, MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import type { RevealPublicationJob } from '../src/ethereumRevealStore.ts';
 import type { MetadataWrite } from '../src/ethereumRevealPublisherObject.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
@@ -97,8 +97,8 @@ for (const previous of ['absent', 'placeholder', 'published'] as const) test(`pu
   });
 });
 
-for (const body of ['{"image":"https://other.test/art.webp"}', 'x'.repeat(128 * 1024 + 1)]) {
-  test(`publisher quarantines ${body.length > 128 * 1024 ? 'oversized' : 'differing'} existing metadata`, async () => {
+for (const body of ['{"image":"https://other.test/art.webp"}', 'x'.repeat(MAX_REVEAL_METADATA_BYTES + 1)]) {
+  test(`publisher quarantines ${body.length > MAX_REVEAL_METADATA_BYTES ? 'oversized' : 'differing'} existing metadata`, async () => {
     const f = fixture();
     f.objects.set(key(), { body, etag: 'foreign' });
     assert.deepEqual(await f.publisher.publishBatch(scope, [job()]), [{ tokenId: '1', status: 'conflict' }]);
@@ -226,10 +226,26 @@ test('publisher rejects oversized payloads and batches before starting R2 work',
   const f = fixture();
   assert.throws(() => f.publisher.publishBatch(scope, Array.from({ length: 9 }, () => job())), /Invalid reveal publication batch/);
   for (const field of ['metadata_json', 'placeholder_json']) {
-    assert.throws(() => f.publisher.publishBatch(scope, [{ ...job(), [field]: 'é'.repeat(128 * 1024) }]), /Invalid reveal publication metadata/);
+    assert.throws(() => f.publisher.publishBatch(scope, [{ ...job(), [field]: 'é'.repeat(MAX_REVEAL_METADATA_BYTES / 2 + 1) }]), /Invalid reveal publication metadata/);
   }
   assert.equal(f.reads(), 0);
   assert.equal(f.writes.length, 0);
+});
+
+test('publisher accepts the exact UTF-8 metadata size limit and reconciles it idempotently', async () => {
+  const f = fixture();
+  const metadata = (value: string) => JSON.stringify({ image: 'https://example.test/1.webp', attributes: [{ trait_type: 'Text', value }] });
+  const room = MAX_REVEAL_METADATA_BYTES - Buffer.byteLength(metadata(''));
+  const value = 'é'.repeat(Math.floor(room / 2)) + 'x'.repeat(room % 2);
+  const item = { ...job(), metadata_json: metadata(value) };
+  assert.equal(Buffer.byteLength(item.metadata_json), MAX_REVEAL_METADATA_BYTES);
+  assert.deepEqual(await f.publisher.publishBatch(scope, [item]), [{ tokenId: '1', status: 'published' }]);
+  assert.equal(f.objects.get(key())?.body, item.metadata_json);
+  assert.deepEqual(await f.reopen().publishBatch(scope, [item]), [{ tokenId: '1', status: 'published' }]);
+  assert.equal(f.writes.length, 1);
+  const reads = f.reads();
+  assert.throws(() => f.publisher.publishBatch(scope, [{ ...item, metadata_json: metadata(value + 'x') }]), /Invalid reveal publication metadata/);
+  assert.equal(f.reads(), reads);
 });
 
 test('publisher returns retry for a stalled read and never writes after its deadline', async () => {

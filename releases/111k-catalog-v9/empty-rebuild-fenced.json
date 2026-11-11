@@ -1,0 +1,16 @@
+{
+  "confirmedNewCoordinator": true,
+  "activationNotBefore": "2026-11-11T15:23:50.931Z",
+  "observedAt": "2026-11-11T15:22:40.030Z",
+  "result": {
+    "deploymentId": "mainnet-v1",
+    "operationId": "empty-e901c417e0aae78fcf18656cadbf6d5f",
+    "phase": "fencing",
+    "complete": false,
+    "catalogRevision": 0,
+    "seeded": 0,
+    "total": 111111,
+    "fenceActive": true,
+    "retryAfterMs": 5000
+  }
+}

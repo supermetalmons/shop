@@ -1,0 +1,58 @@
+{
+  "complete": true,
+  "completedAt": "2026-11-11T15:30:28.069Z",
+  "deploymentId": "mainnet-v1",
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "metadataBaseUri": "https://cdn.mons.shop/111k/",
+  "mode": "empty-pool-rebuild",
+  "operationId": "empty-e901c417e0aae78fcf18656cadbf6d5f",
+  "expectedRevision": 6,
+  "registryRevision": 9,
+  "catalogRevision": 1,
+  "immutableOriginCatalog": "111k-v8",
+  "effectiveCatalog": {
+    "catalogVersion": "111k-v9",
+    "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+  },
+  "counts": {
+    "eggs": 38652,
+    "paintings": 68980,
+    "videos": 58,
+    "3d": 3000,
+    "animated": 421
+  },
+  "total": 111111,
+  "addedPaintings": 16651,
+  "addedPaintingRange": [
+    52330,
+    68980
+  ],
+  "remainingEggs": 38652,
+  "alreadyMintedArtworksHatched": 0,
+  "artworksMinted": 0,
+  "relicsMinted": 2,
+  "saleActive": false,
+  "writerFenceReleased": true,
+  "observationCompleted": true,
+  "schedulerObservations": 5,
+  "schedulerErrors": 0,
+  "obsoleteAllocationCleanupCompleted": true,
+  "testnetPoolChanged": false,
+  "onchainTransactionsSent": 0,
+  "apiVersion": "f5defc0a-4c19-4c1a-b65a-29ae4ae31dd9",
+  "frontendVersion": "31679b44-2a4d-46d1-a0a2-97457feda7f1",
+  "supersededOnlineOperation": {
+    "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+    "expectedRevision": 3,
+    "state": "cancelled-before-activation",
+    "frozenBundlePreserved": true
+  },
+  "scopeWaivers": {
+    "fullCommerceAudit": true,
+    "exhaustiveMediaScan": true,
+    "unrelatedRepeatedTests": true
+  },
+  "localScratchRemoved": true,
+  "compressedLogFiles": 32
+}

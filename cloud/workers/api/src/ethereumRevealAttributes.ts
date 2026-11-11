@@ -7,7 +7,7 @@ import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
 import { REVEAL_CATEGORY_COUNTS } from './ethereumRevealCatalog.js';
 import type { RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.js';
 
-export const MAX_REVEAL_METADATA_BYTES = 128 * 1024;
+export const MAX_REVEAL_METADATA_BYTES = 256 * 1024;
 
 export class InvalidRevealAttributes extends Error {}
 
@@ -66,7 +66,7 @@ export function applyRevealAttributePayload(baseJson: string, attributesJson: st
   const attributes = [payload[0], ...base.attributes, ...payload.slice(1)];
   const metadataJson = JSON.stringify({ ...base, attributes }) + '\n';
   const bytes = new TextEncoder().encode(metadataJson);
-  if (bytes.length > MAX_REVEAL_METADATA_BYTES) throw new InvalidRevealAttributes('Enriched metadata exceeds 128 KiB.');
+  if (bytes.length > MAX_REVEAL_METADATA_BYTES) throw new InvalidRevealAttributes('Enriched metadata exceeds 256 KiB.');
   return { metadataJson, metadataSha256: bytesToHex(sha256(bytes)) };
 }
 

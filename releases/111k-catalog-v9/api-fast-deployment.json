@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "worker": "mons-shop-api",
+  "workerVersion": "a261e730-2ab9-4382-8b34-1357e158bce8",
+  "deploymentId": "4ce04e83-9422-4ea2-9fd2-85e497b97266",
+  "deployedAt": "2026-11-11T15:18:50.930996Z",
+  "codeUpdateDelaySeconds": 300,
+  "codeReadyAt": "2026-11-11T15:23:50.931Z",
+  "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+  "batchSha256": "231235b610618f2a16c131864f66ebeff10382ac9c11be17c98423cec75c71d9",
+  "auditComplete": true,
+  "auditedAt": "2026-11-11T15:19:55.373Z",
+  "fastPathSupport": {
+    "coordinatorMethod": true,
+    "persistentWriterFence": true,
+    "boundedDirectSeeder": true,
+    "allocationBase": true,
+    "generationKeyedCache": true
+  },
+  "auditFile": "api-catalog-audit.json"
+}

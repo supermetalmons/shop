@@ -7,6 +7,7 @@ import { computeRevealCatalogDescriptor, type RevealAssetCatalog } from '../../.
 import { revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
+import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 
 const source = getRevealCatalog('111k-v5')!;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
@@ -244,11 +245,11 @@ test('oversized merged metadata is rejected before activation while the original
   f.store.catalogUpdate.begin(update, 2000);
   f.store.catalogUpdate.stageMappings(update.batchId, update.mappings);
   f.store.catalogUpdate.sealMappings(update.batchId);
-  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'large' }, { trait_type: 'data', value: 'x'.repeat(128 * 1024 - 200) }]);
-  assert.ok(Buffer.byteLength(payload) < 128 * 1024);
+  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'large' }, { trait_type: 'data', value: 'x'.repeat(MAX_REVEAL_METADATA_BYTES - 200) }]);
+  assert.ok(Buffer.byteLength(payload) < MAX_REVEAL_METADATA_BYTES);
   const [row] = f.store.catalogUpdate.metadataPreparationPage(update.batchId);
   assert.throws(() => f.store.catalogUpdate.metadataStage(update.batchId, [{ ...row, attributesJson: payload,
-    sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 128 KiB/);
+    sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 256 KiB/);
   assert.equal(f.store.catalogUpdate.status(update.batchId)!.metadataStaged, 0);
   assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
   f.store.reserve(['111112']);

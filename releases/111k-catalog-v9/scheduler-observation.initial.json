@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "deploymentId": "mainnet-v1",
+  "workerVersion": "5666e657-c3c6-47cf-b124-7c2eb424cd40",
+  "parsedAt": "2026-11-11T15:09:41.181301Z",
+  "sourceSha256": "5320022a761132b3f5a01b4bfebce09d92e696d15e845bcb00bcc0d89f2b4abc",
+  "sourceBytes": 2595,
+  "parsedEvents": 1,
+  "matchedEvents": 1,
+  "unparsedTail": null,
+  "firstEventTimestamp": 1794409509101,
+  "lastEventTimestamp": 1794409509101,
+  "observations": [
+    {
+      "eventTimestamp": 1794409509101,
+      "entrypoint": "EthereumRevealObject",
+      "executionModel": "durableObject",
+      "outcome": "ok",
+      "truncated": false,
+      "rpcMethod": "watchdog",
+      "logTimestamp": 1794409509256,
+      "event": "ethereum_reveal_recovery_health",
+      "ready": true,
+      "seeded": 111111,
+      "available": 111111,
+      "reserved": 0,
+      "frozen": 0,
+      "publication": {},
+      "enrichment": {}
+    }
+  ],
+  "errors": []
+}

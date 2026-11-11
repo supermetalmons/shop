@@ -15,6 +15,7 @@ import { reconcileEthereumCheckoutAttempt } from '../src/ethereumCheckout.ts';
 import type { EthereumCheckoutAttemptRow } from '../src/ethereumCheckoutStore.ts';
 import { ethereumCallBatch, ethereumConfig, ethereumRelicInterfaceAvailable, type EthereumContext, type EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { ethereumInventoryItems, ethereumTokenInfos, type EthereumLog, type EthereumReceipt } from '../src/ethereumRead.ts';
+import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { planReadyToShipNotifications } from '../src/readyToShipNotifications.ts';
 import { requireShipStationEnabled } from '../src/shipstation/common.ts';
@@ -3755,7 +3756,7 @@ for (const [name, response] of [
   ['missing', () => new Response(null, { status: 404 })],
   ['wrong content type', () => new Response('{}', { headers: { 'Content-Type': 'text/plain' } })],
   ['invalid JSON', () => new Response('{', { headers: { 'Content-Type': 'application/json' } })],
-  ['oversized JSON', () => Response.json({ name: 'x'.repeat(128 * 1024), image: 'data:image/svg+xml;base64,AA==' })],
+  ['oversized JSON', () => Response.json({ name: 'x'.repeat(MAX_REVEAL_METADATA_BYTES), image: 'data:image/svg+xml;base64,AA==' })],
   ['invalid image', () => Response.json({ name: 'Artwork', image: 'javascript:alert(1)' })],
   ['HTTP image', () => Response.json({ name: 'Artwork', image: 'http://wip.lil.org/artwork.webp' })],
   ['image credentials', () => Response.json({ name: 'Artwork', image: 'https://user:password@wip.lil.org/artwork.webp' })],
@@ -3770,6 +3771,26 @@ for (const [name, response] of [
     } finally { f.close(); }
   });
 }
+
+test('offchain metadata preserves large traits at the exact UTF-8 size limit and rejects an extra byte', async () => {
+  const f = fixture();
+  try {
+    const metadata = (value: string) => JSON.stringify({ name: 'Large traits', image: 'https://cdn.lil.org/nft/111k/paintings/1.png',
+      attributes: [{ trait_type: 'Text', value }] });
+    const room = MAX_REVEAL_METADATA_BYTES - Buffer.byteLength(metadata(''));
+    const value = 'é'.repeat(Math.floor(room / 2)) + 'x'.repeat(room % 2);
+    const accepted = metadata(value);
+    assert.equal(Buffer.byteLength(accepted), MAX_REVEAL_METADATA_BYTES);
+    f.metadata.fetch = async () => new Response(accepted, { headers: { 'Content-Type': 'application/json' } });
+    const result = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.body.attributes, [{ trait_type: 'Text', value }]);
+    f.metadata.fetch = async () => new Response(metadata(value + 'x'), { headers: { 'Content-Type': 'application/json' } });
+    const rejected = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);
+    assert.equal(rejected.response.status, 503);
+    assert.equal(rejected.body.image, undefined);
+  } finally { f.close(); }
+});
 
 test('offchain inventory metadata uses at most eight concurrent reads and preserves output order', { timeout: 5000 }, async t => {
   const f = fixture();

@@ -1,6 +1,26 @@
 import { ethereumItemDisplayIdMaximum } from './protocol.ts';
 import type { RevealCatalogUpdateBatch } from './revealCatalogUpdate.ts';
 
+export type EthereumRevealEmptyPoolRequest = EthereumRevealMaintenanceRequest & {
+  operationId: string;
+  action: 'inspect' | 'begin' | 'advance' | 'verify' | 'cancel';
+  batch?: RevealCatalogUpdateBatch;
+};
+
+export type EthereumRevealEmptyPoolResult = {
+  deploymentId: string;
+  operationId: string;
+  phase: 'unstarted' | 'fencing' | 'staging' | 'activating' | 'observing' | 'complete' | 'cancelled';
+  complete: boolean;
+  catalogRevision: number;
+  seeded: number;
+  total: number;
+  fenceActive: boolean;
+  retryAfterMs: number;
+  observationUntilMs?: number;
+  emptyCounts?: Record<string, number>;
+};
+
 export type EthereumRevealCatalogUpdateRequest = EthereumRevealMaintenanceRequest & {
   batchId: string;
   action: 'inspect' | 'begin' | 'advance' | 'verify' | 'cancel';

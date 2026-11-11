@@ -24,6 +24,7 @@
     "ethereum:metadata": "node --import tsx scripts/ethereum-metadata/cli.ts",
     "ethereum:assets": "node --import tsx scripts/ethereum-metadata/assetCli.ts",
     "ethereum:catalog-update": "node --import tsx scripts/ethereum-metadata/catalogUpdateCli.ts",
+    "ethereum:empty-pool": "node --import tsx scripts/ethereum-metadata/emptyPoolCli.ts",
     "ethereum:relic-images": "node --import tsx scripts/ethereum-metadata/relicImagesCli.ts",
     "check:ethereum-assets": "npm run ethereum:assets -- import --check && npm run ethereum:assets -- collection-blocks --check",
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",

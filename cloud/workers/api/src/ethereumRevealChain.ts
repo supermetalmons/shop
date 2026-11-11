@@ -164,6 +164,28 @@ export async function verifyRevealDeployment(env: RevealChainEnvironment,
   }));
 }
 
+export async function verifyEmptyRevealChain(env: RevealChainEnvironment,
+  deployment: RevealChainDeployment & Pick<EthereumRevealDeployment, 'metadataBaseUri'>,
+  signal: AbortSignal, providerFetch: typeof fetch = fetch): Promise<ChainBlock> {
+  if (deployment.chainId !== 1) throw new Error('Empty pool rebuild requires Ethereum mainnet.');
+  const rpc = createRpc(env, deployment, signal, providerFetch);
+  await verifyChain(rpc, deployment);
+  const block = parseBlock(await rpc('eth_getBlockByNumber', ['latest', false]));
+  const reference = { blockHash: block.hash, requireCanonical: true };
+  const [stats, uri] = await Promise.all([
+    rpc('eth_call', [{ to: deployment.contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [ZERO]) }, reference]),
+    rpc('eth_call', [{ to: deployment.contractAddress, data: encodeCall('baseURI()', [], []) }, reference]),
+  ]);
+  if (typeof stats !== 'string' || !BYTES.test(stats) || typeof uri !== 'string' || !BYTES.test(uri)) throw unavailable();
+  const values = decodeReturn(STATS_TYPES, stats);
+  if (values[2] !== 0n || values[5] !== false || decodeReturn(['string'], uri)[0] !== deployment.metadataBaseUri) {
+    throw new Error('Empty pool rebuild requires zero minted artworks, a closed sale, and the registered metadata URI.');
+  }
+  const canonical = parseBlock(await rpc('eth_getBlockByNumber', [ethereumHexQuantity(block.number), false]));
+  if (canonical.hash !== block.hash || canonical.number !== block.number) throw unavailable();
+  return block;
+}
+
 function parseLog(value: unknown): ChainLog {
   const row = record(value);
   if (typeof row.address !== 'string' || !ADDRESS.test(row.address) || !Array.isArray(row.topics) ||

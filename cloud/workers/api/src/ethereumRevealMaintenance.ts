@@ -14,8 +14,20 @@ import { ETHEREUM_REVEAL_DEPLOYMENTS_SQL, parseEthereumRevealDeployment } from '
 import type { EthereumRevealCatalogUpdateResult } from '../../../../shared/ethereum/revealMaintenance.js';
 import { parseRelicImagesRequest, type RelicImagesResult } from '../../../../shared/ethereum/relicImages.js';
 import { requireRelicImagesDeployment } from './ethereumRelicImages.js';
+import { parseEmptyPoolRequest } from './ethereumRevealEmptyPool.js';
+import type { EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/revealMaintenance.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async rebuildEmptyPool(value: unknown): Promise<EthereumRevealEmptyPoolResult> {
+    const request = parseEmptyPoolRequest(value);
+    const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)
+      .bind(request.deploymentId).first<Record<string, unknown>>();
+    if (!row) throw new Error('Empty-pool deployment is not registered.');
+    const deployment = parseEthereumRevealDeployment(row);
+    if (deployment.chainId !== 1 || deployment.retiredAtMs != null) throw new Error('Empty-pool rebuild requires a retained mainnet deployment.');
+    return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).rebuildEmptyPool(deployment, request);
+  }
+
   async relicImages(value: unknown): Promise<RelicImagesResult> {
     const request = parseRelicImagesRequest(value);
     const deadline = Date.now() + 25_000;

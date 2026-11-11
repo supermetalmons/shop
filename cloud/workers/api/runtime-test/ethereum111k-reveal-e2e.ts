@@ -44,8 +44,8 @@ export async function runEthereumRevealE2E(input: {
     const forcedAssets = [
       { category: '3d', assetId: 3000, path: '3d/3000.png', animation: '3d/3000.glb', aspectRatio: { width: 1, height: 1 } },
       { category: 'animated', assetId: 421, path: 'animated/421.png', animation: 'animated/421.mp4', aspectRatio: { width: 466, height: 503 } },
-      { category: 'egg', assetId: 55303, path: 'eggs/55303.png', aspectRatio: { width: 1, height: 1 } },
-      { category: 'painting', assetId: 52329, path: 'paintings/52329.png', aspectRatio: { width: 466, height: 503 } },
+      { category: 'egg', assetId: 38652, path: 'eggs/38652.png', aspectRatio: { width: 1, height: 1 } },
+      { category: 'painting', assetId: 68980, path: 'paintings/68980.png', aspectRatio: { width: 1, height: 1 } },
       { category: 'video', assetId: 58, path: 'videos/58.webp', animation: 'videos/58.mp4', aspectRatio: { width: 16, height: 9 } },
     ];
     await storage.exec(`INSERT INTO crates(crate_token_id) VALUES('111112');${forcedAssets.map((asset, slot) => `

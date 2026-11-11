@@ -1,0 +1,67 @@
+{
+  "capturedAt": "2026-11-11T14:55:21.705Z",
+  "baseCommit": "7ba589dad86079c07401a19691ac49153dabc371",
+  "workingTree": true,
+  "files": {
+    "cloud/workers/api/runtime-test/ethereum111k-reveal-e2e.ts": "bbd1851db659d7405764becd00d6b500028e9f59b7fe5791addc3972e2d7d210",
+    "cloud/workers/api/test/ethereumRevealCollectionBlocks.test.ts": "0c47929d2a8b797b330f9f04ad7c8973a69f44cd6c4f5c9ef0650e208783bd36",
+    "cloud/workers/api/test/ethereumRevealMaintenance.test.ts": "e3d9f96369106c91fd7329a6ba65d9723bf8206c4a64c0852edc33daf7a1d2e9",
+    "cloud/workers/api/test/ethereumRevealReconciliation.test.ts": "bee76d68bf91d671255833e7b9b37e3d664d5201fd64fcbff6abc0fd6acd2c11",
+    "cloud/workers/api/test/ethereumRevealStore.test.ts": "6624f8f5f785104532f6e035bee9ed87d84c608e569e5bbc5b6fa3116f19cedb",
+    "scripts/docs/111k_mainnet.md": "890e6a3bc492de9b1ac5d0f9047e04af0e91cfca3526d89077409e6ca6f0d90b",
+    "scripts/docs/111k_metadata.md": "9382a5ee2009f56881f81068204a8962a57f8d305cbb0bccdeb90290bf805d25",
+    "scripts/docs/111k_reveal.md": "e754e85e188433467ed917f45f26b7925c5799da80bb085e1bc3b160eff08394",
+    "scripts/docs/111k_reveal_ops.md": "0cfa175209fb4e6aaaa4d003f97898632144e5ab181a6785fdadff40d7dffe2b",
+    "scripts/ethereum-metadata/reveal-assets/111k_devnet/README.md": "42a2e789575522c390e22073b854d4c5fa02960f0d9e46a204160fc0d5ce4f69",
+    "scripts/ethereum-metadata/reveal-assets/111k_devnet/collection-blocks.json": "b2ea1bf1372b5af4ba2eec6bb38d214de0bc4997e14a17b25387e3e88444f0a8",
+    "scripts/ethereum-metadata/reveal-assets/111k_devnet/collection-blocks.source.json": "1914e178a8e8acec92f9bd19485da58e054cff083a926bf4340d128bc07dcc68",
+    "scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json": "84a9c088c79ea3d4a2afa32358f724da53b7f3fce8dbe0916ccbaf4975e97c78",
+    "scripts/ethereum-metadata/reveal-assets/111k_devnet/source.json": "1914e178a8e8acec92f9bd19485da58e054cff083a926bf4340d128bc07dcc68",
+    "shared/ethereum/revealCatalog.json": "e4ea11650aefe446beb156bdcef1ae589acbf75314277f349d169b06519c5fbb",
+    "shared/ethereum/revealCatalogAncestors.json": "50dc47fb924950705a806681b06bfa177ba7d6607ab2a200ee2d3bb0ffb10b7a",
+    "tests/ethereumAssetImport.test.ts": "91958d9788c272c7e77c3cecb8dfca77faf604d3995e44defd55b29523e677c0",
+    "tests/ethereumCatalogUpdate.test.ts": "700e75846762c81d00f4a49f126a08c7416b797cc293974df686049f82ecb34c",
+    "tests/ethereumCollectionBlocksImport.test.ts": "d16a0e1bc5605f80dfa9997fcedee3b6ab65ff93432c4c68e31864697fb3a740"
+  },
+  "compatibility": {
+    "retainedV8Sha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+    "historicalCollectionBlockLookupsVerified": 184711,
+    "newCollectionBoundariesVerified": 14
+  },
+  "focusedTests": {
+    "related": 74,
+    "catalogBoundaries": 5,
+    "passed": true
+  },
+  "frontendTestRecovery": {
+    "initialSuite": {
+      "tests": 5246,
+      "passed": 5245,
+      "failed": 1
+    },
+    "correctedTest": "tests/ethereumCollectionBlocksImport.test.ts",
+    "changes": {
+      "ranges": [
+        21,
+        28
+      ],
+      "nonEggLabels": [
+        55808,
+        72459
+      ]
+    },
+    "targetedRerun": {
+      "tests": 9,
+      "passed": 9,
+      "failed": 0
+    }
+  },
+  "apiGates": {
+    "unitTests": 3345,
+    "runtimeTests": 70,
+    "failedTests": 0,
+    "migrationsApplied": 0,
+    "boundedCommerceReadiness": "passed",
+    "fullCommerceAudit": "Initial attempt failed on fetch; retry canceled per user direction. No completed full audit required for this hatch."
+  }
+}

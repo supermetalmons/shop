@@ -2,6 +2,8 @@
 
 The first Ethereum mainnet collection uses internal deployment ID `mainnet-v1` and base URI `https://cdn.mons.shop/111k/`. Token JSONs are flat decimal filenames, such as `1.json`, `111112.json`, and `117172.json`. Collection metadata remains `https://cdn.mons.shop/111k/collection.json`. Registering the root permanently assigns it to this contract.
 
+This runbook records the initial bootstrap with origin catalog `111k-v8`. For an existing registered mainnet deployment, use the [catalog expansion workflow](111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs) to apply the current catalog. Preserve the original registration and publication evidence; do not rerun the bootstrap.
+
 This workflow ends with minting closed, zero relic allocation, zero issuance, and reveal provisioning ready but inactive. It does not switch the storefront from Sepolia. Do not run the Sepolia replacement runner, reserve/open commands, or live mint/unpack QA for this release.
 
 ## Frozen constructor configuration

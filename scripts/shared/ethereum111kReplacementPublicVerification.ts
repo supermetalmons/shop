@@ -6,6 +6,7 @@ import descriptor from '../../shared/ethereum/revealCatalog.json';
 import catalog from '../ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 import { loadMetadataTemplates, sha256 } from '../ethereum-metadata/catalog.ts';
 import { cancelResponseBody, readBoundedResponseBytes } from '../../cloud/workers/api/src/boundedResponse.ts';
+import { MAX_REVEAL_METADATA_BYTES } from '../../cloud/workers/api/src/ethereumRevealAttributes.ts';
 
 type Scope = { chainId: number; metadataBaseUri: string };
 type Options = { fetch?: typeof fetch; wait?: (ms: number) => Promise<void>; onVerified?: (file: string) => Promise<void> };
@@ -120,7 +121,7 @@ export async function read111kReplacementPublicSamples(scope: Scope, expected: R
       await cancelResponseBody(response);
       throw new Error(`Public replacement metadata headers are invalid: ${url}`);
     }
-    const bytes = await readBoundedResponseBytes(response, { maxBytes: 128 * 1024, signal,
+    const bytes = await readBoundedResponseBytes(response, { maxBytes: MAX_REVEAL_METADATA_BYTES, signal,
       createError: failure => failure === 'stream-failed' ? new RetryablePublicRead(`Public replacement metadata stream failed: ${url}`)
         : new Error(`Public replacement metadata response is invalid (${failure}): ${url}`) });
     const observed = sha256(bytes);

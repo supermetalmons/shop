@@ -1,0 +1,21 @@
+{
+  "deploymentId": "mainnet-v1",
+  "expectedRevision": 3,
+  "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+  "batchSha256": "231235b610618f2a16c131864f66ebeff10382ac9c11be17c98423cec75c71d9",
+  "result": {
+    "deploymentId": "mainnet-v1",
+    "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+    "phase": "staging",
+    "complete": false,
+    "catalogRevision": 0,
+    "total": 16651,
+    "staged": 96,
+    "applied": 0,
+    "published": 0,
+    "frozen": 0,
+    "retryAfterMs": 0,
+    "conflicts": 0,
+    "retrying": 0
+  }
+}

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.ts';
 import { ethereumHexQuantity, ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
-import { EthereumRevealThrottleError, inspectRevealTransaction, recoverRevealCrates, recoverRevealTokens, verifyRevealDeployment } from '../src/ethereumRevealChain.ts';
+import { EthereumRevealThrottleError, inspectRevealTransaction, recoverRevealCrates, recoverRevealTokens, verifyEmptyRevealChain, verifyRevealDeployment } from '../src/ethereumRevealChain.ts';
 
 const CONTRACT = `0x${'11'.repeat(20)}`;
 const WALLET = `0x${'22'.repeat(20)}`;
@@ -32,7 +32,7 @@ function crateLogs(crate = 111112, first = 1, count = crate === 116666 ? 31 : 20
 
 function fixture() {
   const state = {
-    chain: 11155111, head: 500, canonical: BLOCK_HASH, minted: 40,
+    chain: 11155111, head: 500, canonical: BLOCK_HASH, minted: 40, saleActive: true,
     baseUri: 'https://cdn.mons.shop/111k-sepolia/', code: '0x60006000', createdAt: 100,
     receipt: { transactionHash: HASH, blockNumber: '0x1f4', blockHash: BLOCK_HASH,
       status: '0x1', from: WALLET, to: CONTRACT, logs: crateLogs() } as Record<string, unknown> | null,
@@ -70,7 +70,7 @@ function fixture() {
         result = encodeAbi(['(uint8,uint256,address)[]'], [ids.map(id => [2, id - 111111n, state.owners.get(String(id)) || WALLET])]);
       } else {
         result = encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
-          [1, 0, state.minted, 1, 1, true, word(0), 1, 1, 0]);
+          [1, 0, state.minted, 1, 1, state.saleActive, word(0), 1, 1, 0]);
       }
     } else throw new Error(`Unexpected method ${method}`);
     state.afterCall?.(method, params);
@@ -88,6 +88,29 @@ test('reveal verifies canonical inclusion and every mint and burn at one confirm
   assert.deepEqual(result.observation, { transactionHash: HASH, blockNumber: 500, blockHash: BLOCK_HASH });
   assert.deepEqual(result.crates, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }]);
   assert.ok(state.urls.every(url => url === 'https://eth-sepolia.g.alchemy.com/v2/test-only'));
+});
+
+test('empty pool chain proof requires canonical mainnet, closed sale and zero artworks while allowing relic supply', async () => {
+  const { state, providerFetch } = fixture();
+  state.chain = 1;
+  state.minted = 0;
+  state.saleActive = false;
+  state.baseUri = 'https://cdn.mons.shop/111k/';
+  const deployment = { ...DEPLOYMENT, chainId: 1, metadataBaseUri: state.baseUri };
+  assert.deepEqual(await verifyEmptyRevealChain(ENV, deployment, signal(), providerFetch), { number: 500, hash: BLOCK_HASH });
+  assert.equal(state.calls.some(call => JSON.stringify(call.params).includes(encodeCall('totalSupply()', [], []))), false);
+  state.minted = 1;
+  await assert.rejects(verifyEmptyRevealChain(ENV, deployment, signal(), providerFetch), /zero minted artworks/);
+  state.minted = 0;
+  state.saleActive = true;
+  await assert.rejects(verifyEmptyRevealChain(ENV, deployment, signal(), providerFetch), /closed sale/);
+  state.saleActive = false;
+  state.baseUri = 'https://cdn.mons.shop/111k/other/';
+  await assert.rejects(verifyEmptyRevealChain(ENV, deployment, signal(), providerFetch), /metadata URI/);
+  state.baseUri = deployment.metadataBaseUri;
+  state.afterCall = method => { if (method === 'eth_call') state.canonical = OTHER_BLOCK_HASH; };
+  await assert.rejects(verifyEmptyRevealChain(ENV, deployment, signal(), providerFetch), /unavailable/);
+  await assert.rejects(verifyEmptyRevealChain(ENV, { ...deployment, chainId: 11155111 }, signal(), providerFetch), /mainnet/);
 });
 
 for (const response of [

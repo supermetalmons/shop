@@ -1,11 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import type { GetPlatformProxyOptions } from 'wrangler';
+import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../../shared/ethereum/revealMaintenance.ts';
 import type { RelicImagesRequest, RelicImagesResult } from '../../shared/ethereum/relicImages.ts';
 import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealRetirementRequest, EthereumRevealRetirementResult, EthereumRevealRetirementCancellation, EthereumRevealReplacementRequest,
   EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  rebuildEmptyPool?(request: EthereumRevealEmptyPoolRequest): Promise<EthereumRevealEmptyPoolResult>;
   relicImages?(request: RelicImagesRequest): Promise<RelicImagesResult>;
   catalogUpdate?(request: EthereumRevealCatalogUpdateRequest): Promise<EthereumRevealCatalogUpdateResult>;
   backfillAttributes?(request: EthereumRevealAttributeBackfillRequest): Promise<EthereumRevealAttributeBackfillPage>;
@@ -44,7 +46,14 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async relicImages(request) {
+    return await run({ async rebuildEmptyPool(request) {
+      const result = await call(() => proxy.env.REVEAL_MAINTENANCE.rebuildEmptyPool!(request));
+      return { deploymentId: result.deploymentId, operationId: result.operationId, phase: result.phase,
+        complete: result.complete, catalogRevision: result.catalogRevision, seeded: result.seeded, total: result.total,
+        fenceActive: result.fenceActive, retryAfterMs: result.retryAfterMs,
+        ...(result.observationUntilMs !== undefined ? { observationUntilMs: result.observationUntilMs } : {}),
+        ...(result.emptyCounts ? { emptyCounts: { ...result.emptyCounts } } : {}) };
+    }, async relicImages(request) {
       const result = await call(() => proxy.env.REVEAL_MAINTENANCE.relicImages!(request));
       if (result.action === 'apply') return { action: result.action, tokenId: result.tokenId, status: result.status };
       return { action: result.action, objects: Array.from({ length: result.objects.length }, (_, index) => {

@@ -894,7 +894,9 @@ for (const stage of ['registry', 'getAlarm', 'setAlarm', 'kickoff'] as const) te
     },
     blockConcurrencyWhile: async <T>(operation: () => Promise<T>) => operation(),
     storage: {
-      sql: { exec: () => ({ toArray: () => [{ count: tables }] }) }, list: async () => new Map(),
+      sql: { exec: (_sql: string, ...parameters: unknown[]) => ({
+        toArray: () => parameters.includes('reveal_empty_pool_fences') ? [] : [{ count: tables }],
+      }) }, list: async () => new Map(),
       async getAlarm() { if (++alarmReads === 1 && stage === 'getAlarm') await gate(); return alarm; },
       async setAlarm(next: number) {
         if (++alarmWrites === 1 && stage === 'setAlarm') await gate();

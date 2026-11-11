@@ -15,6 +15,7 @@ import { EthereumApiError } from './ethereumError.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import { ethereumCatalogSnapshot, requireEthereumCatalogSnapshot } from './ethereumCatalogRevision.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
+import { MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import {
   ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
   verifyEthereumBlockSnapshot, ethereumRelicInterfaceAvailable, type EthereumContext, type EthereumCollectionReadContext,
@@ -104,7 +105,7 @@ async function readMetadata(context: EthereumCollectionReadContext, tokenId: str
     await cancelResponseBody(response);
     throw new EthereumApiError('unavailable', 'Ethereum metadata is temporarily unavailable.');
   }
-  return parseMetadata(await readBoundedResponseJson(response, { maxBytes: 128 * 1024, contentType: 'require-json', parseJson: parseMetadataJson, signal,
+  return parseMetadata(await readBoundedResponseJson(response, { maxBytes: MAX_REVEAL_METADATA_BYTES, contentType: 'require-json', parseJson: parseMetadataJson, signal,
     createError: () => new EthereumApiError('unavailable', 'Invalid Ethereum metadata.') }));
 }
 

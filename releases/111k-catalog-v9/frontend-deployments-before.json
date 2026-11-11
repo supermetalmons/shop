@@ -1,0 +1,153 @@
+[
+  {
+    "id": "d5cc3f6a-ac4f-4bdb-9b15-86bda548f69a",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "5f8b9524-2e40-41ce-b4e1-dac8b9275a6c",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-08T16:50:20.087475Z"
+  },
+  {
+    "id": "36944eeb-b607-48de-82ee-5627b4d5c5ad",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "412a9ae1-a8ea-4d33-8563-2422829ba52d",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-08T19:20:13.70373Z"
+  },
+  {
+    "id": "2e577c87-10db-42d5-a6da-30bb65f28f51",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "cecf5aaf-fd90-4354-ad2c-6635ea0b33b6",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-09T12:01:25.135081Z"
+  },
+  {
+    "id": "112f9a97-b01f-405f-8c8e-b9d6b3062e9a",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "9c4b3619-ebf3-4d0b-8dd4-6b4c8fbd8fa8",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-09T15:01:40.576431Z"
+  },
+  {
+    "id": "74eaa06d-a06d-43c9-9b7d-35ef989aa28a",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "b31dca34-85d4-42e2-9b50-94c7463cc6db",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-09T21:09:04.28624Z"
+  },
+  {
+    "id": "6673272d-b200-40f2-95e5-ffbc35ff6f53",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "60446636-5af8-48b3-9cd9-106a83818b7d",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-09T22:48:03.599439Z"
+  },
+  {
+    "id": "a6e01fb7-6f66-46e6-9a1c-81c3537260c6",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/message": "8c1b5c1c: validate collection blocks in reveal responses",
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "c1bffa26-d4b4-4260-be9b-82af74f51933",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-10T17:04:16.283597Z"
+  },
+  {
+    "id": "980d56e6-ad69-426b-a134-fbe51eafbec5",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "5dd2b3c0-362d-4107-94d4-8cc46c1b1808",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-10T17:40:44.406366Z"
+  },
+  {
+    "id": "21ed162b-5d5f-4b3e-83a5-8f1111d4fc3a",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "e507c6c2-6b76-4d60-a560-cf0c56e9943e",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-11T12:04:34.413933Z"
+  },
+  {
+    "id": "eea44800-ab4b-455c-a827-336fdca1b684",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "af0e53e5-3256-4620-b44b-30e71fea94ea",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-11T14:03:42.853133Z"
+  }
+]

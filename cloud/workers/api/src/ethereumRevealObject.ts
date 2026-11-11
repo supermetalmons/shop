@@ -22,6 +22,9 @@ import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateS
 import type { PublicationScope, MetadataWrite } from './ethereumRevealPublisherObject.js';
 import type { EthereumRevealCatalogUpdateResult } from '../../../../shared/ethereum/revealMaintenance.js';
 import { ETHEREUM_CATALOG_SNAPSHOT_PAGE_SIZE, type EthereumRevealCatalogSnapshot } from './ethereumCatalogRevision.js';
+import { EthereumRevealEmptyPool, parseEmptyPoolRequest } from './ethereumRevealEmptyPool.js';
+import { EthereumRevealEmptyPoolFence } from './ethereumRevealEmptyPoolFence.js';
+import type { EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/revealMaintenance.js';
 
 function unavailable(): EthereumApiError { return new EthereumApiError('unavailable', 'Artwork reveal is temporarily unavailable.'); }
 
@@ -29,6 +32,9 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private configuredStore: EthereumRevealStore | null = null;
   private retiring = false;
   private catalogUpdater: EthereumRevealCatalogUpdate | null = null;
+  private emptyPoolUpdater: EthereumRevealEmptyPool | null = null;
+  private emptyPoolFence: EthereumRevealEmptyPoolFence | null = null;
+  private transactionDepth = 0;
   private purgeRun: Promise<EthereumRevealPurgeResult> | null = null;
   private quiesceRun: Promise<{ quiesced: true }> | null = null;
   private readonly receipts = new Map<string, { active: boolean; promise: Promise<void> }>();
@@ -53,9 +59,38 @@ export class EthereumRevealObject extends DurableObject<Env> {
     return this.configuredStore;
   }
 
+  private transaction<T>(action: () => T): T {
+    if (this.transactionDepth) return action();
+    return this.ctx.storage.transactionSync(() => {
+      this.transactionDepth++;
+      try { return action(); } finally { this.transactionDepth--; }
+    });
+  }
+
+  private get rebuildFence(): EthereumRevealEmptyPoolFence {
+    return this.emptyPoolFence ??= new EthereumRevealEmptyPoolFence(this.ctx.storage.sql, action => this.transaction(action));
+  }
+
+  async rebuildEmptyPool(deployment: EthereumRevealDeployment, value: unknown): Promise<EthereumRevealEmptyPoolResult> {
+    const request = parseEmptyPoolRequest(value);
+    requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
+    if (request.deploymentId !== deployment.deploymentId || deployment.chainId !== 1 || this.retiring) throw unavailable();
+    this.emptyPoolUpdater ??= new EthereumRevealEmptyPool({ env: this.env, storage: this.ctx.storage, fence: this.rebuildFence,
+      initializeStore: () => {
+        this.configuredStore ??= new EthereumRevealStore(this.ctx.storage.sql, action => this.transaction(action));
+        return this.configuredStore.catalogUpdate;
+      },
+      readStore: () => new EthereumRevealCatalogUpdateStore(this.ctx.storage.sql, action => this.transaction(action)),
+      quiescent: () => this.receipts.size === 0 && this.scans.size === 0 && this.overflow.size === 0 &&
+        this.enrichmentLanes.size === 0 && !this.migrationRun && !this.publicationRun && !this.alarmUpdate && !this.alarmPending,
+      wake: async current => { this.configure(current); await this.startBackground(current); await this.arm(); },
+    });
+    return this.emptyPoolUpdater.run(request, deployment);
+  }
+
   private get updateController(): EthereumRevealCatalogUpdate {
     this.catalogUpdater ??= new EthereumRevealCatalogUpdate({ env: this.env, storage: this.ctx.storage,
-      initializeStore: () => this.configuredStore ??= new EthereumRevealStore(this.ctx.storage.sql, action => this.ctx.storage.transactionSync(action)),
+      initializeStore: () => this.configuredStore ??= new EthereumRevealStore(this.ctx.storage.sql, action => this.transaction(action)),
       wake: async deployment => { this.configure(deployment); await this.startBackground(deployment); await this.pruneCatalogIndexes(); await this.arm(); },
     });
     return this.catalogUpdater;
@@ -64,14 +99,14 @@ export class EthereumRevealObject extends DurableObject<Env> {
   async catalogUpdate(deployment: EthereumRevealDeployment, value: unknown): Promise<EthereumRevealCatalogUpdateResult> {
     const request = parseCatalogUpdateRequest(value);
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
-    if (request.deploymentId !== deployment.deploymentId || this.retiring) throw unavailable();
+    if (request.deploymentId !== deployment.deploymentId || this.retiring || this.rebuildFence.status()) throw unavailable();
     if (!['inspect', 'verify'].includes(request.action)) this.requireMaintenanceInventory(deployment);
     return this.updateController.run(request, deployment);
   }
 
   async validatePublication(scope: PublicationScope, job: MetadataWrite): Promise<boolean> {
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, scope);
-    if (this.retiring) return false;
+    if (this.retiring || this.rebuildFence.status()) return false;
     const deployment = await readEthereumRevealDeployment(this.env.OPS_DB, scope);
     if (!deployment || deployment.retiredAtMs != null || deployment.deploymentId !== scope.deploymentId ||
       deployment.metadataBaseUri !== scope.metadataBaseUri) return false;
@@ -90,17 +125,17 @@ export class EthereumRevealObject extends DurableObject<Env> {
   }
 
   private configure(deployment: EthereumRevealDeployment): void {
-    if (this.retiring || deployment.retiredAtMs != null || !isSupportedRevealDeployment(deployment) ||
+    if (this.retiring || this.rebuildFence.status() || deployment.retiredAtMs != null || !isSupportedRevealDeployment(deployment) ||
       deployment.chainId === 31337 && this.env.ETHEREUM_111K_CHAIN_ID !== '31337') throw unavailable();
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
     validateRevealCatalog();
-    this.configuredStore ??= new EthereumRevealStore(this.ctx.storage.sql, action => this.ctx.storage.transactionSync(action));
+    this.configuredStore ??= new EthereumRevealStore(this.ctx.storage.sql, action => this.transaction(action));
     this.store.configure(deployment);
   }
 
   private async authorize(deployment: EthereumRevealDeployment, deadline?: number): Promise<EthereumRevealDeployment> {
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
-    if (this.retiring) throw unavailable();
+    if (this.retiring || this.rebuildFence.status()) throw unavailable();
     const remaining = deadline === undefined ? undefined : deadline - Date.now();
     if (remaining !== undefined && (!Number.isFinite(remaining) || remaining <= 0)) throw unavailable();
     const timeout = remaining === undefined ? undefined : createTimedAbortScope(undefined,
@@ -122,10 +157,10 @@ export class EthereumRevealObject extends DurableObject<Env> {
 
   private async canContinue(scope: Pick<EthereumRevealDeployment, 'chainId' | 'contractAddress'>): Promise<boolean> {
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, scope);
-    if (this.retiring) return false;
+    if (this.retiring || this.rebuildFence.status()) return false;
     const canonical = await readEthereumRevealDeployment(this.env.OPS_DB, scope);
     if (canonical?.retiredAtMs != null) this.retiring = true;
-    return !this.retiring && canonical !== null && isSupportedRevealDeployment(canonical);
+    return !this.retiring && !this.rebuildFence.status() && canonical !== null && isSupportedRevealDeployment(canonical);
   }
 
   private requireReady(deployment: EthereumRevealDeployment): void {
@@ -284,7 +319,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
 
   private async matchesScope(scope: RevealVerificationScope): Promise<boolean> {
     if (!this.ctx.id.equals(this.env.ETHEREUM_REVEAL.idFromName(`${scope.chainId}:${scope.contractAddress}`))) return false;
-    if (this.retiring) return false;
+    if (this.retiring || this.rebuildFence.status()) return false;
     const deployment = await readEthereumRevealDeployment(this.env.OPS_DB, scope);
     if (this.retiring || !deployment || deployment.retiredAtMs != null || !isSupportedRevealDeployment(deployment) ||
       deployment.deploymentBlock !== scope.deploymentBlock) return false;
@@ -580,7 +615,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   }
 
   private arm(): Promise<void> {
-    if (this.retiring) return Promise.resolve();
+    if (this.retiring || this.rebuildFence.status()) return Promise.resolve();
     if (this.alarmPending) return this.alarmPending;
     const update = (this.alarmUpdate ?? Promise.resolve()).catch(() => undefined).then(async () => {
       this.alarmPending = null;
@@ -601,6 +636,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   }
 
   async watchdog(deployment: EthereumRevealDeployment): Promise<void> {
+    if (this.rebuildFence.status()) return;
     deployment = await this.authorize(deployment);
     this.configure(deployment);
     if (deployment.state === 'provisioning') { await this.initialize(deployment); return; }
@@ -623,7 +659,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   }
 
   private async pruneCatalogIndexes(): Promise<void> {
-    if (this.retiring || !this.configuredStore) return;
+    if (this.retiring || this.rebuildFence.status() || !this.configuredStore) return;
     const cleanup = this.store.catalogUpdate.pruneObsolete(256);
     if (!cleanup.remaining) return;
     const next = Date.now() + 250;
@@ -633,6 +669,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     try {
+      if (this.rebuildFence.status()) { await this.ctx.storage.deleteAlarm(); return; }
       const settings = this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_schema WHERE type='table' AND name='settings'").toArray();
       const saved = !this.retiring && settings.length
         ? this.ctx.storage.sql.exec<{ deployment_json: string }>('SELECT deployment_json FROM settings WHERE id=1').toArray()[0] : undefined;
@@ -646,14 +683,14 @@ export class EthereumRevealObject extends DurableObject<Env> {
       }
       await this.watchdog(deployment);
     } catch {
-      if (!this.retiring) await this.ctx.storage.setAlarm(Date.now() + 10_000);
+      if (!this.retiring && !this.rebuildFence.status()) await this.ctx.storage.setAlarm(Date.now() + 10_000);
       throw unavailable();
     }
   }
 
   private requireMaintenanceInventory(deployment: EthereumRevealDeployment): void {
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
-    if (this.retiring || !this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='settings'").toArray().length) {
+    if (this.retiring || this.rebuildFence.status() || !this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='settings'").toArray().length) {
       throw new Error('Replacement reveal inventory is not provisioned.');
     }
     const saved = this.ctx.storage.sql.exec<{ deployment_json: string; ready: number }>('SELECT deployment_json,ready FROM settings WHERE id=1').toArray()[0];

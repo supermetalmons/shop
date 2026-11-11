@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "complete": true,
+  "startedAt": "2026-11-11T15:02:33.135Z",
+  "completedAt": "2026-11-11T15:02:53.017Z",
+  "worker": "mons-shop-api",
+  "workerVersion": "5666e657-c3c6-47cf-b124-7c2eb424cd40",
+  "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+  "batchSha256": "231235b610618f2a16c131864f66ebeff10382ac9c11be17c98423cec75c71d9",
+  "deploymentBefore": {
+    "deploymentId": "0851fd9f-8cef-4f2e-92ec-66e206eec05e",
+    "createdAt": "2026-11-11T15:02:19.298691Z",
+    "versions": [
+      {
+        "versionId": "5666e657-c3c6-47cf-b124-7c2eb424cd40",
+        "percentage": 100
+      }
+    ]
+  },
+  "deploymentAfter": {
+    "deploymentId": "0851fd9f-8cef-4f2e-92ec-66e206eec05e",
+    "createdAt": "2026-11-11T15:02:19.298691Z",
+    "versions": [
+      {
+        "versionId": "5666e657-c3c6-47cf-b124-7c2eb424cd40",
+        "percentage": 100
+      }
+    ]
+  },
+  "contentSha256": "0fcaf870f174d10cb3a813fb0c918875524ef5e0d3a07605b83a264a1cee98a0",
+  "contentBytes": 36149740,
+  "entrypointSha256": "48ca131de1dc93ec81d207d59d4c975de448235638cb14916b0738cec8e8c8f9",
+  "staticExtraction": true,
+  "downloadedCodeExecuted": false,
+  "compiledCurrentDescriptor": {
+    "catalogVersion": "111k-v9",
+    "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+  },
+  "compiledCatalogs": [
+    {
+      "catalogVersion": "111k-v5",
+      "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a",
+      "counts": {
+        "painting": 30990,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v6",
+      "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+      "counts": {
+        "painting": 40348,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v7",
+      "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
+      "counts": {
+        "painting": 47128,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v8",
+      "manifestSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+      "counts": {
+        "painting": 52329,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v9",
+      "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1",
+      "counts": {
+        "painting": 68980,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    }
+  ],
+  "predecessorMatchesFrozenBatch": true,
+  "targetMatchesFrozenBatch": true,
+  "collectionBlocks": {
+    "sha256": "b6326268e4a682f179d19a3000a2a1b5017869358caf39c3a725f64f96b4dad5",
+    "sourceSha256": "1914e178a8e8acec92f9bd19485da58e054cff083a926bf4340d128bc07dcc68",
+    "matchesPromotedArtifact": true,
+    "allAddedArtworkLabelsChecked": 16651,
+    "predecessorCutoffPreserved": true
+  },
+  "limitation": "Published Worker bundle verified; existing Durable Objects still require the configured code-update delay."
+}

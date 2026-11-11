@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "deploymentId": "mainnet-v1",
+  "expectedRevision": 3,
+  "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "batchSha256": "231235b610618f2a16c131864f66ebeff10382ac9c11be17c98423cec75c71d9",
+  "recordedAt": "2026-11-11T15:07:42.728Z",
+  "status": "waived",
+  "checksPerformed": false,
+  "scope": "Client-side repeated artwork media availability, content-type and CORS preflight.",
+  "reason": "The user explicitly instructed skipping repeated artwork checks, stating the artworks were previously checked.",
+  "serverSideStagingAndValidationPreserved": true
+}

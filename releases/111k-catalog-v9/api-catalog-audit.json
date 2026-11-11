@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "complete": true,
+  "startedAt": "2026-11-11T15:19:28.908Z",
+  "completedAt": "2026-11-11T15:19:55.373Z",
+  "worker": "mons-shop-api",
+  "workerVersion": "a261e730-2ab9-4382-8b34-1357e158bce8",
+  "batchId": "catalog-231235b610618f2a16c131864f66ebef",
+  "batchSha256": "231235b610618f2a16c131864f66ebeff10382ac9c11be17c98423cec75c71d9",
+  "deploymentBefore": {
+    "deploymentId": "4ce04e83-9422-4ea2-9fd2-85e497b97266",
+    "createdAt": "2026-11-11T15:18:50.930996Z",
+    "versions": [
+      {
+        "versionId": "a261e730-2ab9-4382-8b34-1357e158bce8",
+        "percentage": 100
+      }
+    ]
+  },
+  "deploymentAfter": {
+    "deploymentId": "4ce04e83-9422-4ea2-9fd2-85e497b97266",
+    "createdAt": "2026-11-11T15:18:50.930996Z",
+    "versions": [
+      {
+        "versionId": "a261e730-2ab9-4382-8b34-1357e158bce8",
+        "percentage": 100
+      }
+    ]
+  },
+  "contentSha256": "0883c17da3d0186d8f0fbf2465971a93413ad92b00a75ef769345e96b62860dd",
+  "contentBytes": 36267849,
+  "entrypointSha256": "da7c48ca70abf2eae2caa36150d9f36523243b617b5f4309d210c334ba7a1e07",
+  "staticExtraction": true,
+  "downloadedCodeExecuted": false,
+  "compiledCurrentDescriptor": {
+    "catalogVersion": "111k-v9",
+    "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+  },
+  "compiledCatalogs": [
+    {
+      "catalogVersion": "111k-v5",
+      "manifestSha256": "f2024f71a4d7f77718fb28f701319f2552721cb4ccd386b9e722eb38d4a14b2a",
+      "counts": {
+        "painting": 30990,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v6",
+      "manifestSha256": "dac7b790d7d9e5f393e359591cd30cf8342fe0b7c25a7c5c10c059b883d5f0d4",
+      "counts": {
+        "painting": 40348,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v7",
+      "manifestSha256": "e0bb384c8dfc500b641b5dcd9a1e9998498cef1c9b73abd9faf9d1711c723f13",
+      "counts": {
+        "painting": 47128,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v8",
+      "manifestSha256": "4800adf310a8cff7308b2e8d42badea083ec794767faf19bfc03d716d9a2f665",
+      "counts": {
+        "painting": 52329,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v9",
+      "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1",
+      "counts": {
+        "painting": 68980,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    }
+  ],
+  "predecessorMatchesFrozenBatch": true,
+  "targetMatchesFrozenBatch": true,
+  "fastPathSupport": {
+    "coordinatorMethod": true,
+    "persistentWriterFence": true,
+    "boundedDirectSeeder": true,
+    "allocationBase": true,
+    "generationKeyedCache": true
+  },
+  "collectionBlocks": {
+    "sha256": "b6326268e4a682f179d19a3000a2a1b5017869358caf39c3a725f64f96b4dad5",
+    "sourceSha256": "1914e178a8e8acec92f9bd19485da58e054cff083a926bf4340d128bc07dcc68",
+    "matchesPromotedArtifact": true,
+    "matchesInitiallyVerifiedArtifact": true,
+    "predecessorCutoffPreserved": true
+  },
+  "limitation": "Published Worker bundle verified; existing Durable Objects still require the configured code-update delay."
+}

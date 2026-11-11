@@ -66,7 +66,33 @@ test('validates source shape, response and final UTF-8 sizes', async () => {
   await assert.rejects(fetchRevealAttributes('video', 1, body, signal, fetchLargeSource), /too-large/);
   const largeBase = JSON.stringify({ ...base, name: 'é'.repeat(MAX_REVEAL_METADATA_BYTES / 4) });
   await assert.rejects(fetchRevealAttributes('video', 1, largeBase, signal, async () =>
-    Response.json({ 'collection block': 'b'.repeat(MAX_REVEAL_METADATA_BYTES / 2), attributes: [] })), /exceeds 128 KiB/);
+    Response.json({ 'collection block': 'b'.repeat(MAX_REVEAL_METADATA_BYTES / 2), attributes: [] })), /exceeds 256 KiB/);
+});
+
+test('large trait collections remain intact within the bounded metadata limit', async () => {
+  const attributes = Array.from({ length: 2792 }, (_, index) => ({ trait_type: `Trait ${index}`, value: 'v'.repeat(20) }));
+  const source = JSON.stringify({ 'collection block': 'backrooms 2', attributes }, null, 2);
+  assert.ok(Buffer.byteLength(source) > 128 * 1024);
+  assert.ok(Buffer.byteLength(source) < MAX_REVEAL_METADATA_BYTES);
+  const result = await fetchRevealAttributes('painting', 64946, body, signal,
+    async () => new Response(source, { headers: { 'Content-Type': 'application/json' } }));
+  assert.deepEqual(JSON.parse(result.metadataJson).attributes, [
+    { trait_type: 'collection block', value: 'backrooms 2' }, ...base.attributes, ...attributes,
+  ]);
+  assert.ok(Buffer.byteLength(result.metadataJson) > 128 * 1024);
+  assert.ok(Buffer.byteLength(result.metadataJson) < MAX_REVEAL_METADATA_BYTES);
+});
+
+test('the final metadata UTF-8 limit accepts its exact boundary and rejects one extra byte', async () => {
+  const fetchWith = (value: string) => fetchRevealAttributes('painting', 1, body, signal,
+    async () => Response.json({ 'collection block': 'Block', attributes: [{ trait_type: 'Text', value }] }));
+  const overhead = Buffer.byteLength((await fetchWith('')).metadataJson);
+  const room = MAX_REVEAL_METADATA_BYTES - overhead;
+  const value = 'é'.repeat(Math.floor(room / 2)) + 'x'.repeat(room % 2);
+  const result = await fetchWith(value);
+  assert.equal(Buffer.byteLength(result.metadataJson), MAX_REVEAL_METADATA_BYTES);
+  assert.equal(JSON.parse(result.metadataJson).attributes.at(-1).value, value);
+  await assert.rejects(fetchWith(value + 'x'), /exceeds 256 KiB/);
 });
 
 test('distinguishes invalid inputs from transient CDN failures', async () => {

@@ -1,0 +1,181 @@
+{
+  "chainId": 31337,
+  "contract": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+  "gas": {
+    "deploy": "6470963",
+    "mintDiscountedCrate": "200490",
+    "mintWarehouse": "186807",
+    "unboxWarehouse": "349128",
+    "unboxCrate": "112193",
+    "redeemArtwork": "138785",
+    "redeemCrate": "119360",
+    "claimCrate": "600684",
+    "unboxCrates15IncludingBonus": "1205160",
+    "unboxCrates15SeparateTransactions": "1704401",
+    "unboxSpecialCrate": "133699",
+    "claimSpecialCrate": "885817",
+    "apiSignedDelivery": "119384",
+    "apiSignedClaim": "600684",
+    "apiSignedMixedDelivery": "279047",
+    "checkoutLostHashScheduled": "181850",
+    "checkoutLostHashRefresh": "119396",
+    "releaseAllMint": "935672",
+    "releaseDelivery": "189508",
+    "deploy32Recipients": "8201835",
+    "mint32Recipients": "125397",
+    "releaseAllMint32AfterIndividual": "2003646",
+    "mintFreeCrate": "74543",
+    "mintFreeWarehouse": "118814",
+    "claimRelic": "113055",
+    "allocateRelics3": "96243",
+    "mintRelic": "136219",
+    "mintFreeRelic": "100168",
+    "claimRelic18": "147255",
+    "claimRelic2": "95955",
+    "unboxRelic": "2895195",
+    "redeemRelic": "136580",
+    "redeemMixedRelic": "219682"
+  },
+  "batching": {
+    "metadata30ResponseBytes": 7846,
+    "confirm311ContractCalls": 3,
+    "relicInventoryRequests": 2
+  },
+  "checkoutRecovery": [
+    {
+      "recovery": "scheduled reconciliation",
+      "checkoutId": "9163d9a6-f1a3-40ae-8233-b8ee96a4d392",
+      "orderId": 1889575233,
+      "transactionHash": "0x52fa594d040e06f7e5b9def577bb859fe963ba6de34d4e0c9fd30cdda83dd346",
+      "fulfillmentOrders": 1,
+      "confirmations": 3
+    },
+    {
+      "recovery": "anonymous refresh",
+      "checkoutId": "e00f9fca-d94a-4481-a82c-c042f3bb9030",
+      "orderId": 1954905556,
+      "transactionHash": "0x0dea4053e3fc031bd27d675712bae781c9990389180ec556fa78ace2b54ce88a",
+      "fulfillmentOrders": 1,
+      "confirmations": 3
+    }
+  ],
+  "metadataChecks": [
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/111111.json",
+      "kind": "artwork",
+      "displayId": 111111,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/116666.json",
+      "kind": "crate",
+      "displayId": 5555,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/117171.json",
+      "kind": "warehouse",
+      "displayId": 505,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/1111111.json",
+      "kind": "artwork_receipt",
+      "displayId": 111111,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/2005555.json",
+      "kind": "crate_receipt",
+      "displayId": 5555,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/117172.json",
+      "kind": "relic",
+      "displayId": 1,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/117189.json",
+      "kind": "relic",
+      "displayId": 18,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/3000001.json",
+      "kind": "relic_receipt",
+      "displayId": 1,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v17/3000018.json",
+      "kind": "relic_receipt",
+      "displayId": 18,
+      "apiMatchesSource": true
+    }
+  ],
+  "passed": [
+    "mint receipts reconcile to canonical purchase events",
+    "permissionless mint payouts match configured shares",
+    "single and split shipping fees remain assigned to signed configuration IDs across backend config changes and release in one public call",
+    "32-recipient deployment, mint, individual and batch payouts",
+    "32 initial allowances, free crate and warehouse mints, reserved relic claim, cumulative owner edits and zero claim proceeds",
+    "mixed-case recipients and a former payout caller as payee receive exact payouts",
+    "draft allowlist proof and one discounted crate",
+    "wallet stats and discounted transaction confirmation",
+    "allowance increase to three preserves usage",
+    "public crates and warehouses do not consume discounts",
+    "warehouse mint/unpack",
+    "mixed direct supply",
+    "artwork identity equals token ID across opening order",
+    "transfers preserve artwork identity",
+    "signed artwork delivery",
+    "signed crate delivery",
+    "transferred receipt claim",
+    "supply exhaustion",
+    "15-crate batch with 311 artwork identities and exact aggregate proof",
+    "batch opening saves gas against separate transactions",
+    "311-artwork first-inclusion confirmation and inventory recovery",
+    "150-token-info and 30-metadata contract reads with bounded RPC envelopes",
+    "31-artwork digital unpack",
+    "31-artwork physical receipt claim",
+    "replay rejection",
+    "Ethereum API login and encrypted profile",
+    "API quote and real-chain redemption",
+    "three-confirmation fulfillment publication",
+    "API orphaned crate redelivery under a new order",
+    "token identity and receipt authorization stay stable after opening-order reorg",
+    "API secret-code claim and real-chain receipts",
+    "mixed inventory ownership read",
+    "unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment",
+    "checkout create and submission start retries are idempotent",
+    "unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation",
+    "anonymous checkout refresh recovers a lost transaction hash without a wallet",
+    "checkout public status excludes shipping and callback details",
+    "owner relic allocation reserves crates before sale and distributes preorder proceeds; chosen-ID claims, distinct imagery, transfer, 111-crate unpack and complete inventory recovery across two requests",
+    "paid and free public relic mints share staged limits, consume crates only on issuance, and preserve reserved claims across pause, unpack and duplicate-ID rejection",
+    "relic lifetime count and crate reservations survive unpacking",
+    "all seven metadata types match the selected metadata source",
+    "relic-only and mixed real-chain delivery with matching terminal receipts, fulfillment identity, and no relic claim codes",
+    "relic receipts transfer but reject unpacking, redelivery, and signed crate claims while preserving consumed allocations",
+    "first-confirmation reveal, private pending allocations, local R2 publication, immutable reorg handling, and hash-free token recovery"
+  ],
+  "reveal": {
+    "deploymentId": "local-8a791620dd6260079bf849dc5567adc3f2fdc318",
+    "contractAddress": "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+    "transactionHash": "0xf99c38d985cf78537cef975f7ec9e6a919b690f4f2a7265ca8cbf96f4ae68ae8",
+    "recoveryHash": "0xd795415832b0f82694c1bf347eb9c3e2a33c3ec91f509d91053b827ed7a178c8",
+    "pendingMediaHidden": true,
+    "firstConfirmationArtworkCount": 20,
+    "metadataStorage": "isolated-local-r2",
+    "deterministic3dReveal": true,
+    "deterministicAnimatedReveal": true,
+    "deterministicFiveCategoryReveal": true,
+    "attributeEnrichment": true,
+    "immutableAfterReorg": true,
+    "tokenRecovery": true
+  },
+  "relicContract": "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+  "metadataSource": "live-cdn"
+}

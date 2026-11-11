@@ -1,0 +1,80 @@
+{
+  "originalSha256": "617f91b86117c3371e8f2c9951623d8e041491c2e49fcb7107a29ff13cb6b970",
+  "sourceSha256": "1914e178a8e8acec92f9bd19485da58e054cff083a926bf4340d128bc07dcc68",
+  "excluded": {
+    "relics/1.png": [
+      1944,
+      2736
+    ],
+    "relics/2.png": [
+      2400,
+      1792
+    ],
+    "relics/3.png": [
+      5016,
+      5016
+    ],
+    "relics/4.png": [
+      2560,
+      1920
+    ],
+    "relics/5.png": [
+      2560,
+      1920
+    ],
+    "relics/6.png": [
+      1279,
+      1230
+    ],
+    "relics/7.png": [
+      1712,
+      2560
+    ],
+    "relics/8.png": [
+      8025,
+      9069
+    ],
+    "relics/9.png": [
+      1060,
+      1484
+    ],
+    "relics/10.png": [
+      1961,
+      2300
+    ],
+    "relics/11.png": [
+      2984,
+      3434
+    ],
+    "relics/12.png": [
+      1577,
+      1612
+    ],
+    "relics/13.png": [
+      1664,
+      2496
+    ],
+    "relics/14.png": [
+      2041,
+      2815
+    ],
+    "relics/15.png": [
+      1920,
+      2560
+    ],
+    "relics/16.png": [
+      1920,
+      2560
+    ],
+    "relics/17.png": [
+      1536,
+      1024
+    ],
+    "relics/18.png": [
+      2534,
+      1440
+    ]
+  },
+  "reason": "Relics are separately managed and do not consume artwork allocation slots.",
+  "normalization": "Preserve source entry order and all remaining values; JSON.stringify(value, null, 2) plus newline."
+}

@@ -1,0 +1,35 @@
+{
+  "recordedAt": "2026-11-11T15:25:20.589Z",
+  "scope": "Mainnet empty-pool rebuild and reveal safety; unrelated suites not repeated.",
+  "passed": {
+    "catalogAndCollectionBlocks": true,
+    "toolsTypecheck": true,
+    "apiTypecheck": true,
+    "emptyGenerationNodeTests": 3,
+    "emptyGenerationNativeRuntime": true,
+    "writerFenceFocusedTests": 26,
+    "writerFencePriorKvRegression": 3,
+    "coordinatorSafetyTests": 14,
+    "chainEmptyProof": 1,
+    "cliTests": 2,
+    "retirementAndEntrypointMockCorrections": 5,
+    "metadataBoundaryAndReadbackTests": 99,
+    "knownOversizedTraitSource": true,
+    "localEthereumE2E": "fast-local-e2e-results.json",
+    "bundleCredentialScan": true,
+    "startupProfile": true,
+    "boundedCommerceReadiness": "commerce-readiness.log.gz",
+    "boundedOpsReadiness": "fast-ops-readiness.log.gz"
+  },
+  "reused": {
+    "frontend": "frontend-verification.json",
+    "initialUnchangedApiChecks": "api-deploy.log.gz",
+    "noPendingD1Migrations": true
+  },
+  "scopeChanges": {
+    "fullCommerceAudit": "Initial attempt failed transport; retry stopped at user request.",
+    "exhaustiveMediaScan": "Stopped at user request; explicit scoped waiver retained.",
+    "broadApiRerun": "Stopped at user request; relevant changed tests completed separately. Stale mocks corrected and affected tests passed."
+  },
+  "noOnchainTransactions": true
+}
