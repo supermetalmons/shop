@@ -1,0 +1,13 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "01-open-public-relic-sale.unsigned.json": "eae4e75e16a55c4d0b3da8d2eac641dd447fb47f5343d6997f282df957ef44d6",
+    "02-mint-relic-17.unsigned.json": "e9afe2826a328902cbb2af47d445cdd1d1fbe0c2bcf1d316760a370998d48163",
+    "README.md": "4a4e3696b9a1e398d936b65a2553c818dd1233aa03d508985c1d80988551b5d6",
+    "operation.json": "251421153463d477a416124f1cfafb496a48659504d016176ebab1205aada1b0",
+    "preflight.mjs": "75f9ad25935590b989b12d741a6d5419c1235beec73ac47afecb28b2bcbfc9f4",
+    "recovery/close-public-relic-sale.unsigned.json": "009e265b4edf61bfdc4b5b553ffe70f6e96a93887f55a85ea608ab7b83a8f7fd",
+    "simulation.json": "a3d5815a86e497c3a8c4d1252d7490cfc3ed387eecf863904fdf268118e50472",
+    "source-snapshot.json": "c449164a9282eb5aeaf4897135717760f07031f39be2de8d49370f44782b4dcc"
+  }
+}

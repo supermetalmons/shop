@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "independentReviewer": "private_bundle_review",
+  "verifiedAt": "2026-11-11T19:52:41.474Z",
+  "readOnlyRpc": true,
+  "noTransactionsSignedOrSentByReviewer": true,
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "verificationBlock": {
+    "number": 26393896,
+    "hash": "0xb5f84a420a4ef914b3e105a3be781035ef0790d904f6c44369beeeff8456b0a6"
+  },
+  "transactions": [
+    {
+      "purpose": "open-one-public-slot",
+      "hash": "0x9afafff3643d08bc186cb9982f97d06794fadf1902e197e2015708ecd87d0ecf",
+      "status": "0x1",
+      "blockNumber": 26393894,
+      "blockHash": "0x4835f8c61fa21319fc7c91a64b7b70e6a8dc14a679a7acb65db40360deb52689",
+      "transactionIndex": 83,
+      "canonicalConfirmations": 3,
+      "nonce": 26,
+      "gasUsed": 38212,
+      "effectiveGasPriceWei": "5140176965",
+      "gasFeeWei": "196416442186580",
+      "unsignedPayloadExactMatch": true
+    },
+    {
+      "purpose": "mint-relic-17",
+      "hash": "0x65483a7d6ad9edc7afdb7dc81eeacce4c0e71e27b4906bcacc8b70cad11df155",
+      "status": "0x1",
+      "blockNumber": 26393894,
+      "blockHash": "0x4835f8c61fa21319fc7c91a64b7b70e6a8dc14a679a7acb65db40360deb52689",
+      "transactionIndex": 84,
+      "canonicalConfirmations": 3,
+      "nonce": 27,
+      "gasUsed": 102019,
+      "effectiveGasPriceWei": "5140176965",
+      "gasFeeWei": "524395713792335",
+      "unsignedPayloadExactMatch": true
+    }
+  ],
+  "target": {
+    "relicId": 17,
+    "tokenId": 117188,
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93"
+  },
+  "publicSale": {
+    "limit": 2,
+    "minted": 2,
+    "priceWei": "2402000000000000000",
+    "active": true,
+    "mintable": 0,
+    "freeLimit": 0,
+    "freeUsed": 0
+  },
+  "globalSaleActive": true,
+  "exactMintEventVerified": true,
+  "exactMintTransferVerified": true,
+  "exactSaleUpdateEventVerified": true,
+  "totalGasFeeWei": "720812155978915",
+  "recoverySentByReviewer": false
+}

@@ -1,0 +1,22 @@
+{
+  "chainId": 1,
+  "route": "public-rpc",
+  "submittedAt": "2026-11-11T19:52:01.316Z",
+  "transactions": [
+    {
+      "file": "01-open-public-relic-sale.unsigned.json",
+      "hash": "0x9afafff3643d08bc186cb9982f97d06794fadf1902e197e2015708ecd87d0ecf",
+      "nonce": 26,
+      "broadcastAttemptedAt": "2026-11-11T19:52:00.876Z",
+      "acknowledgedAt": "2026-11-11T19:52:01.069Z"
+    },
+    {
+      "file": "02-mint-relic-17.unsigned.json",
+      "hash": "0x65483a7d6ad9edc7afdb7dc81eeacce4c0e71e27b4906bcacc8b70cad11df155",
+      "nonce": 27,
+      "broadcastAttemptedAt": "2026-11-11T19:52:01.085Z",
+      "acknowledgedAt": "2026-11-11T19:52:01.285Z"
+    }
+  ],
+  "recoverySubmitted": false
+}

@@ -1,0 +1,10 @@
+{
+  "authorizedAt": "2026-11-11T19:51:53.674Z",
+  "userInstruction": "send it",
+  "scope": "Execute the two prepared primary transactions through public RPC; standby close only if mint fails and public slot remains open.",
+  "preparedChecksumsSha256": "ffa2b489666a237b4ef5d3620857483bcb126d67dba907b63f9e8dc8d6163815",
+  "chainId": 1,
+  "maximumTotalGasFeeWei": "3000000000000000",
+  "maxPriorityFeePerGasWei": "5000000000",
+  "maxFeePerGasWei": "10000000000"
+}
