@@ -12,6 +12,7 @@ import { isSupportedRevealDeployment } from './ethereumRevealCatalog.js';
 import { ethereumConfig, ethereumTransactionHash, localEthereumRpcUrl,
   type EthereumCollectionReadContext, type EthereumRequestContext } from './ethereumRuntime.js';
 import { confirmEthereumTransaction } from './ethereumTransactionConfirmation.js';
+import { raceWithSignal } from './boundedRequest.js';
 
 type CollectionScope = { chainId: number; contractAddress: string };
 const confirmationSchema = z.object({
@@ -36,10 +37,11 @@ function requestScope(input: { chainId?: unknown; contractAddress?: unknown }, r
 }
 
 async function publicDeployment(context: EthereumRequestContext, scope: CollectionScope): Promise<EthereumRevealDeployment> {
+  context.signal.throwIfAborted();
   if (scope.chainId === 31337 && context.env.ETHEREUM_111K_CHAIN_ID !== '31337') {
     throw new EthereumApiError('invalid-argument', 'Local Ethereum collections are unavailable in this environment.');
   }
-  const deployment = await readEthereumRevealDeployment(context.env.OPS_DB, scope);
+  const deployment = await raceWithSignal(readEthereumRevealDeployment(context.env.OPS_DB, scope), context.signal);
   context.signal.throwIfAborted();
   if (!deployment) throw new EthereumApiError('not-found', 'The Ethereum collection is not registered.');
   if (deployment.retiredAtMs != null || !isSupportedRevealDeployment(deployment)) {
@@ -104,20 +106,24 @@ export async function ethereumPublicRequest(request: Request, context: EthereumR
     const legacy = { ...context, config: ethereumConfig(context.env) };
     return transactionHash ? confirmEthereumTransaction(legacy, transactionHash) : ethereumPublicRead(request, legacy, path);
   }
+  const readsArtworkMetadata = path !== ETHEREUM_API_PATHS.config && path !== ETHEREUM_API_PATHS.stats;
   for (;;) {
     context.signal.throwIfAborted();
     const deployment = await publicDeployment(context, scope);
     const ready = deployment.provisionedAtMs !== null && deployment.state !== 'provisioning';
     if (!ready && path !== ETHEREUM_API_PATHS.config) throw new EthereumApiError('unavailable', 'The Ethereum collection is still provisioning.');
     const selected = collectionContext(context, deployment);
-    const before = ready ? await ethereumCatalogSnapshot(selected) : { catalogRevision: deployment.catalogRevision ?? 0 };
+    const before = ready && readsArtworkMetadata
+      ? await ethereumCatalogSnapshot(selected) : { catalogRevision: deployment.catalogRevision ?? 0 };
     const identity = collectionScope(deployment, before.catalogRevision);
     const value = path === ETHEREUM_API_PATHS.config ? await publicConfig(selected, deployment, identity)
       : transactionHash ? await confirmEthereumTransaction(selected, transactionHash) : await ethereumCollectionRead(request, selected, path);
-    const after = ready ? await ethereumCatalogSnapshot(selected) : before;
+    const after = ready && (readsArtworkMetadata || deployment.catalogUpdateId != null)
+      ? await ethereumCatalogSnapshot(selected) : before;
     const current = await publicDeployment(context, scope);
     if (current.deploymentId !== deployment.deploymentId || current.revision !== deployment.revision ||
-      current.catalogRevision !== deployment.catalogRevision || after.catalogRevision !== before.catalogRevision) continue;
-    return { ...value, ...identity };
+      current.catalogRevision !== deployment.catalogRevision || current.catalogUpdateId !== deployment.catalogUpdateId ||
+      readsArtworkMetadata && after.catalogRevision !== before.catalogRevision) continue;
+    return { ...value, ...collectionScope(deployment, after.catalogRevision) };
   }
 }

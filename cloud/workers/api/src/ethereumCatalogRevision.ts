@@ -12,9 +12,10 @@ export type EthereumRevealCatalogSnapshot = {
 };
 
 export async function ethereumCatalogSnapshot(context: EthereumCollectionReadContext, tokenIds: string[] = []): Promise<EthereumRevealCatalogSnapshot> {
+  context.signal.throwIfAborted();
   const address = context.config.contractAddress;
-  const deployment = address ? await readEthereumRevealDeployment(context.env.OPS_DB,
-    { chainId: context.config.chainId, contractAddress: address }) : null;
+  const deployment = address ? await raceWithSignal(readEthereumRevealDeployment(context.env.OPS_DB,
+    { chainId: context.config.chainId, contractAddress: address }), context.signal) : null;
   if (deployment?.retiredAtMs != null) throw new EthereumApiError('unavailable', 'This artwork collection is retired.');
   if (!deployment) return { deploymentId: null, catalogRevision: 0, artworks: [] };
   if (!context.env.ETHEREUM_REVEAL) {
@@ -38,9 +39,10 @@ export async function ethereumCatalogSnapshot(context: EthereumCollectionReadCon
 }
 
 export async function requireEthereumCatalogSnapshot(context: EthereumCollectionReadContext, captured: EthereumRevealCatalogSnapshot): Promise<void> {
+  context.signal.throwIfAborted();
   const address = context.config.contractAddress;
-  const current = address ? await readEthereumRevealDeployment(context.env.OPS_DB,
-    { chainId: context.config.chainId, contractAddress: address }) : null;
+  const current = address ? await raceWithSignal(readEthereumRevealDeployment(context.env.OPS_DB,
+    { chainId: context.config.chainId, contractAddress: address }), context.signal) : null;
   if ((current?.deploymentId ?? null) !== captured.deploymentId || current?.retiredAtMs != null) {
     throw new EthereumApiError('unavailable', 'The artwork collection changed. Try again shortly.');
   }
