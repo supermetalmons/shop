@@ -1,0 +1,23 @@
+{
+  "status": "passed",
+  "checkedAt": "2026-11-11T19:58:13.635Z",
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "recipient": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+  "relicId": 17,
+  "tokenId": 117188,
+  "blockNumber": 26393923,
+  "blockHash": "0x93eb0e56e368172f847673a56067ab73656dd51f55cac375ea4e900fb4c5b52a",
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "latestNonce": 28,
+  "pendingNonce": 28,
+  "deployerBalanceWei": "9976878904839566",
+  "recipientCode": "0xef010063c0c19a282a1b52b07dd5a65b58948a07dae32b",
+  "gasEstimate": "50156",
+  "gasLimit": 80000,
+  "maxPriorityFeePerGasWei": "5000000000",
+  "maxFeePerGasWei": "10000000000",
+  "maximumGasFeeWei": "800000000000000",
+  "ethCallResult": "0x"
+}

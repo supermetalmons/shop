@@ -1,0 +1,13 @@
+{
+  "authorizedAt": "2026-11-11T19:58:13.636Z",
+  "userInstruction": "send that relic we just minted to 0x51Ec8729331E284c4B5e8EcA8e0D184FeD18632F now",
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "relicId": 17,
+  "tokenId": 117188,
+  "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "to": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+  "valueWei": "0",
+  "method": "safeTransferFrom(address,address,uint256)",
+  "maximumGasFeeWei": "800000000000000"
+}

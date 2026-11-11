@@ -1,0 +1,12 @@
+{
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "recipient": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+  "relicId": 17,
+  "tokenId": 117188,
+  "transactionHash": "0xf6f55ba858478f9e8137f190e9cdca3c0024bb9842a26a52a5b52e071f27d3bd",
+  "nonce": 28,
+  "broadcastAttemptedAt": "2026-11-11T19:58:13.959Z",
+  "acknowledgedAt": "2026-11-11T19:58:14.139Z"
+}
