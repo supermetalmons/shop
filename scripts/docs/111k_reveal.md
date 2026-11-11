@@ -3,6 +3,7 @@
 Display artwork after an unpack's first canonical Ethereum confirmation. Use API results immediately; CDN metadata and marketplaces may update later.
 
 For the relic selection and claim page, use the [relic claims guide](111k_relic_claims.md).
+For mainnet, use the [VVV mainnet checklist](111k_mainnet_vvv.md) and [public API reference](111k_public_api.md). The examples below retain their explicit Sepolia scope.
 
 ## Connection
 

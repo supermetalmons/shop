@@ -6,7 +6,7 @@ import { normalizeEthereumAddress, normalizeEthereumTokenId } from '../../../../
 import { limitEthereumRequest } from './ethereumAuth.js';
 import { isAllowedEthereumCheckoutStatusOrigin } from './ethereumCheckoutOrigin.js';
 import { EthereumApiError, ethereumErrorResponse, readEthereumBody } from './ethereumError.js';
-import type { EthereumContext } from './ethereumRuntime.js';
+import type { EthereumRequestContext } from './ethereumRuntime.js';
 
 const scope = {
   chainId: z.number().int().refine(value => [1, 11155111, 31337].includes(value)),
@@ -15,7 +15,7 @@ const scope = {
 const transactionSchema = z.object({ ...scope, transactionHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/) }).strict();
 const tokensSchema = z.object({ ...scope, tokenIds: z.array(z.string().max(78)).min(1).max(ETHEREUM_REVEAL_MAX_TOKEN_IDS) }).strict();
 
-export async function ethereumReveal(request: Request, context: EthereumContext, path: string): Promise<unknown> {
+export async function ethereumReveal(request: Request, context: EthereumRequestContext, path: string): Promise<unknown> {
   const deadlineMs = Date.now() + 2_000;
   const transaction = path === ETHEREUM_REVEAL_PATHS.transaction;
   if (!transaction && path !== ETHEREUM_REVEAL_PATHS.tokens) throw new EthereumApiError('not-found', 'Reveal method not found.');

@@ -353,7 +353,7 @@ export default {
     const provider = async (input, init) => {
       if (String(input).startsWith(env.ETHEREUM_111K_METADATA_BASE_URI)) {
         metadataUrls.push(String(input));
-        if (url.searchParams.has('reorg')) changed = true;
+        if (request.headers.get('X-Test-Reorg') === '1') changed = true;
         return Response.json({ name: 'Synthetic runtime metadata', image: 'https://future-cdn.example/artwork.webp',
           description: '', attributes: [{ trait_type: 'type', value: 'artwork' }] });
       }
@@ -409,8 +409,9 @@ export default {
     await server.listen();
     const worker = server.getWorker('ethereum-read-runtime');
     await worker.applyD1Migrations('OPS_DB');
-    const confirm = (query = '') => worker.fetch(`https://api.mons.shop${paths.transactionsConfirm}${query}`, {
-      method: 'POST', headers: { Origin: ORIGIN, 'X-Mons-CSRF': '1', 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.42' },
+    const confirm = (reorg = false) => worker.fetch(`https://api.mons.shop${paths.transactionsConfirm}`, {
+      method: 'POST', headers: { Origin: ORIGIN, 'X-Mons-CSRF': '1', 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.42',
+        ...(reorg ? { 'X-Test-Reorg': '1' } : {}) },
       body: JSON.stringify({ transactionHash: `0x${'aa'.repeat(32)}` }),
     });
     const confirmed = await confirm();
@@ -428,7 +429,7 @@ export default {
     assert.equal(confirmed.headers.get('X-Test-Contract-Calls'), '3');
     assert.equal(confirmed.headers.get('X-Test-Max-Envelope'), '3');
     assert.equal(confirmed.headers.get('X-Test-Pinned-Calls'), 'true');
-    const orphaned = await confirm('?reorg=1');
+    const orphaned = await confirm(true);
     assert.equal(orphaned.status, 503);
     assert.equal((await orphaned.json() as { items?: unknown }).items, undefined);
   } finally {

@@ -7,6 +7,7 @@ import { CORS_HEADERS, handlePublicPreflight } from '../publicRouteSupport.js';
 import { handleRpcPreflight } from '../rpcProxy.js';
 import { applyEthereumCheckoutStatusCors } from '../ethereumCheckoutOrigin.js';
 import { applyEthereumRevealCors } from '../ethereumReveal.js';
+import { applyEthereumPublicConfirmCors, applyEthereumPublicReadCors } from '../ethereumPublicCors.js';
 import { MI_NOTE_SESSION_HEADER } from '../../../../../shared/miNoteAuth.js';
 import { ETHEREUM_SESSION_HEADER } from '../../../../../shared/ethereum/api.js';
 import type { MatchedWorkerRoute, WorkerRouteCorsPolicy } from './support.js';
@@ -44,6 +45,8 @@ const CORS_POLICIES: Readonly<Record<WorkerRouteCorsPolicy, CorsPolicy>> = {
   ethereum: profileCorsPolicy(ETHEREUM_SESSION_HEADER),
   'ethereum-checkout-status': responseCorsPolicy(applyEthereumCheckoutStatusCors),
   'ethereum-reveal': responseCorsPolicy(applyEthereumRevealCors),
+  'ethereum-public-read': responseCorsPolicy(applyEthereumPublicReadCors),
+  'ethereum-public-confirm': responseCorsPolicy(applyEthereumPublicConfirmCors),
   'pack-status': {
     preflight: (_request, route) => route.packStatusDropId === null ? undefined : new Response(null, {
       status: 204,

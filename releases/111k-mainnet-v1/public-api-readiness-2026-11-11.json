@@ -1,0 +1,909 @@
+{
+  "verifiedAt": "2026-11-11T13:35:27.453Z",
+  "scope": "111k public APIs only; no frontend, authentication, checkout, redemption, signing, or onchain changes",
+  "deploymentId": "mainnet-v1",
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "worker": {
+    "name": "mons-shop-api",
+    "id": "51d9079d-2b16-44f3-a356-89a24a90e8c0",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "6cf39aa1-9fa8-44ae-8e60-1a7229fca454",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-11-11T13:28:32.066537Z"
+  },
+  "source": {
+    "baseCommit": "cc47dcf1ecc2e8165615a28bb764ab666b4c43db",
+    "files": {
+      "cloud/workers/api/src/ethereumCatalogRevision.ts": "a97849bc3f7a0e108c305f7c419165c5e199140e9830d299d84d774bf2875433",
+      "cloud/workers/api/src/ethereumCommerce.ts": "665714f51d2a617211504a467eb219ba8358bee1ec85dd873254a40458c3ea32",
+      "cloud/workers/api/src/ethereumHandler.ts": "b56305f74daf7bbcd843ce1ac6a8c160d1f223f06401bb4021da0e7dcf74b760",
+      "cloud/workers/api/src/ethereumPublic.ts": "ef8aa9b78748eab79cdd1f032d54c1d043a094e2da7f701e0d97f8cd04a17bd6",
+      "cloud/workers/api/src/ethereumPublicCors.ts": "7217e85c9b2aa2c9b1da8469798aead07daca92827a7893fbfeb6b1e2d7ff027",
+      "cloud/workers/api/src/ethereumRead.ts": "a0092f84bd83e8473f143fd523abff0f5105e137c731cca3f48badd921b51b6d",
+      "cloud/workers/api/src/ethereumReveal.ts": "48f31b38d0efb4e45fd0535358259dd3b40c307c93b29def76dc19d8a46f6eec",
+      "cloud/workers/api/src/ethereumRouteDefinitions.ts": "03ac1070ea99d61f3839cb36ffb1706838527efb2ce33c780e49af608f83bdd7",
+      "cloud/workers/api/src/ethereumRoutes.ts": "bffc1cc9d2cbf920e9f2a6478a46b76938ac78c7224ca43b2e4328351b4cabfb",
+      "cloud/workers/api/src/ethereumRuntime.ts": "52100c1b898b2e19fdbd350ded14b148aa06ae951616808092b0c5ea0f019f90",
+      "cloud/workers/api/src/ethereumTransactionConfirmation.ts": "12b001467aa258310739cc7b6739e97ef6f8059c4bb18e1a5e75e9f1705c1bfb",
+      "cloud/workers/api/src/workerRoutes/cors.ts": "e3e4384b1394b14ca9860108ff279f60d0e2449ac857a04349204a19f2f71d38",
+      "cloud/workers/api/src/workerRoutes/support.ts": "83cc04555a44b58fef24bc86c27b10a5621ad9a77e89fbb353e1fe4939dcf482",
+      "shared/ethereum/api.ts": "5a44d8aa5206ea4452da0457970eaba498526fa2c1b8300fdb58c7d534b9251d"
+    }
+  },
+  "activation": {
+    "fromState": "ready",
+    "fromRevision": 2,
+    "toState": "active",
+    "toRevision": 3,
+    "activatedAt": "2026-11-11T13:29:46.000Z",
+    "lastError": null
+  },
+  "config": {
+    "deploymentId": "mainnet-v1",
+    "dropId": "111k",
+    "chainId": 1,
+    "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "catalogRevision": 0,
+    "chainName": "Ethereum",
+    "metadataBaseUri": "https://cdn.mons.shop/111k/",
+    "deploymentBlock": 26387160,
+    "explorerUrl": "https://etherscan.io",
+    "walletRpcUrl": "https://ethereum-rpc.publicnode.com",
+    "testnet": false,
+    "enabled": true,
+    "revealEnabled": true,
+    "saleActive": false,
+    "cratePriceWei": "30000000000000000",
+    "warehousePriceWei": "300000000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15
+  },
+  "onchain": {
+    "before": {
+      "checkedAt": "2026-11-11T13:15:00.220Z",
+      "block": {
+        "number": 26391913,
+        "hash": "0xccdbe95e06fbaf86c531d2acd29d9c1df7d40fbabc6b1909dd38b736fb29e30a"
+      },
+      "runtimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+      "baseURI": "https://cdn.mons.shop/111k/",
+      "stats": {
+        "wordCount": 15,
+        "allocatedCrates": "1332",
+        "warehousesMinted": "0",
+        "artworksMinted": "0",
+        "cratePriceWei": "30000000000000000",
+        "warehousePriceWei": "300000000000000000",
+        "saleActive": false,
+        "discountMerkleRoot": "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b",
+        "discountCratePriceWei": "15000000000000000",
+        "discountAllowance": "1",
+        "discountUsed": "0",
+        "relicsAllocated": "12",
+        "relicsMinted": "0",
+        "publicRelicsMinted": "0",
+        "discountCap": {
+          "maxDiscountedMints": "500",
+          "totalDiscountedMints": "0"
+        }
+      },
+      "totalSupply": "0",
+      "totalMintReceived": "22300000000000000000",
+      "totalMintReleased": "22300000000000000000",
+      "getRelicClaimedMask": "0"
+    },
+    "after": {
+      "checkedAt": "2026-11-11T13:35:27.399Z",
+      "block": {
+        "number": 26392016,
+        "hash": "0xec33d68a627358aacadd659619fb84ba419c32110079c22c3967c34f1ce62eca"
+      },
+      "runtimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+      "baseURI": "https://cdn.mons.shop/111k/",
+      "stats": {
+        "wordCount": 15,
+        "allocatedCrates": "1332",
+        "warehousesMinted": "0",
+        "artworksMinted": "0",
+        "cratePriceWei": "30000000000000000",
+        "warehousePriceWei": "300000000000000000",
+        "saleActive": false,
+        "discountMerkleRoot": "0xdc1265497dbb3e1b01056855020a1198853740d704e2e90b5681a2ceb68fb27b",
+        "discountCratePriceWei": "15000000000000000",
+        "discountAllowance": "1",
+        "discountUsed": "0",
+        "relicsAllocated": "12",
+        "relicsMinted": "0",
+        "publicRelicsMinted": "0",
+        "discountCap": {
+          "maxDiscountedMints": "500",
+          "totalDiscountedMints": "0"
+        }
+      },
+      "totalSupply": "0",
+      "totalMintReceived": "22300000000000000000",
+      "totalMintReleased": "22300000000000000000",
+      "getRelicClaimedMask": "0"
+    },
+    "unchanged": true
+  },
+  "preserved": {
+    "storefrontChainId": 11155111,
+    "storefrontContractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "commerceControlRevision": 49,
+    "redemptionSigningEnabled": false,
+    "metadataSamplesUnchanged": true
+  },
+  "validation": {
+    "command": "npm run deploy:api",
+    "unitTests": 3301,
+    "nativeRuntimeTests": 69,
+    "failedTests": 0,
+    "localE2EScenarios": 44,
+    "localE2EChainId": 31337,
+    "localReveal": {
+      "deploymentId": "local-8a791620dd6260079bf849dc5567adc3f2fdc318",
+      "contractAddress": "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+      "transactionHash": "0xf99c38d985cf78537cef975f7ec9e6a919b690f4f2a7265ca8cbf96f4ae68ae8",
+      "recoveryHash": "0xd795415832b0f82694c1bf347eb9c3e2a33c3ec91f509d91053b827ed7a178c8",
+      "pendingMediaHidden": true,
+      "firstConfirmationArtworkCount": 20,
+      "metadataStorage": "isolated-local-r2",
+      "deterministic3dReveal": true,
+      "deterministicAnimatedReveal": true,
+      "deterministicFiveCategoryReveal": true,
+      "attributeEnrichment": true,
+      "immutableAfterReorg": true,
+      "tokenRecovery": true
+    },
+    "noDatabaseMigrationsRequired": true,
+    "fullCommerceAuditRun": false
+  },
+  "publicChecks": {
+    "beforeActivation": [
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/config?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 3082
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1371
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/inventory?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2020
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/relics?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 434
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2308
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1932
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=warehouse&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1925
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2219
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2006
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2049
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1951
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 2038
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 136
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&chainId=1",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 107
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/config",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 91
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 156
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 106
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/config?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1554
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1170
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/inventory?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2056
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/relics?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 423
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1936
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2093
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=warehouse&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2125
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1906
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2015
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1919
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1891
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 1646
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/stats",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 93
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&chainId=1",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 96
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/config",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 96
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 141
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 112
+      },
+      {
+        "origin": "https://mons.shop",
+        "path": "/ethereum/111k/config",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1655
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats?chainId=11155111&contractAddress=0xaca342968965ddb20badb1943b99ee6523658619",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1132
+      }
+    ],
+    "afterActivation": [
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/config?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 3127
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1526
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/inventory?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1939
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/relics?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 553
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2018
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2126
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=warehouse&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2570
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2197
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2230
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2329
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2150
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 1938
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 133
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&chainId=1",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 63
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/config",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 49
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 47
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 47
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 1195
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/reveal/transaction",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 2048
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/config?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1368
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1392
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/inventory?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2453
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/relics?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&owner=0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 923
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2098
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2375
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=warehouse&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2279
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=artwork_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2130
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2208
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2028
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=relic_receipt&displayId=1",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 2170
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 1973
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/stats",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 115
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/stats?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&chainId=1",
+        "method": "GET",
+        "status": 400,
+        "durationMs": 53
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/config",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 57
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/transactions/confirm",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 59
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "method": "OPTIONS",
+        "status": 204,
+        "durationMs": 41
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 1127
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/reveal/transaction",
+        "method": "POST",
+        "status": 200,
+        "durationMs": 611
+      },
+      {
+        "origin": "https://mons.shop",
+        "path": "/ethereum/111k/config",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1550
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/stats?chainId=11155111&contractAddress=0xaca342968965ddb20badb1943b99ee6523658619",
+        "method": "GET",
+        "status": 200,
+        "durationMs": 1346
+      }
+    ],
+    "reveal": [
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "status": 200,
+        "data": {
+          "deploymentId": "mainnet-v1",
+          "dropId": "111k",
+          "chainId": 1,
+          "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "artworks": [],
+          "unresolved": [
+            {
+              "tokenId": "1",
+              "status": "unminted"
+            },
+            {
+              "tokenId": "111111",
+              "status": "unminted"
+            }
+          ],
+          "retryAfterMs": 0,
+          "catalogRevision": 0
+        }
+      },
+      {
+        "origin": "https://vvv.so",
+        "path": "/ethereum/111k/reveal/transaction",
+        "status": 200,
+        "data": {
+          "deploymentId": "mainnet-v1",
+          "dropId": "111k",
+          "chainId": 1,
+          "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "catalogRevision": 0,
+          "status": "not_unpack",
+          "artworks": [],
+          "retryAfterMs": 0
+        }
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/reveal/tokens",
+        "status": 200,
+        "data": {
+          "deploymentId": "mainnet-v1",
+          "dropId": "111k",
+          "chainId": 1,
+          "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "artworks": [],
+          "unresolved": [
+            {
+              "tokenId": "1",
+              "status": "unminted"
+            },
+            {
+              "tokenId": "111111",
+              "status": "unminted"
+            }
+          ],
+          "retryAfterMs": 0,
+          "catalogRevision": 0
+        }
+      },
+      {
+        "origin": "https://www.vvv.so",
+        "path": "/ethereum/111k/reveal/transaction",
+        "status": 200,
+        "data": {
+          "deploymentId": "mainnet-v1",
+          "dropId": "111k",
+          "chainId": 1,
+          "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "catalogRevision": 0,
+          "status": "not_unpack",
+          "artworks": [],
+          "retryAfterMs": 0
+        }
+      }
+    ]
+  },
+  "scheduler": {
+    "observedIntervalMs": 299749,
+    "events": [
+      {
+        "observedAt": "2026-11-11T13:30:09.401Z",
+        "eventTimestamp": 1794403808872,
+        "outcome": "ok",
+        "eventType": [
+          "rpcMethod"
+        ],
+        "summary": {
+          "event": "ethereum_reveal_recovery_health",
+          "deploymentId": "mainnet-v1",
+          "ready": true,
+          "seeded": 111111,
+          "available": 111111,
+          "reserved": 0,
+          "frozen": 0,
+          "publication": {},
+          "recovery": {
+            "migrationReady": true,
+            "migration": {
+              "phase": "ready",
+              "cursor": "",
+              "rowKey": null,
+              "offset": 0
+            },
+            "opaque": 0,
+            "opaqueCapacity": {
+              "used": 0,
+              "limit": 10000,
+              "available": 10000
+            },
+            "crates": {},
+            "due": {
+              "active": {
+                "receiptJobs": 0,
+                "scanJobs": 0,
+                "oldestDueAgeMs": 0
+              },
+              "background": {
+                "receiptJobs": 0,
+                "scanJobs": 0,
+                "oldestDueAgeMs": 0
+              }
+            },
+            "dispatch": {
+              "limit": 64,
+              "inFlight": 0,
+              "active": 0,
+              "background": 0,
+              "pauseUntilMs": 0,
+              "nextRecoveryMs": null,
+              "earliestLeaseUntilMs": null
+            }
+          },
+          "enrichment": {}
+        }
+      },
+      {
+        "observedAt": "2026-11-11T13:35:09.032Z",
+        "eventTimestamp": 1794404108621,
+        "outcome": "ok",
+        "eventType": [
+          "rpcMethod"
+        ],
+        "summary": {
+          "event": "ethereum_reveal_recovery_health",
+          "deploymentId": "mainnet-v1",
+          "ready": true,
+          "seeded": 111111,
+          "available": 111111,
+          "reserved": 0,
+          "frozen": 0,
+          "publication": {},
+          "recovery": {
+            "migrationReady": true,
+            "migration": {
+              "phase": "ready",
+              "cursor": "",
+              "rowKey": null,
+              "offset": 0
+            },
+            "opaque": 0,
+            "opaqueCapacity": {
+              "used": 0,
+              "limit": 10000,
+              "available": 10000
+            },
+            "crates": {},
+            "due": {
+              "active": {
+                "receiptJobs": 0,
+                "scanJobs": 0,
+                "oldestDueAgeMs": 0
+              },
+              "background": {
+                "receiptJobs": 0,
+                "scanJobs": 0,
+                "oldestDueAgeMs": 0
+              }
+            },
+            "dispatch": {
+              "limit": 64,
+              "inFlight": 0,
+              "active": 0,
+              "background": 0,
+              "pauseUntilMs": 0,
+              "nextRecoveryMs": null,
+              "earliestLeaseUntilMs": null
+            }
+          },
+          "enrichment": {}
+        }
+      }
+    ]
+  },
+  "mainnetTransactionsSent": 0,
+  "readyBeforeOnchainSaleOpening": true
+}

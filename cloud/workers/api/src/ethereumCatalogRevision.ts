@@ -1,6 +1,6 @@
 import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumApiError } from './ethereumError.js';
-import type { EthereumContext } from './ethereumRuntime.js';
+import type { EthereumCollectionReadContext } from './ethereumRuntime.js';
 import { raceWithSignal } from './boundedRequest.js';
 
 export const ETHEREUM_CATALOG_SNAPSHOT_PAGE_SIZE = 16;
@@ -11,7 +11,7 @@ export type EthereumRevealCatalogSnapshot = {
   artworks: Array<{ tokenId: string; metadataJson: string; metadataRevision: number }>;
 };
 
-export async function ethereumCatalogSnapshot(context: EthereumContext, tokenIds: string[] = []): Promise<EthereumRevealCatalogSnapshot> {
+export async function ethereumCatalogSnapshot(context: EthereumCollectionReadContext, tokenIds: string[] = []): Promise<EthereumRevealCatalogSnapshot> {
   const address = context.config.contractAddress;
   const deployment = address ? await readEthereumRevealDeployment(context.env.OPS_DB,
     { chainId: context.config.chainId, contractAddress: address }) : null;
@@ -37,7 +37,7 @@ export async function ethereumCatalogSnapshot(context: EthereumContext, tokenIds
   }
 }
 
-export async function requireEthereumCatalogSnapshot(context: EthereumContext, captured: EthereumRevealCatalogSnapshot): Promise<void> {
+export async function requireEthereumCatalogSnapshot(context: EthereumCollectionReadContext, captured: EthereumRevealCatalogSnapshot): Promise<void> {
   const address = context.config.contractAddress;
   const current = address ? await readEthereumRevealDeployment(context.env.OPS_DB,
     { chainId: context.config.chainId, contractAddress: address }) : null;

@@ -1,5 +1,7 @@
 # 111K relic claims — VVV
 
+For mainnet identity and request changes, use the [VVV mainnet checklist](111k_mainnet_vvv.md). The [public API reference](111k_public_api.md) covers the other scoped read and confirmation endpoints; the examples below retain their explicit Sepolia scope.
+
 ## Display
 
 Show **Relic #1–#18** using `https://cdn.lil.org/nft/111k/relics/{id}.webp`. Always show all eighteen choices; the allocated supply limits total claims, not selectable IDs. No metadata, stats, or inventory API is needed for this page.

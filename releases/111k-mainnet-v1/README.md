@@ -1,5 +1,7 @@
 # 111k mainnet deployment
 
+Latest API update: [mainnet public APIs and reveal enabled](public-api-readiness-2026-11-11.json), with the onchain sale still closed and zero token supply. See the [VVV mainnet checklist](../../scripts/docs/111k_mainnet_vvv.md).
+
 Latest discount update: [Terraforms holder expansion to 3,242 eligible addresses](discounts-terraforms-2026-11-11/README.md).
 
 Post-deployment updates: [free-crate allowances](free-crates-2026-11-11/README.md), [discount list and mint prices](discounts-2026-11-11/README.md), and [12-relic allocation with 22.3 ETH](relic-allocation-2026-11-11/README.md), configured on 11 November 2026. The records below describe the original deployment configuration.

@@ -7,6 +7,8 @@ import { ethereumCheckout } from './ethereumCheckout.js';
 import { isAllowedEthereumCheckoutStatusOrigin } from './ethereumCheckoutOrigin.js';
 import { ethereumRouteDefinition } from './ethereumRouteDefinitions.js';
 import { ethereumRelics } from './ethereumRelics.js';
+import { ethereumReveal } from './ethereumReveal.js';
+import { ethereumPublicRequest } from './ethereumPublic.js';
 
 function unregisteredPathHandler(path: string) {
   if (path.startsWith('/ethereum/111k/checkout/')) return ethereumCheckout;
@@ -22,7 +24,7 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
     const methods: readonly string[] = route?.methods || ['POST'];
     if (!methods.includes(request.method)) return jsonResponse({ ok: false, error: { code: 'invalid-argument', message: 'Method not allowed.' } }, 405,
       { headers: { Allow: [...methods, 'OPTIONS'].join(', ') } });
-    const isAllowedOrigin = route?.originPolicy === 'checkout-status' || route?.originPolicy === 'reveal'
+    const isAllowedOrigin = route && route.originPolicy !== 'profile'
       ? isAllowedEthereumCheckoutStatusOrigin : undefined;
     ethereumRequestOrigin(request, isAllowedOrigin);
     if (request.method === 'POST' && request.headers.get('X-Mons-CSRF') !== '1') {
@@ -33,6 +35,8 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
     if (route?.publicRateLimit) await limitEthereumRequest(request, context, path, env.PUBLIC_SHOP_RATE_LIMITER, isAllowedOrigin);
     const handler = route?.handler || unregisteredPathHandler(path);
     const result = handler === ethereumRelics ? await ethereumRelics(request, context)
+      : handler === ethereumReveal ? await ethereumReveal(request, context, path)
+      : handler === ethereumPublicRequest ? await ethereumPublicRequest(request, context, path)
       : await handler(request, { ...context, config: ethereumConfig(env) }, path);
     return jsonResponse(result, 200);
   } catch (error) {

@@ -74,30 +74,36 @@ test('Ethereum checkout status retains partner preflight and denies partner muta
   }
 });
 
-test('Ethereum relic status exposes partner GET and errors without broadening storefront access', async () => {
+test('Ethereum public reads expose partner GET and scoped errors while private access stays restricted', async () => {
   let providerCalls = 0;
   const dependencies = { providerFetch: async () => { providerCalls++; return assert.fail('Unexpected provider call'); },
     log: () => undefined };
   for (const partner of ['https://vvv.so', 'https://www.vvv.so']) {
-    const preflight = await handleRequest(request(paths.relics, 'OPTIONS', partner, false), environment(), failOnDeferredWork, dependencies);
-    assert.equal(preflight.status, 204);
-    assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), partner);
-    assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-    assert.equal(preflight.headers.get('Access-Control-Allow-Headers'), 'Accept, Content-Type');
-    const invalid = await handleRequest(request(paths.relics, 'GET', partner, false), environment(), failOnDeferredWork, dependencies);
-    assert.equal(invalid.status, 400);
-    assert.equal(invalid.headers.get('Access-Control-Allow-Origin'), partner);
-    assert.equal(invalid.headers.get('Cache-Control'), 'no-store');
-    assert.equal(invalid.headers.get('Vary'), 'Origin');
-    assert.equal(invalid.headers.get('Access-Control-Allow-Credentials'), null);
-    const limited = await handleRequest(request(paths.relics, 'GET', partner, false),
-      environment(async () => ({ success: false })), failOnDeferredWork, dependencies);
-    assert.equal(limited.status, 429);
-    assert.equal(limited.headers.get('Access-Control-Allow-Origin'), partner);
-    assert.equal(limited.headers.get('Access-Control-Expose-Headers'), 'Retry-After');
-    assert.equal(limited.headers.get('Retry-After'), '60');
-    for (const path of [paths.config, paths.stats, paths.inventory, paths.metadata, paths.profile]) {
+    for (const path of [paths.relics, paths.config, paths.stats, paths.inventory, paths.metadata]) {
+      const preflight = await handleRequest(request(path, 'OPTIONS', partner, false), environment(), failOnDeferredWork, dependencies);
+      assert.equal(preflight.status, 204, path);
+      assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), partner);
+      assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+      assert.equal(preflight.headers.get('Access-Control-Allow-Headers'), 'Accept, Content-Type');
+      const invalid = await handleRequest(request(path, 'GET', partner, false), environment(), failOnDeferredWork, dependencies);
+      assert.equal(invalid.status, 400, path);
+      assert.equal(invalid.headers.get('Access-Control-Allow-Origin'), partner);
+      assert.equal(invalid.headers.get('Cache-Control'), 'no-store');
+      assert.equal(invalid.headers.get('Vary'), 'Origin');
+      assert.equal(invalid.headers.get('Access-Control-Allow-Credentials'), null);
+      const limited = await handleRequest(request(path, 'GET', partner, false),
+        environment(async () => ({ success: false })), failOnDeferredWork, dependencies);
+      assert.equal(limited.status, 429, path);
+      assert.equal(limited.headers.get('Access-Control-Allow-Origin'), partner);
+      assert.equal(limited.headers.get('Access-Control-Expose-Headers'), 'Retry-After');
+      assert.equal(limited.headers.get('Retry-After'), '60');
+    }
+    for (const path of [paths.profile, paths.addresses, paths.shipments]) {
       const forbidden = await handleRequest(request(path, 'GET', partner, false), environment(), failOnDeferredWork, dependencies);
+      assert.equal(forbidden.status, 403, path);
+    }
+    for (const path of [paths.authChallenge, paths.deliveryPrepare, paths.claimPrepare, checkoutPaths.create]) {
+      const forbidden = await handleRequest(request(path, 'POST', partner), environment(), failOnDeferredWork, dependencies);
       assert.equal(forbidden.status, 403, path);
     }
   }

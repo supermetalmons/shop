@@ -65,7 +65,7 @@ function fixture() {
     deny: () => { allowed = false; }, denyAdmission: () => { admissionAllowed = false; } };
 }
 
-test('reveal endpoints have isolated partner origins and preserve normal route policies', () => {
+test('reveal endpoints retain their partner policy beside scoped public reads and private routes', () => {
   for (const path of Object.values(ETHEREUM_REVEAL_PATHS)) {
     const definition = ethereumRouteDefinition(path)!;
     assert.deepEqual(definition.methods, ['POST']);
@@ -74,7 +74,13 @@ test('reveal endpoints have isolated partner origins and preserve normal route p
     assert.equal(route.cors, 'ethereum-reveal');
     assert.equal(route.profileOriginGate, false);
   }
-  assert.equal(ethereumRouteDefinition('/ethereum/111k/inventory')!.originPolicy, 'profile');
+  for (const path of ['/ethereum/111k/config', '/ethereum/111k/stats', '/ethereum/111k/inventory', '/ethereum/111k/metadata']) {
+    assert.equal(ethereumRouteDefinition(path)!.originPolicy, 'public-read');
+  }
+  assert.equal(ethereumRouteDefinition('/ethereum/111k/transactions/confirm')!.originPolicy, 'public-confirm');
+  for (const path of ['/ethereum/profile', '/ethereum/auth/challenge', '/ethereum/111k/delivery/prepare', '/ethereum/111k/checkout/create']) {
+    assert.equal(ethereumRouteDefinition(path)!.originPolicy, 'profile');
+  }
 });
 
 test('reveal CORS allows only Mons and VVV and does not expose caching or credentials', () => {

@@ -12,6 +12,8 @@ export type WorkerRouteCorsPolicy =
   | 'ethereum'
   | 'ethereum-checkout-status'
   | 'ethereum-reveal'
+  | 'ethereum-public-read'
+  | 'ethereum-public-confirm'
   | 'pack-status';
 
 type WorkerRouteStaffPolicy = 'skip' | 'optional' | 'required';

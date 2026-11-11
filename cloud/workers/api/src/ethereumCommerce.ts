@@ -11,11 +11,10 @@ import { requireEthereum111kWrites } from './ethereumControl.js';
 import { limitEthereumRequest, verifyEthereumSession } from './ethereumAuth.js';
 import { loadEthereumAddress } from './ethereumProfile.js';
 import {
-  ethereumBlockSnapshot, ethereumCall, ethereumRpc, ethereumTransactionHash, requireEthereumContract, rpcInteger,
-  verifyEthereumBlockSnapshot, type EthereumContext,
+  ethereumCall, ethereumRpc, ethereumTransactionHash, requireEthereumContract, rpcInteger, type EthereumContext,
 } from './ethereumRuntime.js';
 import {
-  ethereumInventoryItems, ethereumReceipt, ethereumTokenInfos, transferTokenIds, type EthereumTokenInfo,
+  ethereumReceipt, ethereumTokenInfos, type EthereumTokenInfo,
 } from './ethereumRead.js';
 import { matchesSha256Hex, sha256Hex } from './sessionSecrets.js';
 import { D1CommerceRepository, commerceFieldValue, commerceKeys } from './commerceRepository.js';
@@ -431,21 +430,6 @@ export async function ethereumCommerce(request: Request, context: EthereumContex
   }
   if (path.endsWith('/delivery/prepare')) return prepareEthereumDelivery(request, context);
   if (path.endsWith('/claims/prepare')) return prepareEthereumClaim(request, context);
-  if (path.endsWith('/transactions/confirm')) {
-    const body = await readEthereumBody(request, context.signal, z.object({ transactionHash: hash }).strict());
-    const { receipt, confirmations } = await ethereumReceipt(context, ethereumTransactionHash(body.transactionHash));
-    if (!receipt) return { status: 'pending', confirmations, items: [], burnedTokenIds: [] };
-    const snapshot = await ethereumBlockSnapshot(context);
-    const receiptBlock = rpcInteger(receipt.blockNumber);
-    if (snapshot.blockNumber < receiptBlock) throw new EthereumApiError('unavailable', 'Ethereum changed while confirming your transaction. Try again.');
-    const blockReference = snapshot.blockHash;
-    const ids = transferTokenIds(receipt, requireEthereumContract(context));
-    const items = await ethereumInventoryItems(context, await ethereumTokenInfos(context, ids.minted, blockReference));
-    const logs = receipt.logs.filter(log => log.address.toLowerCase() === context.config.contractAddress);
-    await Promise.all([verifyEthereumBlockSnapshot(context, snapshot),
-      verifyEthereumBlockSnapshot(context, { blockNumber: receiptBlock, blockHash: receipt.blockHash })]);
-    return { status: 'confirmed', confirmations: snapshot.blockNumber - receiptBlock + 1, items, burnedTokenIds: ids.burned, logs };
-  }
   const session = await verifyEthereumSession(request, context);
   if (path.endsWith('/delivery/confirm')) {
     const body = await readEthereumBody(request, context.signal, z.object({ orderId: z.number().int().positive().max(2147483647), transactionHash: hash }).strict());

@@ -5,7 +5,7 @@ import { ethereumAuth } from './ethereumAuth.js';
 import { ethereumCheckout } from './ethereumCheckout.js';
 import { ethereumCommerce } from './ethereumCommerce.js';
 import { ethereumProfile } from './ethereumProfile.js';
-import { ethereumPublicRead } from './ethereumRead.js';
+import { ethereumPublicRequest } from './ethereumPublic.js';
 import { ethereumRelics } from './ethereumRelics.js';
 import { ethereumReveal } from './ethereumReveal.js';
 import type { EthereumContext } from './ethereumRuntime.js';
@@ -18,7 +18,7 @@ type EthereumRouteDefinition = Readonly<{
   methods: readonly ('GET' | 'POST')[];
   handler: (request: Request, context: EthereumContext, path: string) => Promise<unknown>;
   commerceMutation: boolean;
-  originPolicy: 'profile' | 'checkout-status' | 'reveal';
+  originPolicy: 'profile' | 'checkout-status' | 'reveal' | 'public-read' | 'public-confirm';
   publicRateLimit: boolean;
 }>;
 
@@ -30,22 +30,22 @@ export const ethereumRouteDefinitions = {
     methods: ['POST'], handler: ethereumReveal, commerceMutation: false, originPolicy: 'reveal', publicRateLimit: false,
   },
   [ETHEREUM_API_PATHS.config]: {
-    methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
+    methods: ['GET'], handler: ethereumPublicRequest, commerceMutation: false, originPolicy: 'public-read', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.stats]: {
-    methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
+    methods: ['GET'], handler: ethereumPublicRequest, commerceMutation: false, originPolicy: 'public-read', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.relics]: {
     methods: ['GET'], handler: ethereumRelics, commerceMutation: false, originPolicy: 'checkout-status', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.inventory]: {
-    methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
+    methods: ['GET'], handler: ethereumPublicRequest, commerceMutation: false, originPolicy: 'public-read', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.metadata]: {
-    methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
+    methods: ['GET'], handler: ethereumPublicRequest, commerceMutation: false, originPolicy: 'public-read', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.transactionsConfirm]: {
-    methods: ['POST'], handler: ethereumCommerce, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
+    methods: ['POST'], handler: ethereumPublicRequest, commerceMutation: false, originPolicy: 'public-confirm', publicRateLimit: true,
   },
   [ETHEREUM_API_PATHS.authChallenge]: {
     methods: ['POST'], handler: ethereumAuth, commerceMutation: false, originPolicy: 'profile', publicRateLimit: false,

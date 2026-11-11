@@ -1,4 +1,5 @@
 import { encodeCall, decodeReturn } from '../../../../shared/ethereum/abi.js';
+import type { EthereumStats } from '../../../../shared/ethereum/api.js';
 import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '../../../../shared/ethereum/protocol.js';
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.js';
 import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUri.js';
@@ -16,7 +17,7 @@ import { ethereumCatalogSnapshot, requireEthereumCatalogSnapshot } from './ether
 import { mapWithConcurrency } from './mapWithConcurrency.js';
 import {
   ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
-  verifyEthereumBlockSnapshot, ethereumRelicInterfaceAvailable, type EthereumContext,
+  verifyEthereumBlockSnapshot, ethereumRelicInterfaceAvailable, type EthereumContext, type EthereumCollectionReadContext,
 } from './ethereumRuntime.js';
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -40,7 +41,7 @@ export function parseEthereumLog(value: unknown): EthereumLog {
   return row as EthereumLog;
 }
 
-export async function ethereumReceipt(context: EthereumContext, hash: string, allowReverted = false): Promise<{ receipt: EthereumReceipt | null; confirmations: number }> {
+export async function ethereumReceipt(context: EthereumCollectionReadContext, hash: string, allowReverted = false): Promise<{ receipt: EthereumReceipt | null; confirmations: number }> {
   const raw = await ethereumRpc(context, 'eth_getTransactionReceipt', [hash]);
   if (raw === null) return { receipt: null, confirmations: 0 };
   if (!raw || typeof raw !== 'object') throw new EthereumApiError('unavailable', 'Invalid Ethereum transaction receipt.');
@@ -86,7 +87,7 @@ function parseMetadata(value: unknown): EthereumMetadata {
     ...('attributes' in value && Array.isArray(value.attributes) ? { attributes: value.attributes } : {}) };
 }
 
-async function readMetadata(context: EthereumContext, tokenId: string): Promise<EthereumMetadata> {
+async function readMetadata(context: EthereumCollectionReadContext, tokenId: string): Promise<EthereumMetadata> {
   const uri = ethereumTokenMetadataUri(context.config, tokenId);
   const signal = AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]);
   signal.throwIfAborted();
@@ -111,7 +112,7 @@ function readChunks<T>(values: T[], size: number): T[][] {
   return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size));
 }
 
-export async function ethereumTokenInfos(context: EthereumContext, ids: string[], blockReference = 'latest'): Promise<EthereumTokenInfo[]> {
+export async function ethereumTokenInfos(context: EthereumCollectionReadContext, ids: string[], blockReference = 'latest'): Promise<EthereumTokenInfo[]> {
   const batches = readChunks(ids, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE);
   const values = await ethereumCallBatch(context, batches.map((batch) => encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [batch])), blockReference);
   return values.flatMap((value, index) => {
@@ -130,11 +131,11 @@ export async function ethereumTokenInfos(context: EthereumContext, ids: string[]
   });
 }
 
-export async function ethereumInventoryItems(context: EthereumContext, infos: EthereumTokenInfo[]): Promise<EthereumInventoryItem[]> {
+export async function ethereumInventoryItems(context: EthereumCollectionReadContext, infos: EthereumTokenInfo[]): Promise<EthereumInventoryItem[]> {
   return (await ethereumInventorySnapshot(context, infos)).items;
 }
 
-async function ethereumInventorySnapshot(context: EthereumContext, infos: EthereumTokenInfo[]) {
+async function ethereumInventorySnapshot(context: EthereumCollectionReadContext, infos: EthereumTokenInfo[]) {
   const contractAddress = requireEthereumContract(context);
   for (const info of infos) {
     if (ethereumMetadataTokenId(info.kind, info.displayId) !== info.tokenId) {
@@ -174,10 +175,12 @@ async function ethereumInventorySnapshot(context: EthereumContext, infos: Ethere
   return { items, catalogRevision: catalog.catalogRevision, deploymentId: catalog.deploymentId };
 }
 
-async function alchemyOwnerIds(context: EthereumContext, wallet: string, cursor: string | null): Promise<{ ids: string[]; nextCursor: string | null }> {
+async function alchemyOwnerIds(context: EthereumCollectionReadContext, wallet: string, cursor: string | null): Promise<{ ids: string[]; nextCursor: string | null }> {
   const key = context.env.ALCHEMY_MI_NOTE_API_KEY?.trim();
   if (!key) throw new EthereumApiError('unavailable', 'Ethereum inventory is unavailable.');
-  const url = new URL(`https://eth-sepolia.g.alchemy.com/nft/v3/${encodeURIComponent(key)}/getNFTsForOwner`);
+  const host = context.config.chainId === 1 ? 'eth-mainnet' : context.config.chainId === 11155111 ? 'eth-sepolia' : null;
+  if (!host) throw new EthereumApiError('unavailable', 'Ethereum inventory network is unsupported.');
+  const url = new URL(`https://${host}.g.alchemy.com/nft/v3/${encodeURIComponent(key)}/getNFTsForOwner`);
   url.searchParams.set('owner', wallet);
   url.searchParams.set('contractAddresses[]', requireEthereumContract(context));
   url.searchParams.set('withMetadata', 'false');
@@ -201,7 +204,7 @@ async function alchemyOwnerIds(context: EthereumContext, wallet: string, cursor:
   return { ids, nextCursor };
 }
 
-async function localOwnerInfos(context: EthereumContext, wallet: string, head: number, blockHash: string): Promise<EthereumTokenInfo[]> {
+async function localOwnerInfos(context: EthereumCollectionReadContext, wallet: string, head: number, blockHash: string): Promise<EthereumTokenInfo[]> {
   if (head - context.config.deploymentBlock > 50_000) throw new EthereumApiError('resource-exhausted', 'Reset the local test chain to refresh its inventory.');
   const topic = `0x${wallet.slice(2).padStart(64, '0')}`;
   const ids = new Set<string>();
@@ -219,6 +222,42 @@ async function localOwnerInfos(context: EthereumContext, wallet: string, head: n
   return infos.filter(info => info.owner === wallet);
 }
 
+export async function ethereumCollectionStats(context: EthereumCollectionReadContext, owner: string | null): Promise<EthereumStats> {
+  if (!await ethereumRelicInterfaceAvailable(context)) {
+    throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
+  }
+  const statsData = await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]));
+  const stats = decode111kStats(statsData);
+  if (!stats || stats.discountCratePriceWei > stats.cratePriceWei ||
+    stats.warehousesMinted > ethereumItemDisplayIdMaximum('warehouse') || stats.artworksMinted > ethereumItemDisplayIdMaximum('artwork')) {
+    throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid statistics.');
+  }
+  if (!valid111kDiscountUsage(stats)) {
+    throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid discount usage.');
+  }
+  if (!valid111kRelicSupply(stats)) {
+    throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic supply.');
+  }
+  const unclaimedRelics = stats.relicsAllocated - stats.relicsMinted;
+  if (stats.allocatedCrates < minimum111kAllocatedCrates(stats) ||
+    !isPossibleArtworkMintCount(stats.artworksMinted, stats.allocatedCrates, unclaimedRelics)) {
+    throw new EthereumApiError('unavailable', 'The Ethereum collection returned an invalid crate allocation.');
+  }
+  const allocatedCrates = Number(stats.allocatedCrates);
+  const remainingCrates = ethereumItemDisplayIdMaximum('crate') - allocatedCrates;
+  const relicsAllocated = Number(stats.relicsAllocated);
+  const relicsMinted = Number(stats.relicsMinted);
+  return { chainId: context.config.chainId, contractAddress: requireEthereumContract(context), owner,
+    allocatedCrates, warehousesMinted: Number(stats.warehousesMinted), artworksMinted: Number(stats.artworksMinted),
+    cratePriceWei: String(stats.cratePriceWei), warehousePriceWei: String(stats.warehousePriceWei), saleActive: stats.saleActive,
+    remainingCrates, remainingWarehouses: Math.floor(remainingCrates / ETHEREUM_CRATES_PER_WAREHOUSE),
+    discountMerkleRoot: stats.discountMerkleRoot, discountCratePriceWei: String(stats.discountCratePriceWei),
+    discountAllowance: Number(stats.discountAllowance), discountUsed: Number(stats.discountUsed),
+    ...(stats.discountCap ? { maxDiscountedMints: Number(stats.discountCap.maxDiscountedMints),
+      totalDiscountedMints: Number(stats.discountCap.totalDiscountedMints) } : {}),
+    relicsAllocated, relicsMinted, publicRelicsMinted: Number(stats.publicRelicsMinted), remainingRelics: Number(unclaimedRelics) };
+}
+
 export async function ethereumPublicRead(request: Request, context: EthereumContext, path: string): Promise<unknown> {
   if (path.endsWith('/config')) {
     const catalog = await ethereumCatalogSnapshot(context);
@@ -230,43 +269,15 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
     await requireEthereumCatalogSnapshot(context, catalog);
     return { ...context.config, enabled, deploymentId: catalog.deploymentId, catalogRevision: catalog.catalogRevision };
   }
+  return ethereumCollectionRead(request, context, path);
+}
+
+export async function ethereumCollectionRead(request: Request, context: EthereumCollectionReadContext, path: string): Promise<object> {
   requireEthereumContract(context);
   const url = new URL(request.url);
   if (path.endsWith('/stats')) {
     const owner = url.searchParams.has('owner') ? ethereumAddress(url.searchParams.get('owner')) : null;
-    if (!await ethereumRelicInterfaceAvailable(context)) {
-      throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
-    }
-    const statsData = await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]));
-    const stats = decode111kStats(statsData);
-    if (!stats || stats.discountCratePriceWei > stats.cratePriceWei ||
-      stats.warehousesMinted > ethereumItemDisplayIdMaximum('warehouse') || stats.artworksMinted > ethereumItemDisplayIdMaximum('artwork')) {
-      throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid statistics.');
-    }
-    if (!valid111kDiscountUsage(stats)) {
-      throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid discount usage.');
-    }
-    if (!valid111kRelicSupply(stats)) {
-      throw new EthereumApiError('unavailable', 'The Ethereum collection returned invalid relic supply.');
-    }
-    const unclaimedRelics = stats.relicsAllocated - stats.relicsMinted;
-    if (stats.allocatedCrates < minimum111kAllocatedCrates(stats) ||
-      !isPossibleArtworkMintCount(stats.artworksMinted, stats.allocatedCrates, unclaimedRelics)) {
-      throw new EthereumApiError('unavailable', 'The Ethereum collection returned an invalid crate allocation.');
-    }
-    const allocatedCrates = Number(stats.allocatedCrates);
-    const remainingCrates = ethereumItemDisplayIdMaximum('crate') - allocatedCrates;
-    const relicsAllocated = Number(stats.relicsAllocated);
-    const relicsMinted = Number(stats.relicsMinted);
-    return { chainId: context.config.chainId, contractAddress: requireEthereumContract(context), owner,
-      allocatedCrates, warehousesMinted: Number(stats.warehousesMinted), artworksMinted: Number(stats.artworksMinted),
-      cratePriceWei: String(stats.cratePriceWei), warehousePriceWei: String(stats.warehousePriceWei), saleActive: stats.saleActive,
-      remainingCrates, remainingWarehouses: Math.floor(remainingCrates / ETHEREUM_CRATES_PER_WAREHOUSE),
-      discountMerkleRoot: stats.discountMerkleRoot, discountCratePriceWei: String(stats.discountCratePriceWei),
-      discountAllowance: Number(stats.discountAllowance), discountUsed: Number(stats.discountUsed),
-      ...(stats.discountCap ? { maxDiscountedMints: Number(stats.discountCap.maxDiscountedMints),
-        totalDiscountedMints: Number(stats.discountCap.totalDiscountedMints) } : {}),
-      relicsAllocated, relicsMinted, publicRelicsMinted: Number(stats.publicRelicsMinted), remainingRelics: Number(unclaimedRelics) };
+    return ethereumCollectionStats(context, owner);
   }
   if (path.endsWith('/metadata')) {
     const kind = url.searchParams.get('kind') as EthereumItemKind;

@@ -10,7 +10,8 @@ import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY, STRIPE_CHECKOUT_RETRY_HEADER, STRIP
 
 type ExpectedExactRoute = readonly [
   pathname: string,
-  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'ethereum' | 'ethereum-checkout-status' | 'ethereum-reveal' | 'pack-status',
+  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'ethereum' | 'ethereum-checkout-status' | 'ethereum-reveal' |
+    'ethereum-public-read' | 'ethereum-public-confirm' | 'pack-status',
   profileOriginGate: boolean,
   staff: 'skip' | 'optional' | 'required',
   commerceMutation: boolean,
@@ -73,14 +74,14 @@ const EXPECTED_EXACT_ROUTES = [
   ['/fulfillment/shipstation-label-void', 'profile', true, 'required', true, 'profile', '/fulfillment/shipstation-label-void'],
   ['/fulfillment/shipstation-rates', 'profile', true, 'required', true, 'profile', '/fulfillment/shipstation-rates'],
   ['/fulfillment/shipstation-shipment', 'profile', true, 'required', true, 'profile', '/fulfillment/shipstation-shipment'],
-  ['/ethereum/111k/config', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/config'],
-  ['/ethereum/111k/stats', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/stats'],
+  ['/ethereum/111k/config', 'ethereum-public-read', false, 'skip', false, 'profile', '/ethereum/111k/config'],
+  ['/ethereum/111k/stats', 'ethereum-public-read', false, 'skip', false, 'profile', '/ethereum/111k/stats'],
   ['/ethereum/111k/relics', 'ethereum-checkout-status', false, 'skip', false, 'profile', '/ethereum/111k/relics'],
-  ['/ethereum/111k/inventory', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/inventory'],
-  ['/ethereum/111k/metadata', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/metadata'],
+  ['/ethereum/111k/inventory', 'ethereum-public-read', false, 'skip', false, 'profile', '/ethereum/111k/inventory'],
+  ['/ethereum/111k/metadata', 'ethereum-public-read', false, 'skip', false, 'profile', '/ethereum/111k/metadata'],
   ['/ethereum/111k/reveal/transaction', 'ethereum-reveal', false, 'skip', false, 'profile', '/ethereum/111k/reveal/transaction'],
   ['/ethereum/111k/reveal/tokens', 'ethereum-reveal', false, 'skip', false, 'profile', '/ethereum/111k/reveal/tokens'],
-  ['/ethereum/111k/transactions/confirm', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/transactions/confirm'],
+  ['/ethereum/111k/transactions/confirm', 'ethereum-public-confirm', false, 'skip', false, 'profile', '/ethereum/111k/transactions/confirm'],
   ['/ethereum/auth/challenge', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/challenge'],
   ['/ethereum/auth/verify', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/verify'],
   ['/ethereum/auth/logout', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/logout'],
@@ -163,17 +164,22 @@ test('unexpected Mi Note errors retain the verification CORS policy', () => {
 
 test('route CORS policies preserve preflight, response, and error headers across origins', async () => {
   const profileHeaders = 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request';
-  const cases = [
+  const cases: Array<{ path: string; methods: string; headers: string; partner: boolean; partnerMethods?: string;
+    partnerHeaders?: string; legacyMons?: boolean }> = [
     { path: '/profile/state', methods: 'POST, OPTIONS', headers: profileHeaders, partner: false },
     { path: '/staff/auth/challenge', methods: 'POST, OPTIONS', headers: profileHeaders, partner: false },
     { path: '/mi-note-cards', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mi-Note-Session`, partner: false },
-    { path: '/ethereum/111k/config', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
+    { path: '/ethereum/profile', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
+    { path: '/ethereum/111k/config', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`,
+      partner: true, partnerMethods: 'GET, OPTIONS', partnerHeaders: 'Accept, Content-Type', legacyMons: true },
+    { path: '/ethereum/111k/transactions/confirm', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`,
+      partner: true, partnerMethods: 'POST, OPTIONS', partnerHeaders: 'Accept, Content-Type, X-Mons-CSRF', legacyMons: true },
     { path: '/ethereum/111k/checkout/status', methods: 'GET, OPTIONS', headers: 'Accept, Content-Type', partner: true },
     { path: '/ethereum/111k/reveal/tokens', methods: 'POST, OPTIONS', headers: 'Accept, Content-Type, X-Mons-CSRF', partner: true },
   ];
   for (const entry of cases) {
     const route = workerRouteRegistry.resolve(entry.path);
-    for (const origin of ['https://mons.shop', 'https://vvv.so', 'https://evil.example', undefined]) {
+    for (const origin of ['https://mons.shop', 'https://vvv.so', 'https://www.vvv.so', 'https://evil.example', undefined]) {
       const headers = origin ? { Origin: origin } : undefined;
       const request = new Request(`https://api.mons.shop${entry.path}`, { headers });
       const preflight = workerRoutePreflightResponse(route, new Request(request, { method: 'OPTIONS' }));
@@ -181,15 +187,17 @@ test('route CORS policies preserve preflight, response, and error headers across
       const error = unexpectedWorkerRouteResponse(route, request);
       const label = `${entry.path} ${origin ?? 'no origin'}`;
       assert.ok(preflight, label);
-      if (origin === 'https://mons.shop' || (entry.partner && origin === 'https://vvv.so')) {
+      const partnerOrigin = origin === 'https://vvv.so' || origin === 'https://www.vvv.so';
+      if (origin === 'https://mons.shop' || (entry.partner && partnerOrigin)) {
         assert.equal(preflight.status, 204, label);
         assert.equal(response.status, 201, label);
         assert.equal(error.status, 503, label);
         for (const result of [preflight, response, error]) {
           assert.equal(result.headers.get('Access-Control-Allow-Origin'), origin, label);
-          assert.equal(result.headers.get('Access-Control-Allow-Methods'), entry.methods, label);
-          assert.equal(result.headers.get('Access-Control-Allow-Headers'), entry.headers, label);
-          assert.equal(result.headers.get('Access-Control-Expose-Headers'), entry.partner ? 'Retry-After' : STRIPE_CHECKOUT_RETRY_HEADER, label);
+          assert.equal(result.headers.get('Access-Control-Allow-Methods'), partnerOrigin ? entry.partnerMethods ?? entry.methods : entry.methods, label);
+          assert.equal(result.headers.get('Access-Control-Allow-Headers'), partnerOrigin ? entry.partnerHeaders ?? entry.headers : entry.headers, label);
+          assert.equal(result.headers.get('Access-Control-Expose-Headers'), entry.partner && (!entry.legacyMons || partnerOrigin) ?
+            'Retry-After' : STRIPE_CHECKOUT_RETRY_HEADER, label);
           assert.equal(result.headers.get('Vary'), 'Origin', label);
         }
         assert.equal(await response.text(), 'ok', label);
@@ -207,7 +215,7 @@ test('route CORS policies preserve preflight, response, and error headers across
         assert.equal(response.status, 201, label);
         assert.equal(response.headers.get('Access-Control-Allow-Origin'), null, label);
         assert.equal(error.status, 503, label);
-        assert.equal(error.headers.get('Access-Control-Allow-Origin'), entry.partner ? null : '*', label);
+        assert.equal(error.headers.get('Access-Control-Allow-Origin'), entry.partner && !entry.legacyMons ? null : '*', label);
       }
       assert.equal(workerRoutePreflightResponse(route, request), undefined, label);
     }

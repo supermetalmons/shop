@@ -41,6 +41,12 @@ export type EthereumContext = EthereumReadContext & {
   nowMs: number;
 };
 
+export type EthereumRequestContext = Pick<EthereumContext, 'env' | 'nowMs' | 'signal' | 'fetch'>;
+
+export type EthereumCollectionReadContext = EthereumReadContext & EthereumRequestContext & {
+  config: Pick<Ethereum111kConfig, 'chainId' | 'contractAddress' | 'enabled' | 'metadataBaseUri' | 'deploymentBlock'>;
+};
+
 export function ethereumConfig(env: EthereumEnvironment): Ethereum111kConfig {
   const localRpc = Number(env.ETHEREUM_111K_CHAIN_ID) === 31337
     ? localEthereumRpcUrl(env.ETHEREUM_111K_RPC_URL || 'http://127.0.0.1:8545') : undefined;
@@ -53,7 +59,7 @@ export function ethereumConfig(env: EthereumEnvironment): Ethereum111kConfig {
   });
 }
 
-function localEthereumRpcUrl(value: string): string {
+export function localEthereumRpcUrl(value: string): string {
   const url = new URL(value);
   if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || !['http:', 'https:'].includes(url.protocol) ||
     url.username || url.password || url.search || url.hash) {
@@ -64,7 +70,7 @@ function localEthereumRpcUrl(value: string): string {
 
 export function requireEthereumContract(context: EthereumReadContext): string {
   if (!context.config.enabled || !context.config.contractAddress) {
-    throw new EthereumApiError('failed-precondition', 'The Ethereum test collection has not been deployed yet.');
+    throw new EthereumApiError('failed-precondition', 'The Ethereum collection has not been deployed yet.');
   }
   return context.config.contractAddress;
 }

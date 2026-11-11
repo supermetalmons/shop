@@ -2413,7 +2413,7 @@ test('production config has exact authentication rate limits', () => {
   ]);
 });
 
-test('Ethereum reveal preflights permit partner browsers without opening other Ethereum routes', async () => {
+test('Ethereum public preflights permit partner browsers while private routes stay closed', async () => {
   for (const origin of ['https://mons.shop', 'https://vvv.so', 'https://www.vvv.so']) {
     for (const path of ['/ethereum/111k/reveal/transaction', '/ethereum/111k/reveal/tokens']) {
       const response = await handleRequest(new Request(`https://api.mons.shop${path}`, {
@@ -2432,10 +2432,24 @@ test('Ethereum reveal preflights permit partner browsers without opening other E
     }), env(), quietDependencies(fetch));
     assert.equal(denied.status, 403);
   }
-  const restricted = await handleRequest(new Request('https://api.mons.shop/ethereum/111k/inventory', {
-    method: 'OPTIONS', headers: { Origin: 'https://vvv.so' },
-  }), env(), quietDependencies(fetch));
-  assert.equal(restricted.status, 403);
+  for (const origin of ['https://vvv.so', 'https://www.vvv.so']) {
+    for (const path of ['/ethereum/111k/config', '/ethereum/111k/stats', '/ethereum/111k/inventory', '/ethereum/111k/metadata']) {
+      const response = await handleRequest(new Request(`https://api.mons.shop${path}`, {
+        method: 'OPTIONS', headers: { Origin: origin },
+      }), env(), quietDependencies(fetch));
+      assert.equal(response.status, 204, path);
+      assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+      assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+      assert.equal(response.headers.get('Access-Control-Allow-Headers'), 'Accept, Content-Type');
+    }
+    for (const path of ['/ethereum/profile', '/ethereum/auth/challenge', '/ethereum/111k/delivery/prepare', '/ethereum/111k/checkout/create']) {
+      const restricted = await handleRequest(new Request(`https://api.mons.shop${path}`, {
+        method: 'OPTIONS', headers: { Origin: origin },
+      }), env(), quietDependencies(fetch));
+      assert.equal(restricted.status, 403, path);
+      assert.equal(restricted.headers.get('Access-Control-Allow-Origin'), null);
+    }
+  }
 });
 
 test('public routes accept only mons.shop and local browser origins', async () => {

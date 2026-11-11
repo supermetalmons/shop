@@ -24,6 +24,15 @@ export type EthereumStats = {
   discountMerkleRoot: string; discountCratePriceWei: string; discountAllowance: number; discountUsed: number;
   maxDiscountedMints?: number; totalDiscountedMints?: number;
 };
+export type EthereumPublicCollectionScope = {
+  deploymentId: string; dropId: string; chainId: number; contractAddress: string; catalogRevision: number;
+};
+export type EthereumPublicCollectionConfig = EthereumPublicCollectionScope & {
+  chainName: string; metadataBaseUri: string; deploymentBlock: number; explorerUrl: string; walletRpcUrl: string;
+  testnet: boolean; enabled: boolean; revealEnabled: boolean; saleActive: boolean;
+  cratePriceWei: string; warehousePriceWei: string; confirmationBlocks: number;
+  maxMintQuantity: number; maxUnboxQuantity: number;
+};
 export type EthereumRelicStatus = {
   chainId: number; contractAddress: string; owner: string | null; observedBlock: number; blockHash: string;
   saleActive: boolean; relicsAllocated: number; relicsMinted: number; remainingRelics: number; claimedMask: number;
