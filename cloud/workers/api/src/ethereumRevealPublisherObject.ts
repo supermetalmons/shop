@@ -79,7 +79,7 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
         for (const tokenId of RELIC_IMAGE_TOKEN_IDS) {
           if (this.retiring || this.resetting) throw new Error('Relic image publisher is unavailable.');
           const { object, json } = await read(tokenId);
-          objects.push(prepareRelicImagePatch(tokenId, json, object.etag));
+          objects.push(prepareRelicImagePatch(tokenId, json, object.etag, request.field));
         }
         await requireCurrent();
         return { action: 'inspect', objects };

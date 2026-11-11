@@ -3,6 +3,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { ethereumMetadataBaseUri } from './config.ts';
 import { normalizeEthereumAddress } from './protocol.ts';
 import { ETHEREUM_REVEAL_DEPLOYMENT_ID } from './revealDeployment.ts';
+import relicTemplate from '../../scripts/ethereum-metadata/templates/relic.json';
 
 export type RelicImagesScope = {
   deploymentId: string;
@@ -19,7 +20,7 @@ export type RelicImagePatch = {
   afterSha256: string;
   etag: string;
 };
-export type RelicImagesRequest = { scope: RelicImagesScope } & ({ action: 'inspect' } | { action: 'apply'; patch: RelicImagePatch });
+export type RelicImagesRequest = { scope: RelicImagesScope; field?: 'name' } & ({ action: 'inspect' } | { action: 'apply'; patch: RelicImagePatch });
 export type RelicImagesResult = { action: 'inspect'; objects: RelicImagePatch[] } |
   { action: 'apply'; tokenId: string; status: 'updated' | 'unchanged' };
 export const RELIC_IMAGE_TOKEN_IDS: readonly string[] = Object.freeze(Array.from({ length: 18 }, (_, index) => String(117172 + index)));
@@ -74,17 +75,21 @@ function valueEnd(json: string, start: number): number {
   return invalid('unterminated JSON value');
 }
 
-export function relicImagePngJson(tokenId: string, json: string): string {
+function relicMetadataJson(tokenId: string, json: string, field: 'image' | 'name'): string {
   if (!RELIC_IMAGE_TOKEN_IDS.includes(tokenId) || typeof json !== 'string' ||
     json.length > MAX_RELIC_METADATA_BYTES || new TextEncoder().encode(json).byteLength > MAX_RELIC_METADATA_BYTES) invalid('metadata');
   const metadata: unknown = JSON.parse(json);
   if (!record(metadata) || typeof metadata.name !== 'string' || typeof metadata.description !== 'string' ||
     !Array.isArray(metadata.attributes)) invalid('metadata object');
-  const base = `https://cdn.lil.org/nft/111k/relics/${Number(tokenId) - 117171}`;
+  const displayId = Number(tokenId) - 117171;
+  const base = `https://cdn.lil.org/nft/111k/relics/${displayId}`;
   if (metadata.image !== `${base}.webp` && metadata.image !== `${base}.png`) invalid('noncanonical relic image');
+  const target = field === 'name' ? relicTemplate.displayNames[displayId - 1] : `${base}.png`;
+  if (typeof target !== 'string' || !target) invalid('relic display name');
+  if (field === 'name' && metadata.name !== `Relic #${displayId}` && metadata.name !== target) invalid('noncanonical relic name');
   const skipWhitespace = (index: number) => { while (/\s/.test(json[index] ?? '') && index < json.length) index++; return index; };
   let cursor = skipWhitespace(0) + 1;
-  let image: { start: number; end: number } | undefined;
+  let literal: { start: number; end: number } | undefined;
   const names = new Set<string>();
   while (json[skipWhitespace(cursor)] !== '}') {
     cursor = skipWhitespace(cursor);
@@ -94,31 +99,41 @@ export function relicImagePngJson(tokenId: string, json: string): string {
     names.add(name);
     const start = skipWhitespace(skipWhitespace(end) + 1);
     const next = valueEnd(json, start);
-    if (name === 'image') image = { start, end: next };
+    if (name === field) literal = { start, end: next };
     cursor = skipWhitespace(next);
     if (json[cursor] === ',') cursor++;
   }
-  if (!image || json.slice(image.start, image.end) !== JSON.stringify(metadata.image)) invalid('noncanonical image literal');
-  return json.slice(0, image.start) + JSON.stringify(`${base}.png`) + json.slice(image.end);
+  if (!literal || json.slice(literal.start, literal.end) !== JSON.stringify(metadata[field])) invalid(`noncanonical ${field} literal`);
+  const result = json.slice(0, literal.start) + JSON.stringify(target) + json.slice(literal.end);
+  if (result.length > MAX_RELIC_METADATA_BYTES || new TextEncoder().encode(result).byteLength > MAX_RELIC_METADATA_BYTES) invalid('metadata');
+  return result;
 }
 
-export function prepareRelicImagePatch(tokenId: string, beforeJson: string, etag: string): RelicImagePatch {
+export function relicImagePngJson(tokenId: string, json: string): string {
+  return relicMetadataJson(tokenId, json, 'image');
+}
+
+export function prepareRelicImagePatch(tokenId: string, beforeJson: string, etag: string, field?: 'name'): RelicImagePatch {
   if (typeof etag !== 'string' || !etag || etag.length > 256 || /[\s"\x00-\x1f\x7f]/.test(etag)) invalid('ETag');
-  const afterJson = relicImagePngJson(tokenId, beforeJson);
+  const afterJson = relicMetadataJson(tokenId, beforeJson, field ?? 'image');
   return { tokenId, beforeJson, afterJson, beforeSha256: relicImageSha256(beforeJson), afterSha256: relicImageSha256(afterJson), etag };
 }
 
-export function parseRelicImagePatch(value: unknown): RelicImagePatch {
+export function parseRelicImagePatch(value: unknown, field?: 'name'): RelicImagePatch {
   if (!record(value) || !keys(value, ['tokenId', 'beforeJson', 'afterJson', 'beforeSha256', 'afterSha256', 'etag']) ||
     typeof value.tokenId !== 'string' || typeof value.beforeJson !== 'string' || typeof value.etag !== 'string') invalid('patch');
-  const patch = prepareRelicImagePatch(value.tokenId, value.beforeJson, value.etag);
+  const patch = prepareRelicImagePatch(value.tokenId, value.beforeJson, value.etag, field);
   if (value.afterJson !== patch.afterJson || value.beforeSha256 !== patch.beforeSha256 || value.afterSha256 !== patch.afterSha256) invalid('patch content or checksum');
   return patch;
 }
 
 export function parseRelicImagesRequest(value: unknown): RelicImagesRequest {
   if (!record(value) || !['inspect', 'apply'].includes(String(value.action)) ||
-    !keys(value, value.action === 'inspect' ? ['scope', 'action'] : ['scope', 'action', 'patch'])) invalid('action');
+    (Object.hasOwn(value, 'field') && value.field !== 'name') ||
+    !keys(value, [...(value.action === 'inspect' ? ['scope', 'action'] : ['scope', 'action', 'patch']),
+      ...(Object.hasOwn(value, 'field') ? ['field'] : [])])) invalid('action');
   const scope = parseRelicImagesScope(value.scope);
-  return value.action === 'inspect' ? { scope, action: 'inspect' } : { scope, action: 'apply', patch: parseRelicImagePatch(value.patch) };
+  const selected = value.field === 'name' ? { field: 'name' as const } : {};
+  return value.action === 'inspect' ? { scope, action: 'inspect', ...selected }
+    : { scope, action: 'apply', ...selected, patch: parseRelicImagePatch(value.patch, selected.field) };
 }

@@ -106,7 +106,7 @@ Each template contains `name`, `description`, `image`, and `attributes`. The six
 | --- | --- | --- | --- | --- |
 | `artwork.json` | `{{tokenId}}` | `placeholder.png` | 466:503 | `painting` |
 | `warehouse.json` | `Warehouse #{{displayId}}` | `warehouse.webp` | 3:2 | `warehouse` |
-| `relic.json` | `Relic #{{displayId}}` | `relics/{{displayId}}.png` | Unchanged | `relic` |
+| `relic.json` | Per-ID `displayNames` entry | `relics/{{displayId}}.png` | Unchanged | `relic` |
 | `crate.json` | `Crate #{{displayId}}` | `crate.webp` | 4:3 | `crate` |
 | `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `crate receipt` |
 | `artwork_receipt.json` | `Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `receipt` |
@@ -120,6 +120,8 @@ tokens. The reveal runtime combines that registered template with the assigned
 asset's media and exact ratio after confirmation.
 
 All image filenames above are rooted at `https://cdn.lil.org/nft/111k/`, including `relics/{{displayId}}.png` for new relic publications. Historical publication records retain their original image URLs; editing a template does not rewrite them. Use the dedicated relic image maintenance procedure below to migrate registered live metadata. Storefront displays use the corresponding `relics/mid/{id}.webp` derivatives while API metadata retains the PNG URL. Aspect ratios are reduced from the actual asset dimensions: crate 1448 × 1086, warehouse 1536 × 1024, and placeholder 932 × 1006. Reveal registration requires the canonical CDN placeholder with its 466:503 ratio; confirmed reveals replace that ratio with the assigned artwork’s catalog ratio. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
+
+The relic template keeps the exact eighteen names in its `displayNames` array, ordered by display ID. Generation uses the selected name and omits this authoring-only array from token metadata. Historical template snapshots without the array retain their original name pattern.
 
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
@@ -203,6 +205,8 @@ npm run ethereum:relic-images -- verify --directory "$relic_directory"
 ```
 
 Preparation freezes all eighteen before/after objects, checksums, and the original deployment revision. Resume with the same directory after interruption; never replace its journal to hide a conflict. Exact target bytes are idempotent, while unexpected content or a changed registration requires investigation. Verification checks storage, public CDN metadata, and the public metadata API for every relic. Retain the journal and a concise verification record separately from immutable historical publication snapshots, whose relic hashes describe the pre-migration publication. Recheck the final metadata after a scheduler interval. No contract transaction or marketplace refresh is sent by these commands.
+
+For the approved relic names, add `--names` to `prepare` and use a new directory. This mode changes only the top-level `name` to the matching `displayNames` entry; image URLs and all other bytes remain untouched. The journal freezes the selected mode, so subsequent `apply` and `verify` commands stay unchanged. An existing image-update journal cannot be reused for the name update.
 
 Template and storefront changes require their normal tests. Deploy any maintenance support with `npm run deploy:api`, and deploy changed storefront code with `npm run deploy`; this image-only change does not require a full Commerce audit.
 

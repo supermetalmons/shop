@@ -19,7 +19,7 @@ import { withMetadataLock } from '../scripts/ethereum-metadata/lock.ts';
 const examples: Array<{ kind: EthereumItemKind; name: string; image: string; type: string }> = [
   { kind: 'artwork', name: '1', image: 'placeholder.png', type: 'painting' },
   { kind: 'warehouse', name: 'Warehouse #1', image: 'warehouse.webp', type: 'warehouse' },
-  { kind: 'relic', name: 'Relic #1', image: 'relics/1.png', type: 'relic' },
+  { kind: 'relic', name: 'back_crucifix', image: 'relics/1.png', type: 'relic' },
   { kind: 'crate', name: 'Crate #1', image: 'crate.webp', type: 'crate' },
   { kind: 'crate_receipt', name: 'Crate Receipt #1', image: 'placeholder.png', type: 'crate receipt' },
   { kind: 'artwork_receipt', name: 'Receipt #1', image: 'placeholder.png', type: 'receipt' },
@@ -45,15 +45,40 @@ test('the editable templates produce the approved metadata format', async () => 
   assert.equal(metadataBody(first, templates), `${JSON.stringify(renderMetadata('artwork', 1, templates), null, 2)}\n`);
 });
 
-test('all eighteen relics use their individual images and reject numbers outside their supply', async () => {
+test('all eighteen relics use their exact names and individual images', async () => {
   const { templates } = await loadMetadataTemplates();
+  const names = [
+    'back_crucifix', 'bloody margiela shoe', 'Card NFT 2 Booster Box', 'clogs_vase', 'cross room',
+    'drif alien corpse', 'drifella armature', 'Drifella soft sculpture figure painting',
+    'Drifella Lower Dimension game case', 'Drilady crucifix scarecrow soft sculpture', 'family portrait',
+    'glazed porcelain drifella tile', 'hanged man', 'opened', 'reflection', 'reflections with crucifix',
+    'stanczyk hat', 'The Night Parade of 111,111 Demons',
+  ];
   for (let displayId = 1; displayId <= 18; displayId++) {
     assert.deepEqual(renderMetadata('relic', displayId, templates), {
-      name: `Relic #${displayId}`, description: '', image: `https://cdn.lil.org/nft/111k/relics/${displayId}.png`,
+      name: names[displayId - 1], description: '', image: `https://cdn.lil.org/nft/111k/relics/${displayId}.png`,
       attributes: [{ trait_type: 'type', value: 'relic' }],
     });
   }
   for (const displayId of [0, 19]) assert.throws(() => renderMetadata('relic', displayId, templates), /Invalid item number/);
+});
+
+test('historical relic templates keep their original names without a display-name list', async () => {
+  const { templates } = await loadMetadataTemplates();
+  delete templates.relic.displayNames;
+  for (let displayId = 1; displayId <= 18; displayId++) {
+    assert.equal(renderMetadata('relic', displayId, templates).name, `Relic #${displayId}`);
+  }
+});
+
+test('relic display-name lists must be complete literal names', async () => {
+  const { templates } = await loadMetadataTemplates();
+  const names = templates.relic.displayNames!;
+  for (const invalid of [names.slice(1), [...names, 'extra'], names.map((name, index) => index ? name : ' '),
+    names.map((name, index) => index ? name : '{{tokenId}}')]) {
+    templates.relic.displayNames = invalid;
+    assert.throws(() => renderMetadata('relic', 1, templates), /eighteen literal names/);
+  }
 });
 
 test('all eighteen relic receipts use the shared placeholder and matching display numbers', async () => {

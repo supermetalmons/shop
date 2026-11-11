@@ -616,6 +616,27 @@ test('relic maintenance inspects exactly 18 objects and applies only the prepare
   assert.equal(second.action === 'inspect' && second.objects[0].beforeJson, patch.afterJson);
 });
 
+test('relic name maintenance selects the canonical name patch and preserves every image', async () => {
+  const f = fixture();
+  for (const tokenId of RELIC_IMAGE_TOKEN_IDS) f.objects.set(key(tokenId), {
+    body: relicJson(tokenId).replace('"Relic"', `"Relic #${Number(tokenId) - 117171}"`).replace('.webp', '.png'),
+    etag: 'original', httpMetadata: jsonHeaders,
+  });
+  const inspection = await f.publisher.relicImages({ scope: relicScope, action: 'inspect', field: 'name' });
+  assert.equal(inspection.action, 'inspect');
+  if (inspection.action !== 'inspect') return;
+  assert.equal(JSON.parse(inspection.objects[0].afterJson).name, 'back_crucifix');
+  assert.equal(JSON.parse(inspection.objects[17].afterJson).name, 'The Night Parade of 111,111 Demons');
+  for (const patch of inspection.objects) {
+    assert.equal(JSON.parse(patch.beforeJson).image, JSON.parse(patch.afterJson).image);
+    assert.deepEqual(await f.publisher.relicImages({ scope: relicScope, action: 'apply', field: 'name', patch }),
+      { action: 'apply', tokenId: patch.tokenId, status: 'updated' });
+    assert.deepEqual(await f.publisher.relicImages({ scope: relicScope, action: 'apply', field: 'name', patch }),
+      { action: 'apply', tokenId: patch.tokenId, status: 'unchanged' });
+  }
+  assert.equal(f.writes.length, 18);
+});
+
 for (const invalid of ['revision', 'retired', 'catalog-update', 'deployment', 'prefix', 'missing', 'drop', 'provisioning']) {
   test(`relic maintenance rejects ${invalid} before accessing R2`, async () => {
     const f = fixture();

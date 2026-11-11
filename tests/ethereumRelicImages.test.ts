@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseRelicImagePatch, parseRelicImagesRequest, prepareRelicImagePatch, relicImagePngJson,
-  RELIC_IMAGE_TOKEN_IDS } from '../shared/ethereum/relicImages.ts';
+  MAX_RELIC_METADATA_BYTES, RELIC_IMAGE_TOKEN_IDS } from '../shared/ethereum/relicImages.ts';
 
 const scope = { deploymentId: 'mainnet-v1', chainId: 1, contractAddress: `0x${'11'.repeat(20)}`,
   metadataBaseUri: 'https://cdn.mons.shop/111k/', expectedRevision: 3 };
@@ -43,4 +43,41 @@ test('relic requests require exact identities and deterministic image-only patch
   for (const changed of [{ ...patch, afterJson: patch.afterJson.replace('Relic #1', 'Changed') },
     { ...patch, beforeSha256: 'a'.repeat(64) }, { ...patch, afterSha256: 'a'.repeat(64) }, { ...patch, etag: '"quoted"' },
     { ...patch, path: 'anything' }]) assert.throws(() => parseRelicImagePatch(changed));
+});
+
+test('name patches apply all eighteen approved names without changing other bytes', () => {
+  const names = ['back_crucifix', 'bloody margiela shoe', 'Card NFT 2 Booster Box', 'clogs_vase', 'cross room',
+    'drif alien corpse', 'drifella armature', 'Drifella soft sculpture figure painting', 'Drifella Lower Dimension game case',
+    'Drilady crucifix scarecrow soft sculpture', 'family portrait', 'glazed porcelain drifella tile', 'hanged man', 'opened',
+    'reflection', 'reflections with crucifix', 'stanczyk hat', 'The Night Parade of 111,111 Demons'];
+  for (const [index, tokenId] of RELIC_IMAGE_TOKEN_IDS.entries()) {
+    const id = index + 1;
+    const source = `{ "name":"Relic #${id}", "description":"", "image":"https://cdn.lil.org/nft/111k/relics/${id}.png",` +
+      ` "attributes":[{"trait_type":"number","value":12345678901234567890}], "nested":{"name":"Relic #${id}"} }\n`;
+    const patch = prepareRelicImagePatch(tokenId, source, 'original', 'name');
+    assert.equal(patch.afterJson, source.replace(`"name":"Relic #${id}"`, `"name":${JSON.stringify(names[index])}`));
+    assert.deepEqual(parseRelicImagePatch(patch, 'name'), patch);
+    assert.deepEqual(parseRelicImagesRequest({ scope, field: 'name', action: 'apply', patch }), { scope, field: 'name', action: 'apply', patch });
+    assert.equal(prepareRelicImagePatch(tokenId, patch.afterJson, 'new', 'name').afterJson, patch.afterJson);
+    assert.throws(() => parseRelicImagePatch(patch), /patch content or checksum/);
+  }
+});
+
+test('name patches reject foreign names, ambiguous fields, and unapproved changes', () => {
+  for (const source of [body.replace('Relic #1', 'Relic #2'), body.replace('Relic #1', 'Another name'),
+    body.replace('"name":', '"name":"Relic #1", "name":'), body.replace('Relic #1', 'Relic \\u00231')]) {
+    assert.throws(() => prepareRelicImagePatch('117172', source, 'original', 'name'));
+  }
+  const patch = prepareRelicImagePatch('117172', body, 'original', 'name');
+  assert.throws(() => parseRelicImagePatch({ ...patch, afterJson: patch.afterJson.replace('/1.webp', '/1.png') }, 'name'));
+  for (const field of ['description', 'image', null, undefined]) {
+    assert.throws(() => parseRelicImagesRequest({ scope, field, action: 'inspect' }));
+  }
+});
+
+test('name expansion cannot exceed the metadata byte limit', () => {
+  const base = '{"name":"Relic #18","description":"","image":"https://cdn.lil.org/nft/111k/relics/18.png","attributes":[],"padding":""}';
+  const source = base.replace('"padding":""', `"padding":"${'x'.repeat(MAX_RELIC_METADATA_BYTES - Buffer.byteLength(base))}"`);
+  assert.equal(Buffer.byteLength(source), MAX_RELIC_METADATA_BYTES);
+  assert.throws(() => prepareRelicImagePatch('117189', source, 'original', 'name'), /metadata/);
 });

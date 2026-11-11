@@ -52,7 +52,8 @@ test('native relic publisher enforces registered identities and R2 conditional w
         } });
         const prefix = new URL(scope.metadataBaseUri).pathname.slice(1);
         if (input.initialize) for (let index = 0; index < 18; index++) {
-          await this.bucket.put(prefix + (117172 + index) + '.json', body.replace('/1.webp', '/' + (index + 1) + '.webp'), {
+          await this.bucket.put(prefix + (117172 + index) + '.json', body.replace('/1.webp', '/' + (index + 1) + '.webp')
+            .replace('Relic #1', 'Relic #' + (index + 1)), {
             httpMetadata: headers, customMetadata: { retained: 'yes', sha256: 'old-checksum' },
           });
         }
@@ -108,6 +109,16 @@ test('native relic publisher enforces registered identities and R2 conditional w
       const retry = await run(scope, { request });
       assert.equal(retry.status, 'unchanged');
       assert.equal(retry.writes, 0);
+      const names = await run(scope, { request: { scope, action: 'inspect', field: 'name' } });
+      assert.equal(names.error, undefined);
+      assert.equal(names.objects?.length, 18);
+      const namePatch = names.objects![0];
+      const nameRequest = { scope, action: 'apply', field: 'name', patch: namePatch };
+      const renamed = await run(scope, { request: nameRequest });
+      assert.equal(renamed.status, 'updated');
+      assert.equal(renamed.body, written.body!.replace('Relic #1', 'back_crucifix'));
+      assert.deepEqual(renamed.conditions, [{ etagMatches: namePatch.etag }]);
+      assert.equal((await run(scope, { request: nameRequest })).status, 'unchanged');
       const raced = await run(scope, { initialize: true, request, mode: 'etag-race' });
       assert.match(raced.error!, /conditional write conflicted/);
       assert.equal(raced.body, 'foreign bytes');

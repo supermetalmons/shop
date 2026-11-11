@@ -6,18 +6,19 @@ import { applyRelicImages, prepareRelicImages, verifyRelicImages } from './relic
 
 const USAGE = `Usage: npm run ethereum:relic-images -- COMMAND --directory DIR [options]
 
-  prepare --directory DIR --deployment-id ID
+  prepare --directory DIR --deployment-id ID [--names]
   apply --directory DIR
   verify --directory DIR
 
 Prepare freezes all 18 relic image changes against the current deployment revision.
-Apply changes only matching relic image URLs and resumes from the same journal.
+Use --names to freeze the approved name-only update instead.
+Apply performs the frozen image or name update and resumes from the same journal.
 Verify checks stored objects, public CDN JSON, and the public metadata API.
 `;
 
 export function parseRelicImagesArgs(args: string[]) {
   const { values, positionals, tokens } = parseArgs({ args, allowPositionals: true, tokens: true, options: {
-    directory: { type: 'string' }, 'deployment-id': { type: 'string' }, help: { type: 'boolean' },
+    directory: { type: 'string' }, 'deployment-id': { type: 'string' }, names: { type: 'boolean' }, help: { type: 'boolean' },
   } });
   if (values.help) return null;
   const seen = new Set<string>();
@@ -30,17 +31,18 @@ export function parseRelicImagesArgs(args: string[]) {
   if (positionals.length !== 1 || !['prepare', 'apply', 'verify'].includes(command) || !values.directory?.trim()) throw new Error(USAGE);
   const deploymentId = values['deployment-id'];
   if (command === 'prepare' ? !deploymentId || !ETHEREUM_REVEAL_DEPLOYMENT_ID.test(deploymentId) : deploymentId !== undefined) throw new Error(USAGE);
-  return { command, directory: resolve(values.directory), deploymentId };
+  if (command !== 'prepare' && values.names !== undefined) throw new Error('--names applies only to preparation; apply and verify use the frozen journal.');
+  return { command, directory: resolve(values.directory), deploymentId, ...(values.names ? { field: 'name' as const } : {}) };
 }
 
 export async function relicImagesMain(args: string[]): Promise<unknown> {
   const options = parseRelicImagesArgs(args);
   if (!options) return USAGE;
   if (options.command === 'prepare') {
-    const journal = await prepareRelicImages(options.directory, options.deploymentId!);
+    const journal = await prepareRelicImages(options.directory, options.deploymentId!, {}, options.field);
     return { prepared: true, complete: false, deploymentId: journal.scope.deploymentId, expectedRevision: journal.scope.expectedRevision,
       metadataBaseUri: journal.scope.metadataBaseUri, objectCount: journal.objects.length, journalSha256: journal.journalSha256,
-      directory: options.directory };
+      directory: options.directory, ...(journal.field ? { field: journal.field } : {}) };
   }
   if (options.command === 'verify') return verifyRelicImages(options.directory);
   return applyRelicImages(options.directory, { onProgress: progress => process.stderr.write(`${JSON.stringify(progress)}\n`) });

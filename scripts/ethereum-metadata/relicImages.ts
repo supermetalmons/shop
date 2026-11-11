@@ -23,16 +23,18 @@ type Dependencies = {
   now?: () => Date;
   onProgress?: (progress: { tokenId: string; status: 'updated' | 'unchanged'; completed: number; total: number }) => void;
 };
-type JournalBody = { version: 1; preparedAt: string; scope: RelicImagesScope; objects: RelicImagePatch[] };
+type JournalBody = { version: 1; preparedAt: string; scope: RelicImagesScope; objects: RelicImagePatch[]; field?: 'name' };
 export type RelicImagesJournal = JournalBody & { journalSha256: string };
 export type RelicImagesVerification = {
   deploymentId: string; journalSha256: string; verifiedAt: string; complete: true;
   objectCount: number; storageVerified: number; cdnVerified: number; apiVerified: number;
   metadataBaseUri: string; expectedRevision: number;
+  field?: 'name';
 };
 
 function journalBody(value: RelicImagesJournal | JournalBody): JournalBody {
-  return { version: value.version, preparedAt: value.preparedAt, scope: value.scope, objects: value.objects };
+  return { version: value.version, preparedAt: value.preparedAt, scope: value.scope, objects: value.objects,
+    ...(value.field ? { field: value.field } : {}) };
 }
 
 async function optionalFile(path: string): Promise<string | null> {
@@ -48,9 +50,9 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   } finally { await rm(temporary, { force: true }); }
 }
 
-function parseObjects(value: unknown): RelicImagePatch[] {
+function parseObjects(value: unknown, field?: 'name'): RelicImagePatch[] {
   if (!Array.isArray(value) || value.length !== RELIC_IMAGE_TOKEN_IDS.length) throw new Error('Relic inspection must contain all 18 objects.');
-  const objects = value.map(parseRelicImagePatch).sort((left, right) => Number(left.tokenId) - Number(right.tokenId));
+  const objects = value.map(object => parseRelicImagePatch(object, field)).sort((left, right) => Number(left.tokenId) - Number(right.tokenId));
   if (objects.some((object, index) => object.tokenId !== RELIC_IMAGE_TOKEN_IDS[index])) throw new Error('Relic inspection contains unexpected or duplicate token IDs.');
   return objects;
 }
@@ -61,11 +63,14 @@ export async function readRelicImagesJournal(directory: string): Promise<RelicIm
   const value: unknown = JSON.parse(raw);
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid relic image journal.');
   const row = value as Record<string, unknown>;
-  if (Object.keys(row).sort().join(',') !== 'journalSha256,objects,preparedAt,scope,version' || row.version !== 1 ||
+  const hasField = Object.hasOwn(row, 'field');
+  if (Object.keys(row).sort().join(',') !== `${hasField ? 'field,' : ''}journalSha256,objects,preparedAt,scope,version` ||
+    hasField && row.field !== 'name' || row.version !== 1 ||
     typeof row.preparedAt !== 'string' || !Number.isFinite(Date.parse(row.preparedAt)) ||
     typeof row.journalSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.journalSha256)) throw new Error('Invalid relic image journal.');
   const journal: RelicImagesJournal = { version: 1, preparedAt: row.preparedAt,
-    scope: parseRelicImagesScope(row.scope), objects: parseObjects(row.objects), journalSha256: row.journalSha256 };
+    scope: parseRelicImagesScope(row.scope), objects: parseObjects(row.objects, hasField ? 'name' : undefined),
+    ...(hasField ? { field: 'name' } : {}), journalSha256: row.journalSha256 };
   if (relicImageSha256(JSON.stringify(journalBody(journal))) !== journal.journalSha256) throw new Error('Relic image journal checksum mismatch.');
   return journal;
 }
@@ -113,10 +118,10 @@ async function discoverScope(deploymentId: string, query: CommerceAuthorityQuery
     contractAddress: deployment.contractAddress, metadataBaseUri: deployment.metadataBaseUri, expectedRevision: deployment.revision });
 }
 
-async function inspect(scope: RelicImagesScope, transport: RelicImagesTransport): Promise<RelicImagePatch[]> {
-  const result = await transport({ scope, action: 'inspect' });
+async function inspect(scope: RelicImagesScope, transport: RelicImagesTransport, field?: 'name'): Promise<RelicImagePatch[]> {
+  const result = await transport({ scope, action: 'inspect', ...(field ? { field } : {}) });
   if (result.action !== 'inspect') throw new Error('Invalid relic image inspection result.');
-  return parseObjects(result.objects);
+  return parseObjects(result.objects, field);
 }
 
 function requireExpectedObjects(journal: RelicImagesJournal, objects: RelicImagePatch[], complete: boolean): void {
@@ -130,21 +135,24 @@ function requireExpectedObjects(journal: RelicImagesJournal, objects: RelicImage
   }
 }
 
-export async function prepareRelicImages(directory: string, deploymentId: string, dependencies: Dependencies = {}): Promise<RelicImagesJournal> {
+export async function prepareRelicImages(directory: string, deploymentId: string, dependencies: Dependencies = {},
+  field?: 'name'): Promise<RelicImagesJournal> {
   const destination = resolve(directory);
   await mkdir(dirname(destination), { recursive: true });
   return withMetadataLock(`${destination}.lock`, async () => {
     if (await optionalFile(join(destination, 'journal.json')) !== null) {
       const existing = await readRelicImagesJournal(destination);
       if (existing.scope.deploymentId !== deploymentId) throw new Error('This relic image journal belongs to a different deployment.');
+      if (existing.field !== field) throw new Error('This relic journal belongs to a different update field.');
       await requirePublicScope(existing.scope, dependencies.fetch ?? fetch);
-      await withTransport(dependencies, async transport => requireExpectedObjects(existing, await inspect(existing.scope, transport), false));
+      await withTransport(dependencies, async transport => requireExpectedObjects(existing, await inspect(existing.scope, transport, field), false));
       return existing;
     }
     const scope = await discoverScope(deploymentId, dependencies.query ?? createAsyncD1MaintenanceQuery('ops'));
     await requirePublicScope(scope, dependencies.fetch ?? fetch);
-    const objects = await withTransport(dependencies, transport => inspect(scope, transport));
-    const body: JournalBody = { version: 1, preparedAt: (dependencies.now ?? (() => new Date()))().toISOString(), scope, objects };
+    const objects = await withTransport(dependencies, transport => inspect(scope, transport, field));
+    const body: JournalBody = { version: 1, preparedAt: (dependencies.now ?? (() => new Date()))().toISOString(), scope, objects,
+      ...(field ? { field } : {}) };
     const journal = { ...body, journalSha256: relicImageSha256(JSON.stringify(body)) };
     const staging = `${destination}.staging-${randomUUID()}`;
     await mkdir(staging);
@@ -164,11 +172,11 @@ export async function applyRelicImages(directory: string, dependencies: Dependen
     const journal = await readRelicImagesJournal(destination);
     await requirePublicScope(journal.scope, dependencies.fetch ?? fetch);
     return withTransport(dependencies, async transport => {
-      requireExpectedObjects(journal, await inspect(journal.scope, transport), false);
+      requireExpectedObjects(journal, await inspect(journal.scope, transport, journal.field), false);
       const completed: Array<{ tokenId: string; status: 'updated' | 'unchanged' }> = [];
       await rm(join(destination, 'verification.json'), { force: true });
       for (const patch of journal.objects) {
-        const result = await transport({ scope: journal.scope, action: 'apply', patch });
+        const result = await transport({ scope: journal.scope, action: 'apply', patch, ...(journal.field ? { field: journal.field } : {}) });
         if (result.action !== 'apply' || result.tokenId !== patch.tokenId || !['updated', 'unchanged'].includes(result.status)) {
           throw new Error(`Invalid relic image application result for token ${patch.tokenId}.`);
         }
@@ -177,7 +185,7 @@ export async function applyRelicImages(directory: string, dependencies: Dependen
           updatedAt: (dependencies.now ?? (() => new Date()))().toISOString(), complete: false, completed });
         dependencies.onProgress?.({ tokenId: result.tokenId, status: result.status, completed: completed.length, total: journal.objects.length });
       }
-      requireExpectedObjects(journal, await inspect(journal.scope, transport), true);
+      requireExpectedObjects(journal, await inspect(journal.scope, transport, journal.field), true);
       return { deploymentId: journal.scope.deploymentId, journalSha256: journal.journalSha256, applied: true, complete: false,
         objectCount: completed.length, updated: completed.filter(item => item.status === 'updated').length,
         unchanged: completed.filter(item => item.status === 'unchanged').length };
@@ -204,7 +212,7 @@ export async function verifyRelicImages(directory: string, dependencies: Depende
     const fetcher = dependencies.fetch ?? fetch;
     await rm(join(destination, 'verification.json'), { force: true });
     await requirePublicScope(journal.scope, fetcher);
-    await withTransport(dependencies, async transport => requireExpectedObjects(journal, await inspect(journal.scope, transport), true));
+    await withTransport(dependencies, async transport => requireExpectedObjects(journal, await inspect(journal.scope, transport, journal.field), true));
     await concurrent(journal.objects, async object => {
       const url = `${journal.scope.metadataBaseUri}${object.tokenId}.json`;
       const cdn = await readPublicJson(url, fetcher);
@@ -219,11 +227,12 @@ export async function verifyRelicImages(directory: string, dependencies: Depende
       if (api.value.deploymentId !== journal.scope.deploymentId || api.value.chainId !== journal.scope.chainId ||
         api.value.contractAddress !== journal.scope.contractAddress) throw new Error(`Relic metadata API identity differs for token ${object.tokenId}.`);
     });
-    await withTransport(dependencies, async transport => requireExpectedObjects(journal, await inspect(journal.scope, transport), true));
+    await withTransport(dependencies, async transport => requireExpectedObjects(journal, await inspect(journal.scope, transport, journal.field), true));
     const report: RelicImagesVerification = { deploymentId: journal.scope.deploymentId, journalSha256: journal.journalSha256,
       verifiedAt: (dependencies.now ?? (() => new Date()))().toISOString(), complete: true, objectCount: journal.objects.length,
       storageVerified: journal.objects.length, cdnVerified: journal.objects.length, apiVerified: journal.objects.length,
-      metadataBaseUri: journal.scope.metadataBaseUri, expectedRevision: journal.scope.expectedRevision };
+      metadataBaseUri: journal.scope.metadataBaseUri, expectedRevision: journal.scope.expectedRevision,
+      ...(journal.field ? { field: journal.field } : {}) };
     await writeJson(join(destination, 'verification.json'), report);
     return report;
   });

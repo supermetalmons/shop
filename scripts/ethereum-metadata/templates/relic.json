@@ -1,5 +1,25 @@
 {
   "name": "Relic #{{displayId}}",
+  "displayNames": [
+    "back_crucifix",
+    "bloody margiela shoe",
+    "Card NFT 2 Booster Box",
+    "clogs_vase",
+    "cross room",
+    "drif alien corpse",
+    "drifella armature",
+    "Drifella soft sculpture figure painting",
+    "Drifella Lower Dimension game case",
+    "Drilady crucifix scarecrow soft sculpture",
+    "family portrait",
+    "glazed porcelain drifella tile",
+    "hanged man",
+    "opened",
+    "reflection",
+    "reflections with crucifix",
+    "stanczyk hat",
+    "The Night Parade of 111,111 Demons"
+  ],
   "description": "",
   "image": "https://cdn.lil.org/nft/111k/relics/{{displayId}}.png",
   "attributes": [

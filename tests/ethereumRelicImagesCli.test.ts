@@ -32,7 +32,7 @@ async function fixture(t: TestContext) {
     assert.deepEqual(request.scope, scope);
     if (request.scope.expectedRevision !== revision) throw new Error('Revision changed.');
     if (request.action === 'inspect') return { action: 'inspect', objects: RELIC_IMAGE_TOKEN_IDS.map(tokenId =>
-      prepareRelicImagePatch(tokenId, bodies.get(tokenId)!, relicImageSha256(bodies.get(tokenId)!))) };
+      prepareRelicImagePatch(tokenId, bodies.get(tokenId)!, relicImageSha256(bodies.get(tokenId)!), request.field)) };
     const patch = request.patch;
     if (failedToken === patch.tokenId) { failedToken = undefined; throw new Error('Simulated write interruption.'); }
     const previous = bodies.get(patch.tokenId)!;
@@ -79,12 +79,14 @@ async function fixture(t: TestContext) {
 
 test('relic image CLI requires an explicit preparation target and reuses only the frozen target for apply and verify', () => {
   assert.equal(parseRelicImagesArgs(['prepare', '--directory', '/tmp/relics', '--deployment-id', 'mainnet-v1'])?.deploymentId, 'mainnet-v1');
+  assert.equal(parseRelicImagesArgs(['prepare', '--names', '--directory', '/tmp/relics', '--deployment-id', 'mainnet-v1'])?.field, 'name');
   assert.equal(parseRelicImagesArgs(['apply', '--directory', '/tmp/relics'])?.command, 'apply');
   assert.equal(parseRelicImagesArgs(['verify', '--directory', '/tmp/relics'])?.command, 'verify');
   assert.equal(parseRelicImagesArgs(['--help']), null);
   for (const args of [[], ['prepare', '--directory', 'x'], ['prepare', '--directory', 'x', '--deployment-id', '../x'],
     ['apply', '--directory', 'x', '--deployment-id', 'v17'], ['verify', '--directory', ''],
-    ['prepare', '--directory', 'x', '--directory', 'y', '--deployment-id', 'v17'], ['apply', '--directory', 'x', '--write']]) {
+    ['prepare', '--directory', 'x', '--directory', 'y', '--deployment-id', 'v17'], ['apply', '--directory', 'x', '--write'],
+    ['apply', '--directory', 'x', '--names'], ['verify', '--directory', 'x', '--names']]) {
     assert.throws(() => parseRelicImagesArgs(args));
   }
 });
@@ -93,6 +95,8 @@ test('preparation freezes all 18 objects and reuses the immutable journal withou
   const f = await fixture(t);
   const first = await prepareRelicImages(f.directory, scope.deploymentId, f.dependencies);
   const bytes = await readFile(join(f.directory, 'journal.json'), 'utf8');
+  assert.equal(Object.hasOwn(JSON.parse(bytes), 'field'), false);
+  assert.equal(first.field, undefined);
   assert.equal(first.objects.length, 18);
   assert.equal(first.scope.expectedRevision, scope.expectedRevision);
   assert.equal(f.requests.filter(request => request.action === 'apply').length, 0);
@@ -100,9 +104,41 @@ test('preparation freezes all 18 objects and reuses the immutable journal withou
   assert.deepEqual(await prepareRelicImages(f.directory, scope.deploymentId, f.dependencies), first);
   assert.equal(f.queryCalls(), 1);
   assert.equal(await readFile(join(f.directory, 'journal.json'), 'utf8'), bytes);
+  await assert.rejects(prepareRelicImages(f.directory, scope.deploymentId, f.dependencies, 'name'), /different update field/);
   f.setRevision(8);
   await assert.rejects(prepareRelicImages(f.directory, scope.deploymentId, f.dependencies), /Revision changed/);
   await assert.rejects(prepareRelicImages(f.directory, 'mainnet-v1', f.dependencies), /different deployment/);
+});
+
+test('name preparation freezes the chosen field and resumes a name-only update without changing images', async t => {
+  const f = await fixture(t);
+  for (const [tokenId, body] of f.bodies) f.bodies.set(tokenId, body.replace('.webp', '.png'));
+  const originals = new Map(f.bodies);
+  const { displayNames } = JSON.parse(await readFile(new URL('../scripts/ethereum-metadata/templates/relic.json', import.meta.url), 'utf8'));
+  const journal = await prepareRelicImages(f.directory, scope.deploymentId, f.dependencies, 'name');
+  const frozen = await readFile(join(f.directory, 'journal.json'), 'utf8');
+  assert.equal(journal.field, 'name');
+  assert.deepEqual(await readRelicImagesJournal(f.directory), journal);
+  assert.deepEqual(await prepareRelicImages(f.directory, scope.deploymentId, f.dependencies, 'name'), journal);
+  await assert.rejects(prepareRelicImages(f.directory, scope.deploymentId, f.dependencies), /different update field/);
+  for (const [index, patch] of journal.objects.entries()) {
+    assert.equal(patch.afterJson, originals.get(patch.tokenId)!.replace(JSON.stringify(`Relic #${index + 1}`), JSON.stringify(displayNames[index])));
+  }
+  f.failOnce('117174');
+  await assert.rejects(applyRelicImages(f.directory, f.dependencies), /write interruption/);
+  const result = await applyRelicImages(f.directory, f.dependencies);
+  assert.equal(result.updated, 16);
+  assert.equal(result.unchanged, 2);
+  const verified = await verifyRelicImages(f.directory, f.dependencies);
+  assert.equal(verified.complete, true);
+  assert.equal(verified.field, 'name');
+  assert.equal(verified.objectCount, 18);
+  assert(f.requests.every(request => request.field === 'name'));
+  assert.equal(await readFile(join(f.directory, 'journal.json'), 'utf8'), frozen);
+  assert.equal((await applyRelicImages(f.directory, f.dependencies)).unchanged, 18);
+  const edited = { ...journal, field: 'image' };
+  await writeFile(join(f.directory, 'journal.json'), JSON.stringify(edited));
+  await assert.rejects(readRelicImagesJournal(f.directory), /Invalid relic image journal/);
 });
 
 test('apply resumes an interrupted migration and verify checks all stored, CDN and API metadata', async t => {
