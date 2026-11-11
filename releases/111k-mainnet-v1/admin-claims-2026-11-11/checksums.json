@@ -1,0 +1,9 @@
+{
+  "artifacts": {
+    "operation.json": "8ea016fbe0af811359bd6f3acdba058f08e38b4449a8df23f20563fb82a6decd",
+    "verification.json": "5daa4a8df0395869412e8d763ab8e30080f7073268ffeb179e8062ba6e782685",
+    "simulation.json": "5915dfbb30847eef8f836c3ec4e21359ff1393208fdae0a5618c469352b9a336",
+    "README.md": "ef8c770c8723680d4114226bd7907d1a78af4c748170480bf878f0647ac250e6"
+  },
+  "executionSourceSha256": "d126b9cae26cb735825c99adaa50d3bd2b3a67c5fde268f36b84275ac10960d7"
+}

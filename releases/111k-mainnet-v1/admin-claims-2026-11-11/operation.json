@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "operation": "111k-mainnet-admin-claims-8-and-18",
+  "chainId": 1,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "originalPrices": [
+    "30000000000000000",
+    "300000000000000000",
+    "15000000000000000"
+  ],
+  "temporaryPrices": [
+    "1000000000000000000000",
+    "1000000000000000000000",
+    "1000000000000000000000"
+  ],
+  "targets": [
+    {
+      "relicId": 8,
+      "tokenId": 117179
+    },
+    {
+      "relicId": 18,
+      "tokenId": 117189
+    }
+  ],
+  "calls": [
+    {
+      "step": "raise-prices",
+      "data": "0xa88fe42d00000000000000000000000000000000000000000000003635c9adc5dea0000000000000000000000000000000000000000000000000003635c9adc5dea0000000000000000000000000000000000000000000000000003635c9adc5dea00000",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0"
+    },
+    {
+      "step": "open-sale",
+      "data": "0x841718a60000000000000000000000000000000000000000000000000000000000000001",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0"
+    },
+    {
+      "step": "claim-relic-8",
+      "data": "0xd4137c780000000000000000000000000000000000000000000000000000000000000008",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0"
+    },
+    {
+      "step": "claim-relic-18",
+      "data": "0xd4137c780000000000000000000000000000000000000000000000000000000000000012",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0"
+    },
+    {
+      "step": "close-sale",
+      "data": "0x841718a60000000000000000000000000000000000000000000000000000000000000000",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0"
+    },
+    {
+      "step": "restore-prices",
+      "data": "0xa88fe42d000000000000000000000000000000000000000000000000006a94d74f4300000000000000000000000000000000000000000000000000000429d069189e000000000000000000000000000000000000000000000000000000354a6ba7a18000",
+      "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "value": "0"
+    }
+  ],
+  "maximumTotalFeeWei": "2000000000000000",
+  "recovery": {
+    "replacementAfterSeconds": 60,
+    "emergencyCloseAfterSeconds": 120,
+    "maximumMonitorSeconds": 480,
+    "minimumGasBumpPercent": 15,
+    "maximumReplacementsPerNonce": 6,
+    "emergencyCloseAllowedIndices": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "emergencyCloseData": "0x841718a60000000000000000000000000000000000000000000000000000000000000000",
+    "failedCloseRecovery": {
+      "replaceUnbroadcastRestoreIndex": 5,
+      "appendRestoreNonceOffset": 6,
+      "maximumAdditionalTransactions": 1
+    },
+    "confirmations": 3
+  }
+}

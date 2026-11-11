@@ -4,7 +4,7 @@ Latest API update: [mainnet public APIs and reveal enabled](public-api-readiness
 
 Latest discount update: [Terraforms holder expansion to 3,242 eligible addresses](discounts-terraforms-2026-11-11/README.md).
 
-Post-deployment updates: [free-crate allowances](free-crates-2026-11-11/README.md), [discount list and mint prices](discounts-2026-11-11/README.md), and [12-relic allocation with 22.3 ETH](relic-allocation-2026-11-11/README.md), configured on 11 November 2026. The records below describe the original deployment configuration.
+Post-deployment updates: [free-crate allowances](free-crates-2026-11-11/README.md), [discount list and mint prices](discounts-2026-11-11/README.md), [12-relic allocation with 22.3 ETH](relic-allocation-2026-11-11/README.md), and [admin claims for relics 8 and 18](admin-claims-2026-11-11/README.md), configured on 11 November 2026. The records below describe the original deployment configuration.
 
 Deployed [111k](https://etherscan.io/address/0x08cded8258730bda384ff198001e47a1b50f7f9d#code) on Ethereum mainnet with minting closed, zero token supply, and zero relic allocation. Reveal provisioning reached ready at registry revision 2; reveal activation remains disabled. No sale-opening, relic-allocation, or mint transaction was sent.
 
