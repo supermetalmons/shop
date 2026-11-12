@@ -1,0 +1,15 @@
+{
+  "name": "Crate #5555",
+  "description": "a sealed crate pack of 31 nfts",
+  "image": "https://cdn.lil.org/nft/111k/rare_crate.png",
+  "attributes": [
+    {
+      "trait_type": "type",
+      "value": "crate"
+    }
+  ],
+  "aspectRatio": {
+    "width": 2,
+    "height": 3
+  }
+}

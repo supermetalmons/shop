@@ -38,6 +38,11 @@ export type MetadataTemplates = Record<EthereumItemKind, EthereumMetadata & {
   description: string;
   attributes: NonNullable<EthereumMetadata['attributes']>;
   displayNames?: string[];
+  displayOverrides?: Record<string, {
+    description: string;
+    image: string;
+    aspectRatio: NonNullable<EthereumMetadata['aspectRatio']>;
+  }>;
 }>;
 
 const DEFAULT_TEMPLATES_DIRECTORY = fileURLToPath(new URL('./templates/', import.meta.url));
@@ -63,6 +68,20 @@ function requireTemplate(value: unknown, kind: EthereumItemKind): MetadataTempla
     value.displayNames.length !== ethereumItemDisplayIdMaximum('relic') ||
     value.displayNames.some(name => typeof name !== 'string' || !name.trim() || /\{\{|\}\}/.test(name)))) {
     throw new Error('Relic display names must contain exactly eighteen literal names.');
+  }
+  if (value.displayOverrides !== undefined) {
+    if (kind !== 'crate' || !record(value.displayOverrides)) throw new Error('Invalid crate display overrides.');
+    for (const [displayId, override] of Object.entries(value.displayOverrides)) {
+      if (!/^[1-9][0-9]*$/.test(displayId) || Number(displayId) > ethereumItemDisplayIdMaximum('crate') ||
+        !record(override) || Object.keys(override).sort().join(',') !== 'aspectRatio,description,image' ||
+        typeof override.description !== 'string' || typeof override.image !== 'string' ||
+        !record(override.aspectRatio) || Object.keys(override.aspectRatio).sort().join(',') !== 'height,width' ||
+        ![override.aspectRatio.width, override.aspectRatio.height].every(size => Number.isSafeInteger(size) && Number(size) > 0)) {
+        throw new Error('Invalid crate display overrides.');
+      }
+      const image = override.image.replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
+      if (!/^https:\/\//i.test(image) || !isEthereumMetadataImage(image)) throw new Error('Crate override image must be a public HTTPS URL.');
+    }
   }
   const body = JSON.stringify(value, null, 2).replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
   if (/\{\{|\}\}/.test(body)) throw new Error(`Unresolved metadata template placeholder: ${kind}`);
@@ -90,8 +109,9 @@ export async function loadMetadataTemplates(directory = DEFAULT_TEMPLATES_DIRECT
 export function renderMetadata(kind: EthereumItemKind, displayId: number, templates: MetadataTemplates): MetadataTemplates[EthereumItemKind] {
   const tokenId = ethereumMetadataTokenId(kind, displayId);
   const value = requireTemplate(templates[kind], kind);
-  const { displayNames, ...metadata } = value;
-  const body = JSON.stringify({ ...metadata, ...(displayNames ? { name: displayNames[displayId - 1] } : {}) }, null, 2)
+  const { displayNames, displayOverrides, ...metadata } = value;
+  const body = JSON.stringify({ ...metadata, ...displayOverrides?.[String(displayId)],
+    ...(displayNames ? { name: displayNames[displayId - 1] } : {}) }, null, 2)
     .replaceAll('{{tokenId}}', tokenId).replaceAll('{{displayId}}', String(displayId));
   if (/\{\{|\}\}/.test(body)) throw new Error(`Unresolved metadata template placeholder: ${kind}`);
   return requireTemplate(JSON.parse(body), kind);

@@ -45,6 +45,39 @@ test('the editable templates produce the approved metadata format', async () => 
   assert.equal(metadataBody(first, templates), `${JSON.stringify(renderMetadata('artwork', 1, templates), null, 2)}\n`);
 });
 
+test('the final crate override reproduces the published metadata without changing ordinary crates', async () => {
+  const { templates } = await loadMetadataTemplates();
+  const published = await readFile(new URL('../releases/111k-mainnet-v1/rare-crate-2026-11-12/116666.json', import.meta.url), 'utf8');
+  assert.equal(metadataBody({ kind: 'crate', displayId: 5555, tokenId: '116666', file: '116666.json' }, templates), published);
+  assert.equal(Object.hasOwn(renderMetadata('crate', 5555, templates), 'displayOverrides'), false);
+  assert.deepEqual(renderMetadata('crate', 5554, templates), {
+    name: 'Crate #5554', description: '', image: 'https://cdn.lil.org/nft/111k/crate.webp',
+    attributes: [{ trait_type: 'type', value: 'crate' }], aspectRatio: { width: 4, height: 3 },
+  });
+});
+
+test('historical crate templates reproduce their original bytes without display overrides', async () => {
+  const { templates } = await loadMetadataTemplates();
+  const journal = JSON.parse(await readFile(new URL('../releases/111k-mainnet-v1/rare-crate-2026-11-12/journal.json', import.meta.url), 'utf8'));
+  delete templates.crate.displayOverrides;
+  assert.equal(metadataBody({ kind: 'crate', displayId: 5555, tokenId: '116666', file: '116666.json' }, templates), journal.beforeJson);
+});
+
+test('crate display overrides reject invalid identities, images, and dimensions', async () => {
+  const { templates } = await loadMetadataTemplates();
+  const override = templates.crate.displayOverrides!['5555'];
+  for (const displayId of ['0', '05555', '5556', '../5555']) {
+    templates.crate.displayOverrides = { [displayId]: override };
+    assert.throws(() => renderMetadata('crate', 1, templates), /Invalid crate display overrides/);
+  }
+  templates.crate.displayOverrides = { '5555': { ...override, image: 'https://user:password@example.com/crate.png' } };
+  assert.throws(() => renderMetadata('crate', 1, templates), /public HTTPS URL/);
+  templates.crate.displayOverrides = { '5555': { ...override, aspectRatio: { width: 0, height: 3 } } };
+  assert.throws(() => renderMetadata('crate', 1, templates), /Invalid crate display overrides/);
+  templates.warehouse.displayOverrides = { '1': override };
+  assert.throws(() => renderMetadata('warehouse', 1, templates), /Invalid crate display overrides/);
+});
+
 test('all eighteen relics use their exact names and individual images', async () => {
   const { templates } = await loadMetadataTemplates();
   const names = [

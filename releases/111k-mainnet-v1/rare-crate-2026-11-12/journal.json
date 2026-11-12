@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "preparedAt": "2026-11-11T21:29:30.670Z",
+  "scope": {
+    "deployment_id": "mainnet-v1",
+    "chain_id": 1,
+    "contract_address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "metadata_base_uri": "https://cdn.mons.shop/111k/",
+    "revision": 9,
+    "state": "active",
+    "retired_at_ms": null,
+    "catalog_update_id": null
+  },
+  "key": "111k/116666.json",
+  "url": "https://cdn.mons.shop/111k/116666.json",
+  "tokenId": "116666",
+  "displayId": 5555,
+  "beforeJson": "{\n  \"name\": \"Crate #5555\",\n  \"description\": \"\",\n  \"image\": \"https://cdn.lil.org/nft/111k/crate.webp\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"crate\"\n    }\n  ],\n  \"aspectRatio\": {\n    \"width\": 4,\n    \"height\": 3\n  }\n}\n",
+  "afterJson": "{\n  \"name\": \"Crate #5555\",\n  \"description\": \"a sealed crate pack of 31 nfts\",\n  \"image\": \"https://cdn.lil.org/nft/111k/rare_crate.png\",\n  \"attributes\": [\n    {\n      \"trait_type\": \"type\",\n      \"value\": \"crate\"\n    }\n  ],\n  \"aspectRatio\": {\n    \"width\": 2,\n    \"height\": 3\n  }\n}\n",
+  "beforeSha256": "a7a78408f590c620d24fc264a6b00bdfb5e3abbc91643c317980a2000a8281fd",
+  "afterSha256": "b68ede4fdd38fee722c4200c00a0abee274571c3f29c79581bea9511a0bc9485",
+  "beforeEtag": "\"d6191202946dd6eea05edc08aa64d795\"",
+  "changedFields": [
+    "description",
+    "image",
+    "aspectRatio"
+  ],
+  "imageDimensions": {
+    "width": 1024,
+    "height": 1536
+  },
+  "unchangedObjects": [
+    {
+      "url": "https://cdn.mons.shop/111k/116665.json",
+      "sha256": "1910ed8fac4a0e3504db6860acb54e0925ee584caafda42c3577888cc36d0cda"
+    },
+    {
+      "url": "https://cdn.mons.shop/111k/2005555.json",
+      "sha256": "194ddbd87662e4532a1bf8c71c56a4fec96b50e4f3e6a93f7c81e6aefb3c91b8"
+    },
+    {
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/116666.json",
+      "sha256": "a7a78408f590c620d24fc264a6b00bdfb5e3abbc91643c317980a2000a8281fd"
+    }
+  ]
+}

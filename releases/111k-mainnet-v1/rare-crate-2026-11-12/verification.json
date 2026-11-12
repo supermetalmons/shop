@@ -1,0 +1,49 @@
+{
+  "complete": true,
+  "appliedAt": "2026-11-11T21:29:31.857Z",
+  "verifiedAt": "2026-11-11T21:29:35.476Z",
+  "deploymentId": "mainnet-v1",
+  "expectedRevision": 9,
+  "tokenId": "116666",
+  "url": "https://cdn.mons.shop/111k/116666.json",
+  "apiUrl": "https://api.mons.shop/ethereum/111k/metadata?chainId=1&contractAddress=0x08cded8258730bda384ff198001e47a1b50f7f9d&kind=crate&displayId=5555",
+  "metadata": {
+    "name": "Crate #5555",
+    "description": "a sealed crate pack of 31 nfts",
+    "image": "https://cdn.lil.org/nft/111k/rare_crate.png",
+    "attributes": [
+      {
+        "trait_type": "type",
+        "value": "crate"
+      }
+    ],
+    "aspectRatio": {
+      "width": 2,
+      "height": 3
+    }
+  },
+  "sha256": "b68ede4fdd38fee722c4200c00a0abee274571c3f29c79581bea9511a0bc9485",
+  "etag": "\"7365139f2c24e70c1d408ccce76ae0a4\"",
+  "storageVerified": true,
+  "cdnVerified": true,
+  "apiVerified": true,
+  "unchangedObjects": [
+    {
+      "url": "https://cdn.mons.shop/111k/116665.json",
+      "sha256": "1910ed8fac4a0e3504db6860acb54e0925ee584caafda42c3577888cc36d0cda"
+    },
+    {
+      "url": "https://cdn.mons.shop/111k/2005555.json",
+      "sha256": "194ddbd87662e4532a1bf8c71c56a4fec96b50e4f3e6a93f7c81e6aefb3c91b8"
+    },
+    {
+      "url": "https://cdn.mons.shop/111k-sepolia/v17/116666.json",
+      "sha256": "a7a78408f590c620d24fc264a6b00bdfb5e3abbc91643c317980a2000a8281fd"
+    }
+  ],
+  "cdnHeaders": {
+    "contentType": "application/json; charset=utf-8",
+    "cacheControl": "no-store",
+    "cfCacheStatus": "DYNAMIC"
+  }
+}

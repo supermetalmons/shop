@@ -100,7 +100,7 @@ painting alternatives and playable media from `metadata.image`.
 
 ## Templates
 
-Each template contains `name`, `description`, `image`, and `attributes`. The six updated media templates also include their measured `aspectRatio`. Descriptions remain empty and each template has one lowercase `type` trait:
+Each template contains `name`, `description`, `image`, and `attributes`. The six updated media templates also include their measured `aspectRatio`. Descriptions remain empty except for the final crate override below, and each template has one lowercase `type` trait:
 
 | Template | Name | Image filename | Aspect ratio | Type value |
 | --- | --- | --- | --- | --- |
@@ -122,6 +122,8 @@ asset's media and exact ratio after confirmation.
 All image filenames above are rooted at `https://cdn.lil.org/nft/111k/`, including `relics/{{displayId}}.png` for new relic publications. Historical publication records retain their original image URLs; editing a template does not rewrite them. Use the dedicated relic image maintenance procedure below to migrate registered live metadata. Storefront displays use the corresponding `relics/mid/{id}.webp` derivatives while API metadata retains the PNG URL. Aspect ratios are reduced from the actual asset dimensions: crate 1448 × 1086, warehouse 1536 × 1024, and placeholder 932 × 1006. Reveal registration requires the canonical CDN placeholder with its 466:503 ratio; confirmed reveals replace that ratio with the assigned artwork’s catalog ratio. Names are JSON strings, including artwork names such as `"1"`. The only substitutions are `{{tokenId}}` and `{{displayId}}`; unresolved placeholders and invalid expanded image URLs fail validation. Numbering comes from the existing protocol helpers, including the physical-only artwork receipt range.
 
 The relic template keeps the exact eighteen names in its `displayNames` array, ordered by display ID. Generation uses the selected name and omits this authoring-only array from token metadata. Historical template snapshots without the array retain their original name pattern.
+
+The crate template keeps crate #5555's values in `displayOverrides["5555"]`: description `a sealed crate pack of 31 nfts`, image `https://cdn.lil.org/nft/111k/rare_crate.png`, and aspect ratio 2:3. Future fresh generation applies this override to token `116666` and omits `displayOverrides` from its JSON. The result reproduces the [saved live mainnet metadata](../../releases/111k-mainnet-v1/rare-crate-2026-11-12/116666.json). This source update does not regenerate or republish mainnet. Immutable historical template snapshots without the override continue to reproduce their original bytes.
 
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
