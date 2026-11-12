@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
+import { STRIPE_CHECKOUT_RETRY_HEADER } from '../../../../shared/contracts.ts';
 import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_API_PATHS as paths } from '../../../../shared/ethereum/api.ts';
 import { ETHEREUM_CHECKOUT_PATHS as checkoutPaths } from '../../../../shared/ethereum/checkout.ts';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.ts';
+import { PRE111K_API_PATHS as pre111kPaths } from '../../../../shared/ethereum/pre111k.ts';
 import { ETHEREUM_REVEAL_PATHS as revealPaths } from '../../../../shared/ethereum/reveal.ts';
 import { ETHEREUM_REVEAL_CATALOG_VERSION, parseEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { buildEthereumRevealRegistration, buildEthereumRevealTransition } from '../../../../scripts/ops/ethereumRevealControl.ts';
@@ -56,7 +58,8 @@ test('native public Ethereum APIs isolate mainnet and Sepolia without enabling C
   const fixturePath = join(directory, 'worker.ts');
   await writeFile(fixturePath, `
 import { handleRequest } from ${JSON.stringify(resolve('cloud/workers/api/src/index.ts'))};
-export { EthereumRevealObject, EthereumRevealVerifierObject, EthereumRevealPublisherObject } from ${JSON.stringify(resolve('cloud/workers/api/src/index.ts'))};
+export { EthereumRevealObject, EthereumRevealVerifierObject, EthereumRevealPublisherObject, EthereumProviderBudgetObject,
+  EthereumPublicReadCacheObject } from ${JSON.stringify(resolve('cloud/workers/api/src/index.ts'))};
 export default {
   fetch(request, env, ctx) {
     const limiter = { limit: async () => ({ success: !request.headers.has('X-Test-Rate-Limited') }) };
@@ -337,6 +340,22 @@ export default {
     assert.equal(provisioning.response.status, 503);
   });
 
+  await t.test('storefront rate limits expose header-only retry guidance for 111k and pre111k reads', async () => {
+    for (const origin of ['https://mons.shop', 'https://www.mons.shop']) {
+      for (const path of [paths.config, paths.stats, paths.inventory, paths.metadata, pre111kPaths.status]) {
+        const search = path === pre111kPaths.status ? 'network=mainnet' : query(SCOPES[0]);
+        const limited = await request(`${path}?${search}`, { origin, headers: { 'X-Test-Rate-Limited': '1' } });
+        assert.equal(limited.response.status, 429, `${path}: ${JSON.stringify(limited.value)}`);
+        assert.equal(limited.response.headers.get('Access-Control-Allow-Origin'), origin);
+        assert.equal(limited.response.headers.get('Retry-After'), '60');
+        assert.equal(limited.value.error.details?.retryAfterMs, undefined);
+        const exposed = limited.response.headers.get('Access-Control-Expose-Headers')?.toLowerCase().split(/\s*,\s*/) ?? [];
+        assert.ok(exposed.includes('retry-after'), `${path} ${origin}`);
+        assert.ok(exposed.includes(STRIPE_CHECKOUT_RETRY_HEADER.toLowerCase()), `${path} ${origin}`);
+      }
+    }
+  });
+
   await t.test('public preflights, errors and rate limits expose only the intended partner surface', async () => {
     for (const origin of ORIGINS) {
       for (const path of [...publicGets, ...publicPosts]) {
@@ -366,7 +385,7 @@ export default {
       assert.equal(missingCsrf.response.status, 403);
       failProvider = true;
       try {
-        const failure = await request(`${paths.stats}?${query(SCOPES[0])}`, { origin });
+        const failure = await request(`${paths.stats}?${query(SCOPES[0])}&owner=0x${'66'.repeat(20)}`, { origin });
         assert.equal(failure.response.status, 503);
         assert.equal(failure.response.headers.get('Access-Control-Allow-Origin'), origin);
       } finally { failProvider = false; }

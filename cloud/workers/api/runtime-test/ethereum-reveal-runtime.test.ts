@@ -68,7 +68,12 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
   const dispatcher = new undici.Agent({ factory: (origin: string, options: object) =>
     new undici.Pool(origin, { ...options, connections: 64 }) });
   undici.setGlobalDispatcher(dispatcher);
-  context.after(async () => { undici.setGlobalDispatcher(previousDispatcher); await dispatcher.close(); });
+  context.after(async () => {
+    releaseReceipt.resolve();
+    undici.setGlobalDispatcher(previousDispatcher);
+    if (context.signal.aborted) await dispatcher.destroy();
+    else await dispatcher.close();
+  });
   let runningRpc = 0, maximumRpc = 0;
   const rpc = createServer(async (request, response) => {
     const started = performance.now();

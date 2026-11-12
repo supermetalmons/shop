@@ -3,6 +3,10 @@ import { monsApiOrigin } from '../lib/monsApiOrigin';
 
 export type EthereumRequestOptions = { body?: unknown; session?: EthereumSession | null; signal?: AbortSignal; preserveTraitNumbers?: boolean };
 
+export class EthereumNetworkError extends Error {
+  constructor(cause: TypeError) { super(cause.message, { cause }); this.name = 'EthereumNetworkError'; }
+}
+
 function parseItemJson(text: string): unknown {
   // A "value" key may itself contain a Unicode escape.
   if (!/"value"\s*:\s*-?\d|\\u/.test(text)) return JSON.parse(text);
@@ -40,7 +44,8 @@ function parseItemJson(text: string): unknown {
 
 export async function requestEthereumJson(path: string, options: EthereumRequestOptions): Promise<{ response: Response; value: unknown }> {
   const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
-  const response = await fetch(`${monsApiOrigin()}${path}`, {
+  let response: Response;
+  try { response = await fetch(`${monsApiOrigin()}${path}`, {
     method: options.body === undefined ? 'GET' : 'POST',
     headers: {
       Accept: 'application/json',
@@ -49,7 +54,16 @@ export async function requestEthereumJson(path: string, options: EthereumRequest
     },
     ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     cache: 'no-store', signal,
-  });
-  const value: unknown = options.preserveTraitNumbers && response.ok ? parseItemJson(await response.text()) : await response.json();
+  }); } catch (error) {
+    signal.throwIfAborted();
+    throw error instanceof TypeError ? new EthereumNetworkError(error) : error;
+  }
+  let value: unknown;
+  try { value = options.preserveTraitNumbers && response.ok ? parseItemJson(await response.text()) : await response.json(); }
+  catch (error) {
+    signal.throwIfAborted();
+    if (response.ok) throw error instanceof TypeError ? new EthereumNetworkError(error) : error;
+    value = null;
+  }
   return { response, value };
 }

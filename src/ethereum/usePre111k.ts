@@ -5,6 +5,7 @@ import { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { checkedPre111kReservation, pre111kApi, Pre111kPriceChanged } from './pre111kApi';
 import { ethereumOperation, ethereumWalletError } from './wallet';
 import { EthereumApiError } from './api';
+import { ethereumReadCanRefetch, ethereumReadRefetchInterval, ethereumReadRetry, ethereumReadRetryOptions, runEthereumRead } from './readRetry';
 
 type Attempt = {
   scope: string;
@@ -26,10 +27,12 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
   const queryKey = ['pre111k', network, wallet.address] as const;
   const approved = Boolean(accessCode);
   const previouslyApproved = useRef(approved);
-  const statusQuery = useQuery({ queryKey, queryFn: ({ signal }) => pre111kApi.status(network, wallet.address, signal),
-    refetchInterval: approved ? wallet.address ? 3_000 : 10_000 : false,
-    refetchOnWindowFocus: approved, refetchOnReconnect: approved,
-    staleTime: 5_000, retry: approved ? 1 : false });
+  const statusQuery = useQuery({ queryKey, queryFn: context => runEthereumRead(context, signal => pre111kApi.status(network, wallet.address, signal)),
+    ...ethereumReadRetryOptions,
+    refetchInterval: query => approved ? ethereumReadRefetchInterval(query, wallet.address ? 3_000 : 10_000) : false,
+    refetchOnWindowFocus: query => approved && ethereumReadCanRefetch(query),
+    refetchOnReconnect: query => approved && ethereumReadCanRefetch(query),
+    staleTime: 5_000, retry: (failures, error) => approved && ethereumReadRetry(failures, error) });
   const status = statusQuery.data;
   const config = status?.config;
   const scope = config?.contractAddress && wallet.address ? `${config.chainId}:${config.contractAddress}:${wallet.address}` : null;
@@ -112,7 +115,8 @@ export function usePre111k(network: Pre111kNetwork, accessCode: string | null, o
         if (!isCurrent()) throw new Error('Your reservation request changed. Please try again.');
       };
       const signal = AbortSignal.any([current.controller.signal, operation.signal]);
-      const fresh = await pre111kApi.status(network, savedWallet, signal);
+      const fresh = await runEthereumRead({ client: queryClient, queryKey, signal },
+        readSignal => pre111kApi.status(network, savedWallet, readSignal));
       assertCurrent();
       if (!fresh.config.enabled || fresh.config.contractAddress !== config.contractAddress || fresh.config.chainId !== config.chainId ||
         fresh.reservedRelics === null || fresh.remainingRelics === null) {

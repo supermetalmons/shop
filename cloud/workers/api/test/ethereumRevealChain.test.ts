@@ -88,6 +88,95 @@ test('reveal verifies canonical inclusion and every mint and burn at one confirm
   assert.deepEqual(result.observation, { transactionHash: HASH, blockNumber: 500, blockHash: BLOCK_HASH });
   assert.deepEqual(result.crates, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }]);
   assert.ok(state.urls.every(url => url === 'https://eth-sepolia.g.alchemy.com/v2/test-only'));
+  assert.deepEqual(state.calls.map(call => call.method).sort(), [
+    'eth_blockNumber', 'eth_chainId', 'eth_getBlockByNumber', 'eth_getTransactionReceipt',
+  ]);
+});
+
+const failoverEnv = { ...ENV, QUICKNODE_ETHEREUM_MAINNET_ENABLED: 'true',
+  QUICKNODE_ETHEREUM_MAINNET_RPC_URL: 'https://reveal-test.quiknode.pro/test-only/' };
+
+test('a fast active mainnet reveal keeps its four-call path without starting a hedge', async () => {
+  const { state, providerFetch } = fixture();
+  state.chain = 1;
+  const result = await inspectRevealTransaction(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, HASH, signal(), providerFetch,
+    undefined, { active: true });
+  assert.equal(result.status, 'confirmed');
+  assert.equal(state.calls.length, 4);
+  assert.ok(state.urls.every(url => url.startsWith('https://eth-mainnet.g.alchemy.com/')));
+});
+
+test('receipt failover restarts verification on one provider without mixing observations', async () => {
+  const primary = fixture(), secondary = fixture();
+  primary.state.chain = secondary.state.chain = 1;
+  secondary.state.head = 501;
+  secondary.state.canonical = OTHER_BLOCK_HASH;
+  secondary.state.receipt = { ...secondary.state.receipt, blockNumber: '0x1f5', blockHash: OTHER_BLOCK_HASH,
+    logs: crateLogs().map(log => ({ ...log, blockNumber: '0x1f5', blockHash: OTHER_BLOCK_HASH })) };
+  const providerFetch: typeof fetch = async (input, init) => {
+    if (String(input).includes('.quiknode.pro/')) return secondary.providerFetch(input, init);
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'eth_blockNumber') return new Response('unavailable', { status: 503 });
+    return primary.providerFetch(input, init);
+  };
+  const result = await inspectRevealTransaction(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, HASH, signal(), providerFetch);
+  assert.equal(result.status, 'confirmed');
+  if (result.status !== 'confirmed') assert.fail();
+  assert.deepEqual(result.observation, { transactionHash: HASH, blockNumber: 501, blockHash: OTHER_BLOCK_HASH });
+  assert.equal(secondary.state.calls.length, 4);
+  assert.ok(secondary.state.calls.some(call => call.method === 'eth_getBlockByNumber' && call.params[0] === '0x1f5'));
+});
+
+test('an active slow receipt can hedge, and cancelling the loser prevents late disclosure', async () => {
+  const secondary = fixture();
+  secondary.state.chain = 1;
+  let aborted = false;
+  let primaryCalls = 0;
+  const providerFetch: typeof fetch = async (input, init) => {
+    if (String(input).includes('.quiknode.pro/')) return secondary.providerFetch(input, init);
+    primaryCalls++;
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'eth_chainId') return Response.json({ jsonrpc: '2.0', id: 1, result: '0x1' });
+    return new Promise<Response>((_resolve, reject) => {
+      const cancel = () => { aborted = true; reject(init?.signal?.reason); };
+      if (init?.signal?.aborted) cancel();
+      else init?.signal?.addEventListener('abort', cancel, { once: true });
+    });
+  };
+  const result = await inspectRevealTransaction(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, HASH, signal(), providerFetch,
+    undefined, { active: true });
+  assert.equal(result.status, 'confirmed');
+  assert.equal(secondary.state.calls.length, 4);
+  assert.equal(primaryCalls, 2);
+  assert.equal(aborted, true);
+});
+
+test('malformed canonical evidence does not trigger provider shopping', async () => {
+  const { state, providerFetch } = fixture();
+  state.chain = 1;
+  state.receipt = { ...state.receipt, logs: crateLogs().slice(1) };
+  await assert.rejects(inspectRevealTransaction(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, HASH, signal(), providerFetch,
+    undefined, { active: true }));
+  assert.ok(state.urls.every(url => url.startsWith('https://eth-mainnet.g.alchemy.com/')));
+});
+
+test('token recovery failover rereads a canonical snapshot on the selected provider', async () => {
+  const primary = fixture(), secondary = fixture();
+  primary.state.chain = secondary.state.chain = 1;
+  primary.state.logError = { code: 429, message: 'Too many requests' };
+  secondary.state.head = 501;
+  secondary.state.canonical = OTHER_BLOCK_HASH;
+  secondary.state.logs = [{ ...log([ETHEREUM_EVENT_TOPICS.Transfer, address(ZERO), address(WALLET), word(1)]),
+    blockNumber: '0x1f5', blockHash: OTHER_BLOCK_HASH }];
+  const providerFetch: typeof fetch = (input, init) => String(input).includes('.quiknode.pro/')
+    ? secondary.providerFetch(input, init) : primary.providerFetch(input, init);
+  const result = await recoverRevealTokens(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, ['1'],
+    { fromBlock: 100 }, signal(), providerFetch);
+  assert.deepEqual(result.observedBlock, { number: 501, hash: OTHER_BLOCK_HASH });
+  assert.deepEqual(result.provenance, [{ transactionHash: HASH, blockNumber: 501,
+    blockHash: OTHER_BLOCK_HASH, tokenIds: ['1'] }]);
+  assert.deepEqual(secondary.state.calls.find(call => call.method === 'eth_call')!.params[1],
+    { blockHash: OTHER_BLOCK_HASH, requireCanonical: true });
 });
 
 test('empty pool chain proof requires canonical mainnet, closed sale and zero artworks while allowing relic supply', async () => {
@@ -374,6 +463,64 @@ test('recovery persists split work for provider range limits and retries service
   state.logError = { code: -32005, message: 'Rate limit exceeded.' };
   await assert.rejects(recoverRevealTokens(ENV, DEPLOYMENT, ['1'], { fromBlock: 100 }, signal(), providerFetch),
     error => error instanceof EthereumRevealThrottleError);
+});
+
+for (const [kind, recover, ids] of [
+  ['token', recoverRevealTokens, ['1']],
+  ['crate', recoverRevealCrates, ['111112']],
+] as const) {
+  for (const responseKind of ['plural RPC range limit', 'plain HTTP 413'] as const) {
+    test(`${kind} recovery splits QuickNode ${responseKind} after primary failure`, async () => {
+      const { state, providerFetch } = fixture();
+      state.chain = 1;
+      state.head = 20_000;
+      state.logError = { code: -32602, message: 'eth_getLogs and eth_newFilter are limited to a 10,000 blocks range' };
+      let primaryCalls = 0;
+      const logRanges: Array<{ fromBlock: string; toBlock: string }> = [];
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        if (!String(input).includes('.quiknode.pro/')) {
+          primaryCalls++;
+          return new Response('', { status: 503 });
+        }
+        const { method, params } = JSON.parse(String(init?.body));
+        if (method === 'eth_getLogs') {
+          logRanges.push({ fromBlock: params[0].fromBlock, toBlock: params[0].toBlock });
+          if (responseKind === 'plain HTTP 413') return new Response('Request Entity Too Large', { status: 413 });
+        }
+        return providerFetch(input, init);
+      };
+      const result = await recover(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, [...ids], { fromBlock: 100 }, signal(), fetch);
+      assert.equal(primaryCalls, 1);
+      assert.deepEqual(logRanges, [{ fromBlock: '0x64', toBlock: '0x4e20' }]);
+      assert.equal(result.scannedRange, null);
+      assert.deepEqual(result.remainingRanges, [{ fromBlock: 10_051, toBlock: 20_000 }, { fromBlock: 100, toBlock: 10_050 }]);
+      assert.equal(state.calls.filter(call => call.method === 'eth_getBlockByNumber').length, 2);
+    });
+  }
+
+  test(`${kind} recovery does not split QuickNode invalid-params errors after primary failure`, async () => {
+    const { state, providerFetch } = fixture();
+    state.chain = 1;
+    state.logError = { code: -32602, message: 'Invalid params' };
+    await assert.rejects(recover(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, [...ids], { fromBlock: 100 }, signal(),
+      async (input, init) => String(input).includes('.quiknode.pro/') ? providerFetch(input, init) : new Response('', { status: 503 })),
+    /verification is temporarily unavailable/);
+    assert.equal(state.calls.filter(call => call.method === 'eth_getLogs').length, 1);
+  });
+}
+
+test('token recovery does not turn a QuickNode contract revert into split range work', async () => {
+  const { state, providerFetch } = fixture();
+  state.chain = 1;
+  await assert.rejects(recoverRevealTokens(failoverEnv, { ...DEPLOYMENT, chainId: 1 }, ['1'], { fromBlock: 100 }, signal(),
+    async (input, init) => {
+      if (!String(input).includes('.quiknode.pro/')) return new Response('', { status: 503 });
+      const { id, method } = JSON.parse(String(init?.body));
+      if (method === 'eth_call') return Response.json({ jsonrpc: '2.0', id,
+        error: { code: 3, message: 'execution reverted: blocks range limit exceeded' } });
+      return providerFetch(input, init);
+    }), /verification is temporarily unavailable/);
+  assert.equal(state.calls.filter(call => call.method === 'eth_getLogs').length, 0);
 });
 
 test('recovery rejects wrong token, contract, range, duplicate, and noncanonical evidence', async () => {

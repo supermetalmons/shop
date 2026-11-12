@@ -74,6 +74,8 @@ Treat the three flags separately. A closed sale can have working public reads an
 
 Stats includes `owner`, `saleActive`, `allocatedCrates`, `warehousesMinted`, `artworksMinted`, `relicsAllocated`, `relicsMinted`, `publicRelicsMinted`, `remainingCrates`, `remainingWarehouses`, and `remainingRelics`. Reserved relics already consume crate allocation; wallet allowances are not themselves minted tokens.
 
+With provider controls deployed, config and anonymous stats share an onchain snapshot for up to two seconds; wallet stats use at most one second. Failed or expired reads are not served as successful cached results. Registry readiness remains independently checked, and the contract remains authoritative when submitting a transaction.
+
 Prices are decimal wei strings: `cratePriceWei`, `warehousePriceWei`, and `discountCratePriceWei`. Discount fields are `discountMerkleRoot`, `discountAllowance`, `discountUsed`, and, on the current mainnet contract, `maxDiscountedMints` and `totalDiscountedMints`. Pass `owner` for wallet-specific usage. The usable discount quantity is limited by both the remaining wallet allowance and the remaining global cap.
 
 Discount proofs are distributed as a static [mainnet JSON file](../../src/ethereum/discounts/111k-mainnet.json), not a proof API endpoint. It includes `chainId`, `contractAddress`, `root`, and `proofs`, whose keys are lowercased wallet addresses. Require its identity and root to match the chosen collection and the live stats response before using a proof. A missing wallet key means the file has no proof for that wallet. A root mismatch means the file is stale or for another collection; obtain the current file from Mons. Do not substitute the Sepolia `111k.json` dataset.

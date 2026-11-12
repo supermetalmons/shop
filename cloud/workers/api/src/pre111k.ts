@@ -16,13 +16,15 @@ import {
 } from './ethereumRuntime.js';
 import { jsonResponse } from './httpResponse.js';
 import { matchesSha256Hex, sha256Hex } from './sessionSecrets.js';
+import { ethereumProviderApiError, RpcProviderError, type EthereumProviderEnvironment } from './ethereumProvider.js';
+import { ProviderBudgetUnavailable } from './ethereumProviderBudget.js';
 
 export type Pre111kEnvironment = Pick<Env,
   'ALCHEMY_MI_NOTE_API_KEY' | 'ETHEREUM_111K_RPC_URL' | 'PUBLIC_SHOP_RATE_LIMITER' | 'PREORDER_PREPARE_RATE_LIMITER' | 'PREORDER_PREPARE_IP_RATE_LIMITER' |
   'ETHEREUM_PRE111K_MAINNET_CONTRACT_ADDRESS' | 'ETHEREUM_PRE111K_MAINNET_DEPLOYMENT_BLOCK' | 'ETHEREUM_PRE111K_MAINNET_ENABLED' |
   'ETHEREUM_PRE111K_MAINNET_PRICE_WEI' | 'ETHEREUM_PRE111K_SEPOLIA_PRICE_WEI' |
   'ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS' | 'ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK' | 'ETHEREUM_PRE111K_SEPOLIA_ENABLED'
-> & Partial<Pick<Env, 'ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET' | 'ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET' | 'ETHEREUM_PRE111K_ACCESS_CODES'>>;
+> & EthereumProviderEnvironment & Partial<Pick<Env, 'ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET' | 'ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET' | 'ETHEREUM_PRE111K_ACCESS_CODES'>>;
 
 type DeploymentContext = EthereumReadContext & { config: Pre111kDeployment };
 type Context = DeploymentContext & { env: Pre111kEnvironment; config: Pre111kConfig; nowMs: number };
@@ -270,6 +272,7 @@ export async function handlePre111kRequest(request: Request, env: Pre111kEnviron
     return jsonResponse(result, 200, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     if (request.signal.aborted) throw request.signal.reason;
+    if (error instanceof RpcProviderError || error instanceof ProviderBudgetUnavailable) return ethereumErrorResponse(ethereumProviderApiError(error));
     if (!(error instanceof EthereumApiError)) console.error({ event: 'pre111k_request_failed', path,
       errorName: error instanceof Error ? error.name : 'UnknownError' });
     return ethereumErrorResponse(error);

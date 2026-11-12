@@ -60,7 +60,7 @@ function profileCorsHeaders(origin: string, allowMethods = PROFILE_CORS_ALLOW_ME
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': allowMethods,
     'Access-Control-Allow-Headers': `${PROFILE_CORS_ALLOW_HEADERS}${extraHeader ? `, ${extraHeader}` : ''}`,
-    'Access-Control-Expose-Headers': STRIPE_CHECKOUT_RETRY_HEADER,
+    'Access-Control-Expose-Headers': `${STRIPE_CHECKOUT_RETRY_HEADER}, Retry-After`,
     'Access-Control-Max-Age': '86400',
     'Timing-Allow-Origin': origin,
     Vary: 'Origin',

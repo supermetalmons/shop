@@ -46,6 +46,8 @@ export { EthereumRevealObject } from './ethereumRevealObject.js';
 export { EthereumRevealVerifierObject } from './ethereumRevealVerifierObject.js';
 export { EthereumRevealPublisherObject } from './ethereumRevealPublisherObject.js';
 export { EthereumRevealMaintenance } from './ethereumRevealMaintenance.js';
+export { EthereumProviderBudgetObject } from './ethereumProviderBudgetObject.js';
+export { EthereumPublicReadCacheObject } from './ethereumPublicReadCacheObject.js';
 
 type RequestExecution = {
   defer: DeferredWork;

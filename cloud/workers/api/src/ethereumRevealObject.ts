@@ -4,11 +4,14 @@ import { REVEAL_ENRICHMENT_VERSION, type EthereumRevealResult, type EthereumReve
 import { readEthereumRevealDeployment,
   type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumApiError } from './ethereumError.js';
-import { EthereumRevealThrottleError, recoverRevealTokens, recoverRevealCrates, verifyRevealDeployment } from './ethereumRevealChain.js';
+import { EthereumRevealThrottleError, recoverRevealTokens, recoverRevealCrates, verifyRevealDeployment, type RevealPresenceBudget } from './ethereumRevealChain.js';
 import { validateRevealCatalog, isSupportedRevealDeployment } from './ethereumRevealCatalog.js';
 import { EthereumRevealStore, type RevealReceiptClaim, type RevealScanClaim, type RevealPublicationJob,
   type RevealPublicationResult } from './ethereumRevealStore.js';
-import type { RevealVerificationResult, RevealVerificationScope, RevealVerificationWork } from './ethereumRevealVerification.js';
+import { retryRevealProviderBudget, type RevealPermitRequest, type RevealProviderPermit, type RevealWorkAuthorization,
+  type RevealVerificationResult, type RevealVerificationScope, type RevealVerificationWork } from './ethereumRevealVerification.js';
+import { ethereumProviderBudget, waitForProvider } from './ethereumProvider.js';
+import { PROVIDER_BUDGETS, type ProviderBudgetClient, type ProviderName } from './ethereumProviderBudget.js';
 import type { PreparedAttributes, RevealPublicationOutcome } from './ethereumRevealPublisherObject.js';
 import { attributePublisherName } from './ethereumRevealAttributes.js';
 import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum, REVEAL_ENRICHMENT_SLOTS, type RevealEnrichmentClaim, type RevealEnrichmentOutcome } from './ethereumRevealEnrichmentStore.js';
@@ -49,6 +52,10 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private alarmUpdate: Promise<void> | null = null;
   private alarmPending: Promise<void> | null = null;
   private lastHealthReportMs = 0;
+  private providerBudgetClient: ProviderBudgetClient | null = null;
+  private readonly providerPermits = new Map<string, { expiresAtMs: number; cancellation: AbortController;
+    promise: Promise<RevealProviderPermit | undefined> }>();
+  private readonly cancelledProviderPermits = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -57,6 +64,10 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private get store(): EthereumRevealStore {
     if (!this.configuredStore) throw unavailable();
     return this.configuredStore;
+  }
+
+  private providerBudget(chainId: number): ProviderBudgetClient {
+    return this.providerBudgetClient ??= ethereumProviderBudget(this.env, chainId);
   }
 
   private transaction<T>(action: () => T): T {
@@ -338,14 +349,99 @@ export class EthereumRevealObject extends DurableObject<Env> {
     return work.kind === 'receipt' ? this.store.recordReceiptPresence(work.claim, Date.now()) : this.store.validOverflow(work.claim, Date.now());
   }
 
+  private async receiptPermit(scope: RevealVerificationScope, work: RevealVerificationWork, deadlineMs: number,
+    permitId: string, provider: ProviderName, minimum: number, wanted: number, wait = false): Promise<RevealProviderPermit | undefined> {
+    if (scope.chainId === 31337 || this.env.ETHEREUM_PROVIDER_CONTROL_ENABLED !== 'true') return;
+    if (typeof permitId !== 'string' || !/^[0-9a-f-]{36}$/.test(permitId)) throw new Error('Invalid reveal provider request.');
+    const deadline = Math.min(deadlineMs, work.claim.leaseUntilMs);
+    if (!Number.isSafeInteger(deadline) || deadline <= Date.now()) return;
+    for (const [key, value] of this.providerPermits) if (value.expiresAtMs <= Date.now()) this.providerPermits.delete(key);
+    for (const [key, expiresAtMs] of this.cancelledProviderPermits) if (expiresAtMs <= Date.now()) this.cancelledProviderPermits.delete(key);
+    if (this.cancelledProviderPermits.has(`${work.claim.claimId}:${permitId}`)) return;
+    const key = `${work.claim.claimId}:${permitId}:${provider}:${minimum}:${wanted}`;
+    const existing = this.providerPermits.get(key);
+    if (existing) return existing.promise;
+    const lane = work.claim.active ? 'reveal' : 'background';
+    const budget = this.providerBudget(scope.chainId);
+    if (!wait && budget.available(provider, lane) < minimum) return;
+    const entry = { expiresAtMs: deadline, cancellation: new AbortController(),
+      promise: Promise.resolve<RevealProviderPermit | undefined>(undefined) };
+    entry.promise = (async () => {
+      const timeout = createTimedAbortScope(entry.cancellation.signal, { timeoutMs: Math.max(1, deadline - Date.now()),
+        timeoutMessage: 'Reveal provider authorization timed out.' });
+      try {
+        const grant = wait
+          ? await retryRevealProviderBudget(() => budget.grant(provider, lane, minimum, wanted, timeout.signal), timeout.signal)
+          : await budget.grant(provider, lane, minimum, wanted, timeout.signal);
+        entry.expiresAtMs = Math.min(deadline, grant.expiresAtMs);
+        if (this.retiring || timeout.signal.aborted || entry.expiresAtMs <= Date.now() || this.rebuildFence.status() ||
+          !(work.kind === 'receipt' ? this.store.validReceiptClaim(work.claim, Date.now()) : this.store.validOverflow(work.claim, Date.now()))) return;
+        return { provider, lane, grant };
+      } catch { return undefined; }
+      finally { timeout.dispose(); }
+    })();
+    this.providerPermits.set(key, entry);
+    return entry.promise;
+  }
+
+  async requestReceiptPermit(scope: RevealVerificationScope, work: RevealVerificationWork,
+    deadlineMs: number, request: RevealPermitRequest): Promise<RevealWorkAuthorization> {
+    if (!['alchemy', 'quicknode'].includes(request.provider) || !Number.isSafeInteger(request.minimum) ||
+      !Number.isSafeInteger(request.wanted) || request.minimum < 1 || request.wanted < request.minimum ||
+      request.wanted > PROVIDER_BUDGETS[request.provider].maxGrant) throw new Error('Invalid reveal provider request.');
+    if (!await this.validateReceiptWork(scope, work)) return { valid: false };
+    const permit = await this.receiptPermit(scope, work, deadlineMs, request.requestId, request.provider,
+      request.minimum, request.wanted, true);
+    return { valid: !!permit, ...(permit && { permit }) };
+  }
+
+  async cancelReceiptPermit(scope: RevealVerificationScope, work: RevealVerificationWork, requestId: string): Promise<void> {
+    if (!this.ctx.id.equals(this.env.ETHEREUM_REVEAL.idFromName(`${scope.chainId}:${scope.contractAddress}`))) return;
+    const prefix = `${work.claim.claimId}:${requestId}`;
+    this.cancelledProviderPermits.set(prefix, work.claim.leaseUntilMs);
+    const pending: Array<Promise<unknown>> = [];
+    for (const [key, entry] of this.providerPermits) if (key.startsWith(`${prefix}:`)) {
+      entry.cancellation.abort(new Error('Reveal permit request cancelled.'));
+      pending.push(entry.promise);
+    }
+    await Promise.allSettled(pending);
+  }
+
+  async reportReceiptThrottle(scope: RevealVerificationScope, provider: ProviderName, retryAfterMs: number): Promise<void> {
+    if (!this.ctx.id.equals(this.env.ETHEREUM_REVEAL.idFromName(`${scope.chainId}:${scope.contractAddress}`))) return;
+    await this.providerBudget(scope.chainId).reportThrottle(provider, retryAfterMs);
+  }
+
+  async recordReceiptPresenceWithBudget(scope: RevealVerificationScope, work: RevealVerificationWork,
+    deadlineMs: number, permitId: string, budget?: RevealPresenceBudget): Promise<RevealWorkAuthorization> {
+    if (!await this.recordReceiptPresence(scope, work)) return { valid: false };
+    if (!budget || budget.provider === 'local') return { valid: true };
+    if (budget.provider === 'alchemy' ? ![30, 66].includes(budget.cost) : ![2, 3].includes(budget.cost)) {
+      throw new Error('Invalid reveal provider authorization.');
+    }
+    const permit = await this.receiptPermit(scope, work, deadlineMs, permitId, budget.provider, budget.cost, budget.cost);
+    return { valid: true, ...(permit && { permit }) };
+  }
+
   private async inspect(deployment: EthereumRevealDeployment, work: RevealVerificationWork, deadlineMs: number): Promise<RevealVerificationResult> {
     if (Date.now() >= deadlineMs) return { kind: 'failed' };
     const scope = { chainId: deployment.chainId, contractAddress: deployment.contractAddress, deploymentBlock: deployment.deploymentBlock };
+    const delegated: RevealVerificationWork = { kind: work.kind, claim: work.claim,
+      ...(scope.chainId !== 31337 && this.env.ETHEREUM_PROVIDER_CONTROL_ENABLED === 'true' ? { providerBudgetProtocol: 1 } : {}) };
+    const verifier = this.env.ETHEREUM_REVEAL_VERIFIER.getByName(`${scope.chainId}:${scope.contractAddress}:${work.claim.hash}`);
     const timeout = createTimedAbortScope(undefined, { timeoutMs: Math.max(1, deadlineMs - Date.now()),
       timeoutMessage: 'Reveal verification timed out.' });
-    try {
-      return await raceWithSignal<RevealVerificationResult>(this.env.ETHEREUM_REVEAL_VERIFIER
-        .getByName(`${scope.chainId}:${scope.contractAddress}:${work.claim.hash}`).inspect(scope, work, deadlineMs), timeout.signal);
+    try { return await raceWithSignal<RevealVerificationResult>(verifier.inspect(scope, delegated, deadlineMs), timeout.signal); }
+    catch (error) {
+      const cancellation = createTimedAbortScope(undefined, { timeoutMs: 250,
+        timeoutMessage: 'Reveal cancellation acknowledgment timed out.' });
+      try { await raceWithSignal(verifier.cancelInspection(scope, delegated), cancellation.signal); }
+      catch {
+        console.error({ event: 'ethereum_reveal_cancellation_unconfirmed', deploymentId: deployment.deploymentId,
+          transactionHash: work.claim.hash, kind: work.kind });
+        if (!timeout.signal.aborted) await waitForProvider(Math.max(1, deadlineMs - Date.now()), timeout.signal).catch(() => undefined);
+      } finally { cancellation.dispose(); }
+      throw error;
     } finally { timeout.dispose(); }
   }
 
@@ -392,12 +488,14 @@ export class EthereumRevealObject extends DurableObject<Env> {
     const signal = AbortSignal.timeout(45_000);
     try {
       if (claim.kind === 'crate') {
-        const result = await recoverRevealCrates(this.env, deployment, claim.crateTokenIds, claim.range, signal);
+        const result = await retryRevealProviderBudget(() => recoverRevealCrates(this.env, deployment, claim.crateTokenIds,
+          claim.range, signal, fetch, { active: claim.active, budgetClient: this.providerBudget(deployment.chainId) }), signal);
         signal.throwIfAborted();
         if (!await this.canContinue(deployment)) return;
         this.store.completeCrateScan(claim, result, Date.now());
       } else {
-        const result = await recoverRevealTokens(this.env, deployment, claim.tokenIds, claim.range, signal);
+        const result = await retryRevealProviderBudget(() => recoverRevealTokens(this.env, deployment, claim.tokenIds,
+          claim.range, signal, fetch, { active: claim.active, budgetClient: this.providerBudget(deployment.chainId) }), signal);
         signal.throwIfAborted();
         if (!await this.canContinue(deployment)) return;
         this.store.completeTokenScan(claim, result, Date.now());

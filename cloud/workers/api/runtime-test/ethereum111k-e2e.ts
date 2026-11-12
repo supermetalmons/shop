@@ -423,7 +423,8 @@ try {
     const confirmedReads = rpcCalls.filter(request => request.method === 'eth_call');
     batching.confirm311ContractCalls = confirmedReads.length;
     assert.equal(batching.confirm311ContractCalls, Math.ceil(311 / 150));
-    assert.ok(confirmedReads.every(request => request.params[1] === batch.blockHash), 'Every confirmation read must target the exact inclusion block hash');
+    assert.ok(confirmedReads.every(request => JSON.stringify(request.params[1]) === JSON.stringify({ blockHash: batch.blockHash, requireCanonical: true })),
+      'Every confirmation read must require the exact canonical inclusion block hash');
     assert.ok(envelopes.every(length => length <= 4));
     const observed = new Set<string>();
     for (let offset = 0; offset < mintedIds.length; offset += 100) {

@@ -646,7 +646,7 @@ for (const submitWithArrow of [false, true]) {
     await act(async () => verification.resolve({ ok: true }));
     await view.ready();
     view.getByRole('link', { name: 'Go to mons.shop home' });
-    assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
+    assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true);
     assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
     assert.equal(view.container.querySelector('.relic-page__content')!.hasAttribute('inert'), false);
     assert.equal(document.activeElement, reservation);
@@ -733,7 +733,7 @@ test('saved approval restores immediately while background verification is pendi
   const verification = deferred<{ ok: true }>();
   verifyImpl = () => verification.promise;
   const view = page();
-  assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
+  assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true);
   view.getByRole('region', { name: 'Reserve a relic' });
   await view.ready();
   assert.deepEqual(verifiedCodes, [ACCESS_CODE]);
@@ -760,7 +760,7 @@ test('a background service failure preserves saved approval while reservation pr
   const view = page();
   await view.ready();
   assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
-  assert.equal(view.queryByRole('textbox', { name: 'Secret code' }), null);
+  assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true);
   view.reserve();
   await waitFor(() => assert.equal(sendCount, 1));
   assert.deepEqual(preparedCodes, [ACCESS_CODE]);
@@ -886,11 +886,110 @@ test('locked pages preload status once, then poll only while the gate is open', 
   assert.equal(requests, 3);
 });
 
+test('approved reservation status retries twice before permitting one preparation and wallet send', async t => {
+  t.mock.method(Math, 'random', () => 0.5);
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+    schedule(callback, delay === 1_125 || delay === 2_125 ? 1 : delay, ...args));
+  let walletReads = 0;
+  statusImpl = async (network, wallet) => {
+    if (wallet === OWNER && ++walletReads < 3) throw new EthereumApiError(503, 'Busy', 'unavailable');
+    return status(network, wallet);
+  };
+  const view = page();
+  await view.ready();
+  assert.equal(walletReads, 3);
+  assert.equal(sendCount, 0);
+  assert.deepEqual(preparedCodes, []);
+  view.reserve();
+  await waitFor(() => assert.equal(sendCount, 1));
+  assert.deepEqual(preparedCodes, [ACCESS_CODE]);
+});
+
+test('reservation preflight respects the status cooldown and requires a fresh click after recovery', async t => {
+  const view = page();
+  await view.ready();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const failure = new EthereumApiError(503, 'Busy', 'unavailable', null, 10_000);
+  let requests = 0;
+  statusImpl = async () => { requests++; throw failure; };
+  const queryKey = ['pre111k', 'devnet', OWNER];
+  void view.client.refetchQueries({ queryKey });
+  await waitFor(() => assert.equal(view.client.getQueryState(queryKey)?.fetchFailureReason, failure));
+  assert.equal(view.primary().disabled, false);
+  view.reserve();
+  await waitFor(() => view.getByText('Busy'));
+  assert.equal(requests, 1);
+  assert.equal(sendCount, 0);
+  assert.deepEqual(preparedCodes, []);
+  statusImpl = async (network, wallet) => { requests++; return status(network, wallet); };
+  await act(async () => {
+    t.mock.timers.tick(10_000);
+    await view.client.refetchQueries({ queryKey });
+  });
+  assert.equal(requests, 2);
+  assert.equal(sendCount, 0);
+  assert.deepEqual(preparedCodes, []);
+  view.reserve();
+  await waitFor(() => assert.equal(sendCount, 1));
+  assert.deepEqual(preparedCodes, [ACCESS_CODE]);
+});
+
+test('approved reservation polling and focus respect a long server cooldown', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
+  let busy = true;
+  let requests = 0;
+  statusImpl = async (network, wallet) => {
+    requests++;
+    if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+    return status(network, wallet);
+  };
+  const view = page('devnet', false);
+  await waitFor(() => assert.equal(view.client.getQueryState(['pre111k', 'devnet', null])?.status, 'error'));
+  assert.equal(requests, 1);
+  await act(async () => {
+    t.mock.timers.tick(30_000);
+    focusManager.setFocused(false); focusManager.setFocused(true);
+    onlineManager.setOnline(false); onlineManager.setOnline(true);
+  });
+  assert.equal(requests, 1);
+  busy = false;
+  await act(async () => { t.mock.timers.tick(30_000); });
+  await waitFor(() => assert.equal(view.client.getQueryState(['pre111k', 'devnet', null])?.status, 'success'));
+  assert.equal(requests, 2);
+});
+
+test('opening the gate and retrying preserve the original status cooldown', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
+  window.localStorage.removeItem(ACCESS_KEY);
+  const failure = new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+  let requests = 0;
+  statusImpl = async (network, wallet) => {
+    if (++requests === 1) throw failure;
+    return status(network, wallet);
+  };
+  const view = page('devnet', false);
+  const queryKey = ['pre111k', 'devnet', null];
+  await waitFor(() => assert.equal(view.client.getQueryState(queryKey)?.status, 'error'));
+  const input = view.getByRole('textbox', { name: 'Secret code' });
+  fireEvent.change(input, { target: { value: ACCESS_CODE } });
+  fireEvent.submit(input.closest('form')!);
+  await waitFor(() => assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true));
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Retry' })); });
+  assert.equal(requests, 1);
+  assert.equal(view.client.getQueryState(queryKey)?.error, failure);
+  await act(async () => { t.mock.timers.tick(60_000); });
+  await waitFor(() => assert.equal(view.client.getQueryState(queryKey)?.status, 'success'));
+  assert.equal(requests, 2);
+  assert.equal(sendCount, 0);
+  assert.deepEqual(preparedCodes, []);
+});
+
 test('a failed locked prefetch does not retry until the gate opens', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
   window.localStorage.removeItem(ACCESS_KEY);
   let requests = 0;
-  statusImpl = async () => { requests++; throw new Error('Temporarily unavailable'); };
+  statusImpl = async () => { requests++; throw new EthereumApiError(503, 'Temporarily unavailable', 'unavailable'); };
   const view = page('devnet', false);
   await act(async () => {});
   assert.equal(requests, 1);

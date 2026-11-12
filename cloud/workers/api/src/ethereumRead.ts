@@ -15,10 +15,13 @@ import { EthereumApiError } from './ethereumError.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import { ethereumCatalogSnapshot, requireEthereumCatalogSnapshot } from './ethereumCatalogRevision.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
+import { cachedAlchemyOwnerIds, cachedEthereumCollectionStats, type EthereumOwnerIds } from './ethereumPublicReadCache.js';
+import { fetchAlchemyNft, RpcProviderError } from './ethereumProvider.js';
+import { ProviderBudgetUnavailable } from './ethereumProviderBudget.js';
 import { MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import {
   ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
-  verifyEthereumBlockSnapshot, ethereumRelicInterfaceAvailable, type EthereumContext, type EthereumCollectionReadContext,
+  verifyEthereumBlockSnapshot, ethereumRelicInterfaceAvailable, withEthereumReadProvider, type EthereumContext, type EthereumCollectionReadContext,
 } from './ethereumRuntime.js';
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -176,7 +179,7 @@ async function ethereumInventorySnapshot(context: EthereumCollectionReadContext,
   return { items, catalogRevision: catalog.catalogRevision, deploymentId: catalog.deploymentId };
 }
 
-async function alchemyOwnerIds(context: EthereumCollectionReadContext, wallet: string, cursor: string | null): Promise<{ ids: string[]; nextCursor: string | null }> {
+export async function readAlchemyOwnerIds(context: EthereumCollectionReadContext, wallet: string, cursor: string | null): Promise<EthereumOwnerIds> {
   const key = context.env.ALCHEMY_MI_NOTE_API_KEY?.trim();
   if (!key) throw new EthereumApiError('unavailable', 'Ethereum inventory is unavailable.');
   const host = context.config.chainId === 1 ? 'eth-mainnet' : context.config.chainId === 11155111 ? 'eth-sepolia' : null;
@@ -187,7 +190,8 @@ async function alchemyOwnerIds(context: EthereumCollectionReadContext, wallet: s
   url.searchParams.set('withMetadata', 'false');
   url.searchParams.set('pageSize', String(PAGE_SIZE));
   if (cursor) url.searchParams.set('pageKey', cursor);
-  const response = await context.fetch(url, { signal: context.signal, redirect: 'manual' });
+  const response = await fetchAlchemyNft(context.env, url, {},
+    { signal: context.signal, fetch: context.fetch, budgetClient: context.providerBudgetClient });
   const body = await readBoundedResponseJson(response, { maxBytes: 512 * 1024, contentType: 'require-json', signal: context.signal,
     createError: () => new EthereumApiError('unavailable', 'Ethereum inventory is unavailable.') });
   if (!response.ok || !body || typeof body !== 'object' || !('ownedNfts' in body) || !Array.isArray(body.ownedNfts) || body.ownedNfts.length > PAGE_SIZE) {
@@ -224,6 +228,10 @@ async function localOwnerInfos(context: EthereumCollectionReadContext, wallet: s
 }
 
 export async function ethereumCollectionStats(context: EthereumCollectionReadContext, owner: string | null): Promise<EthereumStats> {
+  return cachedEthereumCollectionStats(context, owner) ?? withEthereumReadProvider(context, selected => readEthereumCollectionStats(selected, owner));
+}
+
+export async function readEthereumCollectionStats(context: EthereumCollectionReadContext, owner: string | null): Promise<EthereumStats> {
   if (!await ethereumRelicInterfaceAvailable(context)) {
     throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
   }
@@ -265,7 +273,11 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
     let enabled = context.config.enabled && await ethereum111kWritesAllowed(context.env.COMMERCE_DB, context.config, context.signal);
     if (enabled) {
       try { enabled = await ethereumRelicInterfaceAvailable(context); }
-      catch { context.signal.throwIfAborted(); enabled = false; }
+      catch (error) {
+        context.signal.throwIfAborted();
+        if (error instanceof ProviderBudgetUnavailable || error instanceof RpcProviderError && error.retryable) throw error;
+        enabled = false;
+      }
     }
     await requireEthereumCatalogSnapshot(context, catalog);
     return { ...context.config, enabled, deploymentId: catalog.deploymentId, catalogRevision: catalog.catalogRevision };
@@ -274,6 +286,9 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
 }
 
 export async function ethereumCollectionRead(request: Request, context: EthereumCollectionReadContext, path: string): Promise<object> {
+  if (path.endsWith('/inventory') && !context.providerAttempt) {
+    return withEthereumReadProvider(context, selected => ethereumCollectionRead(request, selected, path));
+  }
   requireEthereumContract(context);
   const url = new URL(request.url);
   if (path.endsWith('/stats')) {
@@ -315,7 +330,7 @@ export async function ethereumCollectionRead(request: Request, context: Ethereum
     infos = [...new Map([...page, ...owned.filter((info) => recent.has(info.tokenId)), ...recovered].map((info) => [info.tokenId, info])).values()];
     nextCursor = offset + PAGE_SIZE < owned.length ? String(offset + PAGE_SIZE) : null;
   } else {
-    const page = await alchemyOwnerIds(context, wallet, cursor);
+    const page = await (cachedAlchemyOwnerIds(context, wallet, cursor) ?? readAlchemyOwnerIds(context, wallet, cursor));
     infos = await ethereumTokenInfos(context, [...new Set([...page.ids, ...recentIds])], blockReference);
     nextCursor = page.nextCursor;
   }

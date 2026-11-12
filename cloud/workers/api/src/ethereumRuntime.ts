@@ -3,14 +3,17 @@ import type { Ethereum111kConfig } from '../../../../shared/ethereum/api.js';
 import { decodeReturn, encodeCall } from '../../../../shared/ethereum/abi.js';
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_RELICS, ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
 import { EthereumApiError } from './ethereumError.js';
-import { readBoundedResponseJson } from './boundedResponse.js';
 import { rpcInteger } from './ethereumRpcValue.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
+import { createEthereumProviderAttempt, ethereumProviderBudget, withEthereumProvider, type EthereumProviderAttempt, type EthereumProviderEnvironment } from './ethereumProvider.js';
+import type { EthereumPublicReadCacheBinding, EthereumPublicReadCacheScope } from './ethereumPublicReadCache.js';
+import type { ProviderBudgetClient, ProviderLane } from './ethereumProviderBudget.js';
 
 export { rpcInteger } from './ethereumRpcValue.js';
 
 const CONTRACT_READ_BATCH_SIZE = 4;
 const CONTRACT_READ_CONCURRENCY = 2;
+const PUBLIC_READ_PERMIT_QUANTUM = 100;
 
 type EthereumBlockSnapshot = { blockNumber: number; blockHash: string };
 
@@ -22,17 +25,23 @@ export type EthereumEnvironment = Pick<Env,
   'ETHEREUM_111K_RPC_URL' |
   'STAFF_AUTH_CHALLENGE_RATE_LIMITER' | 'STAFF_AUTH_SESSION_RATE_LIMITER' |
   'PUBLIC_SHOP_RATE_LIMITER'
-> & Partial<Pick<Env, 'ETHEREUM_REVEAL' | 'ETHEREUM_REVEAL_READ_RATE_LIMITER' | 'ETHEREUM_REVEAL_ADMISSION_RATE_LIMITER' |
+> & EthereumProviderEnvironment & Partial<Pick<Env, 'ETHEREUM_REVEAL' | 'ETHEREUM_REVEAL_READ_RATE_LIMITER' | 'ETHEREUM_REVEAL_ADMISSION_RATE_LIMITER' |
   'ETHEREUM_111K_DELIVERY_CONFIG_ID' | 'ETHEREUM_111K_REDEMPTION_SIGNING_ENABLED'>> &
-  { ETHEREUM_111K_SIGNER_SECRET?: string };
+  { ETHEREUM_111K_SIGNER_SECRET?: string; ETHEREUM_PUBLIC_READ_CACHE?: EthereumPublicReadCacheBinding;
+    ETHEREUM_PUBLIC_READ_CACHE_ENABLED?: string };
 
 export type EthereumReadContext = {
-  env: Pick<EthereumEnvironment, 'ALCHEMY_MI_NOTE_API_KEY' | 'ETHEREUM_111K_RPC_URL'>;
+  env: Pick<EthereumEnvironment, 'ALCHEMY_MI_NOTE_API_KEY' | 'ETHEREUM_111K_RPC_URL'> & EthereumProviderEnvironment;
   config: Pick<Ethereum111kConfig, 'chainId' | 'contractAddress' | 'enabled'>;
   signal: AbortSignal;
   fetch: typeof fetch;
   chainCheck?: Promise<void>;
   relicInterfaceCheck?: Promise<boolean>;
+  providerAttempt?: EthereumProviderAttempt;
+  providerBudgetClient?: ProviderBudgetClient;
+  providerLane?: ProviderLane;
+  publicReadCacheScope?: EthereumPublicReadCacheScope;
+  publicReadCacheExpiresAtMs?: number;
 };
 
 export type EthereumContext = EthereumReadContext & {
@@ -86,36 +95,30 @@ export async function ethereumRelicInterfaceAvailable(context: EthereumReadConte
   return context.relicInterfaceCheck;
 }
 
-function ethereumRpcUrl(context: EthereumReadContext): string {
-  if (context.config.chainId === 31337) {
-    const configured = context.env.ETHEREUM_111K_RPC_URL;
-    if (!configured) throw new EthereumApiError('unavailable', 'Local Ethereum RPC is not configured.');
-    return localEthereumRpcUrl(configured);
+async function rpcRequest(context: EthereumReadContext, payload: Parameters<EthereumProviderAttempt['request']>[0]): Promise<unknown> {
+  if (context.config.chainId === 31337 && !context.env.ETHEREUM_111K_RPC_URL) {
+    throw new EthereumApiError('unavailable', 'Local Ethereum RPC is not configured.');
   }
-  const host = context.config.chainId === 1 ? 'eth-mainnet' : context.config.chainId === 11155111 ? 'eth-sepolia' : null;
-  const key = context.env.ALCHEMY_MI_NOTE_API_KEY?.trim();
-  if (!host || !key) throw new EthereumApiError('unavailable', 'Ethereum RPC is not configured.');
-  return `https://${host}.g.alchemy.com/v2/${encodeURIComponent(key)}`;
+  context.providerAttempt ??= createEthereumProviderAttempt(context.env, context.config.chainId,
+    context.config.chainId === 31337 ? 'local' : 'alchemy', context.signal,
+    { lane: context.providerLane, fetch: context.fetch, budgetClient: context.providerBudgetClient ??= ethereumProviderBudget(
+      context.env, context.config.chainId, (context.providerLane ?? 'public') === 'public' ? PUBLIC_READ_PERMIT_QUANTUM : undefined) });
+  return context.providerAttempt.request(payload, context.signal);
 }
 
-async function rpcRequest(context: EthereumReadContext, payload: unknown): Promise<unknown> {
-  const signal = AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]);
-  const response = await context.fetch(ethereumRpcUrl(context), {
-    method: 'POST',
-    redirect: 'manual',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal,
-  });
-  const body = await readBoundedResponseJson(response, {
-    maxBytes: 3 * 1024 * 1024,
-    contentType: 'require-json', signal,
-    createError: () => new EthereumApiError('unavailable', 'Ethereum RPC returned an invalid response.'),
-  });
-  if (!response.ok) {
-    throw new EthereumApiError('unavailable', 'Ethereum RPC is temporarily unavailable.');
-  }
-  return body;
+export function withEthereumReadProvider<T, C extends EthereumReadContext>(context: C, operation: (selected: C) => Promise<T>): Promise<T> {
+  if (context.providerAttempt) return operation(context);
+  const budgetClient = context.providerBudgetClient ?? ethereumProviderBudget(context.env, context.config.chainId,
+    (context.providerLane ?? 'public') === 'public' ? PUBLIC_READ_PERMIT_QUANTUM : undefined);
+  return withEthereumProvider(context.env, context.config.chainId, context.signal, attempt => operation({ ...context,
+    signal: attempt.signal, providerAttempt: attempt, providerBudgetClient: budgetClient, chainCheck: undefined, relicInterfaceCheck: undefined }),
+  { lane: context.providerLane ?? 'public', fetch: context.fetch, budgetClient });
+}
+
+export type EthereumBlockReference = string | { blockHash: string; requireCanonical: true };
+
+function ethereumBlockReference(value: EthereumBlockReference): EthereumBlockReference {
+  return typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value) ? { blockHash: value, requireCanonical: true } : value;
 }
 
 export async function ethereumRpc(context: EthereumReadContext, method: string, params: unknown[]): Promise<unknown> {
@@ -128,7 +131,7 @@ export async function ethereumRpc(context: EthereumReadContext, method: string, 
   return body.result;
 }
 
-export async function ethereumCallBatch(context: EthereumReadContext, calls: string[], blockReference = 'latest'): Promise<string[]> {
+export async function ethereumCallBatch(context: EthereumReadContext, calls: string[], blockReference: EthereumBlockReference = 'latest'): Promise<string[]> {
   if (!calls.length) return [];
   await checkEthereumChain(context);
   const to = requireEthereumContract(context);
@@ -136,7 +139,7 @@ export async function ethereumCallBatch(context: EthereumReadContext, calls: str
   const values = await mapWithConcurrency(offsets, CONTRACT_READ_CONCURRENCY, async (offset, _index, signal) => {
     const batch = calls.slice(offset, offset + CONTRACT_READ_BATCH_SIZE);
     const body = await rpcRequest({ ...context, signal }, batch.map((data, index) => ({ jsonrpc: '2.0', id: index + 1,
-      method: 'eth_call', params: [{ to, data }, blockReference] })));
+      method: 'eth_call', params: [{ to, data }, ethereumBlockReference(blockReference)] })));
     if (!Array.isArray(body) || body.length !== batch.length) throw new EthereumApiError('unavailable', 'Ethereum RPC returned an incomplete response.');
     const results = new Map<number, string>();
     for (const value of body) {

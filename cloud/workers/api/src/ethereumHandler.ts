@@ -9,6 +9,8 @@ import { ethereumRouteDefinition } from './ethereumRouteDefinitions.js';
 import { ethereumRelics } from './ethereumRelics.js';
 import { ethereumReveal } from './ethereumReveal.js';
 import { ethereumPublicRequest } from './ethereumPublic.js';
+import { ethereumProviderApiError, RpcProviderError } from './ethereumProvider.js';
+import { ProviderBudgetUnavailable } from './ethereumProviderBudget.js';
 import type { DeferredWork } from './deferredWork.js';
 
 function unregisteredPathHandler(path: string) {
@@ -43,6 +45,7 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
     return jsonResponse(result, 200);
   } catch (error) {
     if (request.signal.aborted) throw request.signal.reason;
+    if (error instanceof RpcProviderError || error instanceof ProviderBudgetUnavailable) return ethereumErrorResponse(ethereumProviderApiError(error));
     if (!(error instanceof EthereumApiError)) console.error({ event: 'ethereum_request_failed', path,
       errorName: error instanceof Error ? error.name : 'UnknownError' });
     return ethereumErrorResponse(error);

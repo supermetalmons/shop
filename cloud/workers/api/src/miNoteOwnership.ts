@@ -9,6 +9,8 @@ import {
 import { raceWithSignal } from './boundedRequest.js';
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
 import type { WorkerDependencies, WorkerRequestMetrics } from './publicRouteSupport.js';
+import { ethereumProviderBudget, fetchAlchemyNft, type EthereumProviderEnvironment } from './ethereumProvider.js';
+import { ProviderBudgetUnavailable, type ProviderBudgetClient } from './ethereumProviderBudget.js';
 
 const MAX_PAGE_BYTES = 256 * 1024;
 const MAX_PAGES = 100;
@@ -18,9 +20,11 @@ const ORIGINAL_COLLECTION = miNoteCatalog.ethereumCollections.find((collection) 
 const ORIGINAL_ID_SET = new Set(ORIGINAL_COLLECTION.tokens.map((token) => token.id));
 
 type ProviderContext = {
+  env?: EthereumProviderEnvironment;
   providerFetch: WorkerDependencies['providerFetch'];
   metrics: Pick<WorkerRequestMetrics, 'upstreamCalls' | 'providerDurationMs'>;
   signal: AbortSignal;
+  providerBudgetClient?: ProviderBudgetClient;
 };
 
 export function miNoteProviderFailure(): Error {
@@ -61,9 +65,10 @@ async function providerJson(url: URL, init: RequestInit, context: ProviderContex
   const startedAt = performance.now();
   context.metrics.upstreamCalls += 1;
   try {
-    const response = await miNoteResponseWithSignal(context.providerFetch(url, {
-      ...init, redirect: 'manual', signal: context.signal,
-    }), context.signal);
+    const response = await miNoteResponseWithSignal(url.hostname === 'eth-mainnet.g.alchemy.com'
+      ? fetchAlchemyNft(context.env ?? {}, url, init, { signal: context.signal, fetch: context.providerFetch,
+        budgetClient: context.providerBudgetClient })
+      : context.providerFetch(url, { ...init, redirect: 'manual', signal: context.signal }), context.signal);
     if (!response.ok) {
       await cancelResponseBody(response);
       throw miNoteProviderFailure();
@@ -90,6 +95,8 @@ export async function fetchAlchemyMiNotes(
   address: string, apiKey: string, context: ProviderContext,
 ): Promise<Map<MiNoteContractAddress, string[]>> {
   if (!apiKey) throw miNoteProviderFailure();
+  context.signal.throwIfAborted();
+  const selected = { ...context, providerBudgetClient: context.providerBudgetClient ?? ethereumProviderBudget(context.env ?? {}, 1, 100) };
   const tokenIds = new Map<MiNoteContractAddress, Set<string>>(MI_NOTE_MODERN_CONTRACT_ADDRESSES.map((contract) => [contract, new Set()]));
   const cursors = new Set<string>();
   let cursor: string | undefined;
@@ -101,7 +108,14 @@ export async function fetchAlchemyMiNotes(
     url.searchParams.set('withMetadata', 'false');
     url.searchParams.set('pageSize', String(PAGE_SIZE));
     if (cursor) url.searchParams.set('pageKey', cursor);
-    const body = await providerJson(url, { method: 'GET', headers: { Accept: 'application/json' } }, context);
+    let body: unknown;
+    for (;;) {
+      try { body = await providerJson(url, { method: 'GET', headers: { Accept: 'application/json' } }, selected); break; }
+      catch (error) {
+        if (page === 0 || !(error instanceof ProviderBudgetUnavailable)) throw error;
+        await error.wait(selected.signal);
+      }
+    }
     if (!isRecord(body) || !Array.isArray(body.ownedNfts) || body.ownedNfts.length > PAGE_SIZE) throw miNoteProviderFailure();
     for (const nft of body.ownedNfts) {
       if (!isRecord(nft)) throw miNoteProviderFailure();

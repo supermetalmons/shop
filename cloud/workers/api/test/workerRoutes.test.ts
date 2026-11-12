@@ -170,6 +170,7 @@ test('route CORS policies preserve preflight, response, and error headers across
     { path: '/staff/auth/challenge', methods: 'POST, OPTIONS', headers: profileHeaders, partner: false },
     { path: '/mi-note-cards', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mi-Note-Session`, partner: false },
     { path: '/ethereum/profile', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
+    { path: '/ethereum/pre111k/status', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
     { path: '/ethereum/111k/config', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`,
       partner: true, partnerMethods: 'GET, OPTIONS', partnerHeaders: 'Accept, Content-Type', legacyMons: true },
     { path: '/ethereum/111k/transactions/confirm', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`,
@@ -197,7 +198,7 @@ test('route CORS policies preserve preflight, response, and error headers across
           assert.equal(result.headers.get('Access-Control-Allow-Methods'), partnerOrigin ? entry.partnerMethods ?? entry.methods : entry.methods, label);
           assert.equal(result.headers.get('Access-Control-Allow-Headers'), partnerOrigin ? entry.partnerHeaders ?? entry.headers : entry.headers, label);
           assert.equal(result.headers.get('Access-Control-Expose-Headers'), entry.partner && (!entry.legacyMons || partnerOrigin) ?
-            'Retry-After' : STRIPE_CHECKOUT_RETRY_HEADER, label);
+            'Retry-After' : `${STRIPE_CHECKOUT_RETRY_HEADER}, Retry-After`, label);
           assert.equal(result.headers.get('Vary'), 'Origin', label);
         }
         assert.equal(await response.text(), 'ok', label);

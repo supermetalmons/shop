@@ -2,11 +2,12 @@ import type { EthereumTransactionConfirmResponse } from '../../../../shared/ethe
 import { EthereumApiError } from './ethereumError.js';
 import { ethereumInventoryItems, ethereumReceipt, ethereumTokenInfos, transferTokenIds, type EthereumLog } from './ethereumRead.js';
 import { ethereumBlockSnapshot, requireEthereumContract, rpcInteger, verifyEthereumBlockSnapshot,
-  type EthereumCollectionReadContext } from './ethereumRuntime.js';
+  withEthereumReadProvider, type EthereumCollectionReadContext } from './ethereumRuntime.js';
 
 export async function confirmEthereumTransaction(context: EthereumCollectionReadContext, hash: string): Promise<
   EthereumTransactionConfirmResponse & { logs?: EthereumLog[] }
 > {
+  if (!context.providerAttempt) return withEthereumReadProvider(context, selected => confirmEthereumTransaction(selected, hash));
   const { receipt, confirmations } = await ethereumReceipt(context, hash);
   if (!receipt) return { status: 'pending', confirmations, items: [], burnedTokenIds: [] };
   const snapshot = await ethereumBlockSnapshot(context);

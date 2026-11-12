@@ -2,6 +2,7 @@ import { encodePre111kReservation, isPre111kPriceWei, PRE111K_API_PATHS, PRE111K
 import { EthereumApiError } from './api';
 import { ethereumAddress } from './wallet';
 import { requestEthereumJson } from './request';
+import { ethereumRetryAfterMs } from './retryAfter';
 
 const CHAINS = { mainnet: 1, devnet: 11155111 };
 
@@ -18,7 +19,8 @@ async function request(path: string, body?: unknown, signal?: AbortSignal): Prom
     const detail = record(value) && record(value.error) ? value.error : value;
     throw new EthereumApiError(response.status,
       record(detail) && typeof detail.message === 'string' ? detail.message : 'Couldn’t reach the relic service. Please try again.',
-      record(detail) && typeof detail.code === 'string' ? detail.code : null);
+      record(detail) && typeof detail.code === 'string' ? detail.code : null, null,
+      ethereumRetryAfterMs(response.headers.get('Retry-After'), record(detail) && record(detail.details) ? detail.details.retryAfterMs : undefined));
   }
   return value;
 }

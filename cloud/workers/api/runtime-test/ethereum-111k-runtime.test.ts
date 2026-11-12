@@ -255,7 +255,7 @@ export default {
         if (rpc.method === 'eth_chainId') result = '0x1';
         else if (rpc.method === 'eth_getBlockByNumber') result = { number: '0x66', hash: blockHash };
         else if (rpc.method === 'eth_call') {
-          if (rpc.params[0].to !== contract || rpc.params[1] !== blockHash) throw new Error('Unscoped collection read');
+          if (rpc.params[0].to !== contract || rpc.params[1]?.blockHash !== blockHash || rpc.params[1]?.requireCanonical !== true) throw new Error('Unscoped collection read');
           const data = rpc.params[0].data;
           if (data === encodeCall('getRelicClaimedMask()', [], [])) result = encodeAbi(['uint256'], [1 << 17]);
           else if (data.startsWith(encodeCall('stats(address)', [], []))) {
@@ -390,7 +390,7 @@ export default {
     response.headers.set('X-Test-Max-Envelope', String(Math.max(...envelopes)));
     response.headers.set('X-Test-Metadata-Reads', String(metadataUrls.length));
     response.headers.set('X-Test-Unique-Metadata-Reads', String(new Set(metadataUrls).size));
-    response.headers.set('X-Test-Pinned-Calls', String(calls.every(params => params[1] === blockHash(102))));
+    response.headers.set('X-Test-Pinned-Calls', String(calls.every(params => params[1]?.blockHash === blockHash(102) && params[1]?.requireCanonical === true)));
     return response;
   },
 };

@@ -130,7 +130,7 @@ export async function collectMiNoteOwnership(args: {
   };
   const resultsByContract = {} as MiNoteCardsResponse['resultsByContract'];
   const fetchCollection = (contract: MiNoteContractAddress): Promise<string[]> => {
-    const context = { providerFetch: dependencies.providerFetch, metrics, signal: deadline.signal };
+    const context = { env, providerFetch: dependencies.providerFetch, metrics, signal: deadline.signal };
     if (contract === MI_NOTE_CONTRACT_ADDRESS) return fetchOpenSeaMiNotes(address, openSeaKey, context);
     modern ??= fetchAlchemyMiNotes(address, alchemyKey, context);
     return modern.then((groups) => groups.get(contract)!);

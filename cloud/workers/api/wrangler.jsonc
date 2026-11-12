@@ -15,6 +15,9 @@
 		"mode": "smart"
 	},
 	"vars": {
+		"ETHEREUM_PROVIDER_CONTROL_ENABLED": "true",
+		"ETHEREUM_PUBLIC_READ_CACHE_ENABLED": "true",
+		"QUICKNODE_ETHEREUM_MAINNET_ENABLED": "true",
 		"RESEND_DROP_SEGMENT_IDS": {
 			"111k": "576784c5-af45-4b8f-bf76-110aeef33126",
 			"card_nft_2": "70093451-15ee-4c4c-88b8-592bb985ac1f",
@@ -49,13 +52,16 @@
 		"bindings": [
 			{ "name": "ETHEREUM_REVEAL", "class_name": "EthereumRevealObject" },
 			{ "name": "ETHEREUM_REVEAL_VERIFIER", "class_name": "EthereumRevealVerifierObject" },
-			{ "name": "ETHEREUM_REVEAL_PUBLISHER", "class_name": "EthereumRevealPublisherObject" }
+			{ "name": "ETHEREUM_REVEAL_PUBLISHER", "class_name": "EthereumRevealPublisherObject" },
+			{ "name": "ETHEREUM_PROVIDER_BUDGET", "class_name": "EthereumProviderBudgetObject" },
+			{ "name": "ETHEREUM_PUBLIC_READ_CACHE", "class_name": "EthereumPublicReadCacheObject" }
 		]
 	},
 	"migrations": [
 		{ "tag": "ethereum-reveal-v1", "new_sqlite_classes": ["EthereumRevealObject"] },
 		{ "tag": "ethereum-reveal-verifier-v1", "new_sqlite_classes": ["EthereumRevealVerifierObject"] },
-		{ "tag": "ethereum-reveal-publisher-v1", "new_sqlite_classes": ["EthereumRevealPublisherObject"] }
+		{ "tag": "ethereum-reveal-publisher-v1", "new_sqlite_classes": ["EthereumRevealPublisherObject"] },
+		{ "tag": "ethereum-provider-controls-v1", "new_sqlite_classes": ["EthereumProviderBudgetObject", "EthereumPublicReadCacheObject"] }
 	],
 	"r2_buckets": [{ "binding": "ETHEREUM_REVEAL_METADATA", "bucket_name": "cdn-mons-shop" }],
 	"d1_databases": [
@@ -182,6 +188,7 @@
 	"secrets": {
 		"required": [
 			"ALCHEMY_MI_NOTE_API_KEY",
+			"QUICKNODE_ETHEREUM_MAINNET_RPC_URL",
 			"ETHEREUM_111K_SIGNER_SECRET",
 			"ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET",
 			"ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET",

@@ -74,14 +74,14 @@ function fixture(network: Pre111kNetwork = 'devnet') {
     const respond = (payload: RpcRequest) => ({ jsonrpc: '2.0', id: payload.id, result: result(payload) });
     return new Response(JSON.stringify(Array.isArray(body) ? body.map(respond) : respond(body)), { headers: { 'Content-Type': 'application/json' } });
   };
-  async function call(path: string, body?: unknown, options: { origin?: string; csrf?: string; method?: string } = {}) {
+  async function call(path: string, body?: unknown, options: { origin?: string; csrf?: string; method?: string; fetch?: typeof fetch } = {}) {
     const request = new Request(`https://api.mons.shop${path}`, {
       method: options.method || (body === undefined ? 'GET' : 'POST'),
       headers: { Origin: options.origin || 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.1',
         'Content-Type': 'application/json', 'X-Mons-CSRF': options.csrf ?? '1' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    const response = await handlePre111kRequest(request, env, path.split('?')[0], { nowMs: () => NOW, fetch: providerFetch });
+    const response = await handlePre111kRequest(request, env, path.split('?')[0], { nowMs: () => NOW, fetch: options.fetch ?? providerFetch });
     return { response, body: await response.json() as Record<string, unknown> };
   }
   async function prepared() {
@@ -238,6 +238,29 @@ test('pre111k access enforces origin, CSRF, method, strict body, and rate limits
   assert.equal(limited.response.headers.get('Cache-Control'), 'no-store');
   assert.equal(f.state.calls.length, 0);
 });
+
+for (const failure of ['throttle', 'capacity'] as const) {
+  test(`pre111k preserves ${failure} retry guidance`, async () => {
+    const f = fixture();
+    const retryAfterMs = failure === 'throttle' ? 60_000 : 45_000;
+    if (failure === 'capacity') {
+      f.env.ETHEREUM_PROVIDER_CONTROL_ENABLED = 'true';
+      const denied = async () => ({ granted: 0, issuedAtMs: Date.now(), expiresAtMs: Date.now() + 1_000, retryAfterMs });
+      f.env.ETHEREUM_PROVIDER_BUDGET = { getByName: () => ({
+        grant: denied, acquirePublic: denied, async cancelPublic() {}, async reportThrottle() {},
+      }) };
+    }
+    const result = await f.call(`${PRE111K_API_PATHS.status}?network=devnet`, undefined, { fetch: async () => {
+      assert.equal(failure, 'throttle', 'Capacity denial must not reach the provider');
+      return new Response('', { status: 429, headers: { 'Retry-After': '60' } });
+    } });
+    assert.equal(result.response.status, 503);
+    assert.equal(result.response.headers.get('Retry-After'), String(retryAfterMs / 1_000));
+    const error = result.body.error as { code: string; details: unknown };
+    assert.equal(error.code, 'unavailable');
+    assert.deepEqual(error.details, { kind: failure === 'throttle' ? 'provider-throttle' : 'provider-budget', retryAfterMs });
+  });
+}
 
 test('pre111k limiters run before access configuration checks and chain reads', async () => {
   for (const binding of ['PREORDER_PREPARE_RATE_LIMITER', 'PREORDER_PREPARE_IP_RATE_LIMITER'] as const) {

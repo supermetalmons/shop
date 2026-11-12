@@ -25,7 +25,13 @@ export function ethereumErrorResponse(error: unknown): Response {
   const failure = error instanceof EthereumApiError
     ? error
     : new EthereumApiError('unavailable', 'Ethereum service is temporarily unavailable.');
+  const details = failure.details;
+  const retryAfterMs = details && typeof details === 'object' && 'retryAfterMs' in details &&
+    typeof details.retryAfterMs === 'number' && Number.isFinite(details.retryAfterMs) && details.retryAfterMs >= 0
+    ? details.retryAfterMs : null;
+  const retryAfter = retryAfterMs !== null ? String(Math.max(1, Math.ceil(retryAfterMs / 1_000)))
+    : failure.code === 'resource-exhausted' ? '60' : null;
   return jsonResponse(apiErrorBody(failure), httpStatusForApiErrorCode(failure.code, 503), {
-    ...(failure.code === 'resource-exhausted' ? { headers: { 'Retry-After': '60' } } : {}),
+    ...(retryAfter !== null ? { headers: { 'Retry-After': retryAfter } } : {}),
   });
 }

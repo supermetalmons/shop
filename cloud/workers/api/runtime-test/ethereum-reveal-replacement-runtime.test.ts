@@ -46,7 +46,8 @@ test('native same-catalog replacement retires durably, drains callbacks, preserv
   const main = join(directory, 'api.ts'), callerMain = join(directory, 'caller.ts');
   await writeFile(main, `
     export { default, AdminIrlRedeemFinalizeWorkflowV1, StripeReceiptClaimWorkflowV1, StripeChargebackMaintenance,
-      EthereumRevealMaintenance, EthereumRevealPublisherObject, EthereumRevealVerifierObject }
+      EthereumRevealMaintenance, EthereumRevealPublisherObject, EthereumRevealVerifierObject,
+      EthereumProviderBudgetObject, EthereumPublicReadCacheObject }
       from ${JSON.stringify(resolve('cloud/workers/api/src/index.ts'))};
     import { EthereumRevealObject as Base } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealObject.ts'))};
     import { EthereumRevealStore } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealStore.ts'))};

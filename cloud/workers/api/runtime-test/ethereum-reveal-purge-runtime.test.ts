@@ -23,7 +23,8 @@ test('native retired purge removes frozen storage and alarms without recreation 
   const main = join(directory, 'worker.ts');
   await writeFile(main, `
     export { default, AdminIrlRedeemFinalizeWorkflowV1, StripeReceiptClaimWorkflowV1, StripeChargebackMaintenance,
-      EthereumRevealMaintenance, EthereumRevealPublisherObject, EthereumRevealVerifierObject }
+      EthereumRevealMaintenance, EthereumRevealPublisherObject, EthereumRevealVerifierObject,
+      EthereumProviderBudgetObject, EthereumPublicReadCacheObject }
       from ${JSON.stringify(resolve('cloud/workers/api/src/index.ts'))};
     import { EthereumRevealObject as Base } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealObject.ts'))};
     export class EthereumRevealObject extends Base {

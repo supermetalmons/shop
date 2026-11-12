@@ -8,13 +8,14 @@ import {
 import { hasValidEthereumMedia, isEthereumMediaUrl } from './artworkMedia';
 import { EthereumApiError } from './api';
 import { requestEthereumJson } from './request';
+import { ethereumRetryAfterMs } from './retryAfter';
 import { assertEthereumCatalog, validEthereumCatalogScope, validEthereumMetadataRevision } from './catalogRevision';
 
 type RevealConfig = Pick<Ethereum111kConfig, 'chainId' | 'contractAddress' | 'catalogRevision' | 'deploymentId'>;
 const hashPattern = /^0x[0-9a-f]{64}$/;
 
 export class EthereumRevealApiError extends EthereumApiError {
-  constructor(status: number, message: string, readonly retryAfterMs: number | null) { super(status, message); }
+  constructor(status: number, message: string, retryAfterMs: number | null) { super(status, message, null, null, retryAfterMs); }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -58,11 +59,9 @@ async function request(path: string, config: RevealConfig,
   const { response, value } = await requestEthereumJson(path, { body: payload, signal, preserveTraitNumbers: true });
   if (!response.ok) {
     const detail = record(value) && record(value.error) ? value.error : value;
-    const retry = response.headers.get('Retry-After');
-    const retryAfterMs = retry === null ? NaN : /^\d+(?:\.\d+)?$/.test(retry)
-      ? Number(retry) * 1000 : Date.parse(retry) - Date.now();
+    const retryAfterMs = ethereumRetryAfterMs(response.headers.get('Retry-After'));
     throw new EthereumRevealApiError(response.status, record(detail) && typeof detail.message === 'string' ? detail.message :
-      'Artworks are temporarily unavailable. We will keep checking.', Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : null);
+      'Artworks are temporarily unavailable. We will keep checking.', retryAfterMs !== null && retryAfterMs > 0 ? retryAfterMs : null);
   }
   if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
     typeof value.deploymentId !== 'string' || !value.deploymentId || typeof value.dropId !== 'string' || !value.dropId ||

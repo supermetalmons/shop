@@ -6,7 +6,7 @@ import { readEthereumRevealDeployment } from '../../../../shared/ethereum/reveal
 import { decode111kStats, valid111kRelicSupply } from '../../../../shared/ethereum/stats.js';
 import { EthereumApiError } from './ethereumError.js';
 import { ethereumAddress, ethereumBlockSnapshot, ethereumCallBatch, verifyEthereumBlockSnapshot,
-  type EthereumContext, type EthereumReadContext } from './ethereumRuntime.js';
+  withEthereumReadProvider, type EthereumContext, type EthereumReadContext } from './ethereumRuntime.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -33,6 +33,12 @@ export async function ethereumRelics(request: Request, context: Pick<EthereumCon
     env: context.env, signal: context.signal, fetch: context.fetch,
     config: { chainId: deployment.chainId, contractAddress: deployment.contractAddress, enabled: true },
   };
+  return withEthereumReadProvider(readContext, selected => readRelics(selected, owner));
+}
+
+async function readRelics(readContext: EthereumReadContext, owner: string | null): Promise<EthereumRelicStatus> {
+  const { chainId, contractAddress } = readContext.config;
+  if (!contractAddress) throw new EthereumApiError('unavailable', 'Ethereum collection is unavailable.');
   const snapshot = await ethereumBlockSnapshot(readContext);
   const [maskData, statsData, allowanceData] = await ethereumCallBatch(readContext, [
     encodeCall(ETHEREUM_FUNCTIONS.relicClaimedMask, [], []),
@@ -74,7 +80,7 @@ export async function ethereumRelics(request: Request, context: Pick<EthereumCon
       remainingFreeAllowance: Math.max(0, freeLimit - freeUsed) };
   }
   await verifyEthereumBlockSnapshot(readContext, snapshot);
-  return { chainId: deployment.chainId, contractAddress: deployment.contractAddress, owner,
+  return { chainId, contractAddress, owner,
     observedBlock: snapshot.blockNumber, blockHash: snapshot.blockHash, saleActive: stats.saleActive,
     relicsAllocated, relicsMinted, publicRelicsMinted, publicSale, remainingRelics: relicsAllocated - relicsMinted, claimedMask,
     relicLimit, relicsUsed, remainingAllowance: Math.max(0, relicLimit - relicsUsed) };

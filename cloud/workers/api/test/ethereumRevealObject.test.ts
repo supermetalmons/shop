@@ -14,6 +14,8 @@ import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 import { d1Database } from './commerceD1Harness.ts';
+import { EthereumProviderBudgetStore, PROVIDER_BUDGETS, type ProviderBudgetGrant,
+  type ProviderBudgetNamespace, type ProviderBudgetRequest, type ProviderBudgetSql } from '../src/ethereumProviderBudget.ts';
 
 const { EthereumRevealObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealObject.ts'));
 const { EthereumRevealVerifierObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealVerifierObject.ts'));
@@ -195,7 +197,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion, reg
     state.calls.push(method);
     if (state.failedMethods.has(method)) throw new Error('RPC unavailable');
     let result: unknown;
-    if (method === 'eth_chainId') result = '0x7a69';
+    if (method === 'eth_chainId') result = `0x${registered.chainId.toString(16)}`;
     else if (method === 'eth_blockNumber') result = `0x${state.head.toString(16)}`;
     else if (method === 'eth_getTransactionReceipt') {
       state.receiptLookups.push(params[0]);
@@ -237,7 +239,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion, reg
     return Response.json({ jsonrpc: '2.0', id, result });
   });
   const pending = (transactionHash: string, crates = ['111112'], wrapped = false) => {
-    state.transactions.set(transactionHash, { hash: transactionHash, chainId: '0x7a69', from: OWNER,
+    state.transactions.set(transactionHash, { hash: transactionHash, chainId: `0x${registered.chainId.toString(16)}`, from: OWNER,
       to: wrapped ? WRAPPER : CONTRACT, value: '0x0', blockNumber: null,
       input: crates.length === 1 ? encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], crates)
         : encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [crates]) });
@@ -278,6 +280,323 @@ function shortInlineWait(t: TestContext): void {
   t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
     original(callback, milliseconds !== undefined && milliseconds > 500 && milliseconds <= 2000 ? 25 : milliseconds, ...args));
 }
+
+function availableProviderBudget(onGrant: (request: ProviderBudgetRequest) => void = () => {}): ProviderBudgetNamespace {
+  return { getByName: () => ({
+    async grant(request) {
+      onGrant(request);
+      const now = Date.now();
+      return { granted: request.wanted, issuedAtMs: now, expiresAtMs: now + PROVIDER_BUDGETS[request.provider].leaseMs,
+        retryAfterMs: 0, grantId: crypto.randomUUID() };
+    },
+    async reportThrottle() {},
+  }) };
+}
+
+test('mainnet receipt workers reuse coordinator permits on the four-call fast path', async t => {
+  const mainnet = { ...deployment, deploymentId: 'mainnet-budget', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  let grants = 0;
+  const namespace: ProviderBudgetNamespace = { getByName: () => ({
+    async grant(request) {
+      grants++;
+      const now = Date.now();
+      return { granted: request.wanted, issuedAtMs: now,
+        expiresAtMs: now + PROVIDER_BUDGETS[request.provider].leaseMs, retryAfterMs: 0, grantId: crypto.randomUUID() };
+    },
+    async reportThrottle() { assert.fail('Successful receipt reads must not report provider throttling.'); },
+  }) };
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true',
+    ETHEREUM_PROVIDER_BUDGET: namespace });
+  for (let index = 0; index < 4; index++) {
+    f.state.receipts.set(hash(index + 1), receipt(hash(index + 1), 1000,
+      [{ crateTokenId: String(111112 + index), first: 1 + index * 20 }]));
+  }
+  const results = await Promise.all(Array.from({ length: 4 }, (_, index) =>
+    f.object.revealTransaction(mainnet, hash(index + 1), true)));
+  for (const result of results) assert.equal(value(result).status, 'revealed');
+  await f.settle();
+  assert.equal(grants, 1);
+  assert.equal(f.state.calls.length, 16);
+  assert.equal(f.state.receiptLookups.length, 4);
+});
+
+test('a new verifier accepts legacy coordinator work without calling new permit methods', async t => {
+  const mainnet = { ...deployment, deploymentId: 'mainnet-legacy-coordinator', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  let grants = 0, validations = 0, presences = 0;
+  const wanted: number[] = [];
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true',
+    ETHEREUM_PROVIDER_BUDGET: availableProviderBudget(request => { grants++; wanted.push(request.wanted); }) });
+  const legacyCoordinator = {
+    async validateReceiptWork(scope: RevealVerificationScope, work: RevealVerificationWork) {
+      validations++;
+      return f.object.validateReceiptWork(scope, work);
+    },
+    async recordReceiptPresence(scope: RevealVerificationScope, work: RevealVerificationWork) {
+      presences++;
+      return f.object.recordReceiptPresence(scope, work);
+    },
+  };
+  const verifier = new EthereumRevealVerifierObject({ waitUntil() {} } as unknown as DurableObjectState,
+    { ...f.env, ETHEREUM_REVEAL: { getByName: () => legacyCoordinator } } as unknown as Env);
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  f.store.admitTransaction(hash(1), mainnet.deploymentBlock, Date.now());
+  const claim = f.store.claimReceipt(Date.now(), 'active', hash(1));
+  assert.ok(claim);
+  const rejected = await verifier.inspect(mainnet, { kind: 'receipt', claim: { ...claim, claimId: crypto.randomUUID() } }, Date.now() + 5000);
+  assert.equal(rejected.kind, 'failed');
+  assert.equal(grants, 0);
+  assert.equal(f.state.calls.length, 0);
+  const result = await verifier.inspect(mainnet, { kind: 'receipt', claim }, Date.now() + 5000);
+  assert.equal(result.kind, 'inspected');
+  if (result.kind !== 'inspected') assert.fail();
+  assert.equal(result.inspection.status, 'confirmed');
+  assert.equal(validations, 2);
+  assert.equal(presences, 1);
+  assert.equal(grants, 1);
+  assert.deepEqual(wanted, [55]);
+  assert.equal(f.state.calls.length, 4);
+  f.store.failReceipt(claim, Date.now());
+});
+
+test('a new coordinator remains compatible with verifiers that ignore its protocol marker', async t => {
+  const mainnet = { ...deployment, deploymentId: 'mainnet-legacy-verifier', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true',
+    ETHEREUM_PROVIDER_BUDGET: availableProviderBudget() });
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  const verifier = f.verifier(hash(1)), inspect = verifier.inspect.bind(verifier);
+  let observed: RevealVerificationWork | undefined;
+  t.mock.method(verifier, 'inspect', (scope: RevealVerificationScope, work: RevealVerificationWork, deadlineMs: number) => {
+    observed = work;
+    return inspect(scope, { kind: work.kind, claim: work.claim }, deadlineMs);
+  });
+  t.mock.method(f.object as unknown as InstanceType<typeof EthereumRevealObject>, 'requestReceiptPermit',
+    async () => assert.fail('A legacy verifier must use the legacy coordinator callbacks.'));
+  assert.equal(value(await f.object.revealTransaction(mainnet, hash(1), true)).status, 'revealed');
+  await f.settle();
+  assert.equal(observed?.providerBudgetProtocol, 1);
+  assert.equal(f.state.calls.length, 4);
+});
+
+for (const remote of [false, true]) test(`${remote ? 'disabled controls' : 'local-chain work'} omits the coordinated provider marker`, async t => {
+  const registered = remote ? { ...deployment, deploymentId: 'mainnet-disabled-budget', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' } : deployment;
+  const f = fixture(t, registered.catalogVersion, registered);
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: remote ? 'false' : 'true' });
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  const verifier = f.verifier(hash(1)), inspect = verifier.inspect.bind(verifier);
+  let observed: RevealVerificationWork | undefined;
+  t.mock.method(verifier, 'inspect', (scope: RevealVerificationScope, work: RevealVerificationWork, deadlineMs: number) => {
+    observed = work;
+    return inspect(scope, work, deadlineMs);
+  });
+  assert.equal(value(await f.object.revealTransaction(registered, hash(1), true)).status, 'revealed');
+  await f.settle();
+  assert.ok(observed);
+  assert.equal(observed.providerBudgetProtocol, undefined);
+});
+
+test('a brief mainnet budget shortage retains one receipt claim and does not reduce concurrency', async t => {
+  const mainnet = { ...deployment, deploymentId: 'mainnet-budget-wait', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  let grants = 0;
+  const namespace: ProviderBudgetNamespace = { getByName: () => ({
+    async grant(request) {
+      const now = Date.now();
+      return { granted: ++grants <= 2 ? 0 : request.wanted, issuedAtMs: now,
+        expiresAtMs: now + PROVIDER_BUDGETS[request.provider].leaseMs, retryAfterMs: 2, grantId: crypto.randomUUID() };
+    },
+    async reportThrottle() { assert.fail('Local budget denial is not upstream throttling.'); },
+  }) };
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true',
+    ETHEREUM_PROVIDER_BUDGET: namespace });
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  const result = value(await f.object.revealTransaction(mainnet, hash(1), true));
+  assert.equal(result.status, 'revealed');
+  await f.settle();
+  assert.equal(f.state.receiptLookups.length, 1);
+  assert.equal(f.store.dispatchState(Date.now()).limit, 64);
+  assert.equal(f.store.dispatchState(Date.now()).pauseUntilMs, 0);
+  assert.equal(f.rows('SELECT attempts FROM receipt_work')[0].attempts, 1);
+});
+
+test('one thousand real verifier inspections share bounded coordinator budget retries', { timeout: 30_000 }, async t => {
+  const mainnet = { ...deployment, deploymentId: 'mainnet-budget-burst', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  const sql: ProviderBudgetSql = { exec(query, ...bindings) {
+    const statement = database.prepare(query);
+    const rows = statement.columns().length ? statement.all(...bindings) : (statement.run(...bindings), []);
+    return { toArray: () => rows as never[] };
+  } };
+  const broker = new EthereumProviderBudgetStore(sql, action => action());
+  const requests: number[] = [];
+  const namespace: ProviderBudgetNamespace = { getByName: () => ({
+    async grant(request) { requests.push(Date.now()); return broker.grant(request, Date.now()); },
+    async reportThrottle() { assert.fail('Budget exhaustion must not report an upstream throttle.'); },
+  }) };
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true',
+    ETHEREUM_PROVIDER_BUDGET: namespace });
+  let cursor = 0;
+  await Promise.all(Array.from({ length: 64 }, async () => {
+    while (cursor < 1000) {
+      const transactionHash = hash(++cursor);
+      f.state.receipts.set(transactionHash, { ...receipt(transactionHash, 1000), status: '0x0' });
+      assert.equal(f.store.admitTransaction(transactionHash, mainnet.deploymentBlock, Date.now()), 'accepted');
+      const claim = f.store.claimReceipt(Date.now(), 'active', transactionHash);
+      assert.ok(claim);
+      const result = await f.verifier(transactionHash).inspect(mainnet, { kind: 'receipt', claim, providerBudgetProtocol: 1 }, Date.now() + 20_000);
+      assert.equal(result.kind, 'inspected');
+      if (result.kind !== 'inspected') assert.fail();
+      assert.equal(result.inspection.status, 'reverted');
+      assert.equal(f.store.completeReceipt(mainnet, claim, result.inspection, Date.now()), true);
+    }
+  }));
+  await f.settle();
+  assert.equal(f.state.calls.length, 4000);
+  assert.ok(requests.length < 2500, `Unexpected broker amplification: ${requests.length} requests`);
+  let left = 0, peak = 0;
+  for (let right = 0; right < requests.length; right++) {
+    while (requests[right] - requests[left] >= 1000) left++;
+    peak = Math.max(peak, right - left + 1);
+  }
+  assert.ok(peak < 1000, `Broker traffic exceeded the single-object envelope: ${peak}/second`);
+  assert.equal(f.store.dispatchState(Date.now()).inFlight, 0);
+  t.diagnostic(JSON.stringify({ inspections: 1000, brokerRequests: requests.length, peakBrokerRequestsPerSecond: peak }));
+});
+
+for (const active of [true, false]) test(`${active ? 'active' : 'background'} reveal falls back while the Alchemy permit broker is stalled`, async t => {
+  const mainnet = { ...deployment, deploymentId: `mainnet-budget-stall-${active}`, dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  const held = Promise.withResolvers<ProviderBudgetGrant>();
+  const namespace: ProviderBudgetNamespace = { getByName: provider => ({
+    async grant(request) {
+      if (provider === 'alchemy') return held.promise;
+      const now = Date.now();
+      return { granted: request.wanted, issuedAtMs: now, expiresAtMs: now + 100,
+        retryAfterMs: 0, grantId: crypto.randomUUID() };
+    },
+    async reportThrottle() {},
+  }) };
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true',
+    ETHEREUM_PROVIDER_BUDGET: namespace, QUICKNODE_ETHEREUM_MAINNET_ENABLED: 'true',
+    QUICKNODE_ETHEREUM_MAINNET_RPC_URL: 'https://reveal-test.quiknode.pro/test-only/' });
+  const urls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  let firstQuicknode = Infinity;
+  const started = performance.now();
+  t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    urls.push(String(input));
+    if (String(input).includes('quiknode.pro')) firstQuicknode = Math.min(firstQuicknode, performance.now() - started);
+    return originalFetch(input, init);
+  });
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  f.store.admitTransaction(hash(1), mainnet.deploymentBlock, Date.now());
+  if (!active) f.database.exec('UPDATE receipt_work SET active_until_ms=0');
+  const claim = f.store.claimReceipt(Date.now(), active ? 'active' : 'background', hash(1));
+  assert.ok(claim);
+  try {
+    const result = await f.verifier(hash(1)).inspect(mainnet, { kind: 'receipt', claim, providerBudgetProtocol: 1 }, Date.now() + 5000);
+    assert.equal(result.kind, 'inspected');
+    assert.ok(firstQuicknode < (active ? 900 : 1800), `QuickNode started after ${firstQuicknode}ms`);
+    assert.equal(urls.length, 4);
+    assert.ok(urls.every(url => url.includes('quiknode.pro')));
+  } finally {
+    const now = Date.now();
+    held.resolve({ granted: 0, issuedAtMs: now, expiresAtMs: now + 250, retryAfterMs: 1 });
+    f.store.failReceipt(claim, Date.now());
+    await f.settle();
+  }
+});
+
+for (const pending of [false, true]) test(`QuickNode ${pending ? 'pending' : 'confirmed'} inspection progresses one expiring credit at a time`, async t => {
+  const mainnet = { ...deployment, deploymentId: `mainnet-single-credit-${pending}`, dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  let nextQuicknodeAt = 0;
+  const namespace: ProviderBudgetNamespace = { getByName: provider => ({
+    async grant(request) {
+      const now = Date.now();
+      const granted = provider === 'quicknode' && request.minimum === 1 && now >= nextQuicknodeAt ? 1 : 0;
+      if (granted) nextQuicknodeAt = now + 150;
+      return { granted, issuedAtMs: now, expiresAtMs: now + PROVIDER_BUDGETS[request.provider].leaseMs,
+        retryAfterMs: provider === 'alchemy' ? 10_000 : Math.max(1, nextQuicknodeAt - now), grantId: crypto.randomUUID() };
+    },
+    async reportThrottle() { assert.fail('Local credit waits are not provider throttles.'); },
+  }) };
+  Object.assign(f.env, { ALCHEMY_MI_NOTE_API_KEY: 'test-only', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true',
+    ETHEREUM_PROVIDER_BUDGET: namespace, QUICKNODE_ETHEREUM_MAINNET_ENABLED: 'true',
+    QUICKNODE_ETHEREUM_MAINNET_RPC_URL: 'https://single-credit.quiknode.pro/test-only/' });
+  if (pending) f.pending(hash(1));
+  else f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  f.store.admitTransaction(hash(1), mainnet.deploymentBlock, Date.now());
+  const claim = f.store.claimReceipt(Date.now(), 'active', hash(1));
+  assert.ok(claim);
+  try {
+    const result = await f.verifier(hash(1)).inspect(mainnet, { kind: 'receipt', claim, providerBudgetProtocol: 1 }, Date.now() + 3000);
+    assert.equal(result.kind, 'inspected');
+    if (result.kind !== 'inspected') assert.fail();
+    assert.equal(result.inspection.status, pending ? 'pending' : 'confirmed');
+    assert.equal(f.state.calls.length, pending ? 6 : 4);
+  } finally {
+    f.store.failReceipt(claim, Date.now());
+    await f.settle();
+  }
+});
+
+test('a permit cancelled during claim validation never enters the coordinator retry queue', async t => {
+  const mainnet = { ...deployment, deploymentId: 'mainnet-budget-cancel', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  let requests = 0;
+  Object.assign(f.env, { ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true', ETHEREUM_PROVIDER_BUDGET: { getByName: () => ({
+    async grant() { requests++; throw new Error('Cancelled work must not ask for a permit.'); },
+  }) } });
+  f.store.admitTransaction(hash(1), mainnet.deploymentBlock, Date.now());
+  const claim = f.store.claimReceipt(Date.now(), 'active', hash(1));
+  assert.ok(claim);
+  const validation = Promise.withResolvers<boolean>();
+  t.mock.method(f.object, 'validateReceiptWork', () => validation.promise);
+  const coordinator = f.object as unknown as InstanceType<typeof EthereumRevealObject>;
+  const requestId = crypto.randomUUID(), work = { kind: 'receipt' as const, claim };
+  const permit = coordinator.requestReceiptPermit(mainnet, work, Date.now() + 5000,
+    { requestId, provider: 'alchemy', minimum: 55, wanted: 55 });
+  await coordinator.cancelReceiptPermit(mainnet, work, requestId);
+  validation.resolve(true);
+  assert.deepEqual(await permit, { valid: false });
+  assert.equal(requests, 0);
+  f.store.failReceipt(claim, Date.now());
+});
+
+test('provider throttles survive claim completion without fresh registry validation', async t => {
+  const mainnet = { ...deployment, deploymentId: 'mainnet-throttle-report', dropId: '111k', chainId: 1,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/' };
+  const f = fixture(t, mainnet.catalogVersion, mainnet);
+  const reports: Array<{ provider: string; retryAfterMs: number }> = [];
+  Object.assign(f.env, { ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true', ETHEREUM_PROVIDER_BUDGET: { getByName: () => ({
+    async reportThrottle(report: { provider: string; retryAfterMs: number }) { reports.push(report); },
+  }) } });
+  f.store.admitTransaction(hash(1), mainnet.deploymentBlock, Date.now());
+  const claim = f.store.claimReceipt(Date.now(), 'active', hash(1));
+  assert.ok(claim);
+  assert.equal(f.store.completeReceipt(mainnet, claim, { status: 'not_unpack', source: 'input' }, Date.now()), true);
+  assert.equal(f.store.validReceiptClaim(claim, Date.now()), false);
+  const coordinator = f.object as unknown as InstanceType<typeof EthereumRevealObject>;
+  t.mock.method(coordinator, 'validateReceiptWork', async () => assert.fail('Reporting must not depend on a live claim'));
+  await coordinator.reportReceiptThrottle(mainnet, 'alchemy', 30_000);
+  assert.deepEqual(reports, [{ provider: 'alchemy', retryAfterMs: 30_000 }]);
+  await coordinator.reportReceiptThrottle({ ...mainnet, contractAddress: `0x${'99'.repeat(20)}` }, 'alchemy', 30_000);
+  assert.equal(reports.length, 1);
+});
 
 function transactionRoute(f: ReturnType<typeof fixture>, admissionAllowed = true) {
   let admissions = 0;
@@ -1181,6 +1500,30 @@ test('a stalled presence callback cannot outlive the verifier deadline or author
   callback.resolve(true);
   await f.settle();
   assert.equal(f.store.summary().frozen, 0);
+});
+
+test('an unacknowledged verifier cancellation stays bounded and retains the claim until its deadline', async t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const original = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
+    original(callback, milliseconds === 20_000 ? 40 : milliseconds === 250 ? 5 : milliseconds, ...args));
+  const f = fixture(t);
+  const cancellation = Promise.withResolvers<void>();
+  t.mock.method(f.verifier(hash(1)), 'inspect', async () => { throw new Error('Inspection RPC disconnected.'); });
+  t.mock.method(f.verifier(hash(1)), 'cancelInspection', () => cancellation.promise);
+  const messages: unknown[] = [];
+  t.mock.method(console, 'error', (message: unknown) => { messages.push(message); });
+  const result = f.object.revealTransaction(deployment, hash(1), true);
+  await waitFor(() => messages.length > 0);
+  assert.equal(f.store.dispatchState(now).inFlight, 1);
+  assert.equal(value(await completesWithin(result, 500)).status, 'pending');
+  await f.settle();
+  assert.equal(f.object.receipts.size, 0);
+  assert.equal(f.store.dispatchState(now).inFlight, 0);
+  assert.equal(f.store.knownTransaction(hash(1)), true);
+  assert.ok(messages.some(message => (message as { event?: string }).event === 'ethereum_reveal_cancellation_unconfirmed'));
+  cancellation.resolve();
 });
 
 test('verifier throttling pauses dispatch without losing watches or delaying frozen reads and publication', async t => {

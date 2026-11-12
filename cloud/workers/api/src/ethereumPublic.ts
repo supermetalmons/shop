@@ -12,7 +12,8 @@ import { isSupportedRevealDeployment } from './ethereumRevealCatalog.js';
 import { ethereumConfig, ethereumTransactionHash, localEthereumRpcUrl,
   type EthereumCollectionReadContext, type EthereumRequestContext } from './ethereumRuntime.js';
 import { confirmEthereumTransaction } from './ethereumTransactionConfirmation.js';
-import { raceWithSignal } from './boundedRequest.js';
+import { raceWithSignal, sleepWithSignal } from './boundedRequest.js';
+import { ethereumPublicReadCacheScope } from './ethereumPublicReadCache.js';
 
 type CollectionScope = { chainId: number; contractAddress: string };
 const confirmationSchema = z.object({
@@ -51,7 +52,7 @@ async function publicDeployment(context: EthereumRequestContext, scope: Collecti
 }
 
 function collectionContext(context: EthereumRequestContext, deployment: EthereumRevealDeployment): EthereumCollectionReadContext {
-  return { ...context, config: { chainId: deployment.chainId, contractAddress: deployment.contractAddress,
+  return { ...context, publicReadCacheScope: ethereumPublicReadCacheScope(deployment), config: { chainId: deployment.chainId, contractAddress: deployment.contractAddress,
     metadataBaseUri: deployment.metadataBaseUri, deploymentBlock: deployment.deploymentBlock, enabled: true } };
 }
 
@@ -124,6 +125,10 @@ export async function ethereumPublicRequest(request: Request, context: EthereumR
     if (current.deploymentId !== deployment.deploymentId || current.revision !== deployment.revision ||
       current.catalogRevision !== deployment.catalogRevision || current.catalogUpdateId !== deployment.catalogUpdateId ||
       readsArtworkMetadata && after.catalogRevision !== before.catalogRevision) continue;
+    if (selected.publicReadCacheExpiresAtMs !== undefined && Date.now() >= selected.publicReadCacheExpiresAtMs) {
+      await sleepWithSignal(1, context.signal);
+      continue;
+    }
     return { ...value, ...collectionScope(deployment, after.catalogRevision) };
   }
 }

@@ -2,19 +2,23 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
+import { decodeReturn, encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_API_PATHS as paths, type EthereumPublicCollectionConfig, type EthereumPublicCollectionScope, type EthereumStats } from '../../../../shared/ethereum/api.ts';
 import descriptor from '../../../../shared/ethereum/revealCatalog.json';
 import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { ethereumCatalogSnapshot, requireEthereumCatalogSnapshot, type EthereumRevealCatalogSnapshot } from '../src/ethereumCatalogRevision.ts';
 import { ethereumPublicRequest } from '../src/ethereumPublic.ts';
-import type { EthereumCollectionReadContext, EthereumEnvironment, EthereumRequestContext } from '../src/ethereumRuntime.ts';
+import { ethereumRpc, type EthereumCollectionReadContext, type EthereumEnvironment, type EthereumRequestContext } from '../src/ethereumRuntime.ts';
+import { ethereumCollectionRead, readEthereumCollectionStats } from '../src/ethereumRead.ts';
+import { EthereumPublicReadCache, ethereumPublicReadCacheKey } from '../src/ethereumPublicReadCache.ts';
+import { EthereumProviderBudgetStore, ProviderBudgetClient, type ProviderBudgetRequest, type ProviderBudgetSql } from '../src/ethereumProviderBudget.ts';
+import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 import { d1Database } from './commerceD1Harness.ts';
 
+const { EthereumPublicReadCacheObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumPublicReadCacheObject.ts'));
 const CONTRACT = `0x${'11'.repeat(20)}`;
 const BLOCK_HASH = `0x${'ab'.repeat(32)}`;
 const TRANSACTION_HASH = `0x${'cd'.repeat(32)}`;
-const ZERO = `0x${'00'.repeat(20)}`;
 type Rpc = { id: number; method: string; params: unknown[] };
 type PublicStats = EthereumStats & EthereumPublicCollectionScope;
 
@@ -105,7 +109,8 @@ function fixture(chainId = 1, state: EthereumRevealDeployment['state'] = 'active
         if (call.data === encodeCall('MAX_RELICS()', [], [])) result = encodeAbi(['uint256'], [18]);
         else if (call.data === encodeCall('getRelicClaimedMask()', [], [])) result = encodeAbi(['uint256'], [0]);
         else {
-          assert.equal(call.data, encodeCall('stats(address)', ['address'], [ZERO]));
+          assert.equal(call.data.slice(0, 10), encodeCall('stats(address)', [], []));
+          assert.equal(call.data.length, 74);
           counts.stats++;
           await duringStats();
           result = encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32',
@@ -137,6 +142,277 @@ function fixture(chainId = 1, state: EthereumRevealDeployment['state'] = 'active
       SET effective_catalog_version=?,effective_catalog_sha256=?,catalog_revision=?,revision=revision+1 WHERE deployment_id=?`)
       .run(descriptor.catalogVersion, descriptor.manifestSha256, revision, deploymentId),
   };
+}
+
+function installPublicCache(f: ReturnType<typeof fixture>) {
+  const cache = new EthereumPublicReadCache();
+  f.env.ETHEREUM_PUBLIC_READ_CACHE = {
+    getByName: () => ({
+      stats: async (scope, owner) => ({ ok: true, value: await cache.readEntry(ethereumPublicReadCacheKey(scope, 'stats', owner),
+        owner === null ? 2_000 : 1_000, signal => readEthereumCollectionStats({ ...f.readContext, signal,
+          chainCheck: undefined, relicInterfaceCheck: undefined }, owner)) }),
+      ownerIds: async () => assert.fail('Stats requests must not load inventory'),
+    }),
+  };
+}
+
+for (const enabled of [undefined, 'true']) test(`scoped config and stats use cache when enabled=${enabled}`, async t => {
+  const f = fixture();
+  t.after(() => f.database.close());
+  f.env.ETHEREUM_PUBLIC_READ_CACHE_ENABLED = enabled;
+  installPublicCache(f);
+  const [config, stats] = await Promise.all([f.request(paths.config), f.request(paths.stats)]);
+  assert.equal((config as EthereumPublicCollectionConfig).cratePriceWei, (stats as PublicStats).cratePriceWei);
+  assert.equal(f.counts.stats, 1);
+  assert.equal(f.counts.registry, 4);
+  assert.equal(f.counts.snapshots, 0);
+  const walletA = `0x${'22'.repeat(20)}`;
+  const walletB = `0x${'33'.repeat(20)}`;
+  const [first, second, repeat] = await Promise.all([
+    f.request(paths.stats, `&owner=${walletA}`), f.request(paths.stats, `&owner=${walletB}`), f.request(paths.stats, `&owner=${walletA}`),
+  ]) as PublicStats[];
+  assert.equal(first.owner, walletA);
+  assert.equal(second.owner, walletB);
+  assert.equal(repeat.owner, walletA);
+  assert.equal(f.counts.stats, 3);
+});
+
+test('fallback reads remain fresh while bypassing public cache and provider budget bindings', async t => {
+  const f = fixture();
+  t.after(() => f.database.close());
+  f.env.ETHEREUM_PUBLIC_READ_CACHE_ENABLED = 'false';
+  f.env.ETHEREUM_PROVIDER_CONTROL_ENABLED = 'false';
+  f.env.QUICKNODE_ETHEREUM_MAINNET_ENABLED = 'false';
+  f.env.ETHEREUM_PUBLIC_READ_CACHE = { getByName: () => assert.fail('Fallback must not use the public cache') };
+  f.env.ETHEREUM_PROVIDER_BUDGET = { getByName: () => assert.fail('Fallback must not acquire provider budget') };
+  const originalFetch = f.context.fetch;
+  let ownerReads = 0;
+  f.context.fetch = (input, init) => {
+    if (String(input).includes('/nft/v3/')) ownerReads++;
+    return originalFetch(input, init);
+  };
+  const first = await f.request(paths.stats) as PublicStats;
+  const second = await f.request(paths.stats) as PublicStats;
+  assert.deepEqual(second, first);
+  assert.equal(f.counts.stats, 2);
+  const wallet = `0x${'22'.repeat(20)}`;
+  const firstInventory = await f.request(paths.inventory, `&owner=${wallet}`);
+  const secondInventory = await f.request(paths.inventory, `&owner=${wallet}`);
+  assert.deepEqual(secondInventory, firstInventory);
+  assert.equal(ownerReads, 2);
+});
+
+for (const { name, path, extra, ttlMs } of [
+  { name: 'anonymous stats', path: paths.stats, extra: '', ttlMs: 2_000 },
+  { name: 'config', path: paths.config, extra: '', ttlMs: 2_000 },
+  { name: 'wallet stats', path: paths.stats, extra: `&owner=0x${'22'.repeat(20)}`, ttlMs: 1_000 },
+]) {
+  test(`${name} refills a cached snapshot that expires during the final registry read`, async t => {
+    let now = 1_000_000;
+    t.mock.method(Date, 'now', () => now);
+    const f = fixture();
+    t.after(() => f.database.close());
+    installPublicCache(f);
+    await f.request(path, extra);
+    assert.equal(f.counts.stats, 1);
+    now += ttlMs - 100;
+    const finalRead = f.counts.registry + 2;
+    f.beforeRegistry(read => { if (read === finalRead) now += 1_200; });
+    const result = await f.request(path, extra) as Record<string, unknown>;
+    assert.equal(f.counts.stats, 2);
+    assert.equal(f.counts.registry, 6);
+    assert.equal(Object.hasOwn(result, 'expiresAtMs'), false);
+    assert.equal(Object.hasOwn(result, 'publicReadCacheExpiresAtMs'), false);
+  });
+}
+
+test('a cold statistics fill taking longer than its cache TTL is returned without repeated provider reads', async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture();
+  t.after(() => f.database.close());
+  installPublicCache(f);
+  f.duringStats(() => { now += 3_000; });
+  const result = await f.request(paths.stats) as PublicStats;
+  assert.equal(result.contractAddress, CONTRACT);
+  assert.equal(f.counts.stats, 1);
+  await f.request(paths.stats);
+  assert.equal(f.counts.stats, 2);
+});
+
+test('repeated final-registry expiry yields to the request deadline instead of returning stale data', async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture();
+  t.after(() => f.database.close());
+  installPublicCache(f);
+  f.beforeRegistry(read => { if (read % 2 === 0) now += 2_500; });
+  const reason = new Error('Request deadline reached');
+  const timer = setTimeout(() => f.controller.abort(reason), 20);
+  try {
+    await assert.rejects(f.request(paths.stats), error => error === reason);
+    assert.ok(f.counts.stats >= 1);
+  } finally { clearTimeout(timer); }
+});
+
+test('cached stats cannot bypass final registry checks or authoritative catalog-update revisions', async t => {
+  const f = fixture();
+  t.after(() => f.database.close());
+  installPublicCache(f);
+  await f.request(paths.stats);
+  f.beginUpdate();
+  f.snapshot(() => ({ deploymentId: f.deploymentId, catalogRevision: 1, artworks: [] }));
+  const updated = await f.request(paths.stats) as PublicStats;
+  assert.equal(updated.catalogRevision, 1);
+  assert.equal(f.counts.stats, 2);
+  const before = f.counts.registry;
+  f.beforeRegistry(read => {
+    if (read === before + 3) f.disappear();
+  });
+  await assert.rejects(f.request(paths.stats), /not registered/);
+  assert.equal(f.counts.stats, 2);
+});
+
+test('cached inventory candidates still recheck ownership and merge each callers recent IDs', async t => {
+  const f = fixture();
+  t.after(() => f.database.close());
+  const wallet = `0x${'22'.repeat(20)}`;
+  const otherWallet = `0x${'33'.repeat(20)}`;
+  const cache = new EthereumPublicReadCache();
+  let candidateReads = 0;
+  let ownershipReads = 0;
+  let head = 100;
+  let crateOwner = wallet;
+  f.env.ETHEREUM_PUBLIC_READ_CACHE = { getByName: () => ({
+    stats: async () => assert.fail('Inventory does not request stats'),
+    ownerIds: async (scope, owner, cursor) => ({ ok: true,
+      value: await cache.read(ethereumPublicReadCacheKey(scope, 'owner-ids', owner, cursor), 2_000, async () => {
+        candidateReads++;
+        return { ids: ['111112'], nextCursor: null };
+      }) }),
+  }) };
+  const originalFetch = f.context.fetch;
+  f.context.fetch = async (input, init) => {
+    if (String(input).startsWith('https://cdn.mons.shop/')) {
+      return Response.json({ name: 'Item', image: 'https://cdn.lil.org/nft/111k/placeholder.png' });
+    }
+    const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+    const blockHash = `0x${head.toString(16).padStart(64, '0')}`;
+    if (!Array.isArray(payload) && payload.method === 'eth_getBlockByNumber') {
+      return Response.json({ jsonrpc: '2.0', id: payload.id, result: { number: `0x${head.toString(16)}`, hash: blockHash } });
+    }
+    if (Array.isArray(payload)) {
+      return Response.json(payload.map(call => {
+        const { data } = call.params[0] as { data: string };
+        assert.equal(data.slice(0, 10), encodeCall('getTokenInfos(uint256[])', [], []));
+        assert.deepEqual(call.params[1], { blockHash, requireCanonical: true });
+        ownershipReads++;
+        const [ids] = decodeReturn(['uint256[]'], `0x${data.slice(10)}`) as [bigint[]];
+        return { jsonrpc: '2.0', id: call.id, result: encodeAbi(['(uint8,uint256,address)[]'], [ids.map(id =>
+          id === 111112n ? [2, 1, crateOwner] : [1, id, wallet])]) };
+      }));
+    }
+    return originalFetch(input, init);
+  };
+  type Inventory = { items: Array<{ tokenId: string; owner: string }>; observedBlock: number };
+  const first = await f.request(paths.inventory, `&owner=${wallet}&expectedTokenIds=7`) as Inventory;
+  assert.deepEqual(first.items.map(item => item.tokenId), ['111112', '7']);
+  assert.equal(first.observedBlock, 100);
+  head = 101;
+  crateOwner = otherWallet;
+  const second = await f.request(paths.inventory, `&owner=${wallet}&expectedTokenIds=21`) as Inventory;
+  assert.deepEqual(second.items.map(item => item.tokenId), ['21']);
+  assert.ok(second.items.every(item => item.owner === wallet));
+  assert.equal(second.observedBlock, 101);
+  assert.equal(candidateReads, 1);
+  assert.equal(ownershipReads, 2);
+});
+
+for (const mode of ['legacy', 'scoped', 'prechecked', 'persistent'] as const) {
+  test(`cold ${mode} inventory completes within the public burst using actual permit accounting`, async t => {
+    t.mock.method(Date, 'now', () => 1_000_000);
+    const f = fixture(11155111);
+    t.after(() => f.database.close());
+    const sql: ProviderBudgetSql = { exec<T extends Record<string, string | number | null>>(query: string, ...bindings: Array<string | number | null>) {
+      const statement = f.database.prepare(query);
+      const values = statement.columns().length ? statement.all(...bindings) : (statement.run(...bindings), []);
+      return { toArray: () => values as T[] };
+    } };
+    const store = new EthereumProviderBudgetStore(sql, action => {
+      f.database.exec('BEGIN');
+      try { const result = action(); f.database.exec('COMMIT'); return result; }
+      catch (error) { f.database.exec('ROLLBACK'); throw error; }
+    });
+    const grants: Array<ProviderBudgetRequest & { granted: number }> = [];
+    f.env.ETHEREUM_PROVIDER_CONTROL_ENABLED = 'true';
+    f.env.ETHEREUM_PROVIDER_BUDGET = { getByName: provider => {
+      assert.equal(provider, 'alchemy');
+      return {
+        async grant(request) {
+          const result = store.grant(request, Date.now());
+          grants.push({ ...request, granted: result.granted });
+          return result;
+        },
+        async reportThrottle() { assert.fail('Successful local providers must not be throttled'); },
+      };
+    } };
+    const wallet = `0x${'22'.repeat(20)}`;
+    const originalFetch = f.context.fetch;
+    const blocks: unknown[][] = [];
+    let candidateReads = 0;
+    let ownershipReads = 0;
+    f.context.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === 'cdn.mons.shop') return Response.json({ name: 'Item', image: 'https://cdn.lil.org/nft/111k/placeholder.png' });
+      if (url.pathname.includes('/nft/v3/')) {
+        candidateReads++;
+        return Response.json({ ownedNfts: [{ tokenId: '111112', contractAddress: CONTRACT }] });
+      }
+      const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+      if (Array.isArray(payload)) {
+        assert.equal(payload.length, 1);
+        return Response.json(payload.map(call => {
+          const { data } = call.params[0] as { data: string };
+          assert.equal(data.slice(0, 10), encodeCall('getTokenInfos(uint256[])', [], []));
+          assert.deepEqual(call.params[1], { blockHash: BLOCK_HASH, requireCanonical: true });
+          ownershipReads++;
+          const [ids] = decodeReturn(['uint256[]'], `0x${data.slice(10)}`) as [bigint[]];
+          return { jsonrpc: '2.0', id: call.id, result: encodeAbi(['(uint8,uint256,address)[]'], [ids.map(id =>
+            id === 111112n ? [2, 1, wallet] : [1, id, wallet])]) };
+        }));
+      }
+      if (payload.method === 'eth_getBlockByNumber') blocks.push(payload.params);
+      return originalFetch(input, init);
+    };
+    if (mode === 'scoped') {
+      t.mock.method(globalThis, 'fetch', f.context.fetch);
+      const id = { equals: () => true };
+      const object = new EthereumPublicReadCacheObject({ id } as unknown as DurableObjectState, f.env as Env);
+      const namespace = { getByName: () => object, idFromName: () => id };
+      f.env.ETHEREUM_PUBLIC_READ_CACHE = namespace;
+    }
+    const extra = `owner=${wallet}&expectedTokenIds=7`;
+    const request = new Request(`https://api.mons.shop${paths.inventory}?${extra}`, { headers: { Origin: 'https://mons.shop' } });
+    let result: object;
+    if (mode === 'prechecked' || mode === 'persistent') {
+      const context = { ...f.readContext, fetch: f.context.fetch };
+      if (mode === 'persistent') context.providerBudgetClient = new ProviderBudgetClient(f.env.ETHEREUM_PROVIDER_BUDGET);
+      else await ethereumRpc(context, 'eth_chainId', []);
+      assert.ok(context.providerBudgetClient);
+      result = await ethereumCollectionRead(request, context, paths.inventory);
+    } else {
+      result = await (mode === 'scoped' ? f.request(paths.inventory, `&${extra}`)
+        : ethereumPublicRequest(request, f.context, paths.inventory)) as object;
+    }
+    assert.deepEqual((result as { items: Array<{ tokenId: string; owner: string }> }).items.map(item => [item.tokenId, item.owner]),
+      [['111112', wallet], ['7', wallet]]);
+    assert.equal(candidateReads, 1);
+    assert.equal(ownershipReads, 1);
+    assert.deepEqual(blocks, [['latest', false], ['0x64', false]]);
+    assert.deepEqual(grants.map(grant => ({ minimum: grant.minimum, wanted: grant.wanted, granted: grant.granted })),
+      mode === 'persistent' ? [{ minimum: 5, wanted: 250, granted: 250 }] : [{ minimum: 5, wanted: 100, granted: 100 },
+        { minimum: 100, wanted: mode === 'scoped' ? 250 : 100, granted: mode === 'scoped' ? 150 : 100 }]);
+  });
 }
 
 for (const chainId of [1, 11155111]) for (const state of ['ready', 'active', 'paused'] as const) {

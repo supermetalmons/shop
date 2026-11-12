@@ -16,9 +16,12 @@ test('local reveal bindings override remote storage with a separate local bucket
     { name: 'ETHEREUM_REVEAL', class_name: 'EthereumRevealObject' },
     { name: 'ETHEREUM_REVEAL_VERIFIER', class_name: 'EthereumRevealVerifierObject' },
     { name: 'ETHEREUM_REVEAL_PUBLISHER', class_name: 'EthereumRevealPublisherObject' },
+    { name: 'ETHEREUM_PROVIDER_BUDGET', class_name: 'EthereumProviderBudgetObject' },
+    { name: 'ETHEREUM_PUBLIC_READ_CACHE', class_name: 'EthereumPublicReadCacheObject' },
   ]);
   assert.deepEqual(config.migrations.map(migration => migration.new_sqlite_classes), [
     ['EthereumRevealObject'], ['EthereumRevealVerifierObject'], ['EthereumRevealPublisherObject'],
+    ['EthereumProviderBudgetObject', 'EthereumPublicReadCacheObject'],
   ]);
   assert.equal(config.r2_buckets[0].remote, false);
   assert.equal(config.r2_buckets[0].bucket_name, 'local-ethereum-reveal-metadata');

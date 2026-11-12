@@ -1,5 +1,6 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import miNoteCatalog from '../../../../mi_note_cards.json';
 import {
   MI_NOTE_CONTRACT_ADDRESS,
@@ -11,6 +12,8 @@ import {
 } from '../../../../shared/miNoteCards.ts';
 import { handleMiNoteCards } from '../src/miNoteCards.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
+import { EthereumProviderBudgetController, EthereumProviderBudgetStore, type ProviderBudgetGrant, type ProviderBudgetNamespace,
+  type ProviderBudgetSql } from '../src/ethereumProviderBudget.ts';
 
 const OWNER = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
 const ORIGIN = 'https://mons.shop';
@@ -150,7 +153,7 @@ test('mi note holdings require verification and reject a different requested wal
   assert.equal((await verified.run(request('?address=0x0000000000000000000000000000000000000001'))).response.status, 403);
   assert.equal(verified.calls.length, 0);
   assert.equal((await verified.run(request(''))).response.status, 200);
-  assert.equal(verified.calls[0].url.searchParams.get('owner'), OWNER.toLowerCase());
+  assert.equal(verified.calls.find(call => call.url.hostname === 'eth-mainnet.g.alchemy.com')?.url.searchParams.get('owner'), OWNER.toLowerCase());
 });
 
 function cacheUrl(contract: MiNoteContractAddress, version = 4) {
@@ -194,6 +197,133 @@ async function assertOriginalFailure(response: Response) {
 async function settle() {
   await new Promise((resolve) => setImmediate(resolve));
 }
+
+function providerBudget(t: TestContext, frozen = true) {
+  if (frozen) {
+    t.mock.method(Date, 'now', () => NOW);
+    t.mock.method(performance, 'now', () => NOW);
+  }
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  const sql: ProviderBudgetSql = { exec<T extends Record<string, string | number | null>>(query: string, ...bindings: Array<string | number | null>) {
+    const statement = database.prepare(query);
+    const values = statement.columns().length ? statement.all(...bindings) : (statement.run(...bindings), []);
+    return { toArray: () => values as T[] };
+  } };
+  const store = new EthereumProviderBudgetStore(sql, operation => {
+    database.exec('BEGIN IMMEDIATE');
+    try { const result = operation(); database.exec('COMMIT'); return result; }
+    catch (error) { database.exec('ROLLBACK'); throw error; }
+  });
+  const controller = new EthereumProviderBudgetController(store);
+  const grants: ProviderBudgetGrant[] = [];
+  const namespace: ProviderBudgetNamespace = { getByName: provider => ({
+    async grant(request) {
+      assert.equal(provider, 'alchemy');
+      const grant = controller.grant(request);
+      grants.push(grant);
+      return grant;
+    },
+    async reportThrottle(report) { store.reportThrottle(report.provider, report.retryAfterMs, Date.now()); },
+    async acquirePublic(request) { return controller.acquirePublic(request); },
+    async cancelPublic(request) { controller.cancelPublic(request); },
+  }) };
+  return { store, grants, namespace };
+}
+
+test('mi note Alchemy pagination reserves at most one page of capacity at a time', async t => {
+  const budget = providerBudget(t);
+  const firstPage = Array.from({ length: 100 }, (_, index) => String(index + 1));
+  let pages = 0;
+  const fixture = setup({
+    nfts: async input => {
+      pages++;
+      const cursor = inputUrl(input).searchParams.get('pageKey');
+      assert.equal(cursor, pages === 1 ? null : 'next-page');
+      return pages === 1 ? page(firstPage, 'next-page') : page(['101']);
+    },
+    opensea: async () => openSeaPage([ORIGINAL_IDS[0]]),
+  });
+  Object.assign(fixture.env, { ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true', ETHEREUM_PROVIDER_BUDGET: budget.namespace });
+  assert.deepEqual(await (await fixture.run()).response.json(), ownership([...firstPage, '101'], [], [ORIGINAL_IDS[0]]));
+  assert.equal(pages, 2);
+  assert.deepEqual(budget.grants.map(grant => grant.granted), [100, 100]);
+  assert.equal(fixture.metrics.upstreamCalls, 3);
+  await assertIndexedFailure((await fixture.run()).response);
+  assert.equal(pages, 2);
+  assert.deepEqual(budget.grants.map(grant => grant.granted), [100, 100, 0]);
+});
+
+test('mi note Alchemy pagination respects a paused budget while OpenSea remains available', async t => {
+  const budget = providerBudget(t);
+  budget.store.reportThrottle('alchemy', 1000, NOW);
+  const fixture = setup({ nfts: async () => assert.fail('Paused Alchemy work must not dispatch.') });
+  Object.assign(fixture.env, { ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true', ETHEREUM_PROVIDER_BUDGET: budget.namespace });
+  await assertIndexedFailure((await fixture.run()).response);
+  assert.deepEqual(budget.grants.map(grant => grant.granted), [0]);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(fixture.calls[0].url.hostname, 'api.opensea.io');
+});
+
+test('mi note cancellation stops pagination after the first page', async t => {
+  const budget = providerBudget(t);
+  const controller = new AbortController();
+  const reason = new Error('ownership check cancelled');
+  const firstPage = Array.from({ length: 100 }, (_, index) => String(index + 1));
+  let pages = 0;
+  const fixture = setup({ nfts: async () => {
+    pages++;
+    controller.abort(reason);
+    return page(firstPage, 'next-page');
+  } });
+  Object.assign(fixture.env, { ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true', ETHEREUM_PROVIDER_BUDGET: budget.namespace });
+  await assert.rejects(fixture.run(request(undefined, { signal: controller.signal })), error => error === reason);
+  assert.equal(pages, 1);
+  assert.deepEqual(budget.grants.map(grant => grant.granted), [100]);
+});
+
+test('mi note three-page Alchemy ownership waits for capacity without restarting fast pages', async t => {
+  const budget = providerBudget(t, false);
+  const tokenIds = Array.from({ length: 201 }, (_, index) => String(index + 1));
+  const cursors: Array<string | null> = [];
+  const fixture = setup({ nfts: async input => {
+    const cursor = inputUrl(input).searchParams.get('pageKey');
+    cursors.push(cursor);
+    const offset = cursor === null ? 0 : Number(cursor);
+    return page(tokenIds.slice(offset, offset + 100), offset < 200 ? String(offset + 100) : null);
+  } });
+  Object.assign(fixture.env, { ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true', ETHEREUM_PROVIDER_BUDGET: budget.namespace });
+  assert.deepEqual(await (await fixture.run()).response.json(), ownership(tokenIds));
+  assert.deepEqual(cursors, [null, '100', '200']);
+  assert.equal(budget.grants[0].granted, 100);
+  assert.ok(budget.grants.slice(1).some(grant => grant.granted >= 100));
+});
+
+test('mi note cancellation interrupts a later-page budget wait', async t => {
+  const budget = providerBudget(t, false);
+  const controller = new AbortController();
+  const reason = new Error('cancelled while waiting for page capacity');
+  let abortTimer: ReturnType<typeof setTimeout> | undefined;
+  t.after(() => clearTimeout(abortTimer));
+  const namespace: ProviderBudgetNamespace = { getByName: provider => {
+    const original = budget.namespace.getByName(provider);
+    return { ...original, async grant(request) {
+      const grant = await original.grant(request);
+      if (!grant.granted) abortTimer = setTimeout(() => controller.abort(reason), 5);
+      return grant;
+    } };
+  } };
+  let pages = 0;
+  const fixture = setup({ nfts: async () => {
+    pages++;
+    if (pages === 1) budget.store.reportThrottle('alchemy', 5000, Date.now());
+    return page(Array.from({ length: 100 }, (_, index) => String((pages - 1) * 100 + index + 1)), String(pages * 100));
+  } });
+  Object.assign(fixture.env, { ETHEREUM_PROVIDER_CONTROL_ENABLED: 'true', ETHEREUM_PROVIDER_BUDGET: namespace });
+  await assert.rejects(fixture.run(request(undefined, { signal: controller.signal })), error => error === reason);
+  assert.equal(pages, 1);
+  assert.deepEqual(budget.grants.map(grant => grant.granted), [100, 0]);
+});
 
 test('mi note ownership sends fixed Alchemy and OpenSea requests and follows encoded cursors', async () => {
   let alchemyPages = 0;

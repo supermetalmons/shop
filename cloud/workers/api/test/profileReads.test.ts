@@ -42,7 +42,7 @@ test('profile CORS permits checkout operation headers and exposes retry guidance
     true,
   );
   const response = applyProfileCors(request, new Response(null));
-  assert.equal(response.headers.get('Access-Control-Expose-Headers'), STRIPE_CHECKOUT_RETRY_HEADER);
+  assert.equal(response.headers.get('Access-Control-Expose-Headers'), `${STRIPE_CHECKOUT_RETRY_HEADER}, Retry-After`);
 });
 
 test('profile reads preserve identity failure responses and authentication outcomes', async (context) => {

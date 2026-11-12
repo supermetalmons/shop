@@ -11,7 +11,7 @@ import type { EIP1193Provider } from '../src/wallet/injectedEthereumProviders.ts
 
 let { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
-const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+const { QueryClient, QueryClientProvider, focusManager, onlineManager } = await import('@tanstack/react-query');
 const { useEthereum111k } = await import('../src/ethereum/useEthereum111k.ts');
 const { ethereumApi, EthereumApiError } = await import('../src/ethereum/api.ts');
 const { ethereumRevealApi } = await import('../src/ethereum/revealApi.ts');
@@ -64,6 +64,8 @@ beforeEach(context => {
 });
 afterEach(async () => {
   await act(async () => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
+  focusManager.setFocused(undefined);
+  onlineManager.setOnline(true);
   dom.window.close();
 });
 
@@ -107,6 +109,277 @@ async function ready(view: ReturnType<typeof harness>) {
   await waitFor(() => assert.equal(view.result.current.inventory.isSuccess, true));
 }
 
+function fastReadRetries(t: TestContext) {
+  t.mock.method(Math, 'random', () => 0.5);
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+    schedule(callback, delay === 1_125 || delay === 2_125 ? 1 : delay, ...args));
+}
+
+test('config and wallet statistics recover on the third read without waiting for their polling interval', async t => {
+  fastReadRetries(t);
+  let configAttempts = 0, statsAttempts = 0;
+  const configRequest = t.mock.method(ethereumApi, 'config', async () => {
+    if (++configAttempts < 3) throw new EthereumApiError(503, 'Busy', 'unavailable');
+    return config;
+  });
+  const statsRequest = t.mock.method(ethereumApi, 'stats', async (_config, address) => {
+    if (++statsAttempts < 3) throw new EthereumApiError(502, 'Temporary gateway failure');
+    return { ...statistics, owner: address };
+  });
+  const account = wallet();
+  const view = harness(account);
+  await ready(view);
+  assert.equal(configRequest.mock.callCount(), 3);
+  assert.equal(statsRequest.mock.callCount(), 3);
+  assert.equal(view.result.current.config, config);
+  assert.equal(account.sent.length, 0);
+});
+
+test('exhausted config and stats refresh retries retain the current collection and last good availability', async t => {
+  fastReadRetries(t);
+  const view = harness();
+  await ready(view);
+  const lastConfig = view.result.current.config;
+  const lastStats = view.result.current.stats.data;
+  const configRequest = t.mock.method(ethereumApi, 'config', async () => { throw new EthereumApiError(503, 'Busy', 'unavailable'); });
+  const statsRequest = t.mock.method(ethereumApi, 'stats', async () => { throw new EthereumApiError(504, 'Timed out'); });
+  await act(async () => { await Promise.all([view.result.current.configQuery.refetch(), view.result.current.stats.refetch()]); });
+  assert.equal(configRequest.mock.callCount(), 3);
+  assert.equal(statsRequest.mock.callCount(), 3);
+  assert.equal(view.result.current.config, lastConfig);
+  assert.equal(view.result.current.stats.data, lastStats);
+  assert.equal(view.result.current.config.enabled, true);
+});
+
+test('wallet changes cancel a statistics retry before its delayed attempt can run', async t => {
+  t.mock.method(Math, 'random', () => 0.5);
+  const schedule = globalThis.setTimeout;
+  const delayed: Array<{ timer: ReturnType<typeof setTimeout>; run(): void }> = [];
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    const timer = schedule(callback, delay === 1_125 ? 2_147_483_647 : delay, ...args);
+    if (delay === 1_125) delayed.push({ timer, run: () => callback(...args) });
+    return timer;
+  });
+  t.after(() => delayed.forEach(value => clearTimeout(value.timer)));
+  let oldSignal: AbortSignal | undefined;
+  const addresses: Array<string | null> = [];
+  t.mock.method(ethereumApi, 'stats', async (_config, address, signal) => {
+    addresses.push(address);
+    if (address === owner) { oldSignal = signal; throw new EthereumApiError(503, 'Busy', 'unavailable'); }
+    return { ...statistics, owner: address };
+  });
+  const view = harness();
+  await waitFor(() => assert.equal(delayed.length, 1));
+  view.rerender({ wallet: wallet(other), mintKind: 'crate' });
+  await waitFor(() => assert.equal(view.result.current.stats.data?.owner, other));
+  assert.equal(oldSignal?.aborted, true);
+  await act(async () => { delayed.forEach(value => value.run()); });
+  assert.deepEqual(addresses, [owner, other]);
+});
+
+test('statistics cooldown survives focus, reconnect and remount until its original deadline', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  let busy = true;
+  const requests = t.mock.method(ethereumApi, 'stats', async (_config, address) => {
+    if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+    return { ...statistics, owner: address };
+  });
+  const account = wallet();
+  const view = harness(account);
+  await waitFor(() => assert.equal(view.result.current.stats.isError, true));
+  assert.equal(requests.mock.callCount(), 1);
+  await act(async () => {
+    focusManager.setFocused(false); focusManager.setFocused(true);
+    onlineManager.setOnline(false); onlineManager.setOnline(true);
+  });
+  view.unmount();
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client: view.client }, children);
+  const remounted = renderHook(() => useEthereum111k(account), { wrapper });
+  await act(async () => {});
+  assert.equal(requests.mock.callCount(), 1);
+  busy = false;
+  now += 60_000;
+  await act(async () => { focusManager.setFocused(false); focusManager.setFocused(true); });
+  await waitFor(() => assert.equal(remounted.result.current.stats.isSuccess, true));
+  assert.equal(requests.mock.callCount(), 2);
+});
+
+test('automatic reconciliation preserves stats and inventory cooldowns while retaining confirmed items', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const tick = manualRecoveryTicks(t, 60_000);
+  const confirmation = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  let busy = false, confirmed = false;
+  const reads = [
+    t.mock.method(ethereumApi, 'stats', async () => {
+      if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+      return statistics;
+    }),
+    t.mock.method(ethereumApi, 'inventory', async () => {
+      if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+      return { items: confirmed ? [token()] : [], nextCursor: null, observedBlock: 1 };
+    }),
+  ];
+  t.mock.method(ethereumApi, 'confirm', () => confirmation.promise);
+  writeEthereumDropOperation(scope, 'restored', savedOperation());
+  const view = harness();
+  await ready(view);
+  const lastStats = view.result.current.stats.data;
+  busy = true;
+  await act(async () => { await Promise.all([view.result.current.stats.refetch(), view.result.current.inventory.refetch()]); });
+  await waitFor(() => assert.ok(view.result.current.stats.isError && view.result.current.inventory.isError));
+  const errors = [view.result.current.stats.error, view.result.current.inventory.error];
+  const attempts = reads.map(read => read.mock.callCount());
+  confirmed = true;
+  await act(async () => { confirmation.resolve({ status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] }); });
+  await waitFor(() => assert.equal(view.result.current.pendingMints.length, 0));
+  await waitFor(() => assert.ok(view.result.current.stats.isError && view.result.current.inventory.isError));
+  assert.deepEqual(reads.map(read => read.mock.callCount()), attempts);
+  assert.deepEqual([view.result.current.stats.error, view.result.current.inventory.error], errors);
+  assert.equal(view.result.current.stats.data, lastStats);
+  assert.equal(view.result.current.inventory.data?.items[0]?.tokenId, token().tokenId);
+  busy = false;
+  now += 60_000;
+  await tick();
+  await ready(view);
+  assert.deepEqual(reads.map(read => read.mock.callCount()), attempts.map(count => count + 1));
+});
+
+test('automatic catalog invalidation cannot bypass a config cooldown', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const tick = manualRecoveryTicks(t, 60_000);
+  let busy = false, revision = 0;
+  const requestTimes: number[] = [];
+  const configs = t.mock.method(ethereumApi, 'config', async () => {
+    requestTimes.push(now);
+    if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+    return { ...config, deploymentId: 'test', catalogRevision: revision };
+  });
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [], nextCursor: null, observedBlock: 1,
+    deploymentId: 'test', catalogRevision: revision }));
+  const view = harness();
+  await ready(view);
+  busy = true;
+  await act(async () => { await view.result.current.configQuery.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.configQuery.isError, true));
+  const failure = view.result.current.configQuery.error;
+  assert.equal(configs.mock.callCount(), 2);
+  revision = 1;
+  await act(async () => { await view.result.current.inventory.refetch(); });
+  await waitFor(() => assert.equal(view.result.current.inventory.data?.catalogRevision, 1));
+  assert.equal(configs.mock.callCount(), 2);
+  assert.equal(view.result.current.configQuery.error, failure);
+  assert.equal(view.result.current.config.catalogRevision, 0);
+  busy = false;
+  now += 60_000;
+  await tick();
+  await waitFor(() => assert.equal(view.result.current.config.catalogRevision, 1));
+  assert.ok(configs.mock.callCount() >= 3);
+  assert.ok(requestTimes.slice(2).every(at => at >= 1_800_000_060_000));
+});
+
+for (const transition of ['visibility', 'suspension'] as const) {
+  test(`relic ${transition} changes preserve cooldowns and resume both reads at their deadline`, async t => {
+    let now = 1_800_000_000_000;
+    t.mock.method(Date, 'now', () => now);
+    const tick = manualRecoveryTicks(t, 60_000);
+    manualRecoveryTicks(t, 4_000);
+    let busy = transition === 'visibility';
+    const reads = [
+      t.mock.method(ethereumApi, 'relics', async () => {
+        if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+        return relicStatus;
+      }),
+      t.mock.method(ethereumApi, 'relicMetadata', async () => {
+        if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+        return [];
+      }),
+    ];
+    const account = wallet(null);
+    const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
+    clients.push(client);
+    const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+    const view = renderHook(({ suspended }) => useEthereum111k(account, 'relic', suspended), {
+      initialProps: { suspended: false }, wrapper,
+    });
+    if (!busy) {
+      await waitFor(() => assert.ok(view.result.current.relics.isSuccess && view.result.current.relicMetadata.isSuccess));
+      busy = true;
+      await act(async () => { await Promise.all([view.result.current.relics.refetch(), view.result.current.relicMetadata.refetch()]); });
+    }
+    await waitFor(() => assert.ok(view.result.current.relics.isError && view.result.current.relicMetadata.isError));
+    const attempts = reads.map(read => read.mock.callCount());
+    const lastGood = [view.result.current.relics.data, view.result.current.relicMetadata.data];
+    const errors = [view.result.current.relics.error, view.result.current.relicMetadata.error];
+    if (transition === 'visibility') {
+      for (const state of ['hidden', 'visible']) await act(async () => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: state });
+        document.dispatchEvent(new dom.window.Event('visibilitychange'));
+      });
+    } else {
+      view.rerender({ suspended: true });
+      view.rerender({ suspended: false });
+    }
+    await waitFor(() => assert.ok(view.result.current.relics.isError && view.result.current.relicMetadata.isError));
+    assert.deepEqual(reads.map(read => read.mock.callCount()), attempts);
+    assert.deepEqual([view.result.current.relics.data, view.result.current.relicMetadata.data], lastGood);
+    assert.deepEqual([view.result.current.relics.error, view.result.current.relicMetadata.error], errors);
+    busy = false;
+    now += 60_000;
+    await tick();
+    await waitFor(() => assert.ok(view.result.current.relics.isSuccess && view.result.current.relicMetadata.isSuccess));
+    assert.deepEqual(reads.map(read => read.mock.callCount()), attempts.map(count => count + 1));
+  });
+}
+
+test('a relic cooldown stays with its original wallet scope', async t => {
+  const requests: Array<string | null> = [];
+  t.mock.method(ethereumApi, 'relics', async (_config, address) => {
+    requests.push(address);
+    if (address === owner) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
+    return { ...relicStatus, owner: address };
+  });
+  const view = harness(wallet(), 'relic');
+  await waitFor(() => assert.equal(view.result.current.relics.isError, true));
+  view.rerender({ wallet: wallet(other), mintKind: 'relic' });
+  await waitFor(() => assert.equal(view.result.current.relics.data?.owner, other));
+  assert.equal(requests.filter(address => address === owner).length, 1);
+  assert.ok(requests.includes(other));
+});
+
+test('unmounting stops relic cooldown recovery before another HTTP read', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const tick = manualRecoveryTicks(t, 60_000);
+  const reads = [
+    t.mock.method(ethereumApi, 'relics', async () => { throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000); }),
+    t.mock.method(ethereumApi, 'relicMetadata', async () => { throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000); }),
+  ];
+  const view = harness(wallet(null), 'relic');
+  await waitFor(() => assert.ok(view.result.current.relics.isError && view.result.current.relicMetadata.isError));
+  view.unmount();
+  now += 60_000;
+  await tick();
+  assert.deepEqual(reads.map(read => read.mock.callCount()), [1, 1]);
+});
+
+test('relic metadata retries transient reads without issuing a wallet transaction', async t => {
+  fastReadRetries(t);
+  let attempts = 0;
+  const request = t.mock.method(ethereumApi, 'relicMetadata', async () => {
+    if (++attempts < 3) throw new EthereumApiError(503, 'Busy', 'unavailable');
+    return [];
+  });
+  const account = wallet();
+  const view = harness(account, 'relic');
+  await waitFor(() => assert.equal(view.result.current.relicMetadata.isSuccess, true));
+  assert.equal(request.mock.callCount(), 3);
+  assert.equal(account.sent.length, 0);
+});
+
 test('a newer inventory catalog refreshes config, replaces cached eggs and ignores a delayed older config', async t => {
   let revision = 0;
   let configRevision = 0;
@@ -131,6 +404,7 @@ test('a newer inventory catalog refreshes config, replaces cached eggs and ignor
 });
 
 test('inventory recovers after a cancelled catalog update without a revision change', async t => {
+  fastReadRetries(t);
   const tick = manualRecoveryTicks(t, 5_000);
   const currentConfig = { ...config, deploymentId: 'test', catalogRevision: 0 };
   const configRequest = t.mock.method(ethereumApi, 'config', async () => currentConfig);
@@ -143,19 +417,22 @@ test('inventory recovers after a cancelled catalog update without a revision cha
   await waitFor(() => assert.equal(view.result.current.inventory.isError, true));
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
   await tick();
-  assert.equal(request.mock.callCount(), 1);
+  assert.equal(request.mock.callCount(), 3);
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
   await tick();
-  assert.equal(request.mock.callCount(), 2);
+  await waitFor(() => {
+    assert.equal(view.result.current.inventory.fetchStatus, 'idle');
+    assert.equal(request.mock.callCount(), 6);
+  });
   fenced = false;
   await tick();
   await waitFor(() => assert.equal(view.result.current.inventory.isSuccess, true));
   assert.deepEqual(view.result.current.items, [token()]);
   assert.equal(view.result.current.config, currentConfig);
   assert.equal(configRequest.mock.callCount(), 1);
-  assert.equal(request.mock.callCount(), 3);
+  assert.equal(request.mock.callCount(), 7);
   await tick();
-  assert.equal(request.mock.callCount(), 3);
+  assert.equal(request.mock.callCount(), 7);
 });
 
 for (const failure of [new EthereumApiError(403, 'Forbidden.'), new EthereumApiError(500, 'Invalid request.'), new Error('Invalid response.')]) {
@@ -1233,4 +1510,40 @@ test('a terminal receipt failure discards a retained response after foreign comp
   assert.equal(first.result.current.unpackResults[hash], undefined);
   assert.equal(request.mock.callCount(), 2);
   assert.deepEqual(readEthereumRevealJobs(scope), []);
+});
+
+test('wallet chain cancellation restores relic reads without replaying the aborted claim', async t => {
+  const connected = wallet();
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  connected.provider!.on = (event, listener) => { const entries = listeners.get(event) ?? new Set(); entries.add(listener); listeners.set(event, entries); };
+  connected.provider!.removeListener = (event, listener) => { listeners.get(event)?.delete(listener); };
+  const view = harness(connected, 'relic');
+  await ready(view);
+  await waitFor(() => assert.equal(view.result.current.relics.isSuccess, true));
+  let requested = false;
+  const requests = t.mock.method(ethereumApi, 'relics', async (_config, address, signal) => {
+    if (!requested) {
+      requested = true;
+      return await new Promise<typeof relicStatus>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+    }
+    return { ...relicStatus, owner: address };
+  });
+  let claiming!: Promise<boolean>;
+  act(() => { claiming = view.result.current.claimRelic(1); });
+  await waitFor(() => assert.equal(requested, true));
+  await act(async () => {
+    for (const listener of listeners.get('chainChanged') ?? []) listener('0x1');
+    assert.equal(await claiming, false);
+    for (const listener of listeners.get('chainChanged') ?? []) listener('0xaa36a7');
+  });
+  await waitFor(() => assert.equal(view.result.current.relics.isSuccess, true));
+  await waitFor(() => assert.ok(requests.mock.callCount() >= 2));
+  assert.equal(view.result.current.relics.error, null);
+  assert.equal(connected.sent.length, 0);
+  const { ethereumReadCanRefetch, ethereumReadRefetchInterval } = await import('../src/ethereum/readRetry.ts');
+  const query = view.client.getQueryCache().find({ queryKey: ['ethereum111k', 'relics', config.chainId, config.contractAddress, owner], exact: true })!;
+  assert.equal(ethereumReadCanRefetch(query), true);
+  assert.equal(ethereumReadRefetchInterval(query, 4_000), 4_000);
+  await act(async () => { assert.equal(await view.result.current.claimRelic(1), true); });
+  assert.equal(connected.sent.length, 1);
 });

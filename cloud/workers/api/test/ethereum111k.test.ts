@@ -23,6 +23,7 @@ import { createCommerceD1Harness, d1Database } from './commerceD1Harness.ts';
 import { ETHEREUM_CHECKOUT_PATHS as checkoutPaths, type EthereumCheckoutStatusResponse,
   type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import { RpcProviderError } from '../src/ethereumProvider.ts';
 
 const SYNTHETIC_METADATA: EthereumMetadata = {
   name: 'Synthetic metadata fixture', image: 'data:image/svg+xml;base64,PHN2Zy8+',
@@ -1733,6 +1734,48 @@ test('111k EOA auth is one-use, chain/origin scoped, expires, and keeps shipping
   } finally { f.close(); }
 });
 
+test('contract-wallet credit reverts reject authentication without throttling the shared provider', async () => {
+  const f = fixture();
+  try {
+    f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
+    f.env.ETHEREUM_PROVIDER_CONTROL_ENABLED = 'true';
+    let grants = 0, signatureChecks = 0;
+    const throttles: Array<{ provider: string; retryAfterMs: number }> = [];
+    f.env.ETHEREUM_PROVIDER_BUDGET = { getByName: () => ({
+      async grant(request) {
+        grants++;
+        const now = Date.now();
+        return { granted: request.wanted, issuedAtMs: now, expiresAtMs: now + 250,
+          retryAfterMs: 0, grantId: crypto.randomUUID() };
+      },
+      async reportThrottle(report) { throttles.push(report); },
+    }) };
+    f.state.contractCode.add(OTHER_CONTRACT);
+    const proof = await f.challenge(OTHER_CONTRACT);
+    const providerFetch: typeof fetch = async (input, init) => {
+      const payload = JSON.parse(String(init?.body)) as Rpc;
+      const call = payload.params[0] as { to?: string; data?: string };
+      if (payload.method === 'eth_call' && call.to === OTHER_CONTRACT &&
+        call.data?.startsWith(functionSelector('isValidSignature(bytes32,bytes)'))) {
+        signatureChecks++;
+        return Response.json({ jsonrpc: '2.0', id: payload.id, error: {
+          code: 3, message: 'execution reverted: insufficient credits',
+          data: `0x08c379a0${encodeAbi(['string'], ['insufficient credits']).slice(2)}`,
+        } });
+      }
+      return f.providerFetch(input, init);
+    };
+    const result = await f.request(paths.authVerify, { challengeId: proof.challengeId, signature: '0x' }, undefined, { fetch: providerFetch });
+    assert.equal(result.response.status, 401);
+    assert.equal((result.body.error as { code: string }).code, 'unauthenticated');
+    assert.equal(signatureChecks, 1);
+    assert.ok(grants > 0);
+    assert.deepEqual(throttles, []);
+    assert.equal(f.ops.prepare('SELECT COUNT(*) AS count FROM ethereum_auth_sessions').get()!.count, 0);
+    assert.equal(f.ops.prepare('SELECT consumed_at_ms FROM ethereum_auth_challenges WHERE challenge_id=?').get(proof.challengeId)!.consumed_at_ms, null);
+  } finally { f.close(); }
+});
+
 test('Ethereum auth cleanup runs independently of disabled collection reconciliation', async () => {
   const f = fixture();
   try {
@@ -3109,7 +3152,7 @@ test('one failed receipt does not block later records or discovery and is counte
     let failed = 0;
     await assert.rejects(reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), {
       fetch: f.providerFetch, nowMs: () => f.state.now, onResult: (result) => { failed = result.failed; },
-    }), (error: unknown) => error === failure);
+    }), (error: unknown) => error instanceof RpcProviderError && error.kind === 'transport' && error.cause === failure);
     assert.equal(failed, 1);
     assert.equal(f.order(second.prepared.orderId)!.status, 'ready_to_ship');
     assert.equal(f.order(third.prepared.orderId)!.status, 'ready_to_ship');
@@ -3984,6 +4027,7 @@ test('contract batch failure rejects before cancelled sibling cleanup finishes',
     const failure = new Error('contract batch failed');
     let envelopes = 0;
     let cancellation: unknown;
+    let reportedFailure: unknown;
     let rejected = false;
     const providerFetch: typeof fetch = async (input, init) => {
       const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
@@ -3998,13 +4042,16 @@ test('contract batch failure rejects before cancelled sibling cleanup finishes',
     const context = readContext(f, providerFetch);
     const calls = Array.from({ length: 13 }, (_, index) => encodeCall('previewTokenURI(uint8,uint256)', ['uint8', 'uint256'], [1, index + 1]));
     const result = assert.rejects(ethereumCallBatch(context, calls), error => {
-      assert.equal(error, failure);
+      assert.ok(error instanceof RpcProviderError);
+      assert.equal(error.kind, 'transport');
+      assert.equal(error.cause, failure);
+      reportedFailure = error;
       rejected = true;
       return true;
     });
     await new Promise(setImmediate);
     assert.equal(rejected, true);
-    assert.equal(cancellation, failure);
+    assert.equal(cancellation, reportedFailure);
     assert.equal(context.signal.aborted, false);
     assert.equal(envelopes, 2);
     cleanup.resolve();
@@ -4034,7 +4081,16 @@ for (const failure of ['missing-response', 'duplicate-id', 'unknown-id', 'rpc-er
       await assert.rejects(ethereumCallBatch(readContext(f, providerFetch), [
         encodeCall('getTokenInfos(uint256[])', ['uint256[]'], [['111112']]),
         encodeCall('getTokenInfos(uint256[])', ['uint256[]'], [['111113']]),
-      ]), /Ethereum RPC returned an (?:incomplete|invalid) response/);
+      ]), error => {
+        if (failure !== 'invalid-result') {
+          assert.ok(error instanceof RpcProviderError);
+          assert.equal(error.kind, 'response');
+        } else {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /Ethereum RPC returned an (?:incomplete|invalid) response/);
+        }
+        return true;
+      });
     } finally { f.close(); }
   });
 }
@@ -4088,7 +4144,7 @@ for (const chainId of [31337, 11155111]) {
       assert.equal(result.body.observedBlock, 102);
       const reads = f.state.calls.filter(call => call.method === 'eth_call');
       assert.equal(reads.length, 1);
-      assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+      assert.ok(reads.every(call => JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })));
       assert.ok(f.state.calls.filter(call => call.method === 'eth_getLogs').every(call => (call.params[0] as { toBlock: string }).toBlock === '0x66'));
     } finally { f.close(); }
   });
@@ -4134,7 +4190,7 @@ test('inventory metadata remains coherent when an RPC pool serves another fork a
       for (const result of body) {
         const call = payload.find(entry => entry.id === result.id)!;
         const data = (call.params[0] as { data: string }).data;
-        if (!data.startsWith(functionSelector('getTokenInfos(uint256[])')) || call.params[1] === blockHash(102)) continue;
+        if (!data.startsWith(functionSelector('getTokenInfos(uint256[])')) || JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })) continue;
         const [tokens] = decodeReturn(['(uint8,uint256,address)[]'], result.result) as [Array<[bigint, bigint, string]>];
         result.result = encodeAbi(['(uint8,uint256,address)[]'], [tokens.map(token => [token[0], token[1], OTHER_WALLET])]);
       }
@@ -4147,7 +4203,7 @@ test('inventory metadata remains coherent when an RPC pool serves another fork a
     assert.deepEqual(result.body.items.map(item => item.displayId), ids.map(Number));
     const reads = f.state.calls.filter(call => call.method === 'eth_call');
     assert.equal(reads.length, 1);
-    assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+    assert.ok(reads.every(call => JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })));
     assert.equal(f.state.calls.filter(call => call.method === 'eth_getBlockByNumber' && call.params[0] === '0x66').length, 1);
   } finally { f.close(); }
 });
@@ -4190,7 +4246,7 @@ for (const count of [311, 620]) {
       assert.deepEqual(result.body.items.map(item => item.displayId), ids.map(Number));
       const reads = f.state.calls.filter(call => call.method === 'eth_call');
       assert.equal(reads.length, Math.ceil(count / 150));
-      assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+      assert.ok(reads.every(call => JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })));
       assert.ok(f.state.batchSizes.every(size => size <= 4));
     } finally { f.close(); }
   });
@@ -4266,7 +4322,7 @@ test('local inventory recovers expected IDs at its captured hash when log discov
     const infoReads = reads.filter(call => (call.params[0] as { data: string }).data.startsWith(functionSelector('getTokenInfos(uint256[])')));
     assert.deepEqual(infoReads.map(call => (decodeReturn(['uint256[]'], `0x${(call.params[0] as { data: string }).data.slice(10)}`)[0] as bigint[]).map(String)),
       [discovered, ['40', '41', '42']]);
-    assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+    assert.ok(reads.every(call => JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })));
     const next = await f.request<Page>(`${paths.inventory}?owner=${WALLET}&cursor=30`, undefined, undefined, { fetch: providerFetch });
     assert.equal(next.response.status, 200, JSON.stringify(next.body));
     assert.deepEqual(next.body.items.map(item => item.tokenId), ['31', '40']);
@@ -4351,6 +4407,15 @@ test('Sepolia inventory is contract scoped and verifies current ownership, inclu
     f.state.alchemyNfts = [];
     f.state.alchemyCursor = 'same';
     assert.equal((await f.request(`${paths.inventory}?owner=${WALLET}&cursor=same`)).response.status, 503);
+  } finally { f.close(); }
+});
+
+test('an unconfigured local RPC fails before attempting a default localhost connection', async () => {
+  const f = fixture();
+  try {
+    f.env.ETHEREUM_111K_RPC_URL = '';
+    await assert.rejects(ethereumCallBatch(readContext(f), [encodeCall('MAX_RELICS()', [], [])]), /Local Ethereum RPC is not configured/);
+    assert.equal(f.state.urls.length, 0);
   } finally { f.close(); }
 });
 
@@ -4663,7 +4728,7 @@ for (const chainId of [1, 11155111]) {
         assert.ok(f.state.urls.length > 0);
         assert.ok(f.state.urls.every(url => url === `https://${chainId === 1 ? 'eth-mainnet' : 'eth-sepolia'}.g.alchemy.com/v2/test-alchemy-key`));
         assert.ok(f.state.calls.filter(call => call.method === 'eth_call')
-          .every(call => (call.params[0] as { to: string }).to === selected && call.params[1] === blockHash(102)));
+          .every(call => (call.params[0] as { to: string }).to === selected && JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })));
         assert.equal(f.databaseCalls.requests, 0);
       }
       f.state.rpcChainId = chainId === 1 ? 11155111 : 1;
@@ -4738,7 +4803,7 @@ test('relic status batches all state at one canonical latest block without metad
       relicLimit: 3, relicsUsed: 1, remainingAllowance: 2 });
     assert.deepEqual(f.state.batchSizes, [3]);
     assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_getBlockByNumber', 'eth_call', 'eth_call', 'eth_call', 'eth_getBlockByNumber']);
-    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === blockHash(102)));
+    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })));
     assert.equal(f.state.metadataRequests.length, 0);
     assert.equal(f.databaseCalls.requests, 0);
     assert.match(result.response.headers.get('cache-control') ?? '', /no-store/);
@@ -4763,7 +4828,7 @@ test('public relic availability shares the issued mask while keeping reserved cl
     assert.equal(result.body.publicRelicsMinted, 2);
     assert.deepEqual(result.body.publicSale, { limit: 5, minted: 2, priceWei: '1000', active: true,
       mintable: 3, freeLimit: 3, freeUsed: 1, remainingFreeAllowance: 2 });
-    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === blockHash(102)));
+    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(102), requireCanonical: true })));
     const stats = await f.request<EthereumStats>(paths.stats);
     assert.equal(stats.response.status, 200);
     assert.equal(stats.body.publicRelicsMinted, 2);
@@ -4822,7 +4887,7 @@ test('public relic reads reject RPC errors and reorganizations during the second
     f.state.afterRpc = async entry => {
       if (isPublicRead(entry)) {
         assert.equal((entry.params[0] as { to: string }).to, CONTRACT);
-        assert.equal(entry.params[1], blockHash(102));
+        assert.deepEqual(entry.params[1], { blockHash: blockHash(102), requireCanonical: true });
         f.state.canonical.set(102, blockHash(999));
       }
     };
@@ -4934,6 +4999,50 @@ test('stats reject relic claims exceeding their allocation or unreserved crate s
     }
   } finally { f.close(); }
 });
+
+for (const failure of ['capacity', 'transport', 'throttle', 'connection'] as const) {
+  test(`legacy config keeps ${failure} failures retryable and recovers without disabling the drop`, async () => {
+    const f = fixture();
+    try {
+      f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
+      f.env.ETHEREUM_PROVIDER_CONTROL_ENABLED = 'true';
+      f.commerce.database.prepare('UPDATE ethereum_111k_control SET chain_id=11155111 WHERE singleton=1').run();
+      f.registerDeployment(11155111);
+      let blocked = false;
+      f.env.ETHEREUM_PROVIDER_BUDGET = { getByName: () => ({
+        async grant(request) {
+          const now = Date.now();
+          return { granted: blocked && failure === 'capacity' ? 0 : request.wanted, issuedAtMs: now,
+            expiresAtMs: now + 1000, retryAfterMs: blocked && failure === 'capacity' ? 1000 : 0 };
+        },
+        async acquirePublic() {
+          const now = Date.now();
+          return { granted: 0, issuedAtMs: now, expiresAtMs: now + 1000, retryAfterMs: 1000 };
+        },
+        async cancelPublic() {},
+        async reportThrottle() {},
+      }) };
+      const providerFetch: typeof fetch = async (input, init) => {
+        if (blocked && failure === 'connection') throw new TypeError('Connection lost');
+        if (blocked && failure !== 'capacity') return new Response('', {
+          status: failure === 'throttle' ? 429 : 503, headers: { 'Retry-After': '2' },
+        });
+        return f.providerFetch(input, init);
+      };
+      assert.equal((await f.request(paths.config, undefined, undefined, { fetch: providerFetch })).body.enabled, true);
+      blocked = true;
+      const result = await f.request(paths.config, undefined, undefined, { fetch: providerFetch });
+      assert.equal(result.response.status, 503);
+      assert.equal((result.body.error as { code: string }).code, 'unavailable');
+      assert.ok(Number(result.response.headers.get('Retry-After')) >= 1);
+      assert.equal('enabled' in result.body, false);
+      blocked = false;
+      const recovered = await f.request(paths.config, undefined, undefined, { fetch: providerFetch });
+      assert.equal(recovered.response.status, 200);
+      assert.equal(recovered.body.enabled, true);
+    } finally { f.close(); }
+  });
+}
 
 test('legacy or incompatible collection interfaces disable configuration and reject stats', async () => {
   const f = fixture();

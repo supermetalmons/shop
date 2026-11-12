@@ -11,6 +11,7 @@ import {
 } from '../../shared/ethereum/api';
 import { ethereumAssetId, ethereumItemDisplayIdMaximum, ethereumRelicClaimCount, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELICS, ETHEREUM_CRATES_PER_RELIC, ETHEREUM_MAX_DISCOUNT_ALLOWANCE, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId, type EthereumMetadata } from '../../shared/ethereum/protocol';
 import { requestEthereumJson, type EthereumRequestOptions } from './request';
+import { ethereumRetryAfterMs } from './retryAfter';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
 import { matchesEthereumOperationEvent } from './recovery';
@@ -20,7 +21,12 @@ import { isShipmentHistoryCursor, type ShipmentPageRequest } from '../../shared/
 import { assertEthereumCatalog, assertSameEthereumCatalog, retainEthereumMetadata, validEthereumCatalogScope, validEthereumMetadataRevision } from './catalogRevision';
 
 export class EthereumApiError extends Error {
-  constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null) { super(message); }
+  readonly retryAtMs: number | null;
+  constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null,
+    readonly retryAfterMs: number | null = null) {
+    super(message);
+    this.retryAtMs = retryAfterMs === null ? null : Date.now() + retryAfterMs;
+  }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -39,7 +45,8 @@ async function request(path: string, options: EthereumRequestOptions = {}): Prom
       response.status === 503 ? 'This Ethereum drop is not available yet.' : 'The Ethereum request failed. Please try again.';
     const code = record(detail) && record(detail.details) && detail.details.kind === 'transaction-reverted' ? 'transaction-reverted' :
       record(detail) && typeof detail.code === 'string' ? detail.code : null;
-    throw new EthereumApiError(response.status, message, code, response.status === 401 ? options.session?.token ?? null : null);
+    throw new EthereumApiError(response.status, message, code, response.status === 401 ? options.session?.token ?? null : null,
+      ethereumRetryAfterMs(response.headers.get('Retry-After'), record(detail) && record(detail.details) ? detail.details.retryAfterMs : undefined));
   }
   return value;
 }
