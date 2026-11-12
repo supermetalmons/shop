@@ -14,7 +14,7 @@ New `NFT111K` builds expose a fixed `contractURI()` returning
 `https://cdn.mons.shop/111k/collection.json` on mainnet, Sepolia, and local chains.
 The source is [`collection.json`](../ethereum-metadata/collection.json), with the
 collection name `111k`, description `111k is a collection about nfts`, image
-`https://cdn.lil.org/nft/111k/paintings/1.png`, and website (`external_link`)
+`https://cdn.lil.org/nft/111k/logo.png`, and website (`external_link`)
 `https://vvv.so/111k`. The ERC-721 name and symbol remain `111K`.
 
 The URL has no setter and is independent of `baseURI()`. Its hosted JSON can be
