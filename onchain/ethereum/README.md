@@ -14,14 +14,14 @@ The contract dependencies are `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1
 
 ## Mainnet ETH splitters
 
-Both contracts accept native ETH. Anyone can call `withdraw()` to distribute to all fixed recipients or `release(address)` to retry a single payout. ERC-20 tokens, including WETH, cannot be withdrawn. See the [deployed source](src/EthSplitter.sol) and [receiver addresses and shares in basis points](config/eth-splitters.json).
+`artistssplit` distributes native ETH and canonical WETH. `111ksplit` distributes native ETH only. Anyone can call `withdraw()` to distribute to all fixed recipients or `release(address)` to retry a single ETH payout. See the [artist splitter source](src/splitters/ArtistsSplitV2.sol), [111k splitter source](src/EthSplitter.sol), and [receiver addresses and shares in basis points](config/eth-splitters.json).
 
 | Contract | Mainnet address | Recipients | Creation transaction |
 | --- | --- | --- | --- |
-| `artistssplit` | [`0xffcf89b8a2cd6ac1d09aabf52f112225903e9137`](https://etherscan.io/address/0xffcf89b8a2cd6ac1d09aabf52f112225903e9137#code) | 10 artists | [Block 26,400,539](https://etherscan.io/tx/0xcef24eacb976255f4981656a9db37b73fc1f9e7178093630f9014d5b3ce7f4f1) |
+| `artistssplit` | [`0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5`](https://etherscan.io/address/0xc495131aab4eddb3c9a90a761bd0ab1550ce35a5#code) | 10 artists | [Block 26,401,611](https://etherscan.io/tx/0xe03f5854fae1fc8138bc961fb420f4610598cfecd3df6d57c5790d1838017a08) |
 | `111ksplit` | [`0x20bde74e6ab6774299ef5a3b83b488e8928a8624`](https://etherscan.io/address/0x20bde74e6ab6774299ef5a3b83b488e8928a8624#code) | 14 mint proceeds receivers | [Block 26,400,543](https://etherscan.io/tx/0x23714ec704e7224042c34288dc316cbeb5a162d0c3db994bf66ad82d3eb53695) |
 
-Etherscan shows an Exact Match for `artistssplit` and a Similar Match for `111ksplit`. Sourcify verified the source and constructor arguments for [artistssplit](https://repo.sourcify.dev/1/0xffcf89b8a2cd6ac1d09aabf52f112225903e9137) and [111ksplit](https://repo.sourcify.dev/1/0x20bde74e6ab6774299ef5a3b83b488e8928a8624).
+The ETH/WETH `artistssplit` has an Etherscan Exact Match. `withdraw()` distributes both assets in kind using their separate cumulative shares. Failed ETH payments stay available for `release(address)` retries. The fixed WETH token is `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2`.
 
 ## Check
 
