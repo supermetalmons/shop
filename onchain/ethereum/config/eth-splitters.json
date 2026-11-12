@@ -1,0 +1,46 @@
+{
+  "chainId": 1,
+  "collectionAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "splitters": [
+    {
+      "name": "artistssplit",
+      "contractAddress": "0xffcf89b8a2cd6ac1d09aabf52f112225903e9137",
+      "deploymentTransaction": "0xcef24eacb976255f4981656a9db37b73fc1f9e7178093630f9014d5b3ce7f4f1",
+      "deploymentBlock": 26400539,
+      "recipients": [
+        { "label": "bi", "address": "0x51Ec8729331E284c4B5e8EcA8e0D184FeD18632F", "shareBps": 3549 },
+        { "label": "Pa", "address": "0x8B573abc736c82216D738Af3024F3a45fC3b18E3", "shareBps": 3355 },
+        { "label": "Me", "address": "0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9", "shareBps": 645 },
+        { "label": "Tu", "address": "0x1B591f88d9bFcF7d057DF2c5a50b59Da2cBa349f", "shareBps": 645 },
+        { "label": "Gr", "address": "0x07d2d89b4A6E3fdA8858Da3510b76e2219eE6969", "shareBps": 645 },
+        { "label": "To", "address": "0x603C39B3D0E0f33772d79695A4F6819FCc987113", "shareBps": 645 },
+        { "label": "na", "address": "0xa07E7932f5C981aA769A1Cf9400B5c94AdB944c4", "shareBps": 129 },
+        { "label": "di", "address": "0x2236Fb6C35f78A092F0DdA655f3b49d0e8Bf6581", "shareBps": 129 },
+        { "label": "Lu", "address": "0x71d0318BB33d961f323C81a7a4Ca095b549F7E6E", "shareBps": 129 },
+        { "label": "ch", "address": "0xc4275E6D4109e0288cDc9b064E32F3f54bcDA61F", "shareBps": 129 }
+      ]
+    },
+    {
+      "name": "111ksplit",
+      "contractAddress": "0x20bde74e6ab6774299ef5a3b83b488e8928a8624",
+      "deploymentTransaction": "0x23714ec704e7224042c34288dc316cbeb5a162d0c3db994bf66ad82d3eb53695",
+      "deploymentBlock": 26400543,
+      "recipients": [
+        { "label": "bi", "address": "0x51Ec8729331E284c4B5e8EcA8e0D184FeD18632F", "shareBps": 2750 },
+        { "label": "Pa", "address": "0x8B573abc736c82216D738Af3024F3a45fC3b18E3", "shareBps": 2600 },
+        { "label": "Me", "address": "0xE938eBB66B92692Ab01F76C99cFAc1928482e7b9", "shareBps": 500 },
+        { "label": "Tu", "address": "0x1B591f88d9bFcF7d057DF2c5a50b59Da2cBa349f", "shareBps": 500 },
+        { "label": "Gr", "address": "0x07d2d89b4A6E3fdA8858Da3510b76e2219eE6969", "shareBps": 500 },
+        { "label": "To", "address": "0x603C39B3D0E0f33772d79695A4F6819FCc987113", "shareBps": 500 },
+        { "label": "na", "address": "0xa07E7932f5C981aA769A1Cf9400B5c94AdB944c4", "shareBps": 100 },
+        { "label": "di", "address": "0x2236Fb6C35f78A092F0DdA655f3b49d0e8Bf6581", "shareBps": 100 },
+        { "label": "Lu", "address": "0x71d0318BB33d961f323C81a7a4Ca095b549F7E6E", "shareBps": 100 },
+        { "label": "ch", "address": "0xc4275E6D4109e0288cDc9b064E32F3f54bcDA61F", "shareBps": 100 },
+        { "label": "mo", "address": "0x72D0c5623A05033F9eE4495D408BC6c05DF8367d", "shareBps": 500 },
+        { "label": "vv", "address": "0x0AdF7B78c952E038d4eA4B5bF84B9d3D22C60Ce9", "shareBps": 583 },
+        { "label": "vv", "address": "0xB0B4EC16bE55af47109947F0dC84C4561A020A4B", "shareBps": 583 },
+        { "label": "vv", "address": "0xd9488d6687d656a55B3F1a36998d149f9b1bE2Cc", "shareBps": 584 }
+      ]
+    }
+  ]
+}

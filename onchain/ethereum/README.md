@@ -12,6 +12,17 @@ Ownership transfers require the new owner to accept. `renounceOwnership()` is di
 
 The contract dependencies are `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`; allowlist tooling uses OpenZeppelin's standard Merkle-tree generator. Foundry and Solidity 0.8.38 must already be installed. Builds and tests use `--offline` and do not download compilers. Historical benchmark reproductions also require Solidity 0.8.30. No Hardhat or forge-std dependency is needed.
 
+## Mainnet ETH splitters
+
+Both contracts accept native ETH. Anyone can call `withdraw()` to distribute to all fixed recipients or `release(address)` to retry a single payout. ERC-20 tokens, including WETH, cannot be withdrawn. See the [deployed source](src/EthSplitter.sol) and [receiver addresses and shares in basis points](config/eth-splitters.json).
+
+| Contract | Mainnet address | Recipients | Creation transaction |
+| --- | --- | --- | --- |
+| `artistssplit` | [`0xffcf89b8a2cd6ac1d09aabf52f112225903e9137`](https://etherscan.io/address/0xffcf89b8a2cd6ac1d09aabf52f112225903e9137#code) | 10 artists | [Block 26,400,539](https://etherscan.io/tx/0xcef24eacb976255f4981656a9db37b73fc1f9e7178093630f9014d5b3ce7f4f1) |
+| `111ksplit` | [`0x20bde74e6ab6774299ef5a3b83b488e8928a8624`](https://etherscan.io/address/0x20bde74e6ab6774299ef5a3b83b488e8928a8624#code) | 14 mint proceeds receivers | [Block 26,400,543](https://etherscan.io/tx/0x23714ec704e7224042c34288dc316cbeb5a162d0c3db994bf66ad82d3eb53695) |
+
+Etherscan shows an Exact Match for `artistssplit` and a Similar Match for `111ksplit`. Sourcify verified the source and constructor arguments for [artistssplit](https://repo.sourcify.dev/1/0xffcf89b8a2cd6ac1d09aabf52f112225903e9137) and [111ksplit](https://repo.sourcify.dev/1/0x20bde74e6ab6774299ef5a3b83b488e8928a8624).
+
 ## Check
 
 Run from `onchain/ethereum`:
