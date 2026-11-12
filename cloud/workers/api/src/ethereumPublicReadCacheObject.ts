@@ -5,7 +5,7 @@ import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_RELICS } from '../../../../shared/ethe
 import { EthereumApiError } from './ethereumError.js';
 import { ethereumProviderApiError, ethereumProviderBudget, withEthereumProvider } from './ethereumProvider.js';
 import type { ProviderBudgetClient } from './ethereumProviderBudget.js';
-import { readAlchemyOwnerIds, readEthereumCollectionStats } from './ethereumRead.js';
+import { ethereumCollectionStatsFromData, readAlchemyOwnerIds } from './ethereumRead.js';
 import { EthereumPublicReadCache, ethereumPublicReadCacheKey, ethereumPublicReadCacheName,
   type EthereumOwnerIds, type EthereumPublicCacheEvent, type EthereumPublicReadCacheEntry,
   type EthereumPublicReadCacheResult, type EthereumPublicReadCacheScope } from './ethereumPublicReadCache.js';
@@ -24,10 +24,7 @@ export class EthereumPublicReadCacheObject extends DurableObject<Env> {
       const wallet = owner === null ? null : ethereumAddress(owner);
       const key = this.key(scope, 'stats', wallet);
       return this.cache.readEntry(key, wallet === null ? 2_000 : 1_000, signal =>
-        this.read(scope, signal, context => {
-          context.relicInterfaceCheck = this.relicInterfaceAvailable(scope, context);
-          return readEthereumCollectionStats(context, wallet);
-        }));
+        this.read(scope, signal, context => this.readStats(scope, context, wallet)));
     });
   }
 
@@ -62,21 +59,25 @@ export class EthereumPublicReadCacheObject extends DurableObject<Env> {
       signal, fetch: (input, init) => fetch(input, init) };
   }
 
-  private async relicInterfaceAvailable(scope: EthereumPublicReadCacheScope, context: EthereumCollectionReadContext): Promise<boolean> {
+  private async readStats(scope: EthereumPublicReadCacheScope, context: EthereumCollectionReadContext, owner: string | null): Promise<EthereumStats> {
     const now = Date.now();
     const key = await sha256Hex(JSON.stringify([scope.chainId, scope.contractAddress.toLowerCase(), scope.deploymentId,
       context.providerAttempt?.provider, context.providerAttempt?.url]));
     const checkMaximum = (this.maximumRelicsVerified.get(key) ?? 0) <= now;
-    const calls = [encodeCall(ETHEREUM_FUNCTIONS.relicClaimedMask, [], [])];
+    const calls = [encodeCall(ETHEREUM_FUNCTIONS.relicClaimedMask, [], []),
+      encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? '0x0000000000000000000000000000000000000000'])];
     if (checkMaximum) calls.push(encodeCall('MAX_RELICS()', [], []));
-    const [mask, maximum] = await ethereumCallBatch(context, calls);
+    const [mask, stats, maximum] = await ethereumCallBatch(context, calls);
+    if (mask.length !== 66 || (decodeReturn(['uint256'], mask)[0] as bigint) >= 1n << BigInt(ETHEREUM_MAX_RELICS) ||
+      checkMaximum && (maximum.length !== 66 || decodeReturn(['uint256'], maximum)[0] !== BigInt(ETHEREUM_MAX_RELICS))) {
+      throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
+    }
     if (checkMaximum) {
-      if (maximum.length !== 66 || decodeReturn(['uint256'], maximum)[0] !== BigInt(ETHEREUM_MAX_RELICS)) return false;
       for (const [cachedKey, expiresAtMs] of this.maximumRelicsVerified) if (expiresAtMs <= now) this.maximumRelicsVerified.delete(cachedKey);
       while (this.maximumRelicsVerified.size >= 8) this.maximumRelicsVerified.delete(this.maximumRelicsVerified.keys().next().value!);
       this.maximumRelicsVerified.set(key, now + 600_000);
     }
-    return mask.length === 66 && (decodeReturn(['uint256'], mask)[0] as bigint) < 1n << BigInt(ETHEREUM_MAX_RELICS);
+    return ethereumCollectionStatsFromData(context, owner, stats);
   }
 
   private observeCache(event: EthereumPublicCacheEvent): void {

@@ -6,6 +6,7 @@ import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import type { EthereumStats } from '../../../../shared/ethereum/api.ts';
+import { ethereumProviderCost } from '../src/ethereumProvider.ts';
 import type { EthereumOwnerIds, EthereumPublicReadCacheScope } from '../src/ethereumPublicReadCache.ts';
 
 const CONTRACT = `0x${'11'.repeat(20)}`;
@@ -71,6 +72,9 @@ test('native public cache coalesces requests without coupling caller cancellatio
   let ownerCalls = 0;
   let maximumCalls = 0;
   let maskCalls = 0;
+  let maximumData = encodeAbi(['uint256'], [18]);
+  let maskData = encodeAbi(['uint256'], [0]);
+  const envelopes: Array<Array<{ method: string; data?: string }>> = [];
   const observedOwners: string[] = [];
   const errors: string[] = [];
   try {
@@ -88,8 +92,11 @@ test('native public cache coalesces requests without coupling caller cancellatio
         }
         type Rpc = { id: number; method: string; params: unknown[] };
         const payload = await request.json() as Rpc | Rpc[];
-        if (failAlchemyStats && url.hostname === 'eth-mainnet.g.alchemy.com' && !Array.isArray(payload) &&
-          payload.method === 'eth_call' && (payload.params[0] as { data: string }).data.startsWith(encodeCall('stats(address)', [], []))) {
+        const calls = Array.isArray(payload) ? payload : [payload];
+        envelopes.push(calls.map(call => ({ method: call.method,
+          ...(call.method === 'eth_call' ? { data: (call.params[0] as { data: string }).data } : {}) })));
+        if (failAlchemyStats && url.hostname === 'eth-mainnet.g.alchemy.com' && calls.some(call =>
+          call.method === 'eth_call' && (call.params[0] as { data: string }).data.startsWith(encodeCall('stats(address)', [], [])))) {
           return Response.json({ error: 'temporary' }, { status: 503 });
         }
         const respond = async ({ id, method, params }: Rpc) => {
@@ -99,8 +106,8 @@ test('native public cache coalesces requests without coupling caller cancellatio
             assert.equal(method, 'eth_call');
             const { data, to } = params[0] as { data: string; to: string };
             assert.equal(to, CONTRACT);
-            if (data === encodeCall('MAX_RELICS()', [], [])) { maximumCalls++; result = encodeAbi(['uint256'], [18]); }
-            else if (data === encodeCall('getRelicClaimedMask()', [], [])) { maskCalls++; result = encodeAbi(['uint256'], [0]); }
+            if (data === encodeCall('MAX_RELICS()', [], [])) { maximumCalls++; result = maximumData; }
+            else if (data === encodeCall('getRelicClaimedMask()', [], [])) { maskCalls++; result = maskData; }
             else {
               assert.equal(data.slice(0, 10), encodeCall('stats(address)', [], []));
               statsCalls++;
@@ -120,28 +127,40 @@ test('native public cache coalesces requests without coupling caller cancellatio
     const worker = runtime.getWorker('ethereum-public-cache-test');
     const first = worker.fetch('https://cache.test/stats?cancel=1');
     await entered.promise;
-    const second = worker.fetch('https://cache.test/stats');
+    const joined = Promise.all(Array.from({ length: 20 }, () => worker.fetch('https://cache.test/stats')));
     assert.equal((await first).status, 499);
     holdStats = false;
     release.resolve();
-    const result = await second;
-    assert.equal(result.status, 200);
+    const results = await joined;
+    assert.ok(results.every(result => result.status === 200));
+    const result = results[0];
     const stats = await result.json() as EthereumStats;
+    for (const response of results.slice(1)) assert.deepEqual(await response.json(), stats);
     assert.equal(stats.chainId, 1);
     assert.equal(Object.hasOwn(stats, 'expiresAtMs'), false);
     const freshExpiry = Number(result.headers.get('X-Test-Stats-Expires-At'));
     assert.ok(freshExpiry > Date.now());
     assert.equal(statsCalls, 1);
+    assert.deepEqual(envelopes.map(batch => batch.map(call => call.method)), [['eth_chainId'], ['eth_call', 'eth_call', 'eth_call']]);
+    assert.deepEqual(new Set(envelopes[1].map(call => call.data)), new Set([
+      encodeCall('getRelicClaimedMask()', [], []), encodeCall('stats(address)', ['address'], [`0x${'0'.repeat(40)}`]),
+      encodeCall('MAX_RELICS()', [], []),
+    ]));
+    assert.equal(envelopes.flat().reduce((sum, call) => sum + ethereumProviderCost(call.method, 'alchemy'), 0), 83);
     const cached = await worker.fetch('https://cache.test/stats');
     assert.equal(cached.status, 200);
     const retainedExpiry = Number(cached.headers.get('X-Test-Stats-Expires-At'));
     assert.ok(retainedExpiry > Date.now() && retainedExpiry <= freshExpiry);
     assert.equal(statsCalls, 1);
+    assert.equal(envelopes.length, 2);
     const changed = await worker.fetch('https://cache.test/stats?revision=4');
     assert.equal(changed.status, 200);
     assert.equal(statsCalls, 2);
     assert.equal(maskCalls, 2);
     assert.equal(maximumCalls, 1);
+    const warmFill = envelopes.slice(2);
+    assert.deepEqual(warmFill.map(batch => batch.map(call => call.method)), [['eth_chainId'], ['eth_call', 'eth_call']]);
+    assert.equal(warmFill.flat().reduce((sum, call) => sum + ethereumProviderCost(call.method, 'alchemy'), 0), 57);
     const owners = await Promise.all([OWNER, OTHER_OWNER].map(async owner => {
       const response = await worker.fetch(`https://cache.test/stats?owner=${owner}`);
       assert.equal(response.status, 200);
@@ -173,6 +192,24 @@ test('native public cache coalesces requests without coupling caller cancellatio
     await worker.fetch('https://cache.test/clock?milliseconds=600001');
     assert.equal((await worker.fetch('https://cache.test/stats?revision=9')).status, 200);
     assert.equal(maximumCalls, maximumBeforeFailover + 2);
+    for (const [index, invalid] of ([
+      { field: 'mask', value: '0x' },
+      { field: 'mask', value: encodeAbi(['uint256'], [1 << 18]) },
+      { field: 'maximum', value: '0x' },
+      { field: 'maximum', value: encodeAbi(['uint256'], [17]) },
+    ] as const).entries()) {
+      await worker.fetch('https://cache.test/clock?milliseconds=600001');
+      maskData = invalid.field === 'mask' ? invalid.value : encodeAbi(['uint256'], [0]);
+      maximumData = invalid.field === 'maximum' ? invalid.value : encodeAbi(['uint256'], [18]);
+      const route = `https://cache.test/stats?revision=${10 + index}`;
+      assert.equal((await worker.fetch(route)).status, 503);
+      const beforeRecovery: { stats: number; maximum: number } = { stats: statsCalls, maximum: maximumCalls };
+      maskData = encodeAbi(['uint256'], [0]);
+      maximumData = encodeAbi(['uint256'], [18]);
+      assert.equal((await worker.fetch(route)).status, 200);
+      assert.equal(statsCalls, beforeRecovery.stats + 1);
+      if (invalid.field === 'maximum') assert.equal(maximumCalls, beforeRecovery.maximum + 1);
+    }
     assert.deepEqual(errors, []);
   } finally {
     release.resolve();

@@ -9,7 +9,7 @@ import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '..
 import { ethereumCatalogSnapshot, requireEthereumCatalogSnapshot, type EthereumRevealCatalogSnapshot } from '../src/ethereumCatalogRevision.ts';
 import { ethereumPublicRequest } from '../src/ethereumPublic.ts';
 import { ethereumRpc, type EthereumCollectionReadContext, type EthereumEnvironment, type EthereumRequestContext } from '../src/ethereumRuntime.ts';
-import { ethereumCollectionRead, readEthereumCollectionStats } from '../src/ethereumRead.ts';
+import { ethereumCollectionRead, ethereumCollectionStats } from '../src/ethereumRead.ts';
 import { EthereumPublicReadCache, ethereumPublicReadCacheKey } from '../src/ethereumPublicReadCache.ts';
 import { EthereumProviderBudgetStore, ProviderBudgetClient, type ProviderBudgetRequest, type ProviderBudgetSql } from '../src/ethereumProviderBudget.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
@@ -149,7 +149,7 @@ function installPublicCache(f: ReturnType<typeof fixture>) {
   f.env.ETHEREUM_PUBLIC_READ_CACHE = {
     getByName: () => ({
       stats: async (scope, owner) => ({ ok: true, value: await cache.readEntry(ethereumPublicReadCacheKey(scope, 'stats', owner),
-        owner === null ? 2_000 : 1_000, signal => readEthereumCollectionStats({ ...f.readContext, signal,
+        owner === null ? 2_000 : 1_000, signal => ethereumCollectionStats({ ...f.readContext, signal,
           chainCheck: undefined, relicInterfaceCheck: undefined }, owner)) }),
       ownerIds: async () => assert.fail('Stats requests must not load inventory'),
     }),

@@ -231,11 +231,15 @@ export async function ethereumCollectionStats(context: EthereumCollectionReadCon
   return cachedEthereumCollectionStats(context, owner) ?? withEthereumReadProvider(context, selected => readEthereumCollectionStats(selected, owner));
 }
 
-export async function readEthereumCollectionStats(context: EthereumCollectionReadContext, owner: string | null): Promise<EthereumStats> {
+async function readEthereumCollectionStats(context: EthereumCollectionReadContext, owner: string | null): Promise<EthereumStats> {
   if (!await ethereumRelicInterfaceAvailable(context)) {
     throw new EthereumApiError('failed-precondition', 'The Ethereum collection does not support relic allocations.');
   }
   const statsData = await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? ZERO_ADDRESS]));
+  return ethereumCollectionStatsFromData(context, owner, statsData);
+}
+
+export function ethereumCollectionStatsFromData(context: EthereumCollectionReadContext, owner: string | null, statsData: string): EthereumStats {
   const stats = decode111kStats(statsData);
   if (!stats || stats.discountCratePriceWei > stats.cratePriceWei ||
     stats.warehousesMinted > ethereumItemDisplayIdMaximum('warehouse') || stats.artworksMinted > ethereumItemDisplayIdMaximum('artwork')) {

@@ -26,6 +26,9 @@ Concurrent identical misses share one fill. Each object holds at most 1,024
 results and 64 fills. Wallet keys use sixteen deterministic shards. Capability
 checks expire after ten minutes and are isolated by provider and deployment.
 The current claimed-ID mask remains a live check on each statistics fill.
+Statistics fills batch the live mask and statistics after checking the chain,
+including `MAX_RELICS` when its capability check is due. RPC costs, cache
+freshness windows and provider admission limits are unchanged.
 
 Public provider admission uses a FIFO queue with at most 64 pending requests per
 provider and one wake timer. The initial admission cutoff is one second from
