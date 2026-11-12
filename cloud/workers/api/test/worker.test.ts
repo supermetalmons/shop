@@ -1016,7 +1016,7 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   assert.equal(allowedPreflight.status, 204);
   assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
   assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request');
-  assert.equal(allowedPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry');
+  assert.equal(allowedPreflight.headers.get('access-control-expose-headers'), `${STRIPE_CHECKOUT_RETRY_HEADER}, Retry-After`);
   assert.equal(allowedPreflight.headers.get('vary'), 'Origin');
 
   const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/admin/profile', {
@@ -1132,7 +1132,7 @@ test('checkout route enforces restricted CORS, bearer authentication, methods, a
   assert.equal(allowedPreflight.status, 204);
   assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
   assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request');
-  assert.equal(allowedPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry');
+  assert.equal(allowedPreflight.headers.get('access-control-expose-headers'), `${STRIPE_CHECKOUT_RETRY_HEADER}, Retry-After`);
 
   const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/checkout/session', {
     method: 'OPTIONS',

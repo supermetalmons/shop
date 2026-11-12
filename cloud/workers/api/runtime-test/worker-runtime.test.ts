@@ -428,7 +428,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(checkoutPreflight.status, 204);
     assert.equal(checkoutPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request');
-    assert.equal(checkoutPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry');
+    assert.equal(checkoutPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry, Retry-After');
 
     const unauthenticatedCheckout = await worker.fetch('https://api.mons.shop/checkout/session', {
       method: 'POST',
