@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "status": "prepared-unsigned",
+  "operation": "111k-mainnet-public-mint-relic-4",
+  "preparedAt": "2026-11-12T03:13:09.861Z",
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "recipient": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "target": {
+    "relicId": 4,
+    "tokenId": 117175
+  },
+  "priceWei": "2440000000000000000",
+  "publicMintedBefore": 2,
+  "publicLimitAfter": 3,
+  "additionalPublicMintsPermitted": 1,
+  "primaryTransactions": [
+    "01-open-public-relic-sale.unsigned.json",
+    "02-mint-relic-4.unsigned.json"
+  ],
+  "recoveryTransaction": "recovery/close-public-relic-sale.unsigned.json",
+  "decodedTransactions": [
+    {
+      "step": "open-one-public-slot",
+      "file": "01-open-public-relic-sale.unsigned.json",
+      "nonce": 32,
+      "gas": 60000,
+      "value": "0",
+      "signature": "setPublicRelicSale(uint256,uint256,bool)",
+      "arguments": [
+        "3",
+        "2440000000000000000",
+        "true"
+      ],
+      "standby": false,
+      "data": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+      "step": "mint-relic-4",
+      "file": "02-mint-relic-4.unsigned.json",
+      "nonce": 33,
+      "gas": 180000,
+      "value": "2440000000000000000",
+      "signature": "mintRelic(uint256)",
+      "arguments": [
+        "4"
+      ],
+      "standby": false,
+      "data": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000004"
+    },
+    {
+      "step": "recovery-close-only",
+      "file": "recovery/close-public-relic-sale.unsigned.json",
+      "nonce": 34,
+      "gas": 60000,
+      "value": "0",
+      "signature": "setPublicRelicSale(uint256,uint256,bool)",
+      "arguments": [
+        "3",
+        "2440000000000000000",
+        "false"
+      ],
+      "standby": true,
+      "data": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "transactionType": 2,
+  "maxPriorityFeePerGasWei": "5000000000",
+  "maxFeePerGasWei": "10000000000",
+  "maximumPrimaryGasFeeWei": "2400000000000000",
+  "maximumTotalGasFeeWei": "3000000000000000",
+  "minimumRequiredBalanceWei": "2443000000000000000",
+  "authorization": {
+    "prepareUnsigned": true,
+    "sign": false,
+    "broadcast": false
+  },
+  "preflight": {
+    "command": "node --env-file=.env.local releases/111k-mainnet-v1/relic-4-public-mint-2026-11-12/preflight.mjs",
+    "expectedLatestAndPendingNonce": 32,
+    "expectedOwner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "expectedRuntimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+    "expectedGlobalSaleActive": true,
+    "expectedPublicSale": {
+      "limit": 2,
+      "minted": 2,
+      "priceWei": "2402000000000000000",
+      "active": true
+    },
+    "expectedReservedAllocation": 12,
+    "minimumAvailableCrates": 111,
+    "targetMustBeUnissued": true,
+    "recheckImmediatelyBeforeSigning": true
+  },
+  "futureSubmission": {
+    "route": "public-rpc",
+    "order": [
+      "open-one-public-slot",
+      "mint-relic-4"
+    ],
+    "waitForOpeningReceipt": false,
+    "signBothBeforeSubmission": true,
+    "automaticFeeIncrease": false,
+    "automaticNonceChange": false,
+    "automaticPublicLimitIncrease": false,
+    "automaticAlternativeRelic": false,
+    "confirmations": 3,
+    "raceAccepted": true
+  },
+  "recovery": {
+    "standbyOnly": true,
+    "requiresReconciledPrimaryReceipts": true,
+    "requiresNonce33Consumed": true,
+    "requiresCurrentNextNonce": 34,
+    "trigger": "Mint failed and public relic sale still has an open slot.",
+    "effect": "Disable only public relic sale; keep cumulative limit 3 and price 2.44 ETH.",
+    "cannotCancelPendingMint": true
+  },
+  "success": {
+    "targetOwner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "publicMinted": 3,
+    "publicMintable": 0,
+    "publicActiveFlag": true,
+    "event": {
+      "name": "PublicRelicMinted",
+      "wallet": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "relicId": 4,
+      "tokenId": 117175,
+      "paidWei": "2440000000000000000",
+      "freeMint": false
+    },
+    "ownTransactionAllocatedCratesDelta": 111,
+    "ownTransactionMintRevenueDeltaWei": "2440000000000000000",
+    "consumeReservedAllowance": false
+  },
+  "limitations": [
+    "Public RPC permits transactions from other wallets between opening and minting.",
+    "The public cap bounds additional public issuance; existing reserved claims remain independent.",
+    "No final mainnet mint result exists: this package only prepares unsigned transactions."
+  ]
+}

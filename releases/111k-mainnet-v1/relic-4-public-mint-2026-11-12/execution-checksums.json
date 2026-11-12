@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "sha256",
+  "createdAt": "2026-11-12T03:22:28.847Z",
+  "files": {
+    "EXECUTION.md": "21d88f31e0a71f8d0707337728132b25688c17d83f3a8c452e7941c89284ff04",
+    "checksums.json": "9c6bf9b912b5f131903bb9c93d851da86a1bf2563cfccd479a668562d9fdbd70",
+    "execution-approved.json": "29ee960b8479086fd03c0dcdbf1cc2b9de3d118710b794f776ff1720e6176d88",
+    "execution-independent-verification.json": "7818197c4eeee48e23e2b1542bad5e4fe75fa8db9f05979331c609be74049ce4",
+    "execution-preflight.json": "8cb2a7b977a288b9ea6004b907cc8a20f517b09c8f4338f5e45ed8d1a07be8ee",
+    "execution-submission.json": "075db84de3bb243bf0e36353263365a3d9bc7d1c5dc0675645f760818add0b02",
+    "execution-verification.json": "a5c8f99e035a4abeb5d2e03f983fbb1d8d979f6b184ba9e86b8e1b4bda363554"
+  },
+  "originalPreparation": {
+    "manifest": "checksums.json",
+    "manifestSha256": "9c6bf9b912b5f131903bb9c93d851da86a1bf2563cfccd479a668562d9fdbd70",
+    "verifiedFiles": [
+      "01-open-public-relic-sale.unsigned.json",
+      "02-mint-relic-4.unsigned.json",
+      "README.md",
+      "operation.json",
+      "preflight.mjs",
+      "recovery/close-public-relic-sale.unsigned.json",
+      "simulation.json",
+      "source-snapshot.json"
+    ],
+    "verifiedFileCount": 8,
+    "allHashesMatch": true,
+    "originalFilesUnchanged": true
+  },
+  "privateJournalFilenameCheck": {
+    "relativeDirectory": ".cache/111k-relic-4-public-mint-2026-11-12",
+    "inspection": "Directory filenames and file metadata only; private file contents were not read.",
+    "entries": [
+      {
+        "name": "transactions.private.json",
+        "type": "file",
+        "permissions": "600"
+      }
+    ],
+    "temporaryPasswordPattern": ".password-*",
+    "temporaryPasswordFilesFound": [],
+    "passed": true
+  }
+}

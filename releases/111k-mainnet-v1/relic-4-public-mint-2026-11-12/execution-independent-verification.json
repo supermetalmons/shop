@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "independentReviewer": "private_bundle_review",
+  "verifiedAt": "2026-11-12T03:16:56.110Z",
+  "readOnlyRpc": true,
+  "noTransactionsSignedOrSentByReviewer": true,
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "verificationBlock": {
+    "number": 26396115,
+    "hash": "0xd7d06df105be3287a421d604e3645bc0f044c0b509d107691f57a9b9079b71d1"
+  },
+  "transactions": [
+    {
+      "purpose": "open-one-public-slot",
+      "hash": "0x75e37319ff0901af821d2131368b2383562b40917ce7ed5e8375d1b352dda2a9",
+      "status": "0x1",
+      "blockNumber": 26396112,
+      "blockHash": "0xaf5f9b0f2e170a11ae8ef22c0d7fe078e22edca31660fdb2eddeb8aa369b4116",
+      "transactionIndex": 53,
+      "canonicalConfirmations": 4,
+      "nonce": 32,
+      "gasUsed": 38212,
+      "effectiveGasPriceWei": "5057941725",
+      "gasFeeWei": "193274069195700",
+      "unsignedPayloadExactMatch": true,
+      "calldataIndependentlyEncoded": true
+    },
+    {
+      "purpose": "mint-relic-4",
+      "hash": "0x698c788d1a05fd31dc907008f24e68267152c0931a0708c817248a0b8d30997f",
+      "status": "0x1",
+      "blockNumber": 26396112,
+      "blockHash": "0xaf5f9b0f2e170a11ae8ef22c0d7fe078e22edca31660fdb2eddeb8aa369b4116",
+      "transactionIndex": 54,
+      "canonicalConfirmations": 4,
+      "nonce": 33,
+      "gasUsed": 102019,
+      "effectiveGasPriceWei": "5057941725",
+      "gasFeeWei": "516006156842775",
+      "unsignedPayloadExactMatch": true,
+      "calldataIndependentlyEncoded": true
+    }
+  ],
+  "target": {
+    "relicId": 4,
+    "tokenId": 117175,
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93"
+  },
+  "publicSale": {
+    "limit": 3,
+    "minted": 3,
+    "priceWei": "2440000000000000000",
+    "active": true,
+    "mintable": 0,
+    "freeLimit": 0,
+    "freeUsed": 0
+  },
+  "globalSaleActive": true,
+  "exactMintEventVerified": true,
+  "exactMintTransferVerified": true,
+  "exactSaleUpdateEventVerified": true,
+  "totalGasFeeWei": "709280226038475",
+  "recoverySentByReviewer": false
+}

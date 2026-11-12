@@ -1,0 +1,647 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-11T23:09:04.889Z",
+  "purpose": "Fresh mainnet fork validation of releaseAllMint fixed-recipient proceeds distribution",
+  "localOnly": true,
+  "noMainnetTransactionsSent": true,
+  "noTransactionsSigned": true,
+  "noBalancesModified": true,
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "source": {
+    "blockNumber": 26394878,
+    "blockHash": "0xa469ccb5decadd00df8babc0b05cd749e0b1479ace18f95f9c2ab92f9ec98948",
+    "blockTimestamp": 1794438539,
+    "baseFeePerGasWei": "140270757",
+    "pendingNonce": 31
+  },
+  "runtimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+  "calldata": "0x4c5c05fa",
+  "before": {
+    "totalMintReceivedWei": "86072000000000000000",
+    "totalMintReleasedWei": "71415000000000000000",
+    "contractBalanceWei": "14657000000000000000",
+    "deployerBalanceWei": "9707412092976521",
+    "deployerNonce": 31
+  },
+  "recipientSnapshotsBefore": [
+    {
+      "index": 0,
+      "address": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+      "shareBps": "2750",
+      "releasedWei": "19639125000000000000",
+      "pendingWei": "4030675000000000000",
+      "balanceWei": "19543258563999043760",
+      "codeBytes": 23
+    },
+    {
+      "index": 1,
+      "address": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+      "shareBps": "2600",
+      "releasedWei": "18567900000000000000",
+      "pendingWei": "3810820000000000000",
+      "balanceWei": "597593488702039",
+      "codeBytes": 23
+    },
+    {
+      "index": 2,
+      "address": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+      "shareBps": "500",
+      "releasedWei": "3570750000000000000",
+      "pendingWei": "732850000000000000",
+      "balanceWei": "3573084039009941666",
+      "codeBytes": 0
+    },
+    {
+      "index": 3,
+      "address": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+      "shareBps": "500",
+      "releasedWei": "3570750000000000000",
+      "pendingWei": "732850000000000000",
+      "balanceWei": "3571095049680255000",
+      "codeBytes": 0
+    },
+    {
+      "index": 4,
+      "address": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+      "shareBps": "500",
+      "releasedWei": "3570750000000000000",
+      "pendingWei": "732850000000000000",
+      "balanceWei": "2972857553237152158",
+      "codeBytes": 0
+    },
+    {
+      "index": 5,
+      "address": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+      "shareBps": "500",
+      "releasedWei": "3570750000000000000",
+      "pendingWei": "732850000000000000",
+      "balanceWei": "3570714735941808444",
+      "codeBytes": 0
+    },
+    {
+      "index": 6,
+      "address": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+      "shareBps": "100",
+      "releasedWei": "714150000000000000",
+      "pendingWei": "146570000000000000",
+      "balanceWei": "1609808605851786138",
+      "codeBytes": 0
+    },
+    {
+      "index": 7,
+      "address": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+      "shareBps": "100",
+      "releasedWei": "714150000000000000",
+      "pendingWei": "146570000000000000",
+      "balanceWei": "654761897098392486",
+      "codeBytes": 0
+    },
+    {
+      "index": 8,
+      "address": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+      "shareBps": "100",
+      "releasedWei": "714150000000000000",
+      "pendingWei": "146570000000000000",
+      "balanceWei": "715220837384669271",
+      "codeBytes": 0
+    },
+    {
+      "index": 9,
+      "address": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+      "shareBps": "100",
+      "releasedWei": "714150000000000000",
+      "pendingWei": "146570000000000000",
+      "balanceWei": "75352245000000000",
+      "codeBytes": 0
+    },
+    {
+      "index": 10,
+      "address": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+      "shareBps": "500",
+      "releasedWei": "3570750000000000000",
+      "pendingWei": "732850000000000000",
+      "balanceWei": "3571980000000000000",
+      "codeBytes": 123
+    },
+    {
+      "index": 11,
+      "address": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+      "shareBps": "583",
+      "releasedWei": "4163494500000000000",
+      "pendingWei": "854503100000000000",
+      "balanceWei": "131031462389935850",
+      "codeBytes": 23
+    },
+    {
+      "index": 12,
+      "address": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+      "shareBps": "583",
+      "releasedWei": "4163494500000000000",
+      "pendingWei": "854503100000000000",
+      "balanceWei": "522057567751865261",
+      "codeBytes": 23
+    },
+    {
+      "index": 13,
+      "address": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+      "shareBps": "584",
+      "releasedWei": "4170636000000000000",
+      "pendingWei": "855968800000000000",
+      "balanceWei": "4179161124665476774",
+      "codeBytes": 0
+    }
+  ],
+  "fees": {
+    "maxPriorityFeePerGasWei": "1000000000",
+    "maxFeePerGasWei": "2000000000",
+    "gasEstimate": "480017",
+    "gasLimit": "700021",
+    "maximumFeeWei": "1400042000000000"
+  },
+  "simulation": {
+    "status": "0x1",
+    "gasUsed": "341133",
+    "effectiveGasPriceWei": "1138047767",
+    "gasCostWei": "388225648900011",
+    "events": [
+      {
+        "status": "released",
+        "recipient": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+        "amountWei": "4030675000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+        "amountWei": "3810820000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+        "amountWei": "732850000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+        "amountWei": "732850000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+        "amountWei": "732850000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+        "amountWei": "732850000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+        "amountWei": "146570000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+        "amountWei": "146570000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+        "amountWei": "146570000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+        "amountWei": "146570000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+        "amountWei": "732850000000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+        "amountWei": "854503100000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+        "amountWei": "854503100000000000"
+      },
+      {
+        "status": "released",
+        "recipient": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+        "amountWei": "855968800000000000"
+      }
+    ],
+    "successfulRecipients": 14,
+    "failedRecipients": 0,
+    "totalPaidWei": "14657000000000000000",
+    "pendingBeforeWei": "14657000000000000000",
+    "pendingAfterWei": "0",
+    "after": {
+      "totalMintReceivedWei": "86072000000000000000",
+      "totalMintReleasedWei": "86072000000000000000",
+      "contractBalanceWei": "0",
+      "deployerBalanceWei": "9319186444076510",
+      "deployerNonce": 32
+    },
+    "recipients": [
+      {
+        "address": "0x51ec8729331e284c4b5e8eca8e0d184fed18632f",
+        "index": 0,
+        "shareBps": "2750",
+        "codeBytes": 23,
+        "pendingBeforeWei": "4030675000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "4030675000000000000",
+        "balanceBeforeWei": "19543258563999043760",
+        "balanceAfterWei": "23573933563999043760",
+        "balanceDeltaWei": "4030675000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x8b573abc736c82216d738af3024f3a45fc3b18e3",
+        "index": 1,
+        "shareBps": "2600",
+        "codeBytes": 23,
+        "pendingBeforeWei": "3810820000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "3810820000000000000",
+        "balanceBeforeWei": "597593488702039",
+        "balanceAfterWei": "3811417593488702039",
+        "balanceDeltaWei": "3810820000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0xe938ebb66b92692ab01f76c99cfac1928482e7b9",
+        "index": 2,
+        "shareBps": "500",
+        "codeBytes": 0,
+        "pendingBeforeWei": "732850000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "732850000000000000",
+        "balanceBeforeWei": "3573084039009941666",
+        "balanceAfterWei": "4305934039009941666",
+        "balanceDeltaWei": "732850000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x1b591f88d9bfcf7d057df2c5a50b59da2cba349f",
+        "index": 3,
+        "shareBps": "500",
+        "codeBytes": 0,
+        "pendingBeforeWei": "732850000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "732850000000000000",
+        "balanceBeforeWei": "3571095049680255000",
+        "balanceAfterWei": "4303945049680255000",
+        "balanceDeltaWei": "732850000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x07d2d89b4a6e3fda8858da3510b76e2219ee6969",
+        "index": 4,
+        "shareBps": "500",
+        "codeBytes": 0,
+        "pendingBeforeWei": "732850000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "732850000000000000",
+        "balanceBeforeWei": "2972857553237152158",
+        "balanceAfterWei": "3705707553237152158",
+        "balanceDeltaWei": "732850000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x603c39b3d0e0f33772d79695a4f6819fcc987113",
+        "index": 5,
+        "shareBps": "500",
+        "codeBytes": 0,
+        "pendingBeforeWei": "732850000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "732850000000000000",
+        "balanceBeforeWei": "3570714735941808444",
+        "balanceAfterWei": "4303564735941808444",
+        "balanceDeltaWei": "732850000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0xa07e7932f5c981aa769a1cf9400b5c94adb944c4",
+        "index": 6,
+        "shareBps": "100",
+        "codeBytes": 0,
+        "pendingBeforeWei": "146570000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "146570000000000000",
+        "balanceBeforeWei": "1609808605851786138",
+        "balanceAfterWei": "1756378605851786138",
+        "balanceDeltaWei": "146570000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x2236fb6c35f78a092f0dda655f3b49d0e8bf6581",
+        "index": 7,
+        "shareBps": "100",
+        "codeBytes": 0,
+        "pendingBeforeWei": "146570000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "146570000000000000",
+        "balanceBeforeWei": "654761897098392486",
+        "balanceAfterWei": "801331897098392486",
+        "balanceDeltaWei": "146570000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x71d0318bb33d961f323c81a7a4ca095b549f7e6e",
+        "index": 8,
+        "shareBps": "100",
+        "codeBytes": 0,
+        "pendingBeforeWei": "146570000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "146570000000000000",
+        "balanceBeforeWei": "715220837384669271",
+        "balanceAfterWei": "861790837384669271",
+        "balanceDeltaWei": "146570000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0xc4275e6d4109e0288cdc9b064e32f3f54bcda61f",
+        "index": 9,
+        "shareBps": "100",
+        "codeBytes": 0,
+        "pendingBeforeWei": "146570000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "146570000000000000",
+        "balanceBeforeWei": "75352245000000000",
+        "balanceAfterWei": "221922245000000000",
+        "balanceDeltaWei": "146570000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+        "index": 10,
+        "shareBps": "500",
+        "codeBytes": 123,
+        "pendingBeforeWei": "732850000000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "732850000000000000",
+        "balanceBeforeWei": "3571980000000000000",
+        "balanceAfterWei": "4304830000000000000",
+        "balanceDeltaWei": "732850000000000000",
+        "status": "released"
+      },
+      {
+        "address": "0x0adf7b78c952e038d4ea4b5bf84b9d3d22c60ce9",
+        "index": 11,
+        "shareBps": "583",
+        "codeBytes": 23,
+        "pendingBeforeWei": "854503100000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "854503100000000000",
+        "balanceBeforeWei": "131031462389935850",
+        "balanceAfterWei": "985534562389935850",
+        "balanceDeltaWei": "854503100000000000",
+        "status": "released"
+      },
+      {
+        "address": "0xb0b4ec16be55af47109947f0dc84c4561a020a4b",
+        "index": 12,
+        "shareBps": "583",
+        "codeBytes": 23,
+        "pendingBeforeWei": "854503100000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "854503100000000000",
+        "balanceBeforeWei": "522057567751865261",
+        "balanceAfterWei": "1376560667751865261",
+        "balanceDeltaWei": "854503100000000000",
+        "status": "released"
+      },
+      {
+        "address": "0xd9488d6687d656a55b3f1a36998d149f9b1be2cc",
+        "index": 13,
+        "shareBps": "584",
+        "codeBytes": 0,
+        "pendingBeforeWei": "855968800000000000",
+        "pendingAfterWei": "0",
+        "amountReleasedWei": "855968800000000000",
+        "balanceBeforeWei": "4179161124665476774",
+        "balanceAfterWei": "5035129924665476774",
+        "balanceDeltaWei": "855968800000000000",
+        "status": "released"
+      }
+    ]
+  },
+  "individualFallbacks": "Not needed: every recipient payout succeeded in the batch.",
+  "assertions": [
+    {
+      "name": "Exact deployed runtime verified",
+      "passed": true
+    },
+    {
+      "name": "Exactly fourteen fixed recipients",
+      "passed": true
+    },
+    {
+      "name": "All recipient shares total 10000 BPS",
+      "passed": true
+    },
+    {
+      "name": "Release transaction succeeded",
+      "passed": true
+    },
+    {
+      "name": "No new mint revenue accrued",
+      "passed": true
+    },
+    {
+      "name": "Released accounting equals successful payout events",
+      "passed": true
+    },
+    {
+      "name": "Contract ETH debit equals successful payouts",
+      "passed": true
+    },
+    {
+      "name": "Pending reduction equals successful payouts",
+      "passed": true
+    },
+    {
+      "name": "Recipient 0 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 0 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 0 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 1 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 1 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 1 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 2 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 2 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 2 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 3 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 3 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 3 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 4 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 4 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 4 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 5 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 5 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 5 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 6 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 6 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 6 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 7 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 7 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 7 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 8 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 8 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 8 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 9 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 9 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 9 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 10 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 10 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 10 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 11 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 11 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 11 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 12 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 12 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 12 outcome matches accounting",
+      "passed": true
+    },
+    {
+      "name": "Recipient 13 released accounting and pending agree",
+      "passed": true
+    },
+    {
+      "name": "Recipient 13 event amount matches original pending",
+      "passed": true
+    },
+    {
+      "name": "Recipient 13 outcome matches accounting",
+      "passed": true
+    }
+  ],
+  "allPassed": true,
+  "limitations": [
+    "The fork is pinned to the recorded mainnet block; subsequent mints can increase proceeds before execution.",
+    "Simulation validates the fixed recipient callbacks at that state; live receipts must still be checked for MintProceedsReleaseFailed.",
+    "All transaction execution was local to ephemeral Anvil; simulated transaction hashes are intentionally omitted."
+  ],
+  "localAnvilTerminated": true
+}

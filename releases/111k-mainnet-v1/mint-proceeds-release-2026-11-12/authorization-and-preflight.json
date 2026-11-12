@@ -1,0 +1,20 @@
+{
+  "authorizedAt": "2026-11-11T23:10:53.435Z",
+  "userInstruction": "call withdraw function on the contract now — so it distributes mint proceeds; just call that function.",
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "method": "releaseAllMint()",
+  "valueWei": "0",
+  "nonce": 31,
+  "gasLimit": 650000,
+  "maxPriorityFeePerGasWei": "1000000000",
+  "maxFeePerGasWei": "2000000000",
+  "maximumGasFeeWei": "1300000000000000",
+  "sourceBlock": 26394887,
+  "sourceBlockHash": "0x5534dba4078fd7c4a67e9e6762f3ca9ea5124f08b5a92c51a611ec530b300135",
+  "totalMintReceivedWei": "86072000000000000000",
+  "totalMintReleasedWei": "71415000000000000000",
+  "pendingMintProceedsWei": "14657000000000000000",
+  "gasEstimate": "480622"
+}

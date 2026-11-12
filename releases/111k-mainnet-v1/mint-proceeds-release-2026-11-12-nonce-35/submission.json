@@ -1,0 +1,10 @@
+{
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "method": "releaseAllMint()",
+  "transactionHash": "0x9aa3f4caedf86bf2feb79a52e2c0e0593f5fbd7ddefe39dd2d4f58f7174844e2",
+  "nonce": 35,
+  "broadcastAttemptedAt": "2026-11-12T03:24:17.717Z",
+  "acknowledgedAt": "2026-11-12T03:24:17.924Z"
+}

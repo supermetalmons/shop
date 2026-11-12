@@ -1,0 +1,10 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "README.md": "d3ec748baa5ceb92e037bd3c492af8582193b4ee9a0ab61b36a4389c98c3ec82",
+    "authorization-and-preflight.json": "0bd123647bc22e151715f6ab0c8e509382a8e2972d993f193d92d857b9460d33",
+    "release.unsigned.json": "f6fcb6f677a30b3b9c5000f9348f22459c73db3b121a835e40f56b585e16e651",
+    "submission.json": "5a60dfaaf1f168aae4c3b60686ab8e5c5f43568b2570dab6e16ced55d7fbe13f",
+    "verification.json": "9ec38517e680e2963bab7362e92a44a177b18c5accb1fac1ff43a481d2431ef7"
+  }
+}

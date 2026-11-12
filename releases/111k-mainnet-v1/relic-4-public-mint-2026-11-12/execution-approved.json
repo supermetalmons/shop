@@ -1,0 +1,10 @@
+{
+  "authorizedAt": "2026-11-12T03:15:58.794Z",
+  "userInstruction": "send it",
+  "scope": "Execute prepared opening and Relic 4 paid mint through public RPC; standby close only if mint fails and a public slot remains open.",
+  "preparedChecksumsSha256": "9c6bf9b912b5f131903bb9c93d851da86a1bf2563cfccd479a668562d9fdbd70",
+  "chainId": 1,
+  "maximumTotalGasFeeWei": "3000000000000000",
+  "maxPriorityFeePerGasWei": "5000000000",
+  "maxFeePerGasWei": "10000000000"
+}

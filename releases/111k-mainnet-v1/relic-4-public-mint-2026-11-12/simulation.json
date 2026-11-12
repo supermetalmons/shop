@@ -1,0 +1,735 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-12T03:13:22.609Z",
+  "purpose": "Unsigned preparation only: relic 4 paid public mint mainnet-fork simulation",
+  "localOnly": true,
+  "noMainnetTransactionsSent": true,
+  "noTransactionsSigned": true,
+  "deployerBalanceUnmodified": true,
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "runtimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+  "source": {
+    "blockNumber": 26396096,
+    "blockHash": "0x1ed4969f5fd9a275a7708ebc26ccee2ab2cb989891d4dd76576242f87b10986a",
+    "blockTimestamp": 1794453179,
+    "pendingNonceRead": 32
+  },
+  "initial": {
+    "publicSale": {
+      "limit": "2",
+      "minted": "2",
+      "priceWei": "2402000000000000000",
+      "active": true,
+      "mintable": "0",
+      "freeLimit": "0",
+      "freeUsed": "0"
+    },
+    "allocatedCrates": "4008",
+    "totalMintReceivedWei": "92027000000000000000",
+    "claimedMask": "223207",
+    "reservedMinted": "11",
+    "reservedAllocated": "12",
+    "saleActive": true,
+    "deployerBalanceWei": "2449318339029109683",
+    "deployerNonce": 32,
+    "targetFirstCrate": "0",
+    "deployerReservedAllowance": [
+      "0",
+      "0",
+      "2",
+      "0",
+      "0",
+      "2"
+    ]
+  },
+  "preparedParameters": {
+    "relicId": "4",
+    "tokenId": "117175",
+    "publicLimit": "3",
+    "priceWei": "2440000000000000000",
+    "nonces": {
+      "open": 32,
+      "mint": 33,
+      "recoveryClose": 34
+    },
+    "maxPriorityFeePerGasWei": "5000000000",
+    "maxFeePerGasWei": "10000000000",
+    "gasLimits": {
+      "open": 60000,
+      "mint": 180000,
+      "recoveryClose": 60000
+    },
+    "maxTotalGasBudgetWei": "3000000000000000",
+    "calldata": {
+      "open": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000001",
+      "mint": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000004",
+      "recoveryClose": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "normal": {
+    "open": {
+      "localOnly": true,
+      "function": "setPublicRelicSale(uint256,uint256,bool)",
+      "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "nonce": 32,
+      "valueWei": "0",
+      "gasLimit": 60000,
+      "gasUsed": 38212,
+      "status": "0x1",
+      "calldata": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000001",
+      "logs": [
+        {
+          "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "topics": [
+            "0x30c27c2e4c8bb9e4869246f857832fa7f2f193202310343de460f04cedd443e5"
+          ],
+          "data": "0x000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000001"
+        }
+      ]
+    },
+    "afterOpen": {
+      "publicSale": {
+        "limit": "3",
+        "minted": "2",
+        "priceWei": "2440000000000000000",
+        "active": true,
+        "mintable": "1",
+        "freeLimit": "0",
+        "freeUsed": "0"
+      },
+      "allocatedCrates": "4008",
+      "totalMintReceivedWei": "92027000000000000000",
+      "claimedMask": "223207",
+      "reservedMinted": "11",
+      "reservedAllocated": "12",
+      "saleActive": true,
+      "deployerBalanceWei": "2449124787344537151",
+      "deployerNonce": 33,
+      "targetFirstCrate": "0",
+      "deployerReservedAllowance": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "2"
+      ]
+    },
+    "mint": {
+      "localOnly": true,
+      "function": "mintRelic(uint256)",
+      "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "nonce": 33,
+      "valueWei": "2440000000000000000",
+      "gasLimit": 180000,
+      "gasUsed": 102019,
+      "status": "0x1",
+      "calldata": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000004",
+      "logs": [
+        {
+          "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "topics": [
+            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0x000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93",
+            "0x000000000000000000000000000000000000000000000000000000000001c9b7"
+          ],
+          "data": "0x"
+        },
+        {
+          "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "topics": [
+            "0x9521f7dd2c7ffdfb7c5433cb5ccc7ad166ffd99f68e3fee93c86d6a209327669",
+            "0x000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93",
+            "0x0000000000000000000000000000000000000000000000000000000000000004"
+          ],
+          "data": "0x000000000000000000000000000000000000000000000000000000000001c9b700000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    "afterMint": {
+      "publicSale": {
+        "limit": "3",
+        "minted": "3",
+        "priceWei": "2440000000000000000",
+        "active": true,
+        "mintable": "0",
+        "freeLimit": "0",
+        "freeUsed": "0"
+      },
+      "allocatedCrates": "4119",
+      "totalMintReceivedWei": "94467000000000000000",
+      "claimedMask": "223215",
+      "reservedMinted": "11",
+      "reservedAllocated": "12",
+      "saleActive": true,
+      "deployerBalanceWei": "8608870488903817",
+      "deployerNonce": 34,
+      "targetFirstCrate": "4009",
+      "deployerReservedAllowance": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "2"
+      ]
+    },
+    "targetOwner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "secondPublicMint": {
+      "localOnly": true,
+      "function": "mintRelic(uint256)",
+      "from": "0x8e2AD92D1986C37D4CC9618C13ae9950f4d3192B",
+      "nonce": 1416,
+      "valueWei": "2440000000000000000",
+      "gasLimit": 180000,
+      "gasUsed": 24251,
+      "status": "0x0",
+      "calldata": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000005",
+      "logs": []
+    },
+    "standbyClose": {
+      "localOnly": true,
+      "function": "setPublicRelicSale(uint256,uint256,bool)",
+      "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "nonce": 34,
+      "valueWei": "0",
+      "gasLimit": 60000,
+      "gasUsed": 35400,
+      "status": "0x1",
+      "calldata": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000",
+      "logs": [
+        {
+          "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+          "topics": [
+            "0x30c27c2e4c8bb9e4869246f857832fa7f2f193202310343de460f04cedd443e5"
+          ],
+          "data": "0x000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    "afterClose": {
+      "publicSale": {
+        "limit": "3",
+        "minted": "3",
+        "priceWei": "2440000000000000000",
+        "active": false,
+        "mintable": "0",
+        "freeLimit": "0",
+        "freeUsed": "0"
+      },
+      "allocatedCrates": "4119",
+      "totalMintReceivedWei": "94467000000000000000",
+      "claimedMask": "223215",
+      "reservedMinted": "11",
+      "reservedAllocated": "12",
+      "saleActive": true,
+      "deployerBalanceWei": "8430322881403417",
+      "deployerNonce": 35,
+      "targetFirstCrate": "4009",
+      "deployerReservedAllowance": [
+        "0",
+        "0",
+        "2",
+        "0",
+        "0",
+        "2"
+      ]
+    }
+  },
+  "adversarial": {
+    "competitor": {
+      "address": "0x8e2AD92D1986C37D4CC9618C13ae9950f4d3192B",
+      "initialReservedAllowance": [
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
+      ],
+      "localSyntheticBalanceWei": "10000000000000000000",
+      "allowancesUnmodified": true
+    },
+    "reservedClaimWins": {
+      "competingClaim": {
+        "localOnly": true,
+        "function": "claimRelic(uint256)",
+        "from": "0x8e2AD92D1986C37D4CC9618C13ae9950f4d3192B",
+        "nonce": 1416,
+        "valueWei": "0",
+        "gasLimit": 180000,
+        "gasUsed": 113055,
+        "status": "0x1",
+        "calldata": "0xd4137c780000000000000000000000000000000000000000000000000000000000000004",
+        "logs": [
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+              "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "0x0000000000000000000000008e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+              "0x000000000000000000000000000000000000000000000000000000000001c9b7"
+            ],
+            "data": "0x"
+          },
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0x317d39679544b67de9fe188326a9d267078931b82019390c9c2c5a60dea11a41",
+              "0x0000000000000000000000008e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+              "0x0000000000000000000000000000000000000000000000000000000000000004"
+            ],
+            "data": "0x000000000000000000000000000000000000000000000000000000000001c9b7"
+          }
+        ]
+      },
+      "failedMint": {
+        "localOnly": true,
+        "function": "mintRelic(uint256)",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "nonce": 33,
+        "valueWei": "2440000000000000000",
+        "gasLimit": 180000,
+        "gasUsed": 49524,
+        "status": "0x0",
+        "calldata": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000004",
+        "logs": []
+      },
+      "afterFailure": {
+        "publicSale": {
+          "limit": "3",
+          "minted": "2",
+          "priceWei": "2440000000000000000",
+          "active": true,
+          "mintable": "1",
+          "freeLimit": "0",
+          "freeUsed": "0"
+        },
+        "allocatedCrates": "4008",
+        "totalMintReceivedWei": "92027000000000000000",
+        "claimedMask": "223215",
+        "reservedMinted": "12",
+        "reservedAllocated": "12",
+        "saleActive": true,
+        "deployerBalanceWei": "2448876745336789327",
+        "deployerNonce": 34,
+        "targetFirstCrate": "1222",
+        "deployerReservedAllowance": [
+          "0",
+          "0",
+          "2",
+          "0",
+          "0",
+          "2"
+        ]
+      },
+      "recovery": {
+        "localOnly": true,
+        "function": "setPublicRelicSale(uint256,uint256,bool)",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "nonce": 34,
+        "valueWei": "0",
+        "gasLimit": 60000,
+        "gasUsed": 35400,
+        "status": "0x1",
+        "calldata": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000",
+        "logs": [
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0x30c27c2e4c8bb9e4869246f857832fa7f2f193202310343de460f04cedd443e5"
+            ],
+            "data": "0x000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      "afterRecovery": {
+        "publicSale": {
+          "limit": "3",
+          "minted": "2",
+          "priceWei": "2440000000000000000",
+          "active": false,
+          "mintable": "0",
+          "freeLimit": "0",
+          "freeUsed": "0"
+        },
+        "allocatedCrates": "4008",
+        "totalMintReceivedWei": "92027000000000000000",
+        "claimedMask": "223215",
+        "reservedMinted": "12",
+        "reservedAllocated": "12",
+        "saleActive": true,
+        "deployerBalanceWei": "2448698837136903727",
+        "deployerNonce": 35,
+        "targetFirstCrate": "1222",
+        "deployerReservedAllowance": [
+          "0",
+          "0",
+          "2",
+          "0",
+          "0",
+          "2"
+        ]
+      }
+    },
+    "publicMintWins": {
+      "competingRelicId": "5",
+      "competingMint": {
+        "localOnly": true,
+        "function": "mintRelic(uint256)",
+        "from": "0x8e2AD92D1986C37D4CC9618C13ae9950f4d3192B",
+        "nonce": 1416,
+        "valueWei": "2440000000000000000",
+        "gasLimit": 180000,
+        "gasUsed": 119119,
+        "status": "0x1",
+        "calldata": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000005",
+        "logs": [
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+              "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "0x0000000000000000000000008e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+              "0x000000000000000000000000000000000000000000000000000000000001c9b8"
+            ],
+            "data": "0x"
+          },
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0x9521f7dd2c7ffdfb7c5433cb5ccc7ad166ffd99f68e3fee93c86d6a209327669",
+              "0x0000000000000000000000008e2ad92d1986c37d4cc9618c13ae9950f4d3192b",
+              "0x0000000000000000000000000000000000000000000000000000000000000005"
+            ],
+            "data": "0x000000000000000000000000000000000000000000000000000000000001c9b800000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      "failedMint": {
+        "localOnly": true,
+        "function": "mintRelic(uint256)",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "nonce": 33,
+        "valueWei": "2440000000000000000",
+        "gasLimit": 180000,
+        "gasUsed": 24251,
+        "status": "0x0",
+        "calldata": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000004",
+        "logs": []
+      },
+      "afterFailure": {
+        "publicSale": {
+          "limit": "3",
+          "minted": "3",
+          "priceWei": "2440000000000000000",
+          "active": true,
+          "mintable": "0",
+          "freeLimit": "0",
+          "freeUsed": "0"
+        },
+        "allocatedCrates": "4119",
+        "totalMintReceivedWei": "94467000000000000000",
+        "claimedMask": "223223",
+        "reservedMinted": "11",
+        "reservedAllocated": "12",
+        "saleActive": true,
+        "deployerBalanceWei": "2449004748897797228",
+        "deployerNonce": 34,
+        "targetFirstCrate": "0",
+        "deployerReservedAllowance": [
+          "0",
+          "0",
+          "2",
+          "0",
+          "0",
+          "2"
+        ]
+      },
+      "recovery": {
+        "localOnly": true,
+        "function": "setPublicRelicSale(uint256,uint256,bool)",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "nonce": 34,
+        "valueWei": "0",
+        "gasLimit": 60000,
+        "gasUsed": 35400,
+        "status": "0x1",
+        "calldata": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000",
+        "logs": [
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0x30c27c2e4c8bb9e4869246f857832fa7f2f193202310343de460f04cedd443e5"
+            ],
+            "data": "0x000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      "afterRecovery": {
+        "publicSale": {
+          "limit": "3",
+          "minted": "3",
+          "priceWei": "2440000000000000000",
+          "active": false,
+          "mintable": "0",
+          "freeLimit": "0",
+          "freeUsed": "0"
+        },
+        "allocatedCrates": "4119",
+        "totalMintReceivedWei": "94467000000000000000",
+        "claimedMask": "223223",
+        "reservedMinted": "11",
+        "reservedAllocated": "12",
+        "saleActive": true,
+        "deployerBalanceWei": "2448827215977382628",
+        "deployerNonce": 35,
+        "targetFirstCrate": "0",
+        "deployerReservedAllowance": [
+          "0",
+          "0",
+          "2",
+          "0",
+          "0",
+          "2"
+        ]
+      }
+    },
+    "wrongPayment": {
+      "failedMint": {
+        "localOnly": true,
+        "function": "mintRelic(uint256)",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "nonce": 33,
+        "valueWei": "2439999999999999999",
+        "gasLimit": 180000,
+        "gasUsed": 30854,
+        "status": "0x0",
+        "calldata": "0x7f918ab20000000000000000000000000000000000000000000000000000000000000004",
+        "logs": []
+      },
+      "afterFailure": {
+        "publicSale": {
+          "limit": "3",
+          "minted": "2",
+          "priceWei": "2440000000000000000",
+          "active": true,
+          "mintable": "1",
+          "freeLimit": "0",
+          "freeUsed": "0"
+        },
+        "allocatedCrates": "4008",
+        "totalMintReceivedWei": "92027000000000000000",
+        "claimedMask": "223207",
+        "reservedMinted": "11",
+        "reservedAllocated": "12",
+        "saleActive": true,
+        "deployerBalanceWei": "2448972149852785461",
+        "deployerNonce": 34,
+        "targetFirstCrate": "0",
+        "deployerReservedAllowance": [
+          "0",
+          "0",
+          "2",
+          "0",
+          "0",
+          "2"
+        ]
+      },
+      "recovery": {
+        "localOnly": true,
+        "function": "setPublicRelicSale(uint256,uint256,bool)",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "nonce": 34,
+        "valueWei": "0",
+        "gasLimit": 60000,
+        "gasUsed": 35400,
+        "status": "0x1",
+        "calldata": "0xb3395fd3000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000",
+        "logs": [
+          {
+            "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+            "topics": [
+              "0x30c27c2e4c8bb9e4869246f857832fa7f2f193202310343de460f04cedd443e5"
+            ],
+            "data": "0x000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000021dc9f1283f400000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      },
+      "afterRecovery": {
+        "publicSale": {
+          "limit": "3",
+          "minted": "2",
+          "priceWei": "2440000000000000000",
+          "active": false,
+          "mintable": "0",
+          "freeLimit": "0",
+          "freeUsed": "0"
+        },
+        "allocatedCrates": "4008",
+        "totalMintReceivedWei": "92027000000000000000",
+        "claimedMask": "223207",
+        "reservedMinted": "11",
+        "reservedAllocated": "12",
+        "saleActive": true,
+        "deployerBalanceWei": "2448794792660059461",
+        "deployerNonce": 35,
+        "targetFirstCrate": "0",
+        "deployerReservedAllowance": [
+          "0",
+          "0",
+          "2",
+          "0",
+          "0",
+          "2"
+        ]
+      }
+    }
+  },
+  "assertions": [
+    {
+      "name": "Expected deployed runtime",
+      "passed": true
+    },
+    {
+      "name": "Planned nonce 32 matches pinned and pending state",
+      "passed": true
+    },
+    {
+      "name": "Public issuance exhausted at cumulative cap 2",
+      "passed": true
+    },
+    {
+      "name": "Global sale active",
+      "passed": true
+    },
+    {
+      "name": "Relic 4 unused",
+      "passed": true
+    },
+    {
+      "name": "111 crates remain available",
+      "passed": true
+    },
+    {
+      "name": "Real deployer balance covers purchase and 0.003 ETH fee budget",
+      "passed": true
+    },
+    {
+      "name": "Cap 3 fits unreserved supply",
+      "passed": true
+    },
+    {
+      "name": "Live eligible reserved competitor exists",
+      "passed": true
+    },
+    {
+      "name": "Distinct available ID for competing public mint exists",
+      "passed": true
+    },
+    {
+      "name": "Normal open and paid mint succeed with prepared gas limits",
+      "passed": true
+    },
+    {
+      "name": "Owner uses nonces 32, 33, 34",
+      "passed": true
+    },
+    {
+      "name": "Opening exposes exactly one public slot",
+      "passed": true
+    },
+    {
+      "name": "Target token belongs to deployer",
+      "passed": true
+    },
+    {
+      "name": "Exactly one public relic minted and cap exhausted",
+      "passed": true
+    },
+    {
+      "name": "Exactly 111 crates consumed",
+      "passed": true
+    },
+    {
+      "name": "Revenue increases exactly 2.44 ETH",
+      "passed": true
+    },
+    {
+      "name": "Only target bit added to claimed mask",
+      "passed": true
+    },
+    {
+      "name": "Reserved allocation and minted count unchanged",
+      "passed": true
+    },
+    {
+      "name": "Deployer allowances unchanged",
+      "passed": true
+    },
+    {
+      "name": "Second public mint rejected because cumulative cap exhausted",
+      "passed": true
+    },
+    {
+      "name": "Standby close succeeds within 60000 gas",
+      "passed": true
+    },
+    {
+      "name": "Exactly one paid mint event",
+      "passed": true
+    },
+    {
+      "name": "Paid mint event matches deployer and target with 2.44 ETH",
+      "passed": true
+    },
+    {
+      "name": "Exactly one zero-address Transfer of token 117175 to deployer",
+      "passed": true
+    },
+    {
+      "name": "Reserved competitor can consume target and paid mint reverts",
+      "passed": true
+    },
+    {
+      "name": "Reserved race leaves public slot open until recovery",
+      "passed": true
+    },
+    {
+      "name": "Recovery closes public slot after reserved race",
+      "passed": true
+    },
+    {
+      "name": "Competing public buyer consumes only slot and target mint reverts",
+      "passed": true
+    },
+    {
+      "name": "Target remains unused after another public relic wins",
+      "passed": true
+    },
+    {
+      "name": "Public race recovery succeeds",
+      "passed": true
+    },
+    {
+      "name": "Wrong payment reverts without consuming slot or revenue",
+      "passed": true
+    },
+    {
+      "name": "Failed payment recovery closes remaining slot",
+      "passed": true
+    }
+  ],
+  "allPassed": true,
+  "limitations": [
+    "The fork checks execution and gas at the pinned state, not public-mempool ordering.",
+    "No live transaction was signed or submitted; the real deployer balance was not changed for simulation.",
+    "Only the adversarial competitor received synthetic ETH on the local fork.",
+    "Unsigned nonce and state assumptions must be rechecked before any later separately authorized broadcast.",
+    "Simulated transaction hashes and block identities are omitted to avoid confusion with mainnet execution."
+  ],
+  "localAnvilTerminated": true
+}

@@ -1,0 +1,51 @@
+{
+  "status": "passed",
+  "checkedAt": "2026-11-12T03:15:58.783Z",
+  "readOnly": true,
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "blockNumber": 26396110,
+  "blockHash": "0xc29f0b8c7bae1db48b0dfcb47fae01aa2a01d2bb6d545420fc96ac2554269416",
+  "blockTimestamp": 1794453347,
+  "runtimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "pendingOwner": "0x0000000000000000000000000000000000000000",
+  "saleActive": true,
+  "publicSale": {
+    "limit": "2",
+    "minted": "2",
+    "priceWei": "2402000000000000000",
+    "active": "1",
+    "mintable": "0",
+    "freeLimit": "0",
+    "freeUsed": "0"
+  },
+  "target": {
+    "relicId": 4,
+    "tokenId": 117175,
+    "unissued": true
+  },
+  "claimedRelicMask": "223207",
+  "allocatedCrates": "4009",
+  "remainingCrates": "1546",
+  "reservedRelicsAllocated": "12",
+  "reservedRelicsMinted": "11",
+  "deployerAllowance": [
+    "0",
+    "0",
+    "2",
+    "0",
+    "0",
+    "2"
+  ],
+  "totalMintReceivedWei": "92057000000000000000",
+  "balanceWei": "2449318339029109683",
+  "latestNonce": "32",
+  "pendingNonce": "32",
+  "baseFeePerGasWei": "60869861",
+  "maximumPrimaryGasFeeWei": "2400000000000000",
+  "maximumTotalGasFeeWei": "3000000000000000",
+  "minimumRequiredBalanceWei": "2443000000000000000",
+  "warning": "This snapshot is not a reservation. Re-run immediately before signing; no signing or broadcasting is performed."
+}
