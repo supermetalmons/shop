@@ -212,6 +212,26 @@ test('inspection and unsupported catalog requests never change registration or a
   assert.equal(f.kv.size, 0);
 });
 
+test('eligible egg inspection on a pre-owner ledger never initializes schema', async t => {
+  const f = fixture(t);
+  f.database.exec('PRAGMA foreign_keys=OFF');
+  for (const row of f.database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE 'owner_hatching_%'").all()) {
+    f.database.exec(`DROP TABLE ${String(row.name)}`);
+  }
+  f.database.exec('DROP TABLE reveal_catalog_egg_claims');
+  f.host.initializeStore = () => { throw new Error('Eligible inspection attempted to initialize schema.'); };
+  f.reopen();
+  const schema = f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
+  const before = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
+  const result = await f.controller().run({ ...f.request('inspect'), eggCutoff: source.categories.eggs.count - 2 }, f.current());
+  assert.deepEqual(result.eligibleEggIds, [source.categories.eggs.count - 1, source.categories.eggs.count]);
+  assert.equal(result.nextEligibleEggId, null);
+  assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, before);
+  assert.deepEqual(f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
+  assert.equal(f.counters.saves, 0);
+  assert.equal(f.counters.writes, 0);
+});
+
 test('staging preserves active traffic, stages every artwork, and cancellation leaves ordinary new reveals intact', async t => {
   const f = fixture(t);
   assert.equal((await f.run('begin')).phase, 'staging');

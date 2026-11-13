@@ -6,6 +6,7 @@ import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.j
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
 import { REVEAL_CATEGORY_COUNTS } from './ethereumRevealCatalog.js';
 import type { RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.js';
+import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 
 export const MAX_REVEAL_METADATA_BYTES = 256 * 1024;
 
@@ -25,9 +26,11 @@ function validAttribute(value: unknown): boolean {
 }
 
 export async function fetchRevealAttributePayload(category: EthereumArtworkCategory, assetId: number,
-  signal: AbortSignal, fetchSource: typeof fetch = fetch, catalog?: RevealAssetCatalog): Promise<string> {
+  signal: AbortSignal, fetchSource: typeof fetch = fetch, catalog?: RevealAssetCatalog, ownerHatching = false): Promise<string> {
   if (category === 'egg' || !Object.hasOwn(REVEAL_ASSET_FAMILIES, category) ||
-    !Number.isSafeInteger(assetId) || assetId < 1 || assetId > (catalog?.categories[REVEAL_ASSET_FAMILIES[category]].count ?? REVEAL_CATEGORY_COUNTS[category])) {
+    !Number.isSafeInteger(assetId) || assetId < 1 ||
+    assetId > (catalog?.categories[REVEAL_ASSET_FAMILIES[category]].count ?? REVEAL_CATEGORY_COUNTS[category]) &&
+      !(ownerHatching && getOwnerHatchingGrail(category, assetId))) {
     throw new InvalidRevealAttributes('Invalid trait source identity.');
   }
   const url = `https://cdn.lil.org/nft/111k/${REVEAL_ASSET_FAMILIES[category]}/json/${REVEAL_ENRICHMENT_VERSION}/${assetId}.json`;
@@ -45,6 +48,8 @@ export async function fetchRevealAttributePayload(category: EthereumArtworkCateg
     !Array.isArray(source.attributes) || !source.attributes.every(validAttribute)) {
     throw new InvalidRevealAttributes('Invalid collection block or source attributes.');
   }
+  const grail = ownerHatching ? getOwnerHatchingGrail(category, assetId) : undefined;
+  if (grail && source['collection block'] !== grail.collectionBlock) throw new InvalidRevealAttributes('Grail collection block does not match its catalog.');
   return JSON.stringify([{ trait_type: 'collection block', value: source['collection block'] }, ...source.attributes]);
 }
 

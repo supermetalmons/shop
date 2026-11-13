@@ -40,7 +40,7 @@ function complete(value: unknown, deployment: EthereumRevealDeployment, ids: str
     body.artworks.length !== ids.length) return false;
   const remaining = new Set(ids);
   for (const artwork of body.artworks) {
-    if (!artwork || typeof artwork !== 'object' || !remaining.delete(artwork.tokenId) ||
+    if (!artwork || typeof artwork !== 'object' || artwork.category === 'egg' || !remaining.delete(artwork.tokenId) ||
       typeof artwork.name !== 'string' || typeof artwork.image !== 'string' || !artwork.observation ||
       typeof artwork.observation.transactionHash !== 'string' || typeof artwork.observation.blockHash !== 'string' ||
       !Number.isSafeInteger(artwork.observation.blockNumber)) return false;
@@ -49,8 +49,8 @@ function complete(value: unknown, deployment: EthereumRevealDeployment, ids: str
 }
 
 function ttl(value: EthereumRevealTokensResponse): number {
-  return value.artworks.every(artwork => artwork.category === 'egg' ||
-    Number.isSafeInteger(artwork.metadataRevision) && (artwork.metadataRevision ?? 0) % 2 === 1) ? 5_000 : 2_000;
+  return value.artworks.every(artwork => Number.isSafeInteger(artwork.metadataRevision) &&
+    (artwork.metadataRevision ?? 0) % 2 === 1) ? 5_000 : 2_000;
 }
 
 export async function readCachedEthereumReveal(cache: RevealCache, key: Request, deployment: EthereumRevealDeployment,

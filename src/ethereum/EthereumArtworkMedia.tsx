@@ -2,6 +2,7 @@ import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type R
 import type { EthereumInventoryItem } from '../../shared/ethereum/protocol';
 import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
 import { ethereumInventoryView } from './state';
+import { isEthereumGifUrl } from './artworkMedia';
 
 const createModelViewer = () => lazy(() => import('./EthereumModelViewer'));
 
@@ -30,11 +31,15 @@ export function EthereumArtworkMedia({ item, viewer = false, fullscreen = false,
   const [failedVideo, setFailedVideo] = useState<string | null>(null);
   const [readyVideo, setReadyVideo] = useState<string | null>(null);
   const [failedImage, setFailedImage] = useState<string | null>(null);
+  const [failedGif, setFailedGif] = useState<string | null>(null);
   const [ModelViewer, setModelViewer] = useState(createModelViewer);
   const [modelAttempt, setModelAttempt] = useState(0);
   const [readyModel, setReadyModel] = useState<object | null>(null);
   const [failedModel, setFailedModel] = useState<object | null>(null);
-  const animation = item.category === 'video' || item.category === 'animated' ? item.animation_url : undefined;
+  const movingMedia = item.category === 'video' || item.category === 'animated' ? item.animation_url : undefined;
+  const gif = isEthereumGifUrl(movingMedia) ? movingMedia : undefined;
+  const animation = gif ? undefined : movingMedia;
+  const image = gif && active && !reducedMotion && failedGif !== gif ? gif : preview.image;
   const model = item.category === '3d' && viewer ? item.animation_url : undefined;
   const modelKey = `${model}:${item.name}:${modelAttempt}`;
   const modelSession = useMemo(() => ({}), [modelKey]);
@@ -70,9 +75,12 @@ export function EthereumArtworkMedia({ item, viewer = false, fullscreen = false,
   };
   return <span ref={root} className={`ethereum111k__artwork-media${viewer ? ' ethereum111k__artwork-media--viewer' : ''}${fullscreen ? ' ethereum111k__artwork-media--fullscreen' : ''}`}
     style={{ aspectRatio: ratio, ...(viewer && ratio && !fullscreen ? { width: `min(100%, ${maximumWidth}calc(60svh * ${ratio}))` } : {}) }}>
-    <img className={viewer ? 'ethereum111k__view-image' : undefined} src={preview.image}
+    <img className={viewer ? 'ethereum111k__view-image' : undefined} src={image}
       width={dimensions?.width} height={dimensions?.height} alt={item.name} loading="lazy" decoding="async"
-      hidden={modelReady || failedImage === preview.image} onError={() => setFailedImage(preview.image ?? null)} />
+      hidden={modelReady || failedImage === image} onError={() => {
+        if (image === gif) setFailedGif(gif ?? null);
+        else setFailedImage(image ?? null);
+      }} />
     {showVideo ? <video key={animation} ref={video} src={animation} poster={preview.image}
       width={dimensions?.width} height={dimensions?.height} aria-label={item.name}
       autoPlay={!reducedMotion} loop muted playsInline controls={viewer && chrome} preload="metadata"
@@ -95,7 +103,7 @@ export function EthereumArtworkMedia({ item, viewer = false, fullscreen = false,
         </Suspense>
       </ModelErrorBoundary>
     </span> : null}
-    {failedImage === preview.image && !modelReady && (!showVideo || readyVideo !== animation) ? <span className="placeholder" role="status">Artwork unavailable</span> : null}
+    {failedImage === image && !modelReady && (!showVideo || readyVideo !== animation) ? <span className="placeholder" role="status">Artwork unavailable</span> : null}
     {model && chrome ? <span className="ethereum111k__model-status" role="status">
       {failedModel === modelSession ? <>3D model unavailable. <button type="button" onClick={() => {
         setModelAttempt(value => value + 1);

@@ -128,6 +128,23 @@ test('unresolved and unminted results and errors never populate the reveal cache
   assert.equal(f.entries.size, 0);
 });
 
+test('egg responses are never cached and previously cached eggs cannot hide a hatch', async t => {
+  const f = cachedFixture();
+  t.after(() => f.database.close());
+  const eggs = { ...f.complete, artworks: f.complete.artworks.map(artwork => ({ ...artwork, category: 'egg' })) };
+  f.respond(() => ({ kind: 'ready', value: eggs }));
+  await f.tokens();
+  await f.flush();
+  assert.equal(f.entries.size, 0);
+  f.respond(() => ({ kind: 'ready', value: f.complete }));
+  await f.tokens();
+  await f.flush();
+  const [key, stored] = [...f.entries][0];
+  f.entries.set(key, new Response(JSON.stringify(eggs), { headers: stored.headers }));
+  assert.deepEqual(await (await f.tokens()).json(), f.complete);
+  assert.equal(f.calls.length, 3);
+});
+
 test('reveal cache expires base metadata after two seconds and enriched metadata after five', async t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);

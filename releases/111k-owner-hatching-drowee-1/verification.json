@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "batchId": "owner-drowee-20261113",
+  "deploymentId": "mainnet-v1",
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "metadataBaseUri": "https://cdn.mons.shop/111k/",
+  "originalRegistryRevision": 9,
+  "currentRegistryRevision": 9,
+  "catalogVersion": "111k-v9",
+  "catalogRevision": 1,
+  "sourceSha256": "d72eef0c264fb1e985f8a761308bacb1c8e69a5f2bc93dcf9d5160df838c8ddd",
+  "grailCatalogSha256": "0a1da6ede50ef8fbea8e2f78f242cc2fd40e8ff2458754095fdc489335ac0f35",
+  "mintedSnapshotCount": 27180,
+  "eligibleEggCount": 7552,
+  "selectedEggCount": 350,
+  "grailCount": 175,
+  "freshEggReserveCount": 175,
+  "phase": "complete",
+  "published": 350,
+  "hatched": 0,
+  "pendingPublications": 0,
+  "conflicts": 0,
+  "publicVerification": {
+    "deploymentId": "mainnet-v1",
+    "chainId": 1,
+    "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "readyCount": 350,
+    "readyListSha256": "d3943eb6cd01bd3bd4897a740b63288f9f540716f8c5d6ba5837215f2187a425",
+    "metadataVerified": 350,
+    "invalidTokenRejected": true,
+    "existingRevealSamplesVerified": 3,
+    "unchangedAfterValidation": true
+  },
+  "schedulerObservationUntil": "2026-11-13T17:36:01.544Z",
+  "verifiedAt": "2026-11-13T17:38:40.322Z",
+  "temporaryStagingCleaned": true,
+  "deployments": {
+    "api": "e5a207b9-6b1a-48ff-bcca-cfeb189ab883",
+    "frontend": "08f9f91f-7a5e-4373-a4d7-bec276def3a8"
+  },
+  "validation": {
+    "apiUnitTests": 3661,
+    "apiRuntimeTests": 81,
+    "frontendTests": 5358,
+    "ethereumEndToEnd": "passed",
+    "fullCommerceAudit": "passed",
+    "deadCodeChecks": "passed",
+    "publicMetadataBeforeAndAfterObservation": "passed"
+  },
+  "mainnetSaleActive": true,
+  "mainnetRevealActive": true,
+  "storefrontPreserved": {
+    "deploymentId": "v17",
+    "chainId": 11155111,
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/"
+  }
+}

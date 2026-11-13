@@ -230,6 +230,98 @@ Save marketplace-refresh calldata unsigned; submission is a separate explicit ow
 action. The [v7 release](../../releases/111k-catalog-v7/README.md) illustrates evidence
 formats, not values or cached scripts to reuse.
 
+## Owner-authorized egg hatching
+
+Owner hatching is a separate online operation. Keep the cutoff workflow above for
+ordinary catalog expansion. The public owner-hatching supplement lists media and
+source hashes; selected tokens, random assignments, and operation state stay only
+in the backend. Do not export those assignments or use ordinary catalog promotion
+to import grails. Partner request/response documentation is [owner_hatching_api.md](owner_hatching_api.md).
+
+The first mainnet batch contains 175 DROWEE artworks (`animated/422`–`596`), with
+PNG posters and GIF animations, and selects 350 already-minted eggs. The 175
+ordinary hatches consume the shared non-egg inventory and replace those free
+slots with previously unused egg artwork identities. Supply stays unchanged.
+Future additions append immutable supplement batches; never rewrite an old batch.
+
+Deploy the API and GIF-compatible existing media views before activation and wait
+for the Durable Object code update delay. There is no sales or reveal pause.
+Read the intended mainnet registry with `ethereum-reveal-control status`, choose a
+stable batch ID, and preserve its original registry revision on every retry.
+After a pause/reactivation, retry with that same revision once the deployment is
+active again. New batches still require the current revision and catalog predecessor;
+activated batches can finish after later registry or catalog updates.
+There must be enough eligible minted eggs before selection. Choose the fresh egg
+range from published, unused egg media; the backend rejects reused identities.
+
+```sh
+owner_hatch_deployment='<mainnet deploymentId>'
+owner_hatch_batch='<stable batch id>'
+owner_hatch_revision='<current registry revision>'
+owner_hatch_fresh_start='<first unused egg artwork id>'
+npm run ethereum-reveal-control -- status --deployment-id "$owner_hatch_deployment"
+npm run ethereum:owner-hatching -- apply --deployment-id "$owner_hatch_deployment" --batch-id "$owner_hatch_batch" --expected-revision "$owner_hatch_revision" --source /absolute/path/to/111k.json --ready-count 350 --fresh-egg-start "$owner_hatch_fresh_start" --fresh-egg-count 175 --write
+```
+
+Apply checks the exact source hash, re-reads the mainnet registry, preflights all
+PNG/GIF/trait and fresh-egg URLs with bounded HEAD requests, then resumes scanning,
+staging, activation, and paged publication verification. Activation saves random
+draws privately and checks at most 100 candidates per call against one canonical
+activation snapshot. `activationChecked` and `activationSelected` show progress;
+retries reuse saved draws, and current backend eligibility is checked before allocation.
+Existing allocations never rerandomize. It waits through the
+backend's five-minute scheduler observation, verifies again, and completes
+temporary-state cleanup. Only `complete: true` finishes the operation. Errors
+preserve its identity; inspect before retrying the same command. No onchain
+transaction or marketplace-refresh transaction is sent.
+
+```sh
+npm run ethereum:owner-hatching -- inspect --deployment-id "$owner_hatch_deployment" --batch-id "$owner_hatch_batch" --expected-revision "$owner_hatch_revision"
+npm run ethereum:owner-hatching -- verify --deployment-id "$owner_hatch_deployment" --batch-id "$owner_hatch_batch" --expected-revision "$owner_hatch_revision" --write
+```
+
+If a reorg interrupts an unfinished candidate scan, use `refresh-scan --write`
+with the same deployment, batch ID, and original revision, then rerun `apply`.
+It clears the incomplete candidate list and captures a new canonical scan snapshot.
+It is rejected once scanning has finished or allocation has occurred.
+
+If a reorg replaces the saved activation block, refresh the unallocated snapshot,
+then rerun the original `apply` command. Saved draws and their order are preserved;
+all validation results are cleared and checked again. Allocated batches cannot refresh.
+
+```sh
+npm run ethereum:owner-hatching -- refresh-scan --deployment-id "$owner_hatch_deployment" --batch-id "$owner_hatch_batch" --expected-revision "$owner_hatch_revision" --write
+npm run ethereum:owner-hatching -- refresh-activation --deployment-id "$owner_hatch_deployment" --batch-id "$owner_hatch_batch" --expected-revision "$owner_hatch_revision" --write
+```
+
+`inspect` and `status` are read-only. `verify` also rechecks completed batches and
+requires `--write` because it advances the backend audit cursor. It preserves the
+completed phase and existing assignments. The CLI writes no local journal or assignment file and
+prints only aggregate progress. Retain that sanitized completion result and
+deployment versions. Publication conflicts require investigation before retrying.
+`pendingEnrichment` and `failedEnrichment` report trait work for already-hatched
+tokens. Verification requires both to be zero. Failed sources retry durably and
+appear in health counts and throttled error logs; restore the source before retrying verification.
+
+For a later cutoff hatch on a deployment with owner-hatching history, discover
+eligible **egg artwork IDs** with `ethereum:catalog-update eligible-eggs`, using
+the current registry revision and desired `--egg-cutoff`. Select exactly one
+eligible ID per new ordinary artwork, all strictly above the cutoff, and pass
+their JSON array to `prepare --egg-ids FILE --egg-cutoff N`. This freezes a v2
+batch while preserving existing v1 bundles and hashes. Owner-ready and retired
+eggs are excluded; a concurrent eligibility conflict aborts only that catalog
+operation, without pausing normal reveals or owner hatching.
+
+```sh
+npm run ethereum:catalog-update -- eligible-eggs --deployment-id "$owner_hatch_deployment" --expected-revision '<current registry revision>' --egg-cutoff '<cutoff>'
+npm run ethereum:catalog-update -- prepare --source /absolute/path/to/111k.json --bundle /absolute/path/to/catalog-bundle --egg-ids /absolute/path/to/selected-egg-ids.json --egg-cutoff '<cutoff>'
+```
+
+Ordinary imports exclude known grail media so they cannot be allocated twice.
+New ordinary animated IDs beyond the excluded grail range currently fail closed:
+that case requires sparse animated-catalog support before rollout. Other ordinary
+artwork additions can use the explicit eligible-egg flow above.
+
 ### Empty mainnet pool rebuild
 
 For an explicitly requested prelaunch mainnet rebuild, `ethereum:empty-pool`

@@ -1,0 +1,1244 @@
+{
+  "version": 1,
+  "baseUrl": "https://cdn.lil.org/nft/111k/",
+  "batches": [
+    {
+      "id": "drowee-2026-11-13",
+      "source": {
+        "filename": "111k.json",
+        "sha256": "d72eef0c264fb1e985f8a761308bacb1c8e69a5f2bc93dcf9d5160df838c8ddd"
+      },
+      "predecessor": {
+        "catalogVersion": "111k-v9",
+        "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+      },
+      "artworks": [
+        {
+          "assetId": 422,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 423,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 424,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 425,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 426,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 427,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 428,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 429,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 430,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 431,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 432,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 433,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 434,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 435,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 436,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 437,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 438,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 439,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 440,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 441,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 442,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 443,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 444,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 445,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 446,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 447,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 448,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 449,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 450,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 451,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 452,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 453,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 454,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 455,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 456,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 457,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 458,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 459,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 460,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 461,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 462,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 463,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 464,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 465,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 466,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 467,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 468,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 469,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 470,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 471,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 472,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 473,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 474,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 475,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 476,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 477,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 478,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 479,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 480,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 481,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 482,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 483,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 484,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 485,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 486,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 487,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 488,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 489,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 490,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 491,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 492,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 493,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 494,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 495,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 496,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 497,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 498,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 499,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 500,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 501,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 502,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 503,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 504,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 505,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 506,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 507,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 508,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 509,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 510,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 511,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 512,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 513,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 514,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 515,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 516,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 517,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 518,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 519,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 520,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 521,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 522,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 523,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 524,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 525,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 526,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 527,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 528,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 529,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 530,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 531,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 532,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 533,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 534,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 535,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 536,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 537,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 538,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 539,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 540,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 541,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 542,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 543,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 544,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 545,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 546,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 547,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 548,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 549,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 550,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 551,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 552,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 553,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 554,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 555,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 556,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 557,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 558,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 559,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 560,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 561,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 562,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 563,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 564,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 565,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 566,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 567,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 568,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 569,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 570,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 571,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 572,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 573,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 574,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 575,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 576,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 577,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 578,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 579,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 580,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 581,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 582,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 583,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 584,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 585,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 586,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 587,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 588,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 589,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 590,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 591,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 592,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 593,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 594,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 595,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        },
+        {
+          "assetId": 596,
+          "width": 512,
+          "height": 512,
+          "collectionBlock": "DROWEE",
+          "animationExtension": "gif"
+        }
+      ]
+    }
+  ]
+}

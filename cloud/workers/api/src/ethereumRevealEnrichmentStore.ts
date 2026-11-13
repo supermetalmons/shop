@@ -49,7 +49,9 @@ export function acknowledgedEnrichmentHash(sql: RevealSql, tokenId: string, vers
 }
 
 export class EthereumRevealEnrichmentStore {
+  private readonly ownerOverrides: boolean;
   constructor(private readonly sql: RevealSql, private readonly transaction: <T>(action: () => T) => T) {
+    this.ownerOverrides = Boolean(this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_slot_overrides'").toArray().length);
     this.transaction(() => {
       for (const table of ['reveal_enrichment', 'reveal_enrichment_acknowledgments']) {
         const columns = this.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray();
@@ -58,8 +60,16 @@ export class EthereumRevealEnrichmentStore {
         }
       }
       this.sql.exec('DROP TRIGGER IF EXISTS enqueue_reveal_enrichment');
-      this.sql.exec(REVEAL_ENRICHMENT_SCHEMA.at(-1)!);
+      const trigger = REVEAL_ENRICHMENT_SCHEMA.at(-1)!;
+      this.sql.exec(this.ownerOverrides ? trigger.replace('ON CONFLICT(token_id,version)',
+        `AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=assignments.category AND o.origin_asset_id=assignments.asset_id)
+        ON CONFLICT(token_id,version)`) : trigger);
     });
+  }
+
+  private ownerGuard(): string {
+    return this.ownerOverrides
+      ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)' : '';
   }
 
   claim(now: number, limit = REVEAL_ENRICHMENT_SLOTS): RevealEnrichmentClaim[] {
@@ -70,7 +80,9 @@ export class EthereumRevealEnrichmentStore {
         ack.target_sha256 AS acknowledged_sha256,e.last_error,
         e.attempts+1 AS attempts,? AS claim_id FROM reveal_enrichment e JOIN assignments a ON a.token_id=e.token_id
         LEFT JOIN reveal_enrichment_acknowledgments ack ON ack.token_id=e.token_id AND ack.version=e.version AND ack.assignment_revision=e.assignment_revision
-        WHERE e.version=? AND e.status='pending' AND e.assignment_revision=a.assignment_revision AND e.next_check_ms<=? ORDER BY e.next_check_ms,e.token_id LIMIT ?`,
+        WHERE e.version=? AND e.status='pending' AND e.assignment_revision=a.assignment_revision AND e.next_check_ms<=?
+          ${this.ownerGuard()}
+        ORDER BY e.next_check_ms,e.token_id LIMIT ?`,
         claimId, REVEAL_ENRICHMENT_VERSION, now, limit).toArray();
       for (const job of jobs) {
         this.sql.exec(`UPDATE reveal_enrichment SET claim_id=?,attempts=?,next_check_ms=? WHERE token_id=? AND version=?`,
@@ -83,7 +95,7 @@ export class EthereumRevealEnrichmentStore {
   stage(job: RevealEnrichmentClaim, json: string, sha256: string): boolean {
     return this.sql.exec(`UPDATE reveal_enrichment SET target_json=?,target_sha256=?
       WHERE token_id=? AND version=? AND status='pending' AND claim_id=? AND assignment_revision=? AND target_json IS NULL
-        AND EXISTS (SELECT 1 FROM assignments a WHERE a.token_id=reveal_enrichment.token_id AND a.assignment_revision=reveal_enrichment.assignment_revision)
+        AND EXISTS (SELECT 1 FROM assignments a WHERE a.token_id=reveal_enrichment.token_id AND a.assignment_revision=reveal_enrichment.assignment_revision ${this.ownerGuard()})
       RETURNING token_id`, json, sha256, job.token_id, REVEAL_ENRICHMENT_VERSION, job.claim_id, job.assignment_revision).toArray().length === 1;
   }
 
@@ -93,7 +105,7 @@ export class EthereumRevealEnrichmentStore {
     return this.sql.exec(`UPDATE reveal_enrichment SET status=?,next_check_ms=?,claim_id=NULL,
       last_error=CASE WHEN last_error='conflict-recheck' AND ? NOT IN ('published','conflict') THEN last_error ELSE ? END
       WHERE token_id=? AND version=? AND status='pending' AND claim_id=? AND assignment_revision=?
-        AND EXISTS (SELECT 1 FROM assignments a WHERE a.token_id=reveal_enrichment.token_id AND a.assignment_revision=reveal_enrichment.assignment_revision)
+        AND EXISTS (SELECT 1 FROM assignments a WHERE a.token_id=reveal_enrichment.token_id AND a.assignment_revision=reveal_enrichment.assignment_revision ${this.ownerGuard()})
       RETURNING token_id`,
       retry ? 'pending' : outcome, next, outcome, outcome === 'published' ? null : outcome,
       job.token_id, REVEAL_ENRICHMENT_VERSION, job.claim_id, job.assignment_revision).toArray().length === 1;
@@ -101,13 +113,15 @@ export class EthereumRevealEnrichmentStore {
 
   nextWake(now: number, busy: boolean): number | null {
     if (busy) return now + CLAIM_MS;
-    return this.sql.exec<{ due: number | null }>(`SELECT MIN(next_check_ms) AS due FROM reveal_enrichment
-      WHERE version=? AND status='pending'`, REVEAL_ENRICHMENT_VERSION).toArray()[0].due;
+    return this.sql.exec<{ due: number | null }>(`SELECT MIN(e.next_check_ms) AS due FROM reveal_enrichment e
+      ${this.ownerOverrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
+      WHERE e.version=? AND e.status='pending' ${this.ownerGuard()}`, REVEAL_ENRICHMENT_VERSION).toArray()[0].due;
   }
 
   summary(): Record<string, number> {
-    const rows = this.sql.exec<{ status: string; last_error: string | null; count: number }>(`SELECT status,last_error,COUNT(*) AS count
-      FROM reveal_enrichment WHERE version=? GROUP BY status,last_error`, REVEAL_ENRICHMENT_VERSION).toArray();
+    const rows = this.sql.exec<{ status: string; last_error: string | null; count: number }>(`SELECT e.status,e.last_error,COUNT(*) AS count
+      FROM reveal_enrichment e ${this.ownerOverrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
+      WHERE e.version=? ${this.ownerGuard()} GROUP BY e.status,e.last_error`, REVEAL_ENRICHMENT_VERSION).toArray();
     return Object.fromEntries(rows.map(row => [row.last_error ?? row.status, row.count]));
   }
 }

@@ -181,6 +181,19 @@ test('current v9 catalog preserves all category counts, exact ratios, posters, a
   }
 });
 
+test('allocated egg rendering permits sparse identities while preserving asset and grail bounds', () => {
+  const selected = getRevealCatalog(catalog.catalogVersion)!;
+  const input = { templateJson, tokenId: '1', crateTokenId: crateId(0), category: 'egg' as const,
+    assetId: selected.categories.eggs.count + 1, observation: observation(1), catalog: selected };
+  assert.throws(() => buildRevealedArtwork(input), /Invalid reveal asset/);
+  const allocated = { ...input, allocatedEgg: true };
+  assert.equal(buildRevealedArtwork(allocated).artwork.image, `https://cdn.lil.org/nft/111k/eggs/${input.assetId}.png`);
+  for (const assetId of [0, -1, 1.5, selected.importSettings.availableEggs + 1]) {
+    assert.throws(() => buildRevealedArtwork({ ...allocated, assetId }), /Invalid reveal asset/);
+  }
+  assert.throws(() => buildRevealedArtwork({ ...allocated, category: 'animated', assetId: 422 }), /Invalid reveal asset/);
+});
+
 for (const [version, eggCount, paintingCount] of [
   ['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348], ['111k-v7', 60504, 47128], ['111k-v8', 55303, 52329],
 ] as const) {

@@ -2,20 +2,19 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { REVEAL_ASSET_FAMILIES, revealCatalogMedia, validateRevealAssetCatalog,
   type RevealAssetCatalog, type RevealAssetCatalogDescriptor, type RevealAssetVariant } from './revealAssetCatalog.ts';
+import { getOwnerHatchingGrail } from './ownerHatchingCatalog.ts';
 import type { EthereumArtworkCategory } from './reveal.ts';
 
 export type RevealCatalogAddition = { category: Exclude<EthereumArtworkCategory, 'egg'>; assetId: number };
 export type RevealCatalogUpdateMapping = RevealCatalogAddition & { eggId: number };
-export type RevealCatalogUpdateBatch = {
-  version: 1;
+type RevealCatalogUpdateFields = {
   nonce: string;
-  batchId: string;
-  batchSha256: string;
   predecessor: { manifest: RevealAssetCatalog; descriptor: RevealAssetCatalogDescriptor };
   target: { manifest: RevealAssetCatalog; descriptor: RevealAssetCatalogDescriptor };
   mappings: RevealCatalogUpdateMapping[];
 };
-export type RevealCatalogUpdateBody = Omit<RevealCatalogUpdateBatch, 'batchId' | 'batchSha256'>;
+export type RevealCatalogUpdateBody = RevealCatalogUpdateFields & ({ version: 1 } | { version: 2; eggCutoff: number });
+export type RevealCatalogUpdateBatch = RevealCatalogUpdateBody & { batchId: string; batchSha256: string };
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -65,7 +64,10 @@ export function revealCatalogAdditions(predecessor: RevealAssetCatalog, target: 
       const oldAlternate = alternate(before.variants?.alt, id);
       if (oldAlternate !== null && oldAlternate !== alternate(after.variants?.alt, id)) invalid('existing alternate changed');
     }
-    for (let id = before.count + 1; id <= after.count; id++) additions.push({ category, assetId: id });
+    for (let id = before.count + 1; id <= after.count; id++) {
+      if (getOwnerHatchingGrail(category, id)) invalid('owner hatching grails cannot enter the ordinary reveal pool');
+      additions.push({ category, assetId: id });
+    }
   }
   const oldEggs = predecessor.categories.eggs;
   const newEggs = target.categories.eggs;
@@ -76,11 +78,13 @@ export function revealCatalogAdditions(predecessor: RevealAssetCatalog, target: 
 
 export function revealCatalogUpdateHash(value: RevealCatalogUpdateBody): string {
   return bytesToHex(sha256(new TextEncoder().encode(JSON.stringify({ version: value.version,
-    nonce: value.nonce, predecessor: value.predecessor, target: value.target, mappings: value.mappings }))));
+    nonce: value.nonce, predecessor: value.predecessor, target: value.target, mappings: value.mappings,
+    ...(value.version === 2 ? { eggCutoff: value.eggCutoff } : {}) }))));
 }
 
 export function validateRevealCatalogUpdateBatch(value: unknown): asserts value is RevealCatalogUpdateBatch {
-  if (!record(value) || !keys(value, ['version', 'nonce', 'batchId', 'batchSha256', 'predecessor', 'target', 'mappings']) || value.version !== 1 ||
+  if (!record(value) || !keys(value, ['version', 'nonce', 'batchId', 'batchSha256', 'predecessor', 'target', 'mappings',
+    ...(value.version === 2 ? ['eggCutoff'] : [])]) || value.version !== 1 && value.version !== 2 ||
     typeof value.nonce !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.nonce) ||
     typeof value.batchId !== 'string' || typeof value.batchSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.batchSha256) ||
     value.batchId !== `catalog-${value.batchSha256.slice(0, 32)}` || !Array.isArray(value.mappings)) invalid('invalid batch shape');
@@ -90,12 +94,16 @@ export function validateRevealCatalogUpdateBatch(value: unknown): asserts value 
     validateRevealAssetCatalog(catalog.manifest, catalog.descriptor);
   }
   const batch = value as unknown as RevealCatalogUpdateBatch;
+  if (batch.version === 2 && (!Number.isSafeInteger(batch.eggCutoff) || batch.eggCutoff < 0 ||
+    batch.eggCutoff >= batch.predecessor.manifest.importSettings.availableEggs)) invalid('invalid explicit egg cutoff');
   const additions = revealCatalogAdditions(batch.predecessor.manifest, batch.target.manifest);
   if (batch.mappings.length !== additions.length) invalid('mapping does not cover every cutoff egg');
   const remaining = new Set(additions.map(row => `${row.category}:${row.assetId}`));
   for (const [index, row] of batch.mappings.entries()) {
     if (!record(row) || !keys(row, ['eggId', 'category', 'assetId']) ||
-      row.eggId !== batch.target.manifest.categories.eggs.count + index + 1 ||
+      (batch.version === 1 ? row.eggId !== batch.target.manifest.categories.eggs.count + index + 1 :
+        !Number.isSafeInteger(row.eggId) || row.eggId <= batch.eggCutoff || row.eggId > batch.predecessor.manifest.importSettings.availableEggs ||
+        index > 0 && row.eggId <= batch.mappings[index - 1].eggId) ||
       !remaining.delete(`${row.category}:${row.assetId}`)) invalid('mapping must be a complete bijection to new artworks');
   }
   if (remaining.size || revealCatalogUpdateHash(batch) !== batch.batchSha256) invalid('batch checksum mismatch');

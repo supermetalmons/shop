@@ -12,11 +12,13 @@ import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenan
 import { buildRevealAssetCatalog, withRevealAssetImportLock } from './assetImport.ts';
 import { sha256 } from './catalog.ts';
 import { withMetadataLock } from './lock.ts';
+import { getOwnerHatchingGrail } from '../../shared/ethereum/ownerHatchingCatalog.ts';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ASSETS = 'scripts/ethereum-metadata/reveal-assets/111k_devnet';
 const ANCESTORS = 'shared/ethereum/revealCatalogAncestors.json';
-export type RevealCatalogUpdateInput = { sourcePath: string; catalogVersion?: string; rootDirectory?: string };
+export type RevealCatalogUpdateInput = { sourcePath: string; catalogVersion?: string; rootDirectory?: string;
+  eggIds?: number[]; eggCutoff?: number };
 export type RevealCatalogUpdateBundle = { batch: RevealCatalogUpdateBatch; source: string; predecessorSource: string };
 export type RevealCatalogUpdateSummary = {
   predecessorVersion: string; targetVersion: string; sourceSha256: string; additions: number;
@@ -55,13 +57,33 @@ function requireUnchangedSource(before: string, after: string): void {
   }
 }
 
+export function ordinaryRevealCatalogSource(bytes: string): string {
+  const source: unknown = JSON.parse(bytes);
+  if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('Invalid ordinary reveal source.');
+  const paths = [...bytes.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(match => JSON.parse(match[1]) as string);
+  if (new Set(paths).size !== paths.length) throw new Error('Artwork source contains duplicate paths.');
+  let removed = false;
+  const entries = Object.entries(source).filter(([path, value]) => {
+    const match = /^animated\/([1-9]\d*)\.(png|gif|mp4)$/.exec(path);
+    const grail = match && getOwnerHatchingGrail('animated', Number(match[1]));
+    if (!grail) return true;
+    if (!Array.isArray(value) || value.length < 2 || !Number.isSafeInteger(value[0]) || !Number.isSafeInteger(value[1]) ||
+      value[0] * grail.aspectRatio.height !== value[1] * grail.aspectRatio.width ||
+      value[2] !== undefined && value[2] !== grail.collectionBlock) throw new Error('Existing owner hatching artwork changed.');
+    removed = true;
+    return false;
+  });
+  return removed ? `${JSON.stringify(Object.fromEntries(entries), null, 2)}\n` : bytes;
+}
+
 async function inputCatalogs(input: RevealCatalogUpdateInput) {
   const root = resolve(input.rootDirectory ?? ROOT);
-  const [source, predecessorSource, manifest, descriptor, blockSource, blockArtifact] = await Promise.all([
+  const [inputSource, predecessorSource, manifest, descriptor, blockSource, blockArtifact] = await Promise.all([
     readFile(resolve(input.sourcePath), 'utf8'), readFile(join(root, ASSETS, 'source.json'), 'utf8'),
     readFile(join(root, ASSETS, 'manifest.json'), 'utf8'), readFile(join(root, 'shared/ethereum/revealCatalog.json'), 'utf8'),
     optionalFile(join(root, ASSETS, 'collection-blocks.source.json')), optionalFile(join(root, ASSETS, 'collection-blocks.json')),
   ]);
+  const source = ordinaryRevealCatalogSource(inputSource);
   const previous: unknown = JSON.parse(manifest);
   const previousDescriptor = JSON.parse(descriptor);
   validateRevealAssetCatalog(previous, previousDescriptor);
@@ -93,17 +115,19 @@ export async function inspectRevealCatalogUpdate(input: RevealCatalogUpdateInput
 }
 
 export function buildRevealCatalogUpdateBatch(predecessor: RevealAssetCatalog, target: RevealAssetCatalog,
-  choose: (maximum: number) => number = randomInt): RevealCatalogUpdateBatch {
+  choose: (maximum: number) => number = randomInt, explicit?: { eggIds: number[]; eggCutoff: number }): RevealCatalogUpdateBatch {
   const additions = revealCatalogAdditions(predecessor, target);
   for (let index = additions.length - 1; index > 0; index--) {
     const selected = choose(index + 1);
     if (!Number.isSafeInteger(selected) || selected < 0 || selected > index) throw new Error('Invalid catalog shuffle result.');
     [additions[index], additions[selected]] = [additions[selected], additions[index]];
   }
-  const body: RevealCatalogUpdateBody = { version: 1, nonce: randomUUID(),
+  const eggIds = explicit ? [...explicit.eggIds].sort((a, b) => a - b) : additions.map((_, index) => target.categories.eggs.count + index + 1);
+  if (eggIds.length !== additions.length) throw new Error('Explicit cutoff eggs must match the ordinary artwork additions.');
+  const body: RevealCatalogUpdateBody = { ...(explicit ? { version: 2 as const, eggCutoff: explicit.eggCutoff } : { version: 1 as const }), nonce: randomUUID(),
     predecessor: { manifest: predecessor, descriptor: computeRevealCatalogDescriptor(predecessor) },
     target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) },
-    mappings: additions.map((addition, index) => ({ eggId: target.categories.eggs.count + index + 1, ...addition })) };
+    mappings: additions.map((addition, index) => ({ eggId: eggIds[index], ...addition })) };
   const batchSha256 = revealCatalogUpdateHash(body);
   const batch = { ...body, batchId: `catalog-${batchSha256.slice(0, 32)}`, batchSha256 };
   validateRevealCatalogUpdateBatch(batch);
@@ -143,14 +167,18 @@ export async function prepareRevealCatalogUpdate(input: RevealCatalogUpdateInput
   return withMetadataLock(`${directory}.lock`, async () => {
     if (await optionalFile(join(directory, 'batch.json'))) {
       const existing = await readRevealCatalogUpdateBundle(directory);
-      if (existing.source !== await readFile(resolve(input.sourcePath), 'utf8') ||
-        input.catalogVersion !== undefined && input.catalogVersion !== existing.batch.target.descriptor.catalogVersion) {
+      if (existing.source !== ordinaryRevealCatalogSource(await readFile(resolve(input.sourcePath), 'utf8')) ||
+        input.catalogVersion !== undefined && input.catalogVersion !== existing.batch.target.descriptor.catalogVersion ||
+        input.eggIds !== undefined && (existing.batch.version !== 2 || existing.batch.eggCutoff !== input.eggCutoff ||
+          JSON.stringify(existing.batch.mappings.map(row => row.eggId)) !== JSON.stringify([...input.eggIds].sort((a, b) => a - b)))) {
         throw new Error('Frozen bundle already exists for different catalog inputs.');
       }
       return existing;
     }
     const catalogs = await inputCatalogs(input);
-    const batch = buildRevealCatalogUpdateBatch(catalogs.predecessor.manifest, catalogs.target.manifest);
+    if ((input.eggIds === undefined) !== (input.eggCutoff === undefined)) throw new Error('Explicit cutoff requires both egg IDs and cutoff.');
+    const batch = buildRevealCatalogUpdateBatch(catalogs.predecessor.manifest, catalogs.target.manifest, randomInt,
+      input.eggIds === undefined ? undefined : { eggIds: input.eggIds, eggCutoff: input.eggCutoff! });
     const bundle = { batch, source: catalogs.source, predecessorSource: catalogs.predecessorSource };
     await writeBundleDirectory(directory, bundle);
     return bundle;
@@ -259,6 +287,36 @@ export async function runRevealCatalogUpdate(options: RunRevealCatalogUpdateOpti
   return executeRevealCatalogUpdate(options);
 }
 
+export async function inspectEligibleCutoffEggs(options: {
+  deploymentId: string; expectedRevision: number; eggCutoff: number; transport?: UpdateTransport;
+}): Promise<{ deploymentId: string; catalogRevision: number; eggCutoff: number; eggIds: number[] }> {
+  const execute = async (transport: UpdateTransport) => {
+    const eggIds: number[] = [];
+    let afterEggId = options.eggCutoff;
+    let catalogRevision: number | undefined;
+    for (;;) {
+      const result = await transport({ deploymentId: options.deploymentId, expectedRevision: options.expectedRevision,
+        batchId: `catalog-${'0'.repeat(32)}`, action: 'inspect', eggCutoff: options.eggCutoff, afterEggId });
+      if (result.deploymentId !== options.deploymentId || catalogRevision !== undefined && result.catalogRevision !== catalogRevision ||
+        !Array.isArray(result.eligibleEggIds) || result.eligibleEggIds.length > 256 || result.eligibleEggIds.some((id, index, ids) =>
+          !Number.isSafeInteger(id) || id <= (index ? ids[index - 1] : afterEggId) || id > 111_111)) {
+        throw new Error('Invalid or changed eligible cutoff inventory.');
+      }
+      catalogRevision = result.catalogRevision;
+      eggIds.push(...result.eligibleEggIds);
+      if (result.nextEligibleEggId === null) return { deploymentId: options.deploymentId, catalogRevision, eggCutoff: options.eggCutoff, eggIds };
+      if (result.nextEligibleEggId !== result.eligibleEggIds.at(-1) || !Number.isSafeInteger(result.nextEligibleEggId) ||
+        result.nextEligibleEggId! <= afterEggId || eggIds.length > 111_111) throw new Error('Cutoff inventory cursor did not advance.');
+      afterEggId = result.nextEligibleEggId!;
+    }
+  };
+  if (options.transport) return execute(options.transport);
+  return withEthereumRevealMaintenance(async transport => {
+    if (!transport.catalogUpdate) throw new Error('Catalog update maintenance is not available.');
+    return execute(request => transport.catalogUpdate!(request));
+  });
+}
+
 async function executeRevealCatalogUpdate(options: RunRevealCatalogUpdateOptions): Promise<EthereumRevealCatalogUpdateResult> {
   const directory = resolve(options.directory);
   const { batch } = await readRevealCatalogUpdateBundle(directory);
@@ -272,14 +330,15 @@ async function executeRevealCatalogUpdate(options: RunRevealCatalogUpdateOptions
   }
   const execute = async (transport: UpdateTransport) => {
     if (options.action === 'verify') {
-      let cursor = batch.target.manifest.categories.eggs.count;
+      let cursor = batch.version === 2 ? batch.eggCutoff : batch.target.manifest.categories.eggs.count;
       while (true) {
         const result = await transport({ ...request, action: 'verify', verificationAfterEggId: cursor });
         if (result.deploymentId !== request.deploymentId || result.batchId !== batch.batchId) throw new Error('Catalog verification returned a different operation identity.');
         options.onProgress?.(result);
         if (result.nextVerificationEggId === null) return result;
         if (!Number.isSafeInteger(result.nextVerificationEggId) || result.nextVerificationEggId! <= cursor ||
-          result.nextVerificationEggId! > batch.predecessor.manifest.categories.eggs.count) throw new Error('Catalog verification cursor did not advance.');
+          result.nextVerificationEggId! > (batch.version === 2 ? batch.predecessor.manifest.importSettings.availableEggs
+            : batch.predecessor.manifest.categories.eggs.count)) throw new Error('Catalog verification cursor did not advance.');
         cursor = result.nextVerificationEggId!;
       }
     }

@@ -2426,14 +2426,14 @@ test('Ethereum public preflights permit partner browsers while private routes st
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
     }
   }
-  for (const path of ['/ethereum/111k/reveal/transaction', '/ethereum/111k/reveal/tokens']) {
+  for (const path of ['/ethereum/111k/reveal/transaction', '/ethereum/111k/reveal/tokens', '/ethereum/111k/hatching/ready', '/ethereum/111k/hatching/hatch']) {
     const denied = await handleRequest(new Request(`https://api.mons.shop${path}`, {
       method: 'OPTIONS', headers: { Origin: 'https://evil.example' },
     }), env(), quietDependencies(fetch));
     assert.equal(denied.status, 403);
   }
   for (const origin of ['https://vvv.so', 'https://www.vvv.so']) {
-    for (const path of ['/ethereum/111k/config', '/ethereum/111k/stats', '/ethereum/111k/inventory', '/ethereum/111k/metadata']) {
+    for (const path of ['/ethereum/111k/config', '/ethereum/111k/stats', '/ethereum/111k/inventory', '/ethereum/111k/metadata', '/ethereum/111k/hatching/ready']) {
       const response = await handleRequest(new Request(`https://api.mons.shop${path}`, {
         method: 'OPTIONS', headers: { Origin: origin },
       }), env(), quietDependencies(fetch));
@@ -2442,6 +2442,12 @@ test('Ethereum public preflights permit partner browsers while private routes st
       assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
       assert.equal(response.headers.get('Access-Control-Allow-Headers'), 'Accept, Content-Type');
     }
+    const hatch = await handleRequest(new Request('https://api.mons.shop/ethereum/111k/hatching/hatch', {
+      method: 'OPTIONS', headers: { Origin: origin },
+    }), env(), quietDependencies(fetch));
+    assert.equal(hatch.status, 204);
+    assert.equal(hatch.headers.get('Access-Control-Allow-Methods'), 'POST, OPTIONS');
+    assert.equal(hatch.headers.get('Access-Control-Allow-Headers'), 'Accept, Content-Type, X-Mons-CSRF');
     for (const path of ['/ethereum/profile', '/ethereum/auth/challenge', '/ethereum/111k/delivery/prepare', '/ethereum/111k/checkout/create']) {
       const restricted = await handleRequest(new Request(`https://api.mons.shop${path}`, {
         method: 'OPTIONS', headers: { Origin: origin },

@@ -28,6 +28,11 @@ import { ETHEREUM_CATALOG_SNAPSHOT_PAGE_SIZE, type EthereumRevealCatalogSnapshot
 import { EthereumRevealEmptyPool, parseEmptyPoolRequest } from './ethereumRevealEmptyPool.js';
 import { EthereumRevealEmptyPoolFence } from './ethereumRevealEmptyPoolFence.js';
 import type { EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/revealMaintenance.js';
+import type { EthereumOwnerHatchRequest, EthereumOwnerHatchingReadyResponse } from '../../../../shared/ethereum/ownerHatching.js';
+import { authorizeOwnerHatch, ownerHatchingRpcError } from './ethereumOwnerHatching.js';
+import { EthereumOwnerHatchingOperations } from './ethereumOwnerHatchingOperations.js';
+import type { OwnerHatchingEnrichmentError } from './ethereumOwnerHatchingStore.js';
+import { parseOwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceResult } from '../../../../shared/ethereum/ownerHatchingMaintenance.js';
 
 function unavailable(): EthereumApiError { return new EthereumApiError('unavailable', 'Artwork reveal is temporarily unavailable.'); }
 
@@ -46,6 +51,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private readonly receiptWaiters = new Map<string, Set<() => void>>();
   private migrationRun: Promise<void> | null = null;
   private publicationRun: Promise<void> | null = null;
+  private ownerEnrichmentRun: Promise<void> | null = null;
   private readonly enrichmentLanes = new Set<Promise<void>>();
   private readonly enrichmentStop = new AbortController();
   private lastPublicationStartMs = 0;
@@ -64,6 +70,59 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private get store(): EthereumRevealStore {
     if (!this.configuredStore) throw unavailable();
     return this.configuredStore;
+  }
+
+  async ownerHatchingReady(deployment: EthereumRevealDeployment): Promise<EthereumOwnerHatchingReadyResponse> {
+    try {
+      deployment = await this.authorize(deployment);
+      this.requireReady(deployment);
+      return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,
+        contractAddress: deployment.contractAddress, catalogRevision: deployment.catalogRevision,
+        tokenIds: this.store.catalogUpdate.ownerHatching.readyTokenIds() };
+    } catch (error) { throw ownerHatchingRpcError(error); }
+  }
+
+  async ownerHatchingOperation(deployment: EthereumRevealDeployment, value: unknown): Promise<OwnerHatchingMaintenanceResult> {
+    const request = parseOwnerHatchingMaintenanceRequest(value);
+    deployment = await this.authorize(deployment);
+    this.requireReady(deployment);
+    if (request.deploymentId !== deployment.deploymentId) throw new Error('Owner hatching deployment does not match.');
+    const requireCurrent = async (expectedRevision?: number) => {
+      const current = await this.authorize(deployment);
+      if (current.revision < request.expectedRevision || expectedRevision !== undefined && current.revision !== expectedRevision ||
+        current.state !== 'active' || current.catalogUpdateId !== null &&
+        current.catalogUpdateId !== undefined) throw new Error('Owner hatching deployment revision or readiness changed.');
+    };
+    if (request.action !== 'status') await requireCurrent();
+    const operations = new EthereumOwnerHatchingOperations({ env: this.env, sql: this.ctx.storage.sql,
+      transaction: action => this.transaction(action), store: this.store, requireCurrent,
+      recover: async ids => {
+        const result = await this.revealTokens(deployment, ids, true, Date.now() + 1_500);
+        return result.kind === 'ready' && result.value.unresolved.length === 0;
+      },
+      wake: async () => { await this.arm(); await this.startBackground(deployment); },
+    });
+    return operations.run(deployment, request);
+  }
+
+  async ownerHatch(deployment: EthereumRevealDeployment, request: Pick<EthereumOwnerHatchRequest, 'tokenId' | 'signature'>): Promise<EthereumRevealTokensResponse> {
+    try {
+      deployment = await this.authorize(deployment);
+      this.requireReady(deployment);
+      this.requireAdmission(deployment);
+      await authorizeOwnerHatch(this.env, deployment, request.tokenId, request.signature,
+        { providerBudgetClient: this.providerBudget(deployment.chainId) });
+      deployment = await this.authorize(deployment);
+      this.requireAdmission(deployment);
+      const result = this.store.catalogUpdate.ownerHatching.hatch(request.tokenId, Date.now());
+      if (result.kind === 'not-ready') throw new EthereumApiError('failed-precondition', 'This token is not ready to hatch.');
+      if (result.kind !== 'hatched') throw new EthereumApiError('unavailable', 'An artwork is not available yet. Your egg remains ready to hatch.');
+      await this.arm();
+      this.ctx.waitUntil(this.startBackground(deployment));
+      return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,
+        contractAddress: deployment.contractAddress, catalogRevision: deployment.catalogRevision,
+        artworks: [result.artwork], unresolved: [], retryAfterMs: 0 };
+    } catch (error) { throw ownerHatchingRpcError(error); }
   }
 
   private providerBudget(chainId: number): ProviderBudgetClient {
@@ -93,7 +152,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
       },
       readStore: () => new EthereumRevealCatalogUpdateStore(this.ctx.storage.sql, action => this.transaction(action)),
       quiescent: () => this.receipts.size === 0 && this.scans.size === 0 && this.overflow.size === 0 &&
-        this.enrichmentLanes.size === 0 && !this.migrationRun && !this.publicationRun && !this.alarmUpdate && !this.alarmPending,
+        this.enrichmentLanes.size === 0 && !this.migrationRun && !this.publicationRun && !this.ownerEnrichmentRun && !this.alarmUpdate && !this.alarmPending,
       wake: async current => { this.configure(current); await this.startBackground(current); await this.arm(); },
     });
     return this.emptyPoolUpdater.run(request, deployment);
@@ -562,6 +621,42 @@ export class EthereumRevealObject extends DurableObject<Env> {
       }
     } else this.pump(deployment, preferredHash, tokenIds);
     this.ctx.waitUntil(this.runPublications(deployment));
+    this.ctx.waitUntil(this.runOwnerEnrichment(deployment));
+  }
+
+  private runOwnerEnrichment(deployment: EthereumRevealDeployment): Promise<void> {
+    if (this.retiring || this.ownerEnrichmentRun) return this.ownerEnrichmentRun ?? Promise.resolve();
+    const work = async () => {
+      if (!await this.canContinue(deployment)) return;
+      const jobs = this.store.catalogUpdate.ownerHatching.enrichmentPage(Date.now(), 4);
+      if (!jobs.length) return;
+      await this.arm();
+      await Promise.all(jobs.map(async job => {
+        const failed = (reason: OwnerHatchingEnrichmentError) => {
+          const updated = this.store.catalogUpdate.ownerHatching.failEnrichment(job.tokenId, job.metadataRevision, Date.now(), reason);
+          if (updated && (job.lastError !== reason || (job.attempts & (job.attempts - 1)) === 0)) {
+            console.error({ event: 'ethereum_owner_hatching_enrichment_error', deploymentId: deployment.deploymentId,
+              tokenId: job.tokenId, attempt: job.attempts, reason });
+          }
+        };
+        try {
+          const writer = this.env.ETHEREUM_REVEAL_PUBLISHER.getByName(attributePublisherName(deployment));
+          const result = await writer.prepareAttributes(deployment, { category: job.category, assetId: job.assetId,
+            baseJson: job.baseJson, catalogVersion: this.store.catalogUpdate.effectiveCatalog()?.catalogVersion,
+            catalogSha256: this.store.catalogUpdate.effectiveCatalog()?.manifestSha256 }, Date.now() + 25_000);
+          if (!await this.canContinue(deployment)) return;
+          if (result.status === 'prepared') {
+            this.store.catalogUpdate.ownerHatching.acceptEnrichment(job.tokenId, job.metadataRevision, result.metadataJson, result.metadataSha256);
+          } else failed(result.status);
+        } catch {
+          if (!this.retiring && await this.canContinue(deployment).catch(() => false)) {
+            failed('enrichment-failed');
+          }
+        }
+      }));
+    };
+    this.ownerEnrichmentRun = work().finally(async () => { this.ownerEnrichmentRun = null; await this.arm(); });
+    return this.ownerEnrichmentRun;
   }
 
   private pump(deployment: EthereumRevealDeployment, preferredHash?: string, tokenIds?: string[]): void {
@@ -723,7 +818,10 @@ export class EthereumRevealObject extends DurableObject<Env> {
         if (!identity || !await this.canContinue(identity)) return;
         const current = await this.ctx.storage.getAlarm();
         if (this.retiring) return;
-        const next = this.store.nextWake(Date.now(), this.enrichmentLanes.size >= REVEAL_ENRICHMENT_SLOTS);
+        const next = this.store.nextWake(Date.now(), {
+          enrichment: this.enrichmentLanes.size >= REVEAL_ENRICHMENT_SLOTS,
+          ownerEnrichment: this.ownerEnrichmentRun !== null,
+        });
         if (next !== null && (current === null || current > next)) await this.ctx.storage.setAlarm(next);
       } finally { if (this.alarmUpdate === update) this.alarmUpdate = null; }
     });
@@ -857,8 +955,12 @@ export class EthereumRevealObject extends DurableObject<Env> {
   }
 
   private requireHealthyPublication(hasEnrichment: boolean): void {
-    if (this.ctx.storage.sql.exec(`SELECT 1 FROM publication
-      WHERE status='conflict' OR (status='pending' AND last_error IS NOT NULL) LIMIT 1`).toArray().length) {
+    const owner = this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_tokens'").toArray().length > 0;
+    if (owner && this.ctx.storage.sql.exec(`SELECT 1 FROM owner_hatching_publication
+      WHERE status='conflict' OR (status='pending' AND attempts>0) LIMIT 1`).toArray().length ||
+      this.ctx.storage.sql.exec(`SELECT 1 FROM publication p
+      WHERE (p.status='conflict' OR (p.status='pending' AND p.last_error IS NOT NULL))
+      ${owner ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens o WHERE o.token_id=p.token_id)' : ''} LIMIT 1`).toArray().length) {
       throw new Error('Replacement reveal publication is unhealthy.');
     }
     if (hasEnrichment && this.ctx.storage.sql.exec(`SELECT 1 FROM reveal_enrichment WHERE version=?
@@ -896,6 +998,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
         if (this.alarmUpdate) tasks.push(this.alarmUpdate);
         if (this.migrationRun) tasks.push(this.migrationRun);
         if (this.publicationRun) tasks.push(this.publicationRun);
+        if (this.ownerEnrichmentRun) tasks.push(this.ownerEnrichmentRun);
         tasks.push(...this.enrichmentLanes);
         await raceWithSignal(Promise.allSettled(tasks), timeout.signal);
         await raceWithSignal(requireRetiredRevealDeployment(this.env, request), timeout.signal);

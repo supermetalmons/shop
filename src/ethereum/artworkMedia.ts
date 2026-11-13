@@ -8,6 +8,10 @@ export function isEthereumMediaUrl(value: unknown): value is string {
   } catch { return false; }
 }
 
+export function isEthereumGifUrl(value: unknown): value is string {
+  return isEthereumMediaUrl(value) && new URL(value).pathname.toLowerCase().endsWith('.gif');
+}
+
 export function hasValidEthereumMedia(value: Record<string, unknown>): boolean {
   const ratio = value.aspectRatio;
   return isEthereumMetadataImage(value.image) &&

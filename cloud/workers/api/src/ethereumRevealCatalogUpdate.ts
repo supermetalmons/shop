@@ -29,12 +29,14 @@ type CatalogUpdateHost = {
 export function parseCatalogUpdateRequest(value: unknown): EthereumRevealCatalogUpdateRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid catalog update request.');
   const request = value as EthereumRevealCatalogUpdateRequest;
-  if (Object.keys(request).some(key => !['deploymentId', 'expectedRevision', 'batchId', 'action', 'batch', 'verificationAfterEggId'].includes(key)) ||
+  if (Object.keys(request).some(key => !['deploymentId', 'expectedRevision', 'batchId', 'action', 'batch', 'verificationAfterEggId', 'eggCutoff', 'afterEggId'].includes(key)) ||
     typeof request.deploymentId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(request.deploymentId) ||
     !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1 ||
     typeof request.batchId !== 'string' || !/^catalog-[a-f0-9]{32}$/.test(request.batchId) ||
     !['inspect', 'begin', 'advance', 'verify', 'cancel'].includes(request.action) ||
     request.verificationAfterEggId !== undefined && (request.action !== 'verify' || !Number.isSafeInteger(request.verificationAfterEggId) || request.verificationAfterEggId < 0) ||
+    request.eggCutoff !== undefined && (request.action !== 'inspect' || !Number.isSafeInteger(request.eggCutoff) || request.eggCutoff < 0 || request.eggCutoff >= 111_111) ||
+    request.afterEggId !== undefined && (request.eggCutoff === undefined || !Number.isSafeInteger(request.afterEggId) || request.afterEggId < request.eggCutoff) ||
     request.action === 'begin' && request.batch === undefined || request.action !== 'begin' && request.batch !== undefined) {
     throw new Error('Invalid catalog update request.');
   }
@@ -98,6 +100,12 @@ export class EthereumRevealCatalogUpdate {
   private async read(request: EthereumRevealCatalogUpdateRequest, deployment: EthereumRevealDeployment): Promise<EthereumRevealCatalogUpdateResult> {
     const record = await this.record(request);
     deployment = await this.current(deployment);
+    if (request.eggCutoff !== undefined) {
+      if (deployment.revision !== request.expectedRevision) throw new Error('Catalog deployment revision changed.');
+      const eligibleEggIds = this.updates.eligibleCutoffEggs(request.eggCutoff, request.afterEggId ?? request.eggCutoff);
+      return { ...this.result(request, deployment, record), eligibleEggIds,
+        nextEligibleEggId: eligibleEggIds.length === 256 ? eligibleEggIds.at(-1)! : null };
+    }
     if (request.action !== 'verify') return this.result(request, deployment, record);
     const status = this.updates.verify(request.batchId);
     if (!status.activatedAtMs || status.published !== status.frozen) throw new Error('Catalog replacement publication is incomplete.');

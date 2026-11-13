@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { encodeCall } from '../../../../shared/ethereum/abi.js';
-import { checksumEthereumAddress, personalMessageHash, recoverEthereumAddress } from '../../../../shared/ethereum/crypto.js';
+import { checksumEthereumAddress } from '../../../../shared/ethereum/crypto.js';
 import { EthereumApiError, readEthereumBody } from './ethereumError.js';
-import { ethereumAddress, ethereumCall, ethereumRpc, type EthereumContext } from './ethereumRuntime.js';
+import { ethereumAddress, type EthereumContext } from './ethereumRuntime.js';
+import { verifyEthereumPersonalSignature } from './ethereumPersonalSignature.js';
 import { isAllowedProfileOrigin } from './profileReadSupport.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
@@ -76,19 +76,6 @@ function signInMessage(args: { wallet: string; chainId: number; origin: string; 
   ].join('\n');
 }
 
-async function verifySignature(context: EthereumContext, wallet: string, message: string, signature: string): Promise<boolean> {
-  const digest = personalMessageHash(message);
-  try {
-    if (recoverEthereumAddress(digest, signature)?.toLowerCase() === wallet) return true;
-  } catch {}
-  const code = await ethereumRpc(context, 'eth_getCode', [wallet, 'latest']);
-  if (typeof code !== 'string' || code === '0x' || code === '0x0') return false;
-  try {
-    const result = await ethereumCall(context, encodeCall('isValidSignature(bytes32,bytes)', ['bytes32', 'bytes'], [digest, signature]), wallet);
-    return result.slice(0, 10).toLowerCase() === '0x1626ba7e';
-  } catch { return false; }
-}
-
 export async function ethereumAuth(request: Request, context: EthereumContext, path: string): Promise<unknown> {
   const origin = ethereumRequestOrigin(request);
   if (path.endsWith('/challenge')) {
@@ -117,7 +104,7 @@ export async function ethereumAuth(request: Request, context: EthereumContext, p
       challenge.chain_id !== context.config.chainId || challenge.consumed_at_ms !== null || challenge.expires_at_ms <= context.nowMs) {
       throw new EthereumApiError('failed-precondition', 'This sign-in request expired or was already used.');
     }
-    if (!await verifySignature(context, challenge.wallet, challenge.message, body.signature)) {
+    if (!await verifyEthereumPersonalSignature(context, challenge.wallet, challenge.message, body.signature)) {
       throw new EthereumApiError('unauthenticated', 'The signature does not match this wallet.');
     }
     const sessionId = crypto.randomUUID();

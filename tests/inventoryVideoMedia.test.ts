@@ -5,8 +5,9 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { ethereumInventoryView } from '../src/ethereum/state.ts';
 
 let environment = setupFrontendDom();
-const { act, cleanup, render } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const { InventoryGrid } = await import('../src/components/InventoryGrid.tsx');
+const { EthereumArtworkMedia } = await import('../src/ethereum/EthereumArtworkMedia.tsx');
 environment.dom.window.close();
 
 const preference = '(prefers-reduced-motion: reduce)';
@@ -81,4 +82,54 @@ test('motion preference changes preserve offscreen video suspension', t => {
   assert.equal(view.container.querySelector('video'), null);
   view.unmount();
   assert.equal(disconnected, true);
+});
+
+const gifItem = {
+  ...item.ethereum, category: 'animated' as const, aspectRatio: { width: 1, height: 1 },
+  image: 'https://cdn.lil.org/nft/111k/animated/593.png', animation_url: 'https://cdn.lil.org/nft/111k/animated/593.gif',
+};
+
+test('GIF artwork uses its image animation with a static inventory preview and reduced-motion fallback', () => {
+  const preview = ethereumInventoryView(gifItem);
+  assert.equal(preview.previewVideo, undefined);
+  assert.equal(preview.image, gifItem.image);
+  const view = render(createElement(EthereumArtworkMedia, { item: gifItem, viewer: true }));
+  assert.equal(view.container.querySelector('video'), null);
+  assert.equal(view.container.querySelector('img')?.src, gifItem.animation_url);
+  act(() => environment.setMediaQueryMatches(preference, true));
+  assert.equal(view.container.querySelector('img')?.src, gifItem.image);
+  act(() => environment.setMediaQueryMatches(preference, false));
+  assert.equal(view.container.querySelector('img')?.src, gifItem.animation_url);
+});
+
+test('a failed GIF falls back to its PNG without attempting video playback', () => {
+  const view = render(createElement(EthereumArtworkMedia, { item: gifItem, viewer: true }));
+  fireEvent.error(view.container.querySelector('img')!);
+  assert.equal(view.container.querySelector('img')?.src, gifItem.image);
+  assert.equal(view.container.querySelector('img')?.hidden, false);
+  assert.equal(view.container.querySelector('video'), null);
+  fireEvent.error(view.container.querySelector('img')!);
+  assert.equal(view.getByRole('status').textContent, 'Artwork unavailable');
+});
+
+test('offscreen GIF artwork defers its animation and returns to its poster when suspended', t => {
+  let visible!: (isIntersecting: boolean) => void;
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver');
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, 'IntersectionObserver', original);
+    else Reflect.deleteProperty(globalThis, 'IntersectionObserver');
+  });
+  Object.defineProperty(globalThis, 'IntersectionObserver', { configurable: true, value: class {
+    constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+      visible = isIntersecting => callback([{ isIntersecting }]);
+    }
+    observe() {}
+    disconnect() {}
+  } });
+  const view = render(createElement(EthereumArtworkMedia, { item: gifItem }));
+  assert.equal(view.container.querySelector('img')?.src, gifItem.image);
+  act(() => visible(true));
+  assert.equal(view.container.querySelector('img')?.src, gifItem.animation_url);
+  act(() => visible(false));
+  assert.equal(view.container.querySelector('img')?.src, gifItem.image);
 });

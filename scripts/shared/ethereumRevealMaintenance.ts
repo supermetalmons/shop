@@ -2,11 +2,13 @@ import { fileURLToPath } from 'node:url';
 import type { GetPlatformProxyOptions } from 'wrangler';
 import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../../shared/ethereum/revealMaintenance.ts';
 import type { RelicImagesRequest, RelicImagesResult } from '../../shared/ethereum/relicImages.ts';
+import type { OwnerHatchingMaintenanceRequest, OwnerHatchingMaintenanceResult } from '../../shared/ethereum/ownerHatchingMaintenance.ts';
 import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealRetirementRequest, EthereumRevealRetirementResult, EthereumRevealRetirementCancellation, EthereumRevealReplacementRequest,
   EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  ownerHatching?(request: OwnerHatchingMaintenanceRequest): Promise<OwnerHatchingMaintenanceResult>;
   rebuildEmptyPool?(request: EthereumRevealEmptyPoolRequest): Promise<EthereumRevealEmptyPoolResult>;
   relicImages?(request: RelicImagesRequest): Promise<RelicImagesResult>;
   catalogUpdate?(request: EthereumRevealCatalogUpdateRequest): Promise<EthereumRevealCatalogUpdateResult>;
@@ -46,7 +48,16 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async rebuildEmptyPool(request) {
+    return await run({ async ownerHatching(request) {
+      const result = await call(() => proxy.env.REVEAL_MAINTENANCE.ownerHatching!(request));
+      return { deploymentId: result.deploymentId, batchId: result.batchId, phase: result.phase,
+        readyCount: result.readyCount, grailCount: result.grailCount, candidates: result.candidates,
+        scanned: result.scanned, total: result.total, staged: result.staged,
+        activationChecked: result.activationChecked, activationSelected: result.activationSelected, published: result.published,
+        hatched: result.hatched, retrying: result.retrying, conflicts: result.conflicts, retryAfterMs: result.retryAfterMs,
+        pendingEnrichment: result.pendingEnrichment, failedEnrichment: result.failedEnrichment,
+        verificationCursor: result.verificationCursor, observationUntilMs: result.observationUntilMs, complete: result.complete };
+    }, async rebuildEmptyPool(request) {
       const result = await call(() => proxy.env.REVEAL_MAINTENANCE.rebuildEmptyPool!(request));
       return { deploymentId: result.deploymentId, operationId: result.operationId, phase: result.phase,
         complete: result.complete, catalogRevision: result.catalogRevision, seeded: result.seeded, total: result.total,
@@ -68,6 +79,7 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
         published: result.published, frozen: result.frozen, retryAfterMs: result.retryAfterMs,
         conflicts: result.conflicts, retrying: result.retrying,
         ...(result.nextVerificationEggId !== undefined ? { nextVerificationEggId: result.nextVerificationEggId } : {}),
+        ...(result.eligibleEggIds !== undefined ? { eligibleEggIds: [...result.eligibleEggIds], nextEligibleEggId: result.nextEligibleEggId } : {}),
         ...(result.refreshTransaction ? { refreshTransaction: { chainId: result.refreshTransaction.chainId,
           to: result.refreshTransaction.to, data: result.refreshTransaction.data, value: result.refreshTransaction.value } } : {}) };
     }, async backfillAttributes(request) {

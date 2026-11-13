@@ -5,6 +5,7 @@ import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
 import { relicDisplayMedia } from './relicMedia';
 import { decodeReturn, encodeCall } from '../../shared/ethereum/abi';
 import { ethereumCatalogKey } from './catalogRevision';
+import { isEthereumGifUrl } from './artworkMedia';
 
 export type EthereumAction = 'mint' | 'relic-claim' | 'unbox' | 'delivery' | 'claim' | 'transfer' | 'cancel';
 export type EthereumPendingTransaction = {
@@ -43,7 +44,7 @@ export function ethereumInventoryView(item: EthereumInventoryItem, dropId = '111
     dropId, name: item.name, image: containerMedia?.src ?? item.image,
     ...(containerMedia ? { imageDimensions: { width: containerMedia.width, height: containerMedia.height } } : {}),
     ...(!containerMedia && item.aspectRatio ? { imageDimensions: item.aspectRatio } : {}),
-    ...((item.category === 'video' || item.category === 'animated') && item.animation_url
+    ...((item.category === 'video' || item.category === 'animated') && item.animation_url && !isEthereumGifUrl(item.animation_url)
       ? { previewVideo: { sources: [{ src: item.animation_url }], posterSrc: item.image } } : {}),
     kind: item.kind.endsWith('_receipt') ? 'certificate' : item.kind === 'artwork' ? 'dude' : 'box',
     ...(item.kind === 'artwork' || item.kind === 'artwork_receipt' ? { dudeId: item.displayId } : { boxId: String(item.displayId) }),

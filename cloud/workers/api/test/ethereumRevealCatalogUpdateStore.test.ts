@@ -8,6 +8,7 @@ import { revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCata
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
+import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
 
 const source = getRevealCatalog('111k-v5')!;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
@@ -99,6 +100,150 @@ function conservation(store: EthereumRevealStore, database: DatabaseSync) {
   assert.equal(new Set(store.catalogUpdate.canonicalMetadata(['1', '2', '3']).map(row => `${row.category}:${row.assetId}`)).size,
     store.catalogUpdate.canonicalMetadata(['1', '2', '3']).length);
 }
+
+for (const allocation of ['reserved', 'free'] as const) {
+  test(`sparse cutoff preserves reveal of ${allocation} original eggs above the nominal catalog count`, t => {
+    const f = fixture(t);
+    const eggId = source.categories.eggs.count;
+    if (allocation === 'reserved') reserveEgg(f.database, eggId, '111112', 0);
+    const update = batch(source, 1);
+    const body: RevealCatalogUpdateBody = { ...update, version: 2, eggCutoff: 0,
+      mappings: update.mappings.map(mapping => ({ ...mapping, eggId: 1 })) };
+    const batchSha256 = revealCatalogUpdateHash(body);
+    const sparse: RevealCatalogUpdateBatch = { ...body, batchSha256, batchId: `catalog-${batchSha256.slice(0, 32)}` };
+    stageMetadata(f.store, sparse);
+    stageGeneration(f.store, sparse);
+    f.store.catalogUpdate.activate(sparse.batchId, 3000);
+    f.store.catalogUpdate.finalize(sparse.batchId);
+    assert.equal(f.store.catalogUpdate.activeCatalog().categories.eggs.count, eggId - 1);
+    assert.equal(f.store.catalogUpdate.ownerHatching.slotOverride({ category: 'egg', assetId: eggId }), null);
+    if (allocation === 'free') {
+      const row = f.database.prepare("SELECT slot FROM reveal_catalog_free WHERE generation=? AND category='egg' AND asset_id=?")
+        .get(sparse.batchId, eggId)!;
+      f.random.push(source.categories['3d'].count + source.categories.animated.count, Number(row.slot));
+    }
+    f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 4000);
+    const canonical = f.reopen().catalogUpdate.canonicalMetadata(['1'])[0];
+    assert.equal(canonical.category, 'egg');
+    assert.equal(canonical.assetId, eggId);
+    assert.equal(canonical.artwork.name, `Egg #${eggId}`);
+    assert.equal(canonical.artwork.image, `https://cdn.lil.org/nft/111k/eggs/${eggId}.png`);
+    assert.equal(JSON.parse(canonical.metadataJson).image, canonical.artwork.image);
+    assert.deepEqual(f.store.frozen(['1'])[0], canonical.artwork);
+    conservation(f.store, f.database);
+  });
+}
+
+test('sparse cutoff coexists with live owner hatches and publishes fresh eggs through their immutable origins', t => {
+  const f = fixture(t);
+  reserveEgg(f.database, 1, '111112', 0);
+  reserveEgg(f.database, source.categories.eggs.count - 3, '111112', 1);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 1000);
+  const initial = batch();
+  stageMetadata(f.store, initial);
+  stageGeneration(f.store, initial);
+  f.store.catalogUpdate.activate(initial.batchId, 3000);
+  f.store.catalogUpdate.finalize(initial.batchId);
+  const owner = f.store.catalogUpdate.ownerHatching;
+  owner.prepare({ batchId: 'owner-wave', sourceSha256: 'a'.repeat(64), candidateTokenIds: ['1', '2'], readyCount: 2,
+    grails: [{ category: 'animated', assetId: 422, attributesJson }], freshEggIds: [76700] }, 4000);
+  const next = batch(initial.target.manifest, 1);
+  assert.throws(() => f.store.catalogUpdate.begin(next, 4001), /protected by owner hatching/);
+  assert.equal(f.store.catalogUpdate.status(next.batchId), null);
+  assert.deepEqual(owner.readyTokenIds(), ['1', '2']);
+  const ordinaryId = String(f.database.prepare('SELECT token_id FROM owner_hatching_tokens WHERE grail_asset_id IS NULL').get()!.token_id);
+  const grailId = ordinaryId === '1' ? '2' : '1';
+  owner.hatch(ordinaryId, 5000);
+  conservation(f.store, f.database);
+  assert.deepEqual(f.store.catalogUpdate.eligibleCutoffEggs(76699), [76700]);
+  const row = f.database.prepare("SELECT slot FROM reveal_catalog_free WHERE generation=? AND category='egg' AND asset_id=76700")
+    .get(initial.batchId)!;
+  const origin = f.store.catalogUpdate.takeFree('egg', Number(row.slot));
+  f.database.prepare("INSERT INTO crates(crate_token_id) VALUES('111113')").run();
+  f.database.prepare("INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES(?,?,'111113',0)").run(origin.category, origin.assetId);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111113', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 21)) }], 5001);
+  const original = f.database.prepare("SELECT * FROM assignments WHERE token_id='21'").get();
+  assert.equal(f.store.frozen(['21'])[0].category, 'egg');
+  assert.equal(f.store.catalogUpdate.canonicalMetadata(['21'])[0].assetId, 76700);
+  const body: RevealCatalogUpdateBody = { ...next, version: 2, eggCutoff: 76699,
+    mappings: next.mappings.map(mapping => ({ ...mapping, eggId: 76700 })) };
+  const batchSha256 = revealCatalogUpdateHash(body);
+  const explicit: RevealCatalogUpdateBatch = { ...body, batchSha256, batchId: `catalog-${batchSha256.slice(0, 32)}` };
+  stageMetadata(f.store, explicit);
+  assert.deepEqual(f.store.catalogUpdate.eligibleCutoffEggs(76699), []);
+  assert.throws(() => owner.prepare({ batchId: 'owner-conflict', sourceSha256: 'b'.repeat(64), candidateTokenIds: ['21'], readyCount: 1,
+    grails: [{ category: 'animated', assetId: 423, attributesJson }], freshEggIds: [] }, 5002), /Not enough eligible/);
+  f.store.catalogUpdate.generationStage(explicit.batchId);
+  owner.hatch(grailId, 5003);
+  stageGeneration(f.store, explicit);
+  f.store.catalogUpdate.activate(explicit.batchId, 6000);
+  const publication = f.store.catalogUpdate.publicationPage(explicit.batchId);
+  assert.equal(publication.length, 1);
+  assert.equal(publication[0].tokenId, '21');
+  assert.equal(publication[0].eggId, 76700);
+  assert.equal(publication[0].category, 'video');
+  assert.deepEqual(f.database.prepare("SELECT * FROM assignments WHERE token_id='21'").get(), original);
+  f.store.catalogUpdate.acknowledgePublication(explicit.batchId, '21', publication[0].metadataRevision, publication[0].targetSha256);
+  f.store.catalogUpdate.finalize(explicit.batchId);
+  conservation(f.store, f.database);
+  assert.equal(f.store.catalogUpdate.pools().find(pool => pool.category === 'animated')!.total, source.categories.animated.count + 1);
+  assert.equal(f.reopen().catalogUpdate.verify(explicit.batchId).published, 1);
+  assert.equal(owner.isRetiredEgg(Number(JSON.parse(String(f.database.prepare('SELECT original_json FROM owner_hatching_tokens WHERE token_id=?').get(ordinaryId)!.original_json)).assetId)), true);
+});
+
+test('replacement inspection can read a pre-owner ledger without initializing or writing schema', t => {
+  const f = fixture(t);
+  reserveEgg(f.database, 1, '111112', 0);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 1000);
+  f.database.exec('PRAGMA foreign_keys=OFF');
+  for (const row of f.database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE 'owner_hatching_%'").all()) {
+    f.database.exec(`DROP TABLE ${String(row.name)}`);
+  }
+  const before = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
+  const store = new EthereumRevealCatalogUpdateStore(f.sql, () => { throw new Error('Read-only inspection attempted a transaction.'); });
+  assert.equal(store.ownerHatching.available, false);
+  assert.equal(store.canonicalMetadata(['1'])[0].category, 'egg');
+  assert.equal(store.canonicalArtworks(['1'])[0].category, 'egg');
+  assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, before);
+});
+
+test('catalogue verification and eligible inspection read completed pre-owner schemas without migrations', t => {
+  const f = fixture(t);
+  const update = batch(source, 1);
+  reserveEgg(f.database, update.mappings[0].eggId, '111112', 0);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 1000);
+  stageMetadata(f.store, update);
+  stageGeneration(f.store, update);
+  f.store.catalogUpdate.activate(update.batchId, 3000);
+  const job = f.store.catalogUpdate.publicationPage(update.batchId)[0];
+  f.store.catalogUpdate.acknowledgePublication(update.batchId, job.tokenId, job.metadataRevision, job.targetSha256);
+  f.store.catalogUpdate.finalize(update.batchId);
+  f.database.exec('PRAGMA foreign_keys=OFF');
+  for (const row of f.database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE 'owner_hatching_%'").all()) {
+    f.database.exec(`DROP TABLE ${String(row.name)}`);
+  }
+  f.database.exec(`DROP TRIGGER enqueue_reveal_enrichment;
+    DROP TABLE reveal_catalog_egg_claims;
+    DROP TRIGGER reveal_catalog_mapping_origin_identity;
+    DROP INDEX reveal_catalog_mapping_origin_unit;
+    ALTER TABLE reveal_catalog_mappings DROP COLUMN origin_category;
+    ALTER TABLE reveal_catalog_mappings DROP COLUMN origin_asset_id;
+    DROP TRIGGER reveal_catalog_explicit_identity;
+    ALTER TABLE reveal_catalog_generations DROP COLUMN batch_version;
+    ALTER TABLE reveal_catalog_generations DROP COLUMN egg_cutoff;
+    DROP TRIGGER reveal_catalog_mode_immutable;
+    ALTER TABLE reveal_catalog_generations DROP COLUMN mode;`);
+  const before = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
+  const schema = f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
+  const store = new EthereumRevealCatalogUpdateStore(f.sql, () => { throw new Error('Read-only verification attempted a transaction.'); });
+  assert.equal(store.verify(update.batchId).published, 1);
+  assert.equal(store.publicationPage(update.batchId)[0].tokenId, '1');
+  assert.deepEqual(store.pendingPublications(update.batchId), []);
+  assert.deepEqual(store.eligibleCutoffEggs(source.categories.eggs.count - 3),
+    [source.categories.eggs.count - 2, source.categories.eggs.count - 1]);
+  assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, before);
+  assert.deepEqual(f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
+});
 
 test('online activation maps free, private and frozen units atomically without rewriting original evidence', t => {
   const f = fixture(t);

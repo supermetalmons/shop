@@ -16,8 +16,19 @@ import { parseRelicImagesRequest, type RelicImagesResult } from '../../../../sha
 import { requireRelicImagesDeployment } from './ethereumRelicImages.js';
 import { parseEmptyPoolRequest } from './ethereumRevealEmptyPool.js';
 import type { EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/revealMaintenance.js';
+import { parseOwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceResult } from '../../../../shared/ethereum/ownerHatchingMaintenance.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async ownerHatching(value: unknown): Promise<OwnerHatchingMaintenanceResult> {
+    const request = parseOwnerHatchingMaintenanceRequest(value);
+    const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)
+      .bind(request.deploymentId).first<Record<string, unknown>>();
+    if (!row) throw new Error('Owner hatching deployment is not registered.');
+    const deployment = parseEthereumRevealDeployment(row);
+    if (deployment.retiredAtMs != null) throw new Error('Owner hatching deployment is retired.');
+    return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).ownerHatchingOperation(deployment, request);
+  }
+
   async rebuildEmptyPool(value: unknown): Promise<EthereumRevealEmptyPoolResult> {
     const request = parseEmptyPoolRequest(value);
     const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)

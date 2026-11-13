@@ -14,6 +14,54 @@ function revealSql(db: DatabaseSync): RevealSql {
   } };
 }
 
+test('backfill skips fresh egg origins and never rechecks their obsolete artwork traits', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const sql = revealSql(db);
+  db.exec(`CREATE TABLE assignments(token_id TEXT PRIMARY KEY,category TEXT,asset_id INTEGER,metadata_json TEXT,assignment_revision INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE publication(token_id TEXT PRIMARY KEY,status TEXT);
+    CREATE TABLE owner_hatching_slot_overrides(origin_category TEXT,origin_asset_id INTEGER);
+    INSERT INTO assignments VALUES('1','painting',7,'fresh egg',0),('2','painting',8,'ordinary artwork',0);
+    INSERT INTO publication VALUES('1','published'),('2','published');
+    INSERT INTO owner_hatching_slot_overrides VALUES('painting',7);`);
+  for (const statement of REVEAL_ENRICHMENT_SCHEMA) db.exec(statement);
+  const page = backfillRevealAttributePage(sql, { afterTokenId: null, write: true });
+  assert.equal(page.eligible, 1);
+  assert.equal(page.enqueued, 1);
+  assert.deepEqual(db.prepare('SELECT token_id FROM reveal_enrichment').all().map(row => row.token_id), ['2']);
+  db.prepare(`INSERT INTO reveal_enrichment(token_id,version,status,target_json,target_sha256,last_error)
+    VALUES('1','v0','published','obsolete',?,'conflict-recheck')`).run('a'.repeat(64));
+  const before = db.prepare('SELECT * FROM reveal_enrichment ORDER BY token_id').all();
+  assert.equal(backfillRevealAttributePage(sql, { afterTokenId: null, write: true, recheckTokenId: '1' }).eligible, 0);
+  assert.equal(backfillRevealAttributePage(sql, { afterTokenId: null, write: false }).conflictRechecks, 0);
+  assert.deepEqual(db.prepare('SELECT * FROM reveal_enrichment ORDER BY token_id').all(), before);
+});
+
+test('overridden enrichment cannot keep alarms active or finish an obsolete in-flight claim', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const sql = revealSql(db);
+  db.exec(`CREATE TABLE assignments(token_id TEXT PRIMARY KEY,category TEXT,asset_id INTEGER,metadata_json TEXT,assignment_revision INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE publication(token_id TEXT PRIMARY KEY,status TEXT);
+    CREATE TABLE owner_hatching_slot_overrides(origin_category TEXT,origin_asset_id INTEGER);
+    INSERT INTO assignments VALUES('1','painting',7,'fresh egg',0),('2','painting',8,'ordinary artwork',0);
+    INSERT INTO publication VALUES('1','published'),('2','published');
+    INSERT INTO owner_hatching_slot_overrides VALUES('painting',7);`);
+  for (const statement of REVEAL_ENRICHMENT_SCHEMA) db.exec(statement);
+  db.exec("INSERT INTO reveal_enrichment(token_id,version,next_check_ms) VALUES('1','v0',0),('2','v0',1000)");
+  const store = new EthereumRevealEnrichmentStore(sql, action => action());
+  assert.deepEqual(store.claim(0), []);
+  assert.equal(store.nextWake(0, false), 1000);
+  assert.deepEqual(store.summary(), { pending: 1 });
+  const [claim] = store.claim(1000);
+  assert.equal(claim.token_id, '2');
+  db.exec("INSERT INTO owner_hatching_slot_overrides VALUES('painting',8)");
+  assert.equal(store.stage(claim, 'obsolete target', 'b'.repeat(64)), false);
+  assert.equal(store.complete(claim, 'conflict', 1001), false);
+  assert.equal(store.nextWake(1001, false), null);
+  assert.deepEqual(store.summary(), {});
+});
+
 test('enrichment work is bound to its assignment revision across preparation and completion', t => {
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());

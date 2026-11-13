@@ -8,14 +8,17 @@ import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegis
 import { buildRevealCatalogUpdateBatch } from '../../../../scripts/ethereum-metadata/catalogUpdate.ts';
 import type { RevealCatalogUpdateStatus } from '../src/ethereumRevealCatalogUpdateStore.ts';
 
-test('native empty mainnet rebuild seeds direct identities under the fence and preserves normal enrichment', { timeout: 90_000 }, async t => {
+test('native empty mainnet rebuild replaces sparse history under the fence and preserves normal enrichment', { timeout: 90_000 }, async t => {
+  const origin = getRevealCatalog('111k-v7')!;
   const predecessor = getRevealCatalog('111k-v8')!;
   const target = getRevealCatalog('111k-v9')!;
+  const sparse = buildRevealCatalogUpdateBatch(origin, predecessor, maximum => maximum - 1,
+    { eggCutoff: 0, eggIds: Array.from({ length: 5201 }, (_, index) => index + 1) });
   const batch = buildRevealCatalogUpdateBatch(predecessor, target, () => 0);
   const templateJson = JSON.stringify({ name: '{{tokenId}}', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [] });
   const deployment = { deploymentId: 'mainnet-native-empty', dropId: '111k', chainId: 1,
     contractAddress: `0x${'34'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k/', deploymentBlock: 100,
-    catalogVersion: predecessor.catalogVersion, templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex'),
+    catalogVersion: origin.catalogVersion, templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex'),
     state: 'active', revision: 3, createdAtMs: 1, updatedAtMs: 3, provisionedAtMs: 2, activatedAtMs: 3, lastError: null };
   const scope = { operationId: 'empty-native-mainnet-v9', deploymentId: deployment.deploymentId,
     batchSha256: batch.batchSha256, expectedRevision: 3 };
@@ -60,8 +63,24 @@ test('native empty mainnet rebuild seeds direct identities under the fence and p
       }
       run(input) {
         const sql=this.ctx.storage.sql,updates=this.store.catalogUpdate;
-        if(input.command==='init') {
+        if(input.command==='history-init') {
           this.store.configure(deployment);while(!this.store.initializeChunk()){}
+          updates.begin(input.batch,this.now);
+          for(let offset=0;offset<input.batch.mappings.length;offset+=256)updates.stageMappings(input.batch.batchId,input.batch.mappings.slice(offset,offset+256));
+          updates.sealMappings(input.batch.batchId);
+          const attributesJson='[{"trait_type":"collection block","value":"sparse history"}]';
+          for(;;){
+            const page=updates.metadataPreparationPage(input.batch.batchId,256);
+            if(!page.length)break;
+            updates.metadataStage(input.batch.batchId,page.map(row=>({...row,attributesJson,sha256:${JSON.stringify(createHash('sha256').update('[{"trait_type":"collection block","value":"sparse history"}]').digest('hex'))}})));
+          }
+          return updates.status(input.batch.batchId);
+        }
+        if(input.command==='history-stage')return updates.generationStage(input.batchId);
+        if(input.command==='init') {
+          updates.seal(input.historyBatchId);
+          updates.activate(input.historyBatchId,this.now);
+          updates.finalize(input.historyBatchId);
           updates.begin(input.batch,this.now);
           updates.stageMappings(input.batch.batchId,input.batch.mappings.slice(0,16));
           updates.cancel(input.batch.batchId);
@@ -80,6 +99,7 @@ test('native empty mainnet rebuild seeds direct identities under the fence and p
           return this.snapshot();
         }
         if(input.command==='stage') return this.fence.withRebuild(scope,()=>updates.stageEmptyRebuild(scope.operationId,4096));
+        if(input.command==='verify') return updates.verifyEmptyRebuild(scope.operationId);
         if(input.command==='activate') return this.fence.withRebuild(scope,()=>{
           updates.sealEmptyRebuild(scope.operationId);
           updates.activateEmptyRebuild(scope.operationId,this.now);
@@ -127,7 +147,9 @@ test('native empty mainnet rebuild seeds direct identities under the fence and p
     pools: Array<{ category: string; total: number; available: number }>; free: number; origin: typeof deployment; base: string;
     legacyFree: number; legacyPools: number; mappings: number; historicalMappings: number; fence: unknown; bypass: number; externalRequests: number };
   try {
-    const initial = await request<Snapshot>('init', { batch });
+    await request<RevealCatalogUpdateStatus>('history-init', { batch: sparse });
+    while ((await request<RevealCatalogUpdateStatus>('history-stage', { batchId: sparse.batchId })).generationSeeded < 111111) {}
+    const initial = await request<Snapshot>('init', { batch, historyBatchId: sparse.batchId });
     assert.equal(initial.blocked, true);
     assert.equal(initial.free, 111111);
     assert.equal(initial.effective.catalogVersion, '111k-v8');
@@ -139,10 +161,11 @@ test('native empty mainnet rebuild seeds direct identities under the fence and p
       if (++pages === 1) assert.equal((await request<Snapshot>('reopen')).bypass, 0);
       assert.ok(pages < 30);
     }
+    assert.equal((await request<RevealCatalogUpdateStatus>('verify')).targetRevision, 2);
     const active = await request<Snapshot>('activate');
     assert.equal(active.effective.catalogVersion, '111k-v9');
-    assert.equal(active.effective.catalogRevision, 1);
-    assert.equal(active.origin.catalogVersion, '111k-v8');
+    assert.equal(active.effective.catalogRevision, 2);
+    assert.equal(active.origin.catalogVersion, '111k-v7');
     assert.equal(active.base, scope.operationId);
     assert.equal(active.free, 111111);
     assert.equal(active.status.metadataStaged, 0);
@@ -153,17 +176,17 @@ test('native empty mainnet rebuild seeds direct identities under the fence and p
     const released = await request<Snapshot>('release');
     assert.equal(released.legacyFree, 0);
     assert.equal(released.legacyPools, 0);
-    assert.equal(released.historicalMappings, 16);
+    assert.equal(released.historicalMappings, 5217);
     assert.equal(released.fence, null);
     assert.equal(released.bypass, 0);
     const ordinary = await request<{ canonical: { category: string; assetId: number; metadataRevision: number; migration: boolean };
       claim: { asset_id: number; assignment_revision: number }; free: number; externalRequests: number }>('artworkFixture');
     assert.equal(ordinary.canonical.category, 'painting');
     assert.equal(ordinary.canonical.assetId, 68980);
-    assert.equal(ordinary.canonical.metadataRevision, 2);
+    assert.equal(ordinary.canonical.metadataRevision, 4);
     assert.equal(ordinary.canonical.migration, false);
     assert.equal(ordinary.claim.asset_id, 68980);
-    assert.equal(ordinary.claim.assignment_revision, 1);
+    assert.equal(ordinary.claim.assignment_revision, 2);
     assert.equal(ordinary.free, 111091);
     assert.equal(ordinary.externalRequests, 0);
     t.diagnostic(JSON.stringify({ runtime: 'native-workerd', seeded: 111111, pageSize: 4096, pages: pages + 1, enrichmentAsset: 68980 }));

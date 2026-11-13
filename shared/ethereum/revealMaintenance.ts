@@ -26,6 +26,8 @@ export type EthereumRevealCatalogUpdateRequest = EthereumRevealMaintenanceReques
   action: 'inspect' | 'begin' | 'advance' | 'verify' | 'cancel';
   batch?: RevealCatalogUpdateBatch;
   verificationAfterEggId?: number;
+  eggCutoff?: number;
+  afterEggId?: number;
 };
 
 export type EthereumRevealCatalogUpdateResult = {
@@ -43,6 +45,8 @@ export type EthereumRevealCatalogUpdateResult = {
   retrying?: number;
   retryAfterMs: number;
   nextVerificationEggId?: number | null;
+  eligibleEggIds?: number[];
+  nextEligibleEggId?: number | null;
   refreshTransaction?: { chainId: number; to: string; data: string; value: '0x0' };
 };
 

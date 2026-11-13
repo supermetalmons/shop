@@ -4,6 +4,7 @@ import { revealCatalogMedia, validateRevealAssetCatalog, type RevealAssetCatalog
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
+import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 
 export function revealCategoryCounts(catalog: { categories: Record<'eggs' | 'paintings' | 'videos' | '3d' | 'animated', { count: number }> }) { return {
   egg: catalog.categories.eggs.count,
@@ -42,7 +43,15 @@ export function validateRevealCatalog(): void {
   validatedCatalog = value;
 }
 
-function revealAssetMedia(category: EthereumArtworkCategory, assetId: number, supplied?: RevealAssetCatalog) {
+function revealAssetMedia(category: EthereumArtworkCategory, assetId: number, supplied?: RevealAssetCatalog, ownerHatching = false, allocatedEgg = false) {
+  const selected = supplied ?? (validateRevealCatalog(), validatedCatalog!);
+  const grail = ownerHatching ? getOwnerHatchingGrail(category, assetId) : undefined;
+  if (grail) return { image: grail.image, animation_url: grail.animation_url, aspectRatio: grail.aspectRatio };
+  if ((ownerHatching || allocatedEgg) && category === 'egg' && Number.isSafeInteger(assetId) && assetId > selected.categories.eggs.count &&
+    assetId <= selected.importSettings.availableEggs) {
+    return { image: `${selected.categories.eggs.baseUrl ?? selected.baseUrl}eggs/${assetId}.png`,
+      aspectRatio: { width: selected.importSettings.eggAspectRatio[0], height: selected.importSettings.eggAspectRatio[1] } };
+  }
   if (supplied) return revealCatalogMedia(supplied, category, assetId);
   validateRevealCatalog();
   return revealCatalogMedia(validatedCatalog!, category, assetId);
@@ -52,11 +61,13 @@ export function buildRevealedArtwork(input: {
   templateJson: string; tokenId: string; crateTokenId: string; category: EthereumArtworkCategory;
   assetId: number; observation: EthereumRevealObservation;
   catalog?: RevealAssetCatalog;
+  ownerHatching?: boolean;
+  allocatedEgg?: boolean;
 }): { artwork: EthereumRevealedArtwork; metadataJson: string; placeholderJson: string } {
   const template = JSON.parse(input.templateJson.replaceAll('{{tokenId}}', input.tokenId).replaceAll('{{displayId}}', input.tokenId)) as {
     name: string; description?: string; image: string; attributes?: Array<{ trait_type: string; value: string | number }>;
   };
-  const media = revealAssetMedia(input.category, input.assetId, input.catalog);
+  const media = revealAssetMedia(input.category, input.assetId, input.catalog, input.ownerHatching, input.allocatedEgg);
   const name = input.category === 'egg' ? `Egg #${input.assetId}` : template.name;
   const description = input.category === 'egg' ? 'a unrevealed gan egg. what will hatch from it?' : template.description;
   const attributes = [...(template.attributes || []).filter(attribute => attribute.trait_type !== 'type'),

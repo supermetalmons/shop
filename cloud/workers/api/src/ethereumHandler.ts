@@ -9,6 +9,7 @@ import { ethereumRouteDefinition } from './ethereumRouteDefinitions.js';
 import { ethereumRelics } from './ethereumRelics.js';
 import { ethereumReveal } from './ethereumReveal.js';
 import { ethereumPublicRequest } from './ethereumPublic.js';
+import { ethereumOwnerHatching } from './ethereumOwnerHatching.js';
 import { ethereumProviderApiError, RpcProviderError } from './ethereumProvider.js';
 import { ProviderBudgetUnavailable } from './ethereumProviderBudget.js';
 import type { DeferredWork } from './deferredWork.js';
@@ -41,6 +42,7 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
     const result = handler === ethereumRelics ? await ethereumRelics(request, context)
       : handler === ethereumReveal ? await ethereumReveal(request, context, path, dependencies)
       : handler === ethereumPublicRequest ? await ethereumPublicRequest(request, context, path)
+      : handler === ethereumOwnerHatching ? await ethereumOwnerHatching(request, context, path)
       : await handler(request, { ...context, config: ethereumConfig(env) }, path);
     return jsonResponse(result, 200);
   } catch (error) {

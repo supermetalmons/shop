@@ -7,11 +7,13 @@ import { getRevealCatalog, getRevealCatalogDescriptor } from '../../../../shared
 import { validateRevealCatalogUpdateBatch, type RevealCatalogUpdateBatch, type RevealCatalogUpdateMapping } from '../../../../shared/ethereum/revealCatalogUpdate.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import type { RevealSql } from './ethereumRevealStore.js';
-import { buildRevealedArtwork } from './ethereumRevealCatalog.js';
+import { buildRevealedArtwork, revealRandomInteger } from './ethereumRevealCatalog.js';
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
 import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
+import { EthereumOwnerHatchingStore } from './ethereumOwnerHatchingStore.js';
+import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 
 export type RevealOriginUnit = { category: EthereumArtworkCategory; assetId: number };
 export type RevealArtworkReadOptions = { includeCollectionBlock?: boolean };
@@ -33,10 +35,11 @@ export type RevealCatalogUpdateStatus = {
 type Operation = {
   batch_id: string; batch_sha256: string; predecessor_json: string; target_json: string; target_manifest_json: string;
   source_revision: number; target_revision: number; mapping_count: number; mapping_sha256: string; phase: RevealCatalogUpdateStatus['phase'];
-  started_at_ms: number; activated_at_ms: number | null; seeded: number; frozen_count: number; mode: 'online' | 'empty-rebuild';
+  started_at_ms: number; activated_at_ms: number | null; seeded: number; frozen_count: number; mode?: 'online' | 'empty-rebuild';
+  batch_version: number; egg_cutoff: number | null;
 };
 type Mapping = { batch_id: string; egg_id: number; category: EthereumArtworkCategory; asset_id: number;
-  attributes_json: string | null; attributes_sha256: string | null };
+  attributes_json: string | null; attributes_sha256: string | null; origin_category: EthereumArtworkCategory | null; origin_asset_id: number | null };
 type Assignment = { category: EthereumArtworkCategory; asset_id: number; token_id: string; crate_token_id: string;
   artwork_json: string; metadata_json: string; placeholder_json: string; frozen_at_ms: number; assignment_revision: number };
 const CATEGORIES = ['egg', 'painting', 'video', '3d', 'animated'] as const;
@@ -61,6 +64,9 @@ const SCHEMA = [
     egg_id INTEGER NOT NULL,category TEXT NOT NULL,asset_id INTEGER NOT NULL,attributes_json TEXT,attributes_sha256 TEXT,
     PRIMARY KEY(batch_id,egg_id),UNIQUE(batch_id,category,asset_id),CHECK((attributes_json IS NULL)=(attributes_sha256 IS NULL)))`,
   `CREATE INDEX IF NOT EXISTS reveal_catalog_origin ON reveal_catalog_mappings(egg_id,batch_id)`,
+  `CREATE TABLE IF NOT EXISTS reveal_catalog_egg_claims (batch_id TEXT NOT NULL REFERENCES reveal_catalog_generations(batch_id),
+    egg_id INTEGER NOT NULL,origin_category TEXT NOT NULL,origin_asset_id INTEGER NOT NULL,
+    PRIMARY KEY(batch_id,egg_id),UNIQUE(batch_id,origin_category,origin_asset_id))`,
   `CREATE TABLE IF NOT EXISTS reveal_catalog_pools (generation TEXT NOT NULL REFERENCES reveal_catalog_generations(batch_id),
     category TEXT NOT NULL,total INTEGER NOT NULL,seeded INTEGER NOT NULL DEFAULT 0,available INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(generation,category),CHECK(available>=0 AND available<=seeded AND seeded<=total))`,
@@ -92,8 +98,73 @@ const SCHEMA = [
 
 export class EthereumRevealCatalogUpdateStore {
   private originCounts: { generation: string | null; counts: Record<EthereumArtworkCategory, number> } | undefined;
+  private mappingOriginsAvailable: boolean | undefined;
   private readonly catalogs = new Map<string, RevealAssetCatalog>();
-  constructor(private readonly sql: RevealSql, private readonly transaction: <T>(action: () => T) => T) {}
+  readonly ownerHatching: EthereumOwnerHatchingStore;
+  constructor(private readonly sql: RevealSql, private readonly transaction: <T>(action: () => T) => T) {
+    this.ownerHatching = new EthereumOwnerHatchingStore(sql, transaction, {
+      canonical: tokenId => this.canonicalMetadataBase([tokenId])[0] ?? null,
+      originForToken: tokenId => {
+        const row = this.sql.exec<Assignment>('SELECT * FROM assignments WHERE token_id=?', tokenId).toArray()[0];
+        if (!row) throw new Error('Owner hatch origin is unavailable.');
+        return { category: row.category, assetId: row.asset_id };
+      },
+      build: (tokenId, asset, original) => {
+        const deployment = JSON.parse(this.settings()!.deployment_json) as EthereumRevealDeployment;
+        const built = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId,
+          crateTokenId: original.artwork.crateTokenId, category: asset.category, assetId: asset.assetId,
+          observation: original.artwork.observation, catalog: this.activeCatalog(), ownerHatching: true });
+        const grail = getOwnerHatchingGrail(asset.category, asset.assetId);
+        const block = grail?.collectionBlock ?? lookupRevealCollectionBlock(revealCollectionBlocks(this.effectiveCatalog()), asset.category, asset.assetId);
+        built.artwork.collectionBlock = block;
+        return { artwork: built.artwork,
+          metadataJson: asset.attributesJson ? applyRevealAttributePayload(built.metadataJson, asset.attributesJson).metadataJson : built.metadataJson };
+      },
+      takeOrdinary: () => {
+        const pools = this.pools().filter(pool => pool.category !== 'egg' && pool.available > 0);
+        const available = pools.reduce((sum, pool) => sum + pool.available, 0);
+        if (!available) return null;
+        let selection = revealRandomInteger(available);
+        const pool = pools.find(value => { selection -= value.available; return selection < 0; })!;
+        const origin = this.takeFree(pool.category, revealRandomInteger(pool.available));
+        const effective = this.resolveUnit(origin);
+        if (effective.category === 'egg' || getOwnerHatchingGrail(effective.category, effective.assetId)) {
+          throw new Error('Ordinary hatch inventory is inconsistent.');
+        }
+        return { origin, effective: { category: effective.category, assetId: effective.assetId } };
+      },
+      transitionSlot: (origin, before, after) => this.transitionOwnerSlot(origin, before, after),
+      releaseReplacement: origin => this.releaseFree(origin),
+      freshEggAvailable: eggId => this.freshOwnerEggAvailable(eggId),
+      eligibleEgg: (_tokenId, eggId) => Boolean(this.settings()?.active_catalog_generation) &&
+        !this.sql.exec(`SELECT 1 FROM (SELECT batch_id,egg_id FROM reveal_catalog_egg_claims
+          UNION ALL SELECT batch_id,egg_id FROM reveal_catalog_mappings) m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
+          WHERE m.egg_id=? AND g.phase IN ('mapping','staging','ready') LIMIT 1`, eggId).toArray().length,
+    });
+  }
+
+  freshOwnerEggAvailable(eggId: number): boolean {
+    const saved = this.settings();
+    if (!saved) return false;
+    const deployment = JSON.parse(saved.deployment_json) as EthereumRevealDeployment;
+    const original = getRevealCatalog(deployment.catalogVersion);
+    return Number.isSafeInteger(eggId) && eggId > Math.max(original?.categories.eggs.count ?? Infinity,
+      this.activeCatalog().categories.eggs.count) && eggId <= this.activeCatalog().importSettings.availableEggs &&
+      !this.ownerHatching.usedFreshEgg(eggId) && !this.ownerHatching.isRetiredEgg(eggId);
+  }
+
+  private transitionOwnerSlot(origin: RevealOriginUnit, before: RevealOriginUnit, after: RevealOriginUnit): void {
+    if (before.category === after.category) return;
+    const saved = this.settings()!;
+    if (!saved.active_catalog_generation) throw new Error('Owner hatching requires a canonical inventory generation.');
+    for (const generation of [saved.active_catalog_generation, saved.candidate_catalog_generation].filter((value): value is string => Boolean(value))) {
+      const seeded = generation === saved.active_catalog_generation || this.ordinal(origin) <= this.operation(generation).seeded;
+      this.sql.exec('UPDATE reveal_catalog_pools SET total=total+1,seeded=seeded+? WHERE generation=? AND category=?',
+        Number(seeded), generation, after.category);
+      this.sql.exec('UPDATE reveal_catalog_pools SET total=total-1,seeded=seeded-? WHERE generation=? AND category=?',
+        Number(seeded), generation, before.category);
+    }
+  }
 
   initialize(): void {
     this.transaction(() => {
@@ -107,6 +178,24 @@ export class EthereumRevealCatalogUpdateStore {
       if (!this.sql.exec<{ name: string }>('PRAGMA table_info(reveal_catalog_generations)').toArray().some(row => row.name === 'mode')) {
         this.sql.exec("ALTER TABLE reveal_catalog_generations ADD COLUMN mode TEXT NOT NULL DEFAULT 'online' CHECK(mode IN ('online','empty-rebuild'))");
       }
+      for (const [table, name, type] of [
+        ['reveal_catalog_generations', 'batch_version', 'INTEGER NOT NULL DEFAULT 1'],
+        ['reveal_catalog_generations', 'egg_cutoff', 'INTEGER'],
+        ['reveal_catalog_mappings', 'origin_category', 'TEXT'],
+        ['reveal_catalog_mappings', 'origin_asset_id', 'INTEGER'],
+      ]) {
+        if (!this.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().some(row => row.name === name)) {
+          this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+        }
+      }
+      this.sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS reveal_catalog_mapping_origin_unit ON reveal_catalog_mappings
+        (batch_id,COALESCE(origin_category,'egg'),COALESCE(origin_asset_id,egg_id))`);
+      this.sql.exec(`CREATE TRIGGER IF NOT EXISTS reveal_catalog_explicit_identity BEFORE UPDATE ON reveal_catalog_generations
+        WHEN NEW.batch_version IS NOT OLD.batch_version OR NEW.egg_cutoff IS NOT OLD.egg_cutoff
+        BEGIN SELECT RAISE(ABORT,'Catalog generation identity is immutable'); END`);
+      this.sql.exec(`CREATE TRIGGER IF NOT EXISTS reveal_catalog_mapping_origin_identity BEFORE UPDATE ON reveal_catalog_mappings
+        WHEN NEW.origin_category IS NOT OLD.origin_category OR NEW.origin_asset_id IS NOT OLD.origin_asset_id
+        BEGIN SELECT RAISE(ABORT,'Catalog mapping origin is immutable'); END`);
       this.sql.exec(`CREATE TRIGGER IF NOT EXISTS reveal_catalog_mode_immutable BEFORE UPDATE ON reveal_catalog_generations
         WHEN NEW.mode IS NOT OLD.mode BEGIN SELECT RAISE(ABORT,'Catalog generation mode is immutable'); END`);
       for (const [table, name] of [['assignments', 'assignment_revision'], ['publication', 'metadata_revision']]) {
@@ -136,6 +225,22 @@ export class EthereumRevealCatalogUpdateStore {
         this.sql.exec("INSERT INTO reveal_migrations(name) VALUES('online-catalog-generations-v1')");
       }
     });
+    this.mappingOriginsAvailable = true;
+    this.ownerHatching.initialize();
+  }
+
+  private hasTable(name: string): boolean {
+    return this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", name).toArray().length > 0;
+  }
+
+  private mappingOriginJoin(): string {
+    if (!this.mappingOriginsAvailable) {
+      const columns = this.sql.exec<{ name: string }>('PRAGMA table_info(reveal_catalog_mappings)').toArray();
+      this.mappingOriginsAvailable = columns.some(row => row.name === 'origin_category') && columns.some(row => row.name === 'origin_asset_id');
+    }
+    return this.mappingOriginsAvailable
+      ? "a.category=COALESCE(m.origin_category,'egg') AND a.asset_id=COALESCE(m.origin_asset_id,m.egg_id)"
+      : "a.category='egg' AND a.asset_id=m.egg_id";
   }
 
   private settings(): { deployment_json: string; catalog_revision: number; active_catalog_generation: string | null;
@@ -223,6 +328,7 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   private mapping(unit: RevealOriginUnit, candidate?: string): (Mapping & { target_revision: number }) | undefined {
+    unit = this.ownerHatching.available ? this.ownerHatching.slotOverride(unit) ?? unit : unit;
     if (unit.category !== 'egg') return;
     return this.sql.exec<Mapping & { target_revision: number }>(`SELECT m.*,g.target_revision FROM reveal_catalog_mappings m
       JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id WHERE m.egg_id=? AND
@@ -231,6 +337,7 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   resolveUnit(unit: RevealOriginUnit, assignmentRevision = this.settings()?.catalog_revision ?? 0, candidate?: string): RevealEffectiveUnit {
+    unit = this.ownerHatching.available ? this.ownerHatching.slotOverride(unit) ?? unit : unit;
     const mapping = unit.category === 'egg' ? this.sql.exec<{ category: EthereumArtworkCategory; asset_id: number; target_revision: number }>(
       `SELECT m.category,m.asset_id,g.target_revision FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
         WHERE m.egg_id=? AND g.target_revision>${ALLOCATION_BASE_REVISION} AND (g.activated_at_ms IS NOT NULL OR g.batch_id=?) ORDER BY g.target_revision DESC LIMIT 1`,
@@ -255,16 +362,23 @@ export class EthereumRevealCatalogUpdateStore {
       const rows = this.sql.exec<Pick<Assignment, 'category' | 'asset_id' | 'assignment_revision' | 'token_id' | 'crate_token_id' | 'artwork_json'>>(
         `SELECT category,asset_id,assignment_revision,token_id,crate_token_id,artwork_json FROM assignments WHERE token_id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray();
       for (const row of rows) {
+        const owner = this.ownerHatching.canonical(row.token_id);
+        if (owner) {
+          values.set(row.token_id, owner.artwork);
+          continue;
+        }
         const effective = this.resolveUnit({ category: row.category, assetId: row.asset_id }, row.assignment_revision ?? 0);
         let artwork = JSON.parse(row.artwork_json) as EthereumRevealedArtwork;
         if (effective.category !== row.category || effective.assetId !== row.asset_id) {
           catalog ??= this.activeCatalog();
           artwork = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId: row.token_id, crateTokenId: row.crate_token_id,
-            category: effective.category, assetId: effective.assetId, observation: artwork.observation, catalog }).artwork;
+            category: effective.category, assetId: effective.assetId, observation: artwork.observation, catalog,
+            ownerHatching: this.ownerHatching.slotOverride({ category: row.category, assetId: row.asset_id }) !== null }).artwork;
         }
         const metadataRevision = 2 * effective.assignmentRevision;
         const canonical = { ...artwork, ...(metadataRevision ? { metadataRevision } : {}) };
-        if (options?.includeCollectionBlock) canonical.collectionBlock = lookupRevealCollectionBlock(collectionBlocks, effective.category, effective.assetId);
+        if (options?.includeCollectionBlock) canonical.collectionBlock = getOwnerHatchingGrail(effective.category, effective.assetId)?.collectionBlock
+          ?? lookupRevealCollectionBlock(collectionBlocks, effective.category, effective.assetId);
         values.set(row.token_id, canonical);
       }
     }
@@ -497,6 +611,70 @@ export class EthereumRevealCatalogUpdateStore {
     return this.prune(operationId, pageSize);
   }
 
+  private effectiveEggOrigin(eggId: number): RevealOriginUnit | null {
+    const override = this.sql.exec<{ origin_category: EthereumArtworkCategory; origin_asset_id: number }>(
+      "SELECT origin_category,origin_asset_id FROM owner_hatching_slot_overrides WHERE category='egg' AND asset_id=?", eggId).toArray()[0];
+    const unit: RevealOriginUnit = override ? { category: override.origin_category, assetId: override.origin_asset_id } : { category: 'egg', assetId: eggId };
+    if (!override && eggId > this.originalCounts().egg) return null;
+    const effective = this.resolveUnit(unit);
+    if (effective.category !== 'egg' || effective.assetId !== eggId || !this.isFree(unit) &&
+      !this.sql.exec('SELECT 1 FROM assignments WHERE category=? AND asset_id=?', unit.category, unit.assetId).toArray().length) return null;
+    return unit;
+  }
+
+  eligibleCutoffEggs(cutoff: number, afterEggId = cutoff, pageSize = 256): number[] {
+    limit(pageSize);
+    if (!Number.isSafeInteger(cutoff) || cutoff < 0 || !Number.isSafeInteger(afterEggId) || afterEggId < cutoff) throw new Error('Invalid cutoff egg page.');
+    const settings = this.settings();
+    if (!settings) return [];
+    const active = settings.active_catalog_generation;
+    const owner = this.ownerHatching.available;
+    const mapped = this.hasTable('reveal_catalog_mappings');
+    const claimed = this.hasTable('reveal_catalog_egg_claims');
+    const free = active ? 'SELECT asset_id AS egg_id FROM reveal_catalog_free WHERE generation=? AND category=\'egg\''
+      : 'SELECT asset_id AS egg_id FROM free_slots WHERE category=\'egg\'';
+    const assigned = owner ? `SELECT COALESCE(o.asset_id,a.asset_id) AS egg_id FROM assignments a LEFT JOIN owner_hatching_slot_overrides o
+      ON o.origin_category=a.category AND o.origin_asset_id=a.asset_id WHERE COALESCE(o.category,a.category)='egg'`
+      : "SELECT asset_id AS egg_id FROM assignments WHERE category='egg'";
+    return this.sql.exec<{ egg_id: number }>(`WITH candidates AS (${free} UNION ${assigned})
+      SELECT egg_id FROM candidates c WHERE egg_id>?
+        ${owner ? `AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens t WHERE t.egg_id=c.egg_id)
+          AND NOT EXISTS(SELECT 1 FROM owner_hatching_retired_eggs r WHERE r.egg_id=c.egg_id)` : ''}
+        ${mapped ? `AND NOT EXISTS(SELECT 1 FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
+          WHERE m.egg_id=c.egg_id AND (g.target_revision>${ALLOCATION_BASE_REVISION} AND g.activated_at_ms IS NOT NULL
+            OR g.phase IN ('mapping','staging','ready')))` : ''}
+        ${claimed ? `AND NOT EXISTS(SELECT 1 FROM reveal_catalog_egg_claims m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
+          WHERE m.egg_id=c.egg_id AND g.phase IN ('mapping','staging','ready'))` : ''}
+        ORDER BY egg_id LIMIT ?`, ...(active ? [active] : []), afterEggId, pageSize).toArray().map(row => row.egg_id);
+  }
+
+  private requireCutoffEgg(eggId: number): RevealOriginUnit {
+    if (this.ownerHatching.hasProtectedEgg(eggId)) throw new Error('Cutoff egg is protected by owner hatching.');
+    const unit = this.effectiveEggOrigin(eggId);
+    if (!unit) throw new Error('Cutoff egg is not a live allocation.');
+    return unit;
+  }
+
+  private verifyCutoffClaims(batchId: string): void {
+    if (!this.ownerHatching.hasBatch()) return;
+    const active = this.settings()?.active_catalog_generation;
+    const free = active ? `SELECT 1 FROM reveal_catalog_free f WHERE f.generation=? AND f.origin_category=b.origin_category AND f.origin_asset_id=b.origin_asset_id`
+      : 'SELECT 1 FROM free_slots f WHERE f.category=b.origin_category AND f.asset_id=b.origin_asset_id';
+    const invalid = this.sql.exec(`WITH bases AS (SELECT m.egg_id,COALESCE(m.origin_category,'egg') AS origin_category,
+        COALESCE(m.origin_asset_id,m.egg_id) AS origin_asset_id,COALESCE(o.category,m.origin_category,'egg') AS effective_category,
+        COALESCE(o.asset_id,m.origin_asset_id,m.egg_id) AS effective_asset_id FROM reveal_catalog_mappings m
+        LEFT JOIN owner_hatching_slot_overrides o ON o.origin_category=COALESCE(m.origin_category,'egg')
+          AND o.origin_asset_id=COALESCE(m.origin_asset_id,m.egg_id) WHERE m.batch_id=?)
+      SELECT 1 FROM bases b WHERE b.effective_category!='egg' OR b.effective_asset_id!=b.egg_id
+        OR EXISTS(SELECT 1 FROM owner_hatching_tokens t WHERE t.egg_id=b.egg_id)
+        OR EXISTS(SELECT 1 FROM owner_hatching_retired_eggs r WHERE r.egg_id=b.egg_id)
+        OR EXISTS(SELECT 1 FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
+          WHERE m.egg_id=b.egg_id AND g.activated_at_ms IS NOT NULL AND g.target_revision>${ALLOCATION_BASE_REVISION})
+        OR (NOT EXISTS(SELECT 1 FROM assignments a WHERE a.category=b.origin_category AND a.asset_id=b.origin_asset_id)
+          AND NOT EXISTS(${free})) LIMIT 1`, batchId, ...(active ? [active] : [])).toArray().length;
+    if (invalid) throw new Error('Cutoff egg allocation changed or became protected.');
+  }
+
   begin(batch: RevealCatalogUpdateBatch, now: number): RevealCatalogUpdateStatus {
     validateRevealCatalogUpdateBatch(batch);
     this.initialize();
@@ -512,13 +690,22 @@ export class EthereumRevealCatalogUpdateStore {
         current.manifestSha256 !== batch.predecessor.descriptor.manifestSha256) throw new Error('Catalog update predecessor changed.');
       if (!this.sql.exec('SELECT 1 FROM settings WHERE id=1 AND ready=1').toArray().length) throw new Error('Reveal inventory is not ready.');
       if (this.sql.exec("SELECT 1 FROM reveal_catalog_generations WHERE phase='active' LIMIT 1").toArray().length) throw new Error('Finish the previous catalog operation first.');
+      const origins = batch.mappings.map(mapping => this.requireCutoffEgg(mapping.eggId));
       this.sql.exec(`INSERT INTO reveal_catalog_generations(batch_id,batch_sha256,predecessor_json,target_json,target_manifest_json,
-        source_revision,target_revision,mapping_count,mapping_sha256,phase,started_at_ms) VALUES(?,?,?,?,?,?,?,?,?,'mapping',?)`,
+        source_revision,target_revision,mapping_count,mapping_sha256,phase,started_at_ms,batch_version,egg_cutoff) VALUES(?,?,?,?,?,?,?,?,?,'mapping',?,?,?)`,
         batch.batchId, batch.batchSha256, JSON.stringify(batch.predecessor.descriptor), JSON.stringify(batch.target.descriptor),
         JSON.stringify(batch.target.manifest), current.catalogRevision, current.catalogRevision + 1, batch.mappings.length,
-        hash(JSON.stringify(batch.mappings.map(row => ({ eggId: row.eggId, category: row.category, assetId: row.assetId })))), now);
+        hash(JSON.stringify(batch.mappings.map(row => ({ eggId: row.eggId, category: row.category, assetId: row.assetId })))), now,
+        batch.version, batch.version === 2 ? batch.eggCutoff : null);
+      const targetCounts = Object.fromEntries(this.pools().map(pool => [pool.category, pool.total])) as Record<EthereumArtworkCategory, number>;
+      for (const [index, mapping] of batch.mappings.entries()) {
+        targetCounts.egg--;
+        targetCounts[mapping.category]++;
+        this.sql.exec('INSERT INTO reveal_catalog_egg_claims(batch_id,egg_id,origin_category,origin_asset_id) VALUES(?,?,?,?)',
+          batch.batchId, mapping.eggId, origins[index].category, origins[index].assetId);
+      }
       for (const category of CATEGORIES) this.sql.exec('INSERT INTO reveal_catalog_pools(generation,category,total) VALUES(?,?,?)',
-        batch.batchId, category, counts(batch.target.manifest)[category]);
+        batch.batchId, category, targetCounts[category]);
       this.sql.exec('UPDATE settings SET candidate_catalog_generation=? WHERE id=1', batch.batchId);
       return this.status(batch.batchId)!;
     });
@@ -533,13 +720,23 @@ export class EthereumRevealCatalogUpdateStore {
       const predecessor = this.activeCatalog();
       const before = counts(predecessor), after = counts(target);
       for (const mapping of mappings) {
-        if (!Number.isSafeInteger(mapping.eggId) || mapping.eggId <= after.egg || mapping.eggId > before.egg ||
+        if (!Number.isSafeInteger(mapping.eggId) || (operation.batch_version === 2
+          ? mapping.eggId <= (operation.egg_cutoff ?? -1) || mapping.eggId > predecessor.importSettings.availableEggs
+          : mapping.eggId <= after.egg || mapping.eggId > before.egg) ||
           mapping.category === ('egg' as string) || !Object.hasOwn(after, mapping.category) || !Number.isSafeInteger(mapping.assetId) ||
-          mapping.assetId <= before[mapping.category] || mapping.assetId > after[mapping.category]) throw new Error('Invalid replacement mapping.');
+          mapping.assetId <= before[mapping.category] || mapping.assetId > after[mapping.category] ||
+          getOwnerHatchingGrail(mapping.category, mapping.assetId)) throw new Error('Invalid replacement mapping.');
+        const origin = this.requireCutoffEgg(mapping.eggId);
+        const claim = this.sql.exec<{ origin_category: EthereumArtworkCategory; origin_asset_id: number }>(
+          'SELECT origin_category,origin_asset_id FROM reveal_catalog_egg_claims WHERE batch_id=? AND egg_id=?', batchId, mapping.eggId).toArray()[0];
+        if (claim && (claim.origin_category !== origin.category || claim.origin_asset_id !== origin.assetId) || operation.batch_version === 2 && !claim) {
+          throw new Error('Cutoff mapping does not match its frozen egg claim.');
+        }
         const previous = this.sql.exec<Mapping>('SELECT * FROM reveal_catalog_mappings WHERE batch_id=? AND egg_id=?', batchId, mapping.eggId).toArray()[0];
         if (previous) {
           if (previous.category !== mapping.category || previous.asset_id !== mapping.assetId) throw new Error('Catalog mapping replay changed.');
-        } else this.sql.exec('INSERT INTO reveal_catalog_mappings(batch_id,egg_id,category,asset_id) VALUES(?,?,?,?)', batchId, mapping.eggId, mapping.category, mapping.assetId);
+        } else this.sql.exec('INSERT INTO reveal_catalog_mappings(batch_id,egg_id,category,asset_id,origin_category,origin_asset_id) VALUES(?,?,?,?,?,?)',
+          batchId, mapping.eggId, mapping.category, mapping.assetId, origin.category, origin.assetId);
       }
     });
     return this.status(batchId)!;
@@ -632,6 +829,7 @@ export class EthereumRevealCatalogUpdateStore {
     if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild sealing.');
     if (operation.phase === 'ready') return this.status(batchId)!;
     if (operation.phase !== 'staging' || operation.seeded !== TOTAL) throw new Error('Catalog generation is incomplete.');
+    this.verifyCutoffClaims(batchId);
     this.verifyGeneration(batchId);
     this.sql.exec("UPDATE reveal_catalog_generations SET phase='ready' WHERE batch_id=?", batchId);
     return this.status(batchId)!;
@@ -646,8 +844,10 @@ export class EthereumRevealCatalogUpdateStore {
       if (operation.phase !== 'ready' || saved.candidate_catalog_generation !== batchId || saved.catalog_revision !== operation.source_revision) {
         throw new Error('Catalog generation cannot activate.');
       }
+      this.verifyCutoffClaims(batchId);
       const frozen = this.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments a JOIN reveal_catalog_mappings m
-        ON a.category='egg' AND a.asset_id=m.egg_id WHERE m.batch_id=? AND a.token_id IS NOT NULL AND a.assignment_revision<?`, batchId, operation.target_revision).toArray()[0].count;
+        ON a.category=COALESCE(m.origin_category,'egg') AND a.asset_id=COALESCE(m.origin_asset_id,m.egg_id)
+        WHERE m.batch_id=? AND a.token_id IS NOT NULL AND a.assignment_revision<?`, batchId, operation.target_revision).toArray()[0].count;
       const target = JSON.parse(operation.target_json) as RevealAssetCatalogDescriptor;
       this.sql.exec(`UPDATE reveal_catalog_generations SET phase='active',activated_at_ms=?,frozen_count=? WHERE batch_id=?`, now, frozen, batchId);
       this.sql.exec(`UPDATE settings SET active_catalog_generation=?,candidate_catalog_generation=NULL,effective_catalog_version=?,
@@ -657,6 +857,13 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   canonicalMetadata(tokenIds: readonly string[]): RevealCanonicalMetadata[] {
+    return tokenIds.flatMap(tokenId => {
+      const owner = this.ownerHatching.canonical(tokenId);
+      return owner ? [owner] : this.canonicalMetadataBase([tokenId]);
+    });
+  }
+
+  private canonicalMetadataBase(tokenIds: readonly string[]): RevealCanonicalMetadata[] {
     const saved = this.settings();
     if (!saved || !tokenIds.length) return [];
     const deployment = JSON.parse(saved.deployment_json) as EthereumRevealDeployment;
@@ -673,6 +880,11 @@ export class EthereumRevealCatalogUpdateStore {
       let metadataJson = row.metadata_json;
       let metadataRevision = 2 * revision;
       let category = row.category, assetId = row.asset_id;
+      const effective = this.resolveUnit({ category, assetId }, row.assignment_revision);
+      if (!mapping && (effective.category !== category || effective.assetId !== assetId)) {
+        category = effective.category;
+        assetId = effective.assetId;
+      }
       if (mapping) {
         if (mapping.attributes_json === null) throw new Error('Activated artwork attributes are missing.');
         category = mapping.category;
@@ -711,7 +923,8 @@ export class EthereumRevealCatalogUpdateStore {
     const operation = this.operation(batchId);
     if (operation.activated_at_ms === null) return [];
     const rows = this.sql.exec<{ egg_id: number; token_id: string }>(`SELECT m.egg_id,a.token_id FROM reveal_catalog_mappings m JOIN assignments a
-      ON a.category='egg' AND a.asset_id=m.egg_id WHERE m.batch_id=? AND a.token_id IS NOT NULL AND a.assignment_revision<?
+      ON ${this.mappingOriginJoin()}
+      WHERE m.batch_id=? AND a.token_id IS NOT NULL AND a.assignment_revision<?
       AND m.egg_id>? ORDER BY m.egg_id LIMIT ?`, batchId, operation.target_revision, afterEggId, pageSize).toArray();
     const canonical = new Map(this.canonicalMetadata(rows.map(row => row.token_id)).map(row => [row.tokenId, row]));
     return rows.map(row => ({ ...canonical.get(row.token_id)!, eggId: row.egg_id }));
@@ -722,7 +935,8 @@ export class EthereumRevealCatalogUpdateStore {
     const operation = this.operation(batchId);
     if (operation.activated_at_ms === null) return [];
     const rows = this.sql.exec<{ egg_id: number; token_id: string }>(`SELECT m.egg_id,a.token_id FROM reveal_catalog_mappings m JOIN assignments a
-      ON a.category='egg' AND a.asset_id=m.egg_id LEFT JOIN reveal_catalog_publications p ON p.batch_id=m.batch_id AND p.token_id=a.token_id
+      ON ${this.mappingOriginJoin()}
+      LEFT JOIN reveal_catalog_publications p ON p.batch_id=m.batch_id AND p.token_id=a.token_id
       WHERE m.batch_id=? AND a.token_id IS NOT NULL AND a.assignment_revision<? AND COALESCE(p.published,0)=0
       AND COALESCE(p.next_check_ms,0)<=? ORDER BY m.egg_id LIMIT ?`, batchId, operation.target_revision, now, pageSize).toArray();
     const canonical = new Map(this.canonicalMetadata(rows.map(row => row.token_id)).map(row => [row.tokenId, row]));
@@ -760,9 +974,32 @@ export class EthereumRevealCatalogUpdateStore {
     return this.status(batchId)!;
   }
 
+  private generationAllocationContext(operation: Operation): { baseRevision: number; targetRevision: number } {
+    const baseRevision = operation.mode === 'empty-rebuild' ? operation.target_revision : operation.mode === undefined ? 0
+      : this.sql.exec<{ revision: number }>(`SELECT COALESCE(MAX(target_revision),0) AS revision FROM reveal_catalog_generations
+        WHERE mode='empty-rebuild' AND activated_at_ms IS NOT NULL AND target_revision<=?`, operation.source_revision).toArray()[0].revision;
+    return { baseRevision, targetRevision: operation.target_revision };
+  }
+
   private verifyGeneration(batchId: string): void {
-    const operation = this.operation(batchId);
-    const target = counts(JSON.parse(operation.target_manifest_json) as RevealAssetCatalog);
+    const allocation = this.generationAllocationContext(this.operation(batchId));
+    const categories = this.sql.exec<{ category: EthereumArtworkCategory; total: number; distinct_assets: number }>(
+      `WITH units AS (SELECT origin_category AS category,origin_asset_id AS asset_id FROM reveal_catalog_free WHERE generation=?
+        UNION ALL SELECT category,asset_id FROM assignments),
+      overlay AS (${this.ownerHatching.available ? `SELECT COALESCE(o.category,u.category) AS category,COALESCE(o.asset_id,u.asset_id) AS asset_id FROM units u
+        LEFT JOIN owner_hatching_slot_overrides o ON o.origin_category=u.category AND o.origin_asset_id=u.asset_id` : 'SELECT category,asset_id FROM units'}),
+      effective AS (SELECT COALESCE(m.category,o.category) AS category,COALESCE(m.asset_id,o.asset_id) AS asset_id FROM overlay o
+        LEFT JOIN reveal_catalog_mappings m ON m.rowid=(SELECT candidate.rowid FROM reveal_catalog_mappings candidate
+          JOIN reveal_catalog_generations g ON g.batch_id=candidate.batch_id WHERE o.category='egg' AND candidate.egg_id=o.asset_id
+            AND g.target_revision>? AND g.target_revision<=? AND (g.activated_at_ms IS NOT NULL OR g.batch_id=?)
+          ORDER BY g.target_revision DESC LIMIT 1))
+      SELECT category,COUNT(*) AS total,COUNT(DISTINCT asset_id) AS distinct_assets FROM effective GROUP BY category`,
+      batchId, allocation.baseRevision, allocation.targetRevision, batchId).toArray();
+    const target = Object.fromEntries(CATEGORIES.map(category => [category, 0])) as Record<EthereumArtworkCategory, number>;
+    for (const row of categories) {
+      if (!Object.hasOwn(target, row.category) || row.distinct_assets !== row.total) throw new Error('Catalog effective artwork identity is duplicated.');
+      target[row.category] = row.total;
+    }
     const pools = this.sql.exec<RevealPool & { free: number; minimum: number | null; maximum: number | null }>(`SELECT p.category,p.total,p.seeded,p.available,
       (SELECT COUNT(*) FROM reveal_catalog_free f WHERE f.generation=p.generation AND f.category=p.category) AS free,
       (SELECT MIN(slot) FROM reveal_catalog_free f WHERE f.generation=p.generation AND f.category=p.category) AS minimum,
@@ -785,7 +1022,7 @@ export class EthereumRevealCatalogUpdateStore {
     const status = this.status(batchId)!;
     if (status.published !== status.frozen) throw new Error('Catalog metadata publication is incomplete.');
     if (this.sql.exec(`SELECT 1 FROM reveal_catalog_publications p LEFT JOIN assignments a ON a.token_id=p.token_id
-      LEFT JOIN reveal_catalog_mappings m ON m.batch_id=p.batch_id AND a.category='egg' AND a.asset_id=m.egg_id
+      LEFT JOIN reveal_catalog_mappings m ON m.batch_id=p.batch_id AND ${this.mappingOriginJoin()}
       WHERE p.batch_id=? AND p.published=1 AND (m.egg_id IS NULL OR a.assignment_revision>=? OR p.metadata_revision!=?) LIMIT 1`,
       batchId, operation.target_revision, 2 * operation.target_revision + 1).toArray().length) throw new Error('Catalog publication evidence is inconsistent.');
     return status;

@@ -4,11 +4,12 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { createHash } from 'node:crypto';
 import { buildRevealAssetCatalog, importRevealAssets } from '../scripts/ethereum-metadata/assetImport.ts';
 import { importRevealCollectionBlocks } from '../scripts/ethereum-metadata/collectionBlocks.ts';
 import { buildRevealCatalogUpdateBatch, inspectRevealCatalogUpdate, preflightRevealCatalogUpdateMedia,
   prepareRevealCatalogUpdate, prepareRevealCatalogUpdateFromBundle, promoteRevealCatalogUpdate,
-  readRevealCatalogUpdateBundle, runRevealCatalogUpdate } from '../scripts/ethereum-metadata/catalogUpdate.ts';
+  readRevealCatalogUpdateBundle, runRevealCatalogUpdate, ordinaryRevealCatalogSource, inspectEligibleCutoffEggs } from '../scripts/ethereum-metadata/catalogUpdate.ts';
 import { parseCatalogUpdateArgs } from '../scripts/ethereum-metadata/catalogUpdateCli.ts';
 import { computeRevealCatalogDescriptor, validateRevealAssetCatalog } from '../shared/ethereum/revealAssetCatalog.ts';
 import { getRevealCatalog, getRevealCatalogDescriptor, getSupportedRevealCatalogVersions } from '../shared/ethereum/revealCatalogRegistry.ts';
@@ -79,6 +80,68 @@ test('frozen mapping covers highest eggs exactly once and only new artwork ident
   const tampered = structuredClone(value);
   tampered.batchSha256 = 'a'.repeat(64);
   assert.throws(() => validateRevealCatalogUpdateBatch(tampered), /batch shape/);
+});
+
+test('explicit cutoff batches accept sparse effective egg IDs and preserve the historical v1 hash', () => {
+  const legacy = batch();
+  const oldHash = createHash('sha256').update(JSON.stringify({ version: legacy.version, nonce: legacy.nonce,
+    predecessor: legacy.predecessor, target: legacy.target, mappings: legacy.mappings })).digest('hex');
+  assert.equal(legacy.batchSha256, oldHash);
+  const explicit = buildRevealCatalogUpdateBatch(legacy.predecessor.manifest, legacy.target.manifest, () => 0,
+    { eggCutoff: 10, eggIds: [111110, 80, 20] });
+  assert.equal(explicit.version, 2);
+  assert.deepEqual(explicit.mappings.map(row => row.eggId), [20, 80, 111110]);
+  validateRevealCatalogUpdateBatch(explicit);
+  assert.throws(() => buildRevealCatalogUpdateBatch(legacy.predecessor.manifest, legacy.target.manifest, () => 0,
+    { eggCutoff: 20, eggIds: [20, 80, 111110] }), /bijection/);
+  assert.throws(() => buildRevealCatalogUpdateBatch(legacy.predecessor.manifest, legacy.target.manifest, () => 0,
+    { eggCutoff: 10, eggIds: [20, 20, 80] }), /bijection/);
+  assert.throws(() => validateRevealCatalogUpdateBatch({ ...legacy, version: '1' }), /batch shape/);
+});
+
+test('ordinary catalogue source removes registered grails without admitting them as regular additions', () => {
+  const source = { ...nextSource(), 'animated/422.png': [512, 512, 'DROWEE'] };
+  const ordinary = ordinaryRevealCatalogSource(JSON.stringify(source));
+  assert.deepEqual(JSON.parse(ordinary), nextSource());
+  assert.equal(buildRevealCatalogUpdateBatch(catalog(sample(), '111k-v5'), catalog(JSON.parse(ordinary), '111k-v6')).mappings.length, 3);
+  assert.throws(() => ordinaryRevealCatalogSource(JSON.stringify({ ...source, 'animated/422.png': [512, 256, 'DROWEE'] })), /artwork changed/);
+  assert.throws(() => ordinaryRevealCatalogSource('{"animated/422.png":[512,512,"DROWEE"],"animated/422.png":[512,512,"DROWEE"]}'), /duplicate paths/);
+});
+
+test('explicit cutoff preparation preserves its mapping and threshold through frozen bundle retries', async t => {
+  const input = await fixture(t);
+  const options = { ...input, eggIds: [20, 80, 111110], eggCutoff: 10 };
+  const first = await prepareRevealCatalogUpdate(options);
+  assert.equal(first.batch.version, 2);
+  assert.deepEqual(await readRevealCatalogUpdateBundle(input.directory), first);
+  assert.deepEqual(await prepareRevealCatalogUpdate({ ...options, eggIds: [111110, 20, 80] }), first);
+  await assert.rejects(prepareRevealCatalogUpdate({ ...options, eggCutoff: 9 }), /different catalog inputs/);
+  const retry = await prepareRevealCatalogUpdateFromBundle(input.directory, input.directory + '-retry');
+  assert.equal(retry.batch.version, 2);
+  if (retry.batch.version === 2) assert.equal(retry.batch.eggCutoff, 10);
+  assert.deepEqual(retry.batch.mappings, first.batch.mappings);
+});
+
+test('eligible cutoff inspection pages without mutation and rejects a changing catalogue', async () => {
+  const calls: EthereumRevealCatalogUpdateRequest[] = [];
+  const options = { deploymentId: 'test', expectedRevision: 4, eggCutoff: 10 };
+  const transport = async (request: EthereumRevealCatalogUpdateRequest): Promise<EthereumRevealCatalogUpdateResult> => {
+    calls.push(request);
+    const first = request.afterEggId === 10;
+    return { deploymentId: 'test', batchId: request.batchId, phase: 'unstarted', complete: false, catalogRevision: 2,
+      total: 0, staged: 0, applied: 0, published: 0, frozen: 0, retryAfterMs: 0,
+      eligibleEggIds: first ? Array.from({ length: 256 }, (_, index) => index + 11) : [76700], nextEligibleEggId: first ? 266 : null };
+  };
+  const result = await inspectEligibleCutoffEggs({ ...options, transport });
+  assert.equal(result.eggIds.length, 257);
+  assert.equal(result.eggIds.at(-1), 76700);
+  assert.deepEqual(calls.map(call => call.action), ['inspect', 'inspect']);
+  assert.deepEqual(calls.map(call => call.afterEggId), [10, 266]);
+  await assert.rejects(inspectEligibleCutoffEggs({ ...options, transport: async request => ({ ...await transport(request),
+    catalogRevision: request.afterEggId === 10 ? 2 : 3 }) }), /changed eligible/);
+  assert.equal(parseCatalogUpdateArgs(['eligible-eggs', '--deployment-id', 'test', '--expected-revision', '4', '--egg-cutoff', '10'])!.eggCutoff, 10);
+  assert.equal(parseCatalogUpdateArgs(['prepare', '--source', '/tmp/source', '--bundle', '/tmp/bundle', '--egg-ids', '/tmp/ids', '--egg-cutoff', '10'])!.eggIdsPath, '/tmp/ids');
+  assert.throws(() => parseCatalogUpdateArgs(['prepare', '--source', '/tmp/source', '--bundle', '/tmp/bundle', '--egg-ids', '/tmp/ids']));
 });
 
 test('updates reject deletions, old media changes and nonincreasing catalog versions', () => {

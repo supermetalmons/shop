@@ -31,7 +31,8 @@ export type RevealSearchRange = { fromBlock: number; toBlock?: number };
 
 const REVEAL_CRATE_EGG_LIMIT = 6;
 const NORMAL_PUBLICATION = `NOT EXISTS (SELECT 1 FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
-  WHERE a.category='egg' AND a.asset_id=m.egg_id AND g.activated_at_ms IS NOT NULL AND a.assignment_revision<g.target_revision)`;
+  WHERE a.category=COALESCE(m.origin_category,'egg') AND a.asset_id=COALESCE(m.origin_asset_id,m.egg_id)
+    AND g.activated_at_ms IS NOT NULL AND a.assignment_revision<g.target_revision)`;
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), deployment_json TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0)`,
@@ -210,9 +211,9 @@ export class EthereumRevealStore {
       pools = this.pools().filter(pool => pool.available > 0);
     }
     if (!pools.length) return undefined;
-    const privateEggs = this.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments INDEXED BY assignments_crate
-      WHERE crate_token_id=? AND token_id IS NULL AND category='egg' AND asset_id<=?`,
-      crateTokenId, this.catalogUpdate.activeCatalog().categories.eggs.count).toArray()[0].count;
+    const privateEggs = this.sql.exec<ReservationRow>(`SELECT category,asset_id,crate_token_id,slot FROM assignments INDEXED BY assignments_crate
+      WHERE crate_token_id=? AND token_id IS NULL`, crateTokenId).toArray().filter(row =>
+      this.catalogUpdate.resolveUnit({ category: row.category, assetId: row.asset_id }).category === 'egg').length;
     if (privateEggs + frozenEggs >= REVEAL_CRATE_EGG_LIMIT && pools.some(pool => pool.category !== 'egg')) {
       pools = pools.filter(pool => pool.category !== 'egg');
     }
@@ -270,7 +271,8 @@ export class EthereumRevealStore {
           if (!reservation) throw new Error('Reveal inventory invariant failed.');
           const effective = this.catalogUpdate.resolveUnit({ category: reservation.category, assetId: reservation.asset_id });
           const value = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: crate.crateTokenId,
-            category: effective.category, assetId: effective.assetId, observation, catalog });
+            category: effective.category, assetId: effective.assetId, observation, catalog, allocatedEgg: effective.category === 'egg',
+            ownerHatching: this.catalogUpdate.ownerHatching.slotOverride({ category: reservation.category, assetId: reservation.asset_id }) !== null });
           this.sql.exec(`UPDATE assignments SET token_id=?,artwork_json=?,metadata_json=?,placeholder_json=?,frozen_at_ms=?,assignment_revision=?
             WHERE category=? AND asset_id=? AND token_id IS NULL`, tokenId, JSON.stringify(value.artwork), value.metadataJson,
             value.placeholderJson, now, deployment.catalogRevision ?? 0, reservation.category, reservation.asset_id);
@@ -380,10 +382,13 @@ export class EthereumRevealStore {
 
   claimPublications(now: number, limit = 8): RevealPublicationJob[] {
     return this.transaction(() => {
+      const ownerJobs = this.catalogUpdate.ownerHatching.claimPublications(now, Math.min(2, limit));
+      if (ownerJobs.length === limit) return ownerJobs;
       const rows: RevealPublicationJob[] = this.sql.exec<Pick<RevealPublicationJob, 'token_id' | 'metadata_json' | 'placeholder_json' | 'attempts'>>(`SELECT p.token_id,a.metadata_json,a.placeholder_json,p.attempts FROM publication p
         JOIN assignments a ON a.token_id=p.token_id WHERE p.status='pending' AND p.next_check_ms<=? AND ${NORMAL_PUBLICATION}
-        ORDER BY p.next_check_ms,CAST(p.token_id AS INTEGER) LIMIT ?`, now, limit).toArray();
-      if (!rows.length) return rows;
+        AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens o WHERE o.token_id=p.token_id)
+        ORDER BY p.next_check_ms,CAST(p.token_id AS INTEGER) LIMIT ?`, now, limit - ownerJobs.length).toArray();
+      if (!rows.length) return ownerJobs;
       const claimId = crypto.randomUUID();
       const canonical = new Map(this.catalogUpdate.canonicalMetadata(rows.map(row => row.token_id)).map(row => [row.tokenId, row]));
       for (const row of rows) {
@@ -397,13 +402,15 @@ export class EthereumRevealStore {
         this.sql.exec('UPDATE publication SET next_check_ms=?,attempts=attempts+1,claim_id=?,metadata_revision=? WHERE token_id=?',
           now + 60_000, claimId, current.metadataRevision, row.token_id);
       }
-      return rows;
+      return [...ownerJobs, ...rows];
     });
   }
 
   releasePublicationClaims(jobs: RevealPublicationJob[], now: number): void {
     this.transaction(() => {
+      this.catalogUpdate.ownerHatching.releasePublicationClaims(jobs, now);
       for (const job of jobs) {
+        if (this.catalogUpdate.ownerHatching.canonical(job.token_id)) continue;
         this.sql.exec(`UPDATE publication SET attempts=?,next_check_ms=?,claim_id=NULL
           WHERE token_id=? AND status='pending' AND attempts=? AND claim_id IS ?`,
         job.attempts, now, job.token_id, job.attempts + 1, job.claim_id ?? null);
@@ -413,9 +420,10 @@ export class EthereumRevealStore {
 
   completePublications(results: RevealPublicationResult[], now: number): RevealPublicationResult[] {
     return this.transaction(() => {
-      const applied: RevealPublicationResult[] = [];
+      const applied = this.catalogUpdate.ownerHatching.completePublications(results, now);
       for (const result of results) {
         const { job, status } = result;
+        if (this.catalogUpdate.ownerHatching.canonical(job.token_id)) continue;
         if (status === 'superseded') { this.releasePublicationClaims([job], now); continue; }
         const updated = status === 'published' ? this.publicationComplete(job.token_id, job.attempts + 1, job.claim_id, job.metadata_revision ?? 0)
           : this.publicationFailed(job.token_id, now, job.attempts, status === 'conflict', job.attempts + 1, job.claim_id, job.metadata_revision ?? 0);
@@ -447,18 +455,25 @@ export class EthereumRevealStore {
   }
 
   publicationError(): 'metadata-conflict' | 'publication-unavailable' | null {
+    const ownerError = this.catalogUpdate.ownerHatching.publicationError();
+    if (ownerError) return ownerError;
     if (this.sql.exec<{ found: number }>(`SELECT 1 AS found FROM publication p JOIN assignments a ON a.token_id=p.token_id
-      WHERE p.status='conflict' AND ${NORMAL_PUBLICATION} LIMIT 1`).toArray().length) return 'metadata-conflict';
+      WHERE p.status='conflict' AND ${NORMAL_PUBLICATION}
+      AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens o WHERE o.token_id=p.token_id) LIMIT 1`).toArray().length) return 'metadata-conflict';
     return this.sql.exec<{ found: number }>(`SELECT 1 AS found FROM publication p JOIN assignments a ON a.token_id=p.token_id
-      WHERE p.status='pending' AND p.last_error IS NOT NULL AND ${NORMAL_PUBLICATION} LIMIT 1`)
+      WHERE p.status='pending' AND p.last_error IS NOT NULL AND ${NORMAL_PUBLICATION}
+      AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens o WHERE o.token_id=p.token_id) LIMIT 1`)
       .toArray().length ? 'publication-unavailable' : null;
   }
 
-  nextWake(now: number, enrichmentBusy = false): number | null {
+  nextWake(now: number, busy: { enrichment?: boolean; ownerEnrichment?: boolean } = {}): number | null {
     const recovery = this.recovery.nextWake(now);
     const publication = this.sql.exec<{ due: number | null }>(`SELECT MIN(p.next_check_ms) AS due FROM publication p JOIN assignments a ON a.token_id=p.token_id
-      WHERE p.status='pending' AND ${NORMAL_PUBLICATION}`).toArray()[0]?.due;
-    const times = [recovery, publication, this.enrichment.nextWake(now, enrichmentBusy)].filter((value): value is number => value != null);
+      WHERE p.status='pending' AND ${NORMAL_PUBLICATION}
+      AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens o WHERE o.token_id=p.token_id)`).toArray()[0]?.due;
+    const times = [recovery, publication, this.enrichment.nextWake(now, busy.enrichment ?? false),
+      this.catalogUpdate.ownerHatching.nextWake(now, busy.ownerEnrichment)]
+      .filter((value): value is number => value != null);
     return times.length ? Math.max(now + 250, Math.min(...times)) : null;
   }
 
@@ -469,6 +484,6 @@ export class EthereumRevealStore {
     return { ready: this.ready(), seeded: this.pools().reduce((sum, pool) => sum + pool.seeded, 0),
       available: this.pools().reduce((sum, pool) => sum + pool.available, 0), ...row,
       publication: Object.fromEntries(publication.map(value => [value.status, value.count])), recovery: this.recovery.summary(),
-      enrichment: this.enrichment.summary() };
+      enrichment: this.enrichment.summary(), ownerEnrichment: this.catalogUpdate.ownerHatching.enrichmentSummary() };
   }
 }

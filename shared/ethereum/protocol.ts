@@ -134,6 +134,7 @@ export function ethereumHexQuantity(value: bigint | number | string): Hex {
 
 export type EthereumMetadata = {
   metadataRevision?: number;
+  readyToHatch?: true;
   name: string;
   description?: string;
   image: string;

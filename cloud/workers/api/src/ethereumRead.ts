@@ -79,6 +79,7 @@ function parseMetadata(value: unknown): EthereumMetadata {
   }
   const aspectRatio = 'aspectRatio' in value && metadataAspectRatio(value.aspectRatio);
   return { name: value.name, image: value.image,
+    ...('readyToHatch' in value && value.readyToHatch === true ? { readyToHatch: true as const } : {}),
     ...('category' in value && (value.category === 'egg' || value.category === 'painting' || value.category === 'video' ||
       value.category === '3d' || value.category === 'animated')
       ? { category: value.category } : {}),

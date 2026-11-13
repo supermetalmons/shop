@@ -104,6 +104,8 @@ const productionExportBaseline = [
   ["shared/dropMediaDefaults.ts","exports","DRIFELLA_SHIRT_CDN_BASE_URL"],
   ["shared/dropMediaDefaults.ts","exports","DRIFELLA_SHIRT_IMAGE_BASE_URL"],
   ["shared/ethereum/checkout.ts","exports","checkoutEntryUrl"],
+  ["shared/ethereum/ownerHatchingCatalog.ts","exports","getOwnerHatchingGrails"],
+  ["shared/ethereum/ownerHatchingCatalog.ts","exports","validateOwnerHatchingCatalog"],
   ["shared/ethereum/relicImages.ts","exports","parseRelicImagePatch"],
   ["shared/ethereum/relicImages.ts","exports","parseRelicImagesScope"],
   ["shared/ethereum/relicImages.ts","exports","relicImagePngJson"],

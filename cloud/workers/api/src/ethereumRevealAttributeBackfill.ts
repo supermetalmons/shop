@@ -10,16 +10,23 @@ function assignmentRevision(sql: RevealSql, table: string, alias: string): strin
     ? `${alias}.assignment_revision` : '0';
 }
 
+function ownerOverrideGuard(sql: RevealSql): string {
+  return sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_slot_overrides'").toArray().length
+    ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)' : '';
+}
+
 function recheckPublishedToken(sql: RevealSql, tokenId: string, write: boolean, hasJobs: boolean): EthereumRevealAttributeBackfillPage {
   const page = { eligible: 0, missing: 0, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0, nextCursor: null };
   if (!hasJobs) return page;
   const version = REVEAL_ENRICHMENT_VERSION;
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');
   const jobRevision = assignmentRevision(sql, 'reveal_enrichment', 'e');
+  const ownerGuard = ownerOverrideGuard(sql);
   const job = sql.exec<{ status: string; target_json: string | null; target_sha256: string | null; last_error: string | null; assignment_revision: number }>(
     `SELECT e.status,e.target_json,e.target_sha256,e.last_error,${jobRevision} AS assignment_revision FROM reveal_enrichment e
      JOIN publication p ON p.token_id=e.token_id JOIN assignments a ON a.token_id=e.token_id
-     WHERE e.token_id=? AND e.version=? AND p.status='published' AND a.category!='egg' AND ${jobRevision}=${actualRevision}`, tokenId, version).toArray()[0];
+     WHERE e.token_id=? AND e.version=? AND p.status='published' AND a.category!='egg' AND ${jobRevision}=${actualRevision}
+       ${ownerGuard}`, tokenId, version).toArray()[0];
   if (!job) return page;
   const acknowledged = acknowledgedEnrichmentHash(sql, tokenId, version, job.assignment_revision);
   if (job.status !== 'published' && !acknowledged) return page;
@@ -48,12 +55,13 @@ export function backfillRevealAttributePage(sql: RevealSql,
   if (request.recheckTokenId) return recheckPublishedToken(sql, request.recheckTokenId, request.write, hasJobs);
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');
   const jobRevision = hasJobs ? assignmentRevision(sql, 'reveal_enrichment', 'e') : '0';
+  const ownerGuard = ownerOverrideGuard(sql);
   const rows = sql.exec<{ token_id: string; eligible: number; job_status: string | null; last_error: string | null }>(`WITH page AS MATERIALIZED (
       SELECT token_id,status FROM publication WHERE token_id>? ORDER BY token_id LIMIT ?
-    ) SELECT page.token_id, (page.status='published' AND a.category!='egg') AS eligible,
+    ) SELECT page.token_id, (page.status='published' AND a.category!='egg' ${ownerGuard}) AS eligible,
       ${hasJobs ? 'e.status' : 'NULL'} AS job_status, ${hasJobs ? 'e.last_error' : 'NULL'} AS last_error
     FROM page JOIN assignments a ON a.token_id=page.token_id
-    ${hasJobs ? `LEFT JOIN reveal_enrichment e ON e.token_id=page.token_id AND e.version=? AND ${jobRevision}=${actualRevision}` : ''}
+    ${hasJobs ? `LEFT JOIN reveal_enrichment e ON e.token_id=page.token_id AND e.version=? AND ${jobRevision}=${actualRevision} ${ownerGuard}` : ''}
     ORDER BY page.token_id`, request.afterTokenId ?? '', PAGE_SIZE, ...(hasJobs ? [REVEAL_ENRICHMENT_VERSION] : [])).toArray();
   const eligible = rows.filter(row => row.eligible);
   const missing = eligible.filter(row => row.job_status === null).map(row => row.token_id);
