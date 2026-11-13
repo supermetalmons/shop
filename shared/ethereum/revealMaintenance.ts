@@ -1,5 +1,6 @@
 import { ethereumItemDisplayIdMaximum } from './protocol.ts';
 import type { RevealCatalogUpdateBatch } from './revealCatalogUpdate.ts';
+import type { EthereumArtworkCategory } from './reveal.ts';
 
 export type EthereumRevealEmptyPoolRequest = EthereumRevealMaintenanceRequest & {
   operationId: string;
@@ -64,6 +65,28 @@ export type EthereumRevealAttributeBackfillRequest = EthereumRevealMaintenanceRe
   write: boolean;
   retryBlocked?: boolean;
   recheckTokenId?: string;
+  audit?: boolean;
+  frozenThroughMs?: number;
+};
+
+export type EthereumRevealAttributeAuditToken = {
+  tokenId: string;
+  category: EthereumArtworkCategory;
+  assetId: number;
+  assignmentRevision: number;
+  metadataRevision: number;
+  metadataSha256: string;
+  frozenMetadataSha256: string;
+  nonAttributeSha256: string;
+  collectionBlock: string | null;
+  enrichment: {
+    status: 'pending' | 'published' | 'invalid' | 'conflict';
+    assignmentRevision: number;
+    attempts: number;
+    lastError: string | null;
+    targetSha256: string | null;
+    checksumValid: boolean | null;
+  } | null;
 };
 
 export type EthereumRevealAttributeBackfillPage = {
@@ -75,6 +98,8 @@ export type EthereumRevealAttributeBackfillPage = {
   conflictRechecks: number;
   enqueued: number;
   requeued: number;
+  frozenThroughMs?: number;
+  tokens?: EthereumRevealAttributeAuditToken[];
 };
 
 export type EthereumRevealInspection = {

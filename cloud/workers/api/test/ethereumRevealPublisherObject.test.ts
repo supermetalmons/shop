@@ -569,6 +569,45 @@ test('attribute publisher drains header repairs and refuses new writes after ret
   } finally { release.resolve(); await Promise.allSettled([write, drain]); }
 });
 
+test('attribute preparation retries recoverable sources and distinguishes invalid local identity and metadata', async t => {
+  const f = fixture();
+  const publisher = f.reopen(attributePublisherName(scope));
+  const diagnostics = t.mock.method(console, 'error', () => {});
+  let current = () => new Response('Forbidden', { status: 403 });
+  const requests = t.mock.method(globalThis, 'fetch', async () => current());
+  const source = { category: 'painting' as const, assetId: 41171, baseJson: '{"attributes":[{"trait_type":"type","value":"painting"}]}' };
+  f.registry.row!.catalog_version = '111k-v9';
+  const prepare = (job = source) => publisher.prepareAttributes(scope, job, Date.now() + 5_000);
+  assert.deepEqual(await prepare(), { status: 'source-unavailable' });
+  assert.deepEqual(diagnostics.mock.calls.at(-1)?.arguments[0], {
+    event: 'ethereum_reveal_attribute_preparation_error', deploymentId: scope.deploymentId,
+    status: 'source-unavailable', reason: 'http-403',
+  });
+  current = () => Response.json({ attributes: [] });
+  assert.deepEqual(await prepare(), { status: 'source-unavailable' });
+  current = () => Response.json({ 'collection block': 'little swag', attributes: [{ trait_type: 'sub block', value: 'cruciswag' }] });
+  const recovered = await prepare();
+  assert.equal(recovered.status, 'prepared');
+  if (recovered.status !== 'prepared') throw new Error('Expected recovered source to prepare.');
+  assert.deepEqual(JSON.parse(recovered.metadataJson).attributes, [
+    { trait_type: 'collection block', value: 'little swag' }, { trait_type: 'type', value: 'painting' },
+    { trait_type: 'sub block', value: 'cruciswag' },
+  ]);
+  assert.deepEqual(await prepare({ ...source, baseJson: 'broken local JSON' }), { status: 'invalid' });
+  const beforeInvalidIdentity = requests.mock.callCount();
+  assert.deepEqual(await prepare({ ...source, assetId: 0 }), { status: 'invalid' });
+  assert.equal(requests.mock.callCount(), beforeInvalidIdentity);
+  assert.deepEqual(await publisher.prepareAttributes(scope, { ...source, catalogVersion: '111k-v999' }, Date.now() + 5_000),
+    { status: 'source-unavailable' });
+  assert.equal(requests.mock.callCount(), beforeInvalidIdentity);
+  assert.deepEqual(diagnostics.mock.calls.at(-1)?.arguments[0], {
+    event: 'ethereum_reveal_attribute_preparation_error', deploymentId: scope.deploymentId,
+    status: 'source-unavailable', reason: 'catalog-unavailable',
+  });
+  assert.equal((await publisher.prepareAttributes(scope, { ...source, catalogVersion: '111k-v9' }, Date.now() + 5_000)).status, 'prepared');
+  assert.equal(f.writes.length, 0);
+});
+
 test('attribute preparation bounds source reads and retirement waits for aborted I/O to settle', async t => {
   const f = fixture();
   const publisher = f.reopen(attributePublisherName(scope));

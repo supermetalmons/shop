@@ -13,6 +13,7 @@ test('native owner hatching operations preserve private preparation through rest
     import { EthereumOwnerHatchingOperations } from ${path('cloud/workers/api/src/ethereumOwnerHatchingOperations.ts')};
     import { EthereumOwnerHatchingStore } from ${path('cloud/workers/api/src/ethereumOwnerHatchingStore.ts')};
     import { fetchRevealAttributePayload } from ${path('cloud/workers/api/src/ethereumRevealAttributes.ts')};
+    import { revealTraitFixtureBlock } from ${path('cloud/workers/api/runtime-test/revealTraitFixture.ts')};
     import { getRevealCatalog,getRevealCatalogDescriptor } from ${path('shared/ethereum/revealCatalogRegistry.ts')};
     import { ownerHatchingCatalogSha256 } from ${path('shared/ethereum/ownerHatchingCatalog.ts')};
     import supplement from ${path('shared/ethereum/ownerHatchingCatalog.json')};
@@ -32,7 +33,7 @@ test('native owner hatching operations preserve private preparation through rest
     const hash=value=>createHash('sha256').update(value).digest('hex');
     globalThis.fetch=async(input,init)=>{
       if(String(input).startsWith('https://cdn.lil.org/')){
-        if(String(input).includes('/paintings/'))return traitsUnavailable?new Response(null,{status:503}):Response.json({'collection block':'PAINTINGS',attributes:[{trait_type:'Recovered',value:'yes'}]});
+        if(String(input).includes('/paintings/'))return traitsUnavailable?new Response(null,{status:503}):Response.json({'collection block':revealTraitFixtureBlock(String(input)),attributes:[{trait_type:'Recovered',value:'yes'}]});
         return Response.json({'collection block':'DROWEE',attributes:[]});
       }
       const payload=JSON.parse(init.body);

@@ -85,7 +85,17 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     }, async backfillAttributes(request) {
       const page = await call(() => proxy.env.REVEAL_MAINTENANCE.backfillAttributes!(request));
       return { nextCursor: page.nextCursor, eligible: page.eligible, missing: page.missing,
-        invalid: page.invalid, conflict: page.conflict, conflictRechecks: page.conflictRechecks, enqueued: page.enqueued, requeued: page.requeued };
+        invalid: page.invalid, conflict: page.conflict, conflictRechecks: page.conflictRechecks, enqueued: page.enqueued, requeued: page.requeued,
+        ...(page.frozenThroughMs !== undefined && { frozenThroughMs: page.frozenThroughMs }),
+        ...(page.tokens !== undefined && { tokens: Array.from({ length: page.tokens.length }, (_, index) => {
+          const token = page.tokens![index];
+          return { tokenId: token.tokenId, category: token.category, assetId: token.assetId, assignmentRevision: token.assignmentRevision,
+            metadataRevision: token.metadataRevision, metadataSha256: token.metadataSha256, frozenMetadataSha256: token.frozenMetadataSha256,
+            nonAttributeSha256: token.nonAttributeSha256, collectionBlock: token.collectionBlock,
+            enrichment: token.enrichment === null ? null : { status: token.enrichment.status, assignmentRevision: token.enrichment.assignmentRevision,
+              attempts: token.enrichment.attempts, lastError: token.enrichment.lastError, targetSha256: token.enrichment.targetSha256,
+              checksumValid: token.enrichment.checksumValid } };
+        }) }) };
     }, async purgeRetired(request) {
       const value = await call(() => proxy.env.REVEAL_MAINTENANCE.purgeRetired(request));
       return { ...inspection(value), purged: value.purged } as EthereumRevealPurgeResult;

@@ -17,12 +17,13 @@ type Snapshot = {
   bootId: string;
   owner: EnrichmentSummary;
   health: { ownerEnrichment: EnrichmentSummary };
-  jobs: Array<{ token_id: string; status: string; attempts: number; last_error: string | null }>;
+  jobs: Array<{ token_id: string; status: string; attempts: number; last_error: string | null; next_check_ms: number }>;
   canonical: { category: string; assetId: number; metadataRevision: number };
   publication: Array<{ token_id: string; status: string; metadata_revision: number }>;
   sourceRequests: number;
   alarmCalls: number;
   alarmAt: number | null;
+  ownerEnrichmentWakeAt: number | null;
   now: number;
   errors: Array<[{ event: string; deploymentId: string; tokenId: string; attempt: number; reason: string }]>;
 };
@@ -52,6 +53,7 @@ test('native owner enrichment recovers failures and schedules work without block
     import { handleEthereumRequest } from ${importPath('cloud/workers/api/src/ethereumHandler.ts')};
     import { decodeReturn, encodeAbi, encodeCall } from ${importPath('shared/ethereum/abi.ts')};
     import { ETHEREUM_FUNCTIONS } from ${importPath('shared/ethereum/protocol.ts')};
+    import { revealTraitFixtureBlock } from ${importPath('cloud/workers/api/runtime-test/revealTraitFixture.ts')};
     const constants = { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: ${JSON.stringify(contractAddress)},
       ETHEREUM_111K_METADATA_BASE_URI: ${JSON.stringify(metadataBaseUri)}, ETHEREUM_111K_DEPLOYMENT_BLOCK: '100',
       ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ALCHEMY_MI_NOTE_API_KEY: 'fixture' };
@@ -98,7 +100,7 @@ test('native owner enrichment recovers failures and schedules work without block
         if (sourceMode === 'missing') return new Response('private-source-body', { status: 404 });
         if (sourceMode === 'malformed') return new Response('{"private-source-body":', { headers: { 'Content-Type': 'application/json' } });
         if (sourceMode === 'unavailable') return new Response('private-source-body', { status: 503 });
-        return Response.json({ 'collection block': 'fixture', attributes: [{ trait_type: 'fixture', value: 'recovered' }] });
+        return Response.json({ 'collection block': revealTraitFixtureBlock(url), attributes: [{ trait_type: 'fixture', value: 'recovered' }] });
       }
       throw new Error('Unexpected external fetch '+url);
     };
@@ -173,11 +175,13 @@ test('native owner enrichment recovers failures and schedules work without block
         const store = await this.openStore();
         const sql = this.ctx.storage.sql;
         const canonical = store.catalogUpdate.ownerHatching.canonical('1');
+        const now = Date.now();
         return { bootId, owner: store.catalogUpdate.ownerHatching.enrichmentSummary(), health: store.summary(),
-          jobs: sql.exec('SELECT token_id,status,attempts,last_error FROM owner_hatching_enrichment').toArray(),
+          jobs: sql.exec('SELECT token_id,status,attempts,last_error,next_check_ms FROM owner_hatching_enrichment').toArray(),
           canonical: { category: canonical.category, assetId: canonical.assetId, metadataRevision: canonical.metadataRevision },
           publication: sql.exec('SELECT token_id,status,metadata_revision FROM owner_hatching_publication').toArray(),
-          sourceRequests, errors, alarmCalls, alarmAt: await this.ctx.storage.getAlarm(), now: Date.now() };
+          sourceRequests, errors, alarmCalls, alarmAt: await this.ctx.storage.getAlarm(), now,
+          ownerEnrichmentWakeAt: store.catalogUpdate.ownerHatching.nextWake(now, this.ownerEnrichmentRun !== null) };
       }
     }
     export default { async fetch(request, bindings) {
@@ -250,7 +254,7 @@ test('native owner enrichment recovers failures and schedules work without block
     await db.prepare("UPDATE ethereum_reveal_deployments SET catalog_revision=1,effective_catalog_version=?,effective_catalog_sha256=?,catalog_update_id=NULL,catalog_update_started_at_ms=NULL WHERE deployment_id=?")
       .bind(descriptor.catalogVersion, descriptor.manifestSha256, deploymentId).run();
   };
-  for (const [mode, reason] of [['missing', 'invalid'], ['malformed', 'invalid'], ['unavailable', 'source-unavailable']] as const) {
+  for (const [mode, reason] of [['missing', 'source-unavailable'], ['malformed', 'source-unavailable'], ['unavailable', 'source-unavailable']] as const) {
     await t.test(mode, { timeout: 40_000 }, async () => {
       const runtime = new Miniflare(options());
       const request = requestFor(runtime);
@@ -288,7 +292,8 @@ test('native owner enrichment recovers failures and schedules work without block
           assert.equal(failure.jobs[0].attempts, attempt);
           assert.deepEqual(failure.owner, failed);
         }
-        assert.deepEqual(failure.errors, [1, 2, 4].map(attempt => [{ event: 'ethereum_owner_hatching_enrichment_error',
+        assert.deepEqual(failure.errors.filter(([row]) => row.event === 'ethereum_owner_hatching_enrichment_error'),
+          [1, 2, 4].map(attempt => [{ event: 'ethereum_owner_hatching_enrichment_error',
           deploymentId, tokenId: '1', attempt, reason }]));
         assert.doesNotMatch(JSON.stringify(failure.errors), /private-source-body|https?:|metadata|signature|stack/);
         await runtime.setOptions(options(1));
@@ -349,8 +354,14 @@ test('native owner enrichment recovers failures and schedules work without block
         assert.ok(blocked.alarmCalls - started.alarmCalls <= 1, `${blocked.alarmCalls - started.alarmCalls} idle alarms while enrichment was busy`);
         assert.equal(blocked.sourceRequests, 4);
         assert.equal(blocked.owner.completed, 0);
-        assert.ok(blocked.alarmAt !== null && blocked.alarmAt > blocked.now + 1_000 && blocked.alarmAt <= blocked.now + 60_000,
-          JSON.stringify({ startedAt: started.alarmAt, alarmAt: blocked.alarmAt, now: blocked.now, alarmCalls: blocked.alarmCalls }));
+        const claimed = blocked.jobs.filter(row => row.attempts > 0);
+        assert.equal(claimed.length, 4);
+        assert.ok(claimed.every(row => row.status === 'pending' && row.next_check_ms > blocked.now && row.next_check_ms <= blocked.now + 60_000));
+        assert.ok(blocked.ownerEnrichmentWakeAt !== null && blocked.ownerEnrichmentWakeAt > blocked.now + 1_000 &&
+          blocked.ownerEnrichmentWakeAt <= blocked.now + 60_000);
+        assert.ok(blocked.alarmAt !== null && blocked.alarmAt <= blocked.ownerEnrichmentWakeAt,
+          JSON.stringify({ startedAt: started.alarmAt, alarmAt: blocked.alarmAt, ownerEnrichmentWakeAt: blocked.ownerEnrichmentWakeAt,
+            now: blocked.now, alarmCalls: blocked.alarmCalls }));
         if (restart) {
           await runtime.setOptions(options(1, true));
           const restored = await request('/snapshot');

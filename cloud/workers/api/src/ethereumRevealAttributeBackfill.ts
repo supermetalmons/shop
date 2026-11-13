@@ -1,9 +1,16 @@
-import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest } from '../../../../shared/ethereum/revealMaintenance.js';
+import { createHash } from 'node:crypto';
+import type { EthereumRevealAttributeAuditToken, EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest } from '../../../../shared/ethereum/revealMaintenance.js';
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.js';
+import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
+import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum } from './ethereumRevealEnrichmentStore.js';
+import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
+import { parseMetadataJson } from './ethereumMetadataJson.js';
 
 const PAGE_SIZE = 256;
+const hash = (json: string) => createHash('sha256').update(json).digest('hex');
 
 function assignmentRevision(sql: RevealSql, table: string, alias: string): string {
   return sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().some(column => column.name === 'assignment_revision')
@@ -13,6 +20,47 @@ function assignmentRevision(sql: RevealSql, table: string, alias: string): strin
 function ownerOverrideGuard(sql: RevealSql): string {
   return sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_slot_overrides'").toArray().length
     ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)' : '';
+}
+
+function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, frozenThroughMs: number): EthereumRevealAttributeBackfillPage {
+  const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
+  const actualRevision = assignmentRevision(sql, 'assignments', 'a');
+  const jobRevision = hasJobs ? assignmentRevision(sql, 'reveal_enrichment', 'e') : '0';
+  type AuditRow = { token_id: string; metadata_json: string; eligible: number; job_status: NonNullable<EthereumRevealAttributeAuditToken['enrichment']>['status'] | null;
+    last_error: string | null; attempts: number; assignment_revision: number; target_json: string | null; target_sha256: string | null };
+  const rows = sql.exec<AuditRow>(`WITH page AS MATERIALIZED (
+      SELECT p.token_id FROM publication p JOIN assignments a ON a.token_id=p.token_id
+      WHERE p.token_id>? AND p.status='published' AND a.frozen_at_ms<=? ORDER BY p.token_id LIMIT ?
+    ) SELECT page.token_id,a.metadata_json,(a.category!='egg' ${ownerOverrideGuard(sql)}) AS eligible,
+      ${hasJobs ? `e.status AS job_status,e.last_error,e.attempts,${jobRevision} AS assignment_revision,e.target_json,e.target_sha256`
+        : 'NULL AS job_status,NULL AS last_error,0 AS attempts,0 AS assignment_revision,NULL AS target_json,NULL AS target_sha256'}
+    FROM page JOIN assignments a ON a.token_id=page.token_id
+    ${hasJobs ? `LEFT JOIN reveal_enrichment e ON e.token_id=page.token_id AND e.version=? AND ${jobRevision}=${actualRevision}` : ''}
+    ORDER BY page.token_id`, afterTokenId ?? '', frozenThroughMs, PAGE_SIZE, ...(hasJobs ? [REVEAL_ENRICHMENT_VERSION] : [])).toArray();
+  const catalogs = new EthereumRevealCatalogUpdateStore(sql, action => action());
+  const canonical = new Map(catalogs.canonicalMetadata(rows.map(row => row.token_id)).map(value => [value.tokenId, value]));
+  const blocks = revealCollectionBlocks(catalogs.effectiveCatalog());
+  const tokens = rows.map(row => {
+    const current = canonical.get(row.token_id);
+    if (!current) throw new Error('Published artwork is missing canonical metadata.');
+    const { attributes: _attributes, ...metadata } = parseMetadataJson(current.metadataJson) as Record<string, unknown>;
+    return { tokenId: row.token_id, category: current.category, assetId: current.assetId,
+      assignmentRevision: current.assignmentRevision, metadataRevision: current.metadataRevision,
+      metadataSha256: current.targetSha256, frozenMetadataSha256: hash(row.metadata_json), nonAttributeSha256: hash(JSON.stringify(metadata)),
+      collectionBlock: getOwnerHatchingGrail(current.category, current.assetId)?.collectionBlock
+        ?? lookupRevealCollectionBlock(blocks, current.category, current.assetId),
+      enrichment: !row.eligible || row.job_status === null || row.assignment_revision !== current.assignmentRevision ? null
+        : { status: row.job_status, assignmentRevision: row.assignment_revision,
+        attempts: row.attempts, lastError: row.last_error, targetSha256: row.target_sha256,
+        checksumValid: row.target_json === null && row.target_sha256 === null ? null : matchesEnrichmentChecksum(row.target_json, row.target_sha256,
+          acknowledgedEnrichmentHash(sql, row.token_id, REVEAL_ENRICHMENT_VERSION, row.assignment_revision)) } };
+  });
+  const eligible = rows.filter(row => row.eligible);
+  return { nextCursor: rows.length === PAGE_SIZE ? rows[rows.length - 1].token_id : null, eligible: eligible.length,
+    missing: eligible.filter(row => row.job_status === null).length, invalid: eligible.filter(row => row.job_status === 'invalid').length,
+    conflict: eligible.filter(row => row.job_status === 'conflict').length,
+    conflictRechecks: eligible.filter(row => row.last_error === 'conflict-recheck').length, enqueued: 0, requeued: 0,
+    frozenThroughMs, tokens };
 }
 
 function recheckPublishedToken(sql: RevealSql, tokenId: string, write: boolean, hasJobs: boolean): EthereumRevealAttributeBackfillPage {
@@ -50,7 +98,12 @@ function recheckPublishedToken(sql: RevealSql, tokenId: string, write: boolean, 
 }
 
 export function backfillRevealAttributePage(sql: RevealSql,
-  request: Pick<EthereumRevealAttributeBackfillRequest, 'afterTokenId' | 'write' | 'retryBlocked' | 'recheckTokenId'>): EthereumRevealAttributeBackfillPage {
+  request: Pick<EthereumRevealAttributeBackfillRequest, 'afterTokenId' | 'write' | 'retryBlocked' | 'recheckTokenId' | 'audit' | 'frozenThroughMs'>): EthereumRevealAttributeBackfillPage {
+  if (request.audit) {
+    if (request.write || request.retryBlocked || request.recheckTokenId || !Number.isSafeInteger(request.frozenThroughMs) ||
+      request.frozenThroughMs! < 0 || request.frozenThroughMs! > Date.now()) throw new Error('Attribute audit requires a read-only frozen cutoff.');
+    return auditRevealAttributePage(sql, request.afterTokenId, request.frozenThroughMs!);
+  }
   const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
   if (request.recheckTokenId) return recheckPublishedToken(sql, request.recheckTokenId, request.write, hasJobs);
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');

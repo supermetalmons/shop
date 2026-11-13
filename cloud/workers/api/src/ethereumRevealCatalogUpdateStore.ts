@@ -7,7 +7,7 @@ import { getRevealCatalog, getRevealCatalogDescriptor } from '../../../../shared
 import { validateRevealCatalogUpdateBatch, type RevealCatalogUpdateBatch, type RevealCatalogUpdateMapping } from '../../../../shared/ethereum/revealCatalogUpdate.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import type { RevealSql } from './ethereumRevealStore.js';
-import { buildRevealedArtwork, revealRandomInteger } from './ethereumRevealCatalog.js';
+import { buildNewRevealedArtwork, buildRevealedArtwork, revealRandomInteger } from './ethereumRevealCatalog.js';
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
 import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
@@ -111,7 +111,7 @@ export class EthereumRevealCatalogUpdateStore {
       },
       build: (tokenId, asset, original) => {
         const deployment = JSON.parse(this.settings()!.deployment_json) as EthereumRevealDeployment;
-        const built = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId,
+        const built = buildNewRevealedArtwork({ templateJson: deployment.templateJson, tokenId,
           crateTokenId: original.artwork.crateTokenId, category: asset.category, assetId: asset.assetId,
           observation: original.artwork.observation, catalog: this.activeCatalog(), ownerHatching: true });
         const grail = getOwnerHatchingGrail(asset.category, asset.assetId);
@@ -890,8 +890,10 @@ export class EthereumRevealCatalogUpdateStore {
         category = mapping.category;
         assetId = mapping.asset_id;
         catalog ??= this.activeCatalog();
-        const built = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: row.crate_token_id,
-          category, assetId, observation: artwork.observation, catalog });
+        const built = row.assignment_revision >= mapping.target_revision && artwork.attributes?.some(attribute => attribute.trait_type === 'collection block')
+          ? { artwork, metadataJson: row.metadata_json }
+          : buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: row.crate_token_id,
+            category, assetId, observation: artwork.observation, catalog });
         metadataJson = applyRevealAttributePayload(built.metadataJson, mapping.attributes_json).metadataJson;
         artwork = built.artwork;
         metadataRevision++;

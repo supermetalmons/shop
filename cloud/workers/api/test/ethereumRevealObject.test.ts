@@ -14,6 +14,7 @@ import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 import { d1Database } from './commerceD1Harness.ts';
+import { revealTraitFixtureBlock } from '../runtime-test/revealTraitFixture.ts';
 import { EthereumProviderBudgetStore, PROVIDER_BUDGETS, type ProviderBudgetGrant,
   type ProviderBudgetNamespace, type ProviderBudgetRequest, type ProviderBudgetSql } from '../src/ethereumProviderBudget.ts';
 
@@ -192,7 +193,7 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion, reg
   };
   t.mock.method(console, 'log', () => {});
   t.mock.method(globalThis, 'fetch', async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    if (String(url).startsWith('https://cdn.lil.org/nft/111k/')) return Response.json({ 'collection block': 'Fixture', attributes: [] });
+    if (String(url).startsWith('https://cdn.lil.org/nft/111k/')) return Response.json({ 'collection block': revealTraitFixtureBlock(String(url)), attributes: [] });
     const { id, method, params } = JSON.parse(String(init?.body));
     state.calls.push(method);
     if (state.failedMethods.has(method)) throw new Error('RPC unavailable');
@@ -635,7 +636,7 @@ test('slow trait reads consume only enrichment slots while later reveals and bas
     if (!String(url).startsWith('https://cdn.lil.org/nft/111k/')) return original(url, init);
     started++;
     await abortable(release.promise, init?.signal);
-    return Response.json({ 'collection block': 'First block', attributes: [{ trait_type: 'Count', value: 7 }] });
+    return Response.json({ 'collection block': revealTraitFixtureBlock(String(url)), attributes: [{ trait_type: 'Count', value: 7 }] });
   });
   f.freeze(hash(1));
   await f.object.runPublications(deployment);
@@ -655,7 +656,8 @@ test('slow trait reads consume only enrichment slots while later reveals and bas
   assert.equal(finished.length, f.rows("SELECT token_id FROM assignments WHERE token_id IS NOT NULL AND category!='egg'").length);
   for (const row of finished) {
     assert.equal(f.published.get(`111k-sepolia/${row.token_id}.json`), row.target_json);
-    assert.equal(JSON.parse(String(row.target_json)).attributes[0].value, 'First block');
+    assert.equal(JSON.parse(String(row.target_json)).attributes[0].value,
+      f.store.tokensResponse(deployment, [String(row.token_id)]).artworks[0].collectionBlock);
   }
 });
 
@@ -663,12 +665,12 @@ test('a slow source occupies one slot while its peers keep enriching other token
   const f = fixture(t);
   const release = Promise.withResolvers<void>();
   let active = 0, maximum = 0, started = 0;
-  t.mock.method(globalThis, 'fetch', async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  t.mock.method(globalThis, 'fetch', async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
     started++;
     maximum = Math.max(maximum, ++active);
     try {
       if (started === 1) await abortable(release.promise, init?.signal);
-      return Response.json({ 'collection block': 'Fixture', attributes: [] });
+      return Response.json({ 'collection block': revealTraitFixtureBlock(String(url)), attributes: [] });
     } finally { active--; }
   });
   f.freeze(hash(1));
@@ -755,9 +757,9 @@ test('restarting after an unacknowledged enriched write uses staged bytes withou
   f.published.set(key, String(base.metadata_json));
   f.store.publicationComplete(String(base.token_id));
   let fetches = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.mock.method(globalThis, 'fetch', async (url: Parameters<typeof fetch>[0]) => {
     fetches++;
-    return Response.json({ 'collection block': 'A', attributes: [{ trait_type: 'Size', value: 2 }] });
+    return Response.json({ 'collection block': revealTraitFixtureBlock(String(url)), attributes: [{ trait_type: 'Size', value: 2 }] });
   });
   t.mock.method(f.store.enrichment, 'complete', () => { throw new Error('simulated interrupted acknowledgement'); });
   await assert.rejects(f.object.runEnrichment(deployment), /interrupted acknowledgement/);
@@ -782,10 +784,10 @@ test('a source read completed after retirement cannot stage bytes, publish, or a
   f.published.set(key, String(base.metadata_json));
   f.store.publicationComplete(String(base.token_id));
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.mock.method(globalThis, 'fetch', async (url: Parameters<typeof fetch>[0]) => {
     entered.resolve();
     await release.promise;
-    return Response.json({ 'collection block': 'A', attributes: [] });
+    return Response.json({ 'collection block': revealTraitFixtureBlock(String(url)), attributes: [] });
   });
   const work = f.object.runEnrichment(sepolia);
   try {
@@ -1155,13 +1157,15 @@ for (const kind of ['transaction', 'tokens'] as const) {
 
   test(`${kind} admission returns pending after a durable alarm while background registry lookup continues`, async t => {
     const f = fixture(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    let now = 1_000_000;
+    t.mock.method(Date, 'now', () => now);
+    const deadline = now + 30;
     const canContinue = f.object.canContinue.bind(f.object);
     let checks = 0;
     t.mock.method(f.object, 'canContinue', async (...args: Parameters<InternalObject['canContinue']>) => {
-      if (++checks === 2) { entered.resolve(); await release.promise; }
+      if (++checks === 2) { now = deadline; entered.resolve(); await release.promise; }
       return canContinue(...args);
     });
-    const deadline = Date.now() + 30;
     const request = kind === 'transaction' ? f.object.revealTransaction(deployment, hash(1), true, deadline)
       : f.object.revealTokens(deployment, ['1'], true, deadline);
     try {
@@ -1506,24 +1510,50 @@ test('an unacknowledged verifier cancellation stays bounded and retains the clai
   const now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
   const original = globalThis.setTimeout;
-  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
-    original(callback, milliseconds === 20_000 ? 40 : milliseconds === 250 ? 5 : milliseconds, ...args));
+  let expireInspection: (() => void) | undefined;
+  let expireCancellation: (() => void) | undefined;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) => {
+    const timer = original(callback, milliseconds, ...args);
+    const expire = () => { clearTimeout(timer); callback(...args); };
+    if (milliseconds === 20_000) expireInspection ??= expire;
+    if (milliseconds === 250) expireCancellation ??= expire;
+    return timer;
+  });
   const f = fixture(t);
   const cancellation = Promise.withResolvers<void>();
+  const cancellationEntered = Promise.withResolvers<void>();
+  const cancellationUnconfirmed = Promise.withResolvers<void>();
   t.mock.method(f.verifier(hash(1)), 'inspect', async () => { throw new Error('Inspection RPC disconnected.'); });
-  t.mock.method(f.verifier(hash(1)), 'cancelInspection', () => cancellation.promise);
+  t.mock.method(f.verifier(hash(1)), 'cancelInspection', () => { cancellationEntered.resolve(); return cancellation.promise; });
   const messages: unknown[] = [];
-  t.mock.method(console, 'error', (message: unknown) => { messages.push(message); });
+  t.mock.method(console, 'error', (message: unknown) => {
+    messages.push(message);
+    if ((message as { event?: string }).event === 'ethereum_reveal_cancellation_unconfirmed') cancellationUnconfirmed.resolve();
+  });
   const result = f.object.revealTransaction(deployment, hash(1), true);
-  await waitFor(() => messages.length > 0);
-  assert.equal(f.store.dispatchState(now).inFlight, 1);
-  assert.equal(value(await completesWithin(result, 500)).status, 'pending');
-  await f.settle();
+  try {
+    await completesWithin(cancellationEntered.promise);
+    assert.equal(f.store.dispatchState(now).inFlight, 1);
+    assert.ok(expireCancellation);
+    expireCancellation();
+    await completesWithin(cancellationUnconfirmed.promise);
+    assert.equal(f.store.dispatchState(now).inFlight, 1);
+    assert.equal(f.object.receipts.size, 1);
+    assert.ok(expireInspection);
+    expireInspection();
+    assert.equal(value(await completesWithin(result, 500)).status, 'pending');
+    await f.settle();
+  } finally {
+    expireInspection?.();
+    expireCancellation?.();
+    cancellation.resolve();
+    await Promise.allSettled([result]);
+    await f.settle();
+  }
   assert.equal(f.object.receipts.size, 0);
   assert.equal(f.store.dispatchState(now).inFlight, 0);
   assert.equal(f.store.knownTransaction(hash(1)), true);
   assert.ok(messages.some(message => (message as { event?: string }).event === 'ethereum_reveal_cancellation_unconfirmed'));
-  cancellation.resolve();
 });
 
 test('verifier throttling pauses dispatch without losing watches or delaying frozen reads and publication', async t => {

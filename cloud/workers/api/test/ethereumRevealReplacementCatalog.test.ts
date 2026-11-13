@@ -11,6 +11,7 @@ import { parseEthereumRevealDeployment } from '../../../../shared/ethereum/revea
 import type { RevealSql } from '../src/ethereumRevealStore.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 import { d1Database } from './commerceD1Harness.ts';
+import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
 const source = getRevealCatalog('111k-v5')!;
 const ancestor = { ...source, catalogVersion: '111k-v4' };
@@ -19,6 +20,7 @@ target.catalogVersion = '111k-v6';
 target.categories.eggs.count -= 2;
 target.categories.videos.count += 2;
 target.categories.videos.aspectRatioIndexById = [...target.categories.videos.aspectRatioIndexById!, 0, 0];
+registerRevealCollectionBlocksFixture(target, 'Replacement artwork');
 const catalogs = [ancestor, source, target].map(manifest => ({ manifest, descriptor: computeRevealCatalogDescriptor(manifest) }));
 const registry = `const catalogs=${JSON.stringify(catalogs)};
   export function getRevealCatalog(version,hash) { const entry=catalogs.find(row=>row.manifest.catalogVersion===version);

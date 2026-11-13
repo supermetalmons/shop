@@ -13,7 +13,7 @@ import { ETHEREUM_REVEAL_CATALOG_VERSION, ETHEREUM_REVEAL_CATALOG_VERSION_PATTER
 import { normalizeEthereumAddress } from '../../shared/ethereum/protocol.ts';
 import { createAsyncD1MaintenanceQuery } from '../shared/asyncD1MaintenanceQuery.ts';
 import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenance.ts';
-import { isRevealArtworkTokenId, type EthereumRevealAttributeBackfillPage } from '../../shared/ethereum/revealMaintenance.ts';
+import { isRevealArtworkTokenId, type EthereumRevealAttributeAuditToken, type EthereumRevealAttributeBackfillPage } from '../../shared/ethereum/revealMaintenance.ts';
 import { acquireMetadataPublicationLease } from '../ethereum-metadata/publicationLease.ts';
 import { verifyMetadata } from '../ethereum-metadata/remote.ts';
 import { COMMERCE_D1_NOW_MS_SQL, sqlString, type CommerceAuthorityQuery } from '../shared/commerceD1Maintenance.ts';
@@ -22,16 +22,17 @@ const DEFAULT_TEMPLATE = new URL('../ethereum-metadata/templates/artwork.json', 
 const RPC_ENV_FILES = [new URL('../../.env.local', import.meta.url), new URL('../../.env', import.meta.url)];
 
 type Args = { command: 'status' | 'register' | 'activate' | 'pause' | 'backfill-attributes'; write: boolean; retryBlocked?: boolean; recheckTokenId?: string;
-  deploymentId?: string; expectedRevision?: number; manifest?: string };
+  audit?: boolean; frozenThroughMs?: number; deploymentId?: string; expectedRevision?: number; manifest?: string };
 
 export function parseEthereumRevealControlArgs(argv: string[]): Args {
   const { values, positionals, tokens } = parseArgs({ args: argv, allowPositionals: true, tokens: true, options: {
     write: { type: 'boolean', default: false }, manifest: { type: 'string' }, 'deployment-id': { type: 'string' }, 'expected-revision': { type: 'string' },
     'retry-blocked': { type: 'boolean' }, 'recheck-token': { type: 'string' },
+    audit: { type: 'boolean' }, 'frozen-through-ms': { type: 'string' },
   } });
   const command = positionals[0] as Args['command'];
   if (positionals.length !== 1 || !['status', 'register', 'activate', 'pause', 'backfill-attributes'].includes(command)) {
-    throw new Error('Usage: ethereumRevealControl.ts <status|register|activate|pause|backfill-attributes> [--manifest FILE | --deployment-id ID] [--expected-revision N] [--write] [--retry-blocked | --recheck-token ID]');
+    throw new Error('Usage: ethereumRevealControl.ts <status|register|activate|pause|backfill-attributes> [--manifest FILE | --deployment-id ID] [--expected-revision N] [--write] [--retry-blocked | --recheck-token ID | --audit [--frozen-through-ms N]]');
   }
   const seen = new Set<string>();
   for (const token of tokens) {
@@ -40,6 +41,12 @@ export function parseEthereumRevealControlArgs(argv: string[]): Args {
     seen.add(token.name);
   }
   const deploymentId = values['deployment-id'];
+  const frozenThroughMs = values['frozen-through-ms'] === undefined ? undefined : Number(values['frozen-through-ms']);
+  if (values.audit && (command !== 'backfill-attributes' || values.write || values['retry-blocked'] || values['recheck-token']) ||
+    frozenThroughMs !== undefined && (!values.audit || !/^\d+$/.test(values['frozen-through-ms']!) ||
+      !Number.isSafeInteger(frozenThroughMs) || frozenThroughMs < 0 || frozenThroughMs > Date.now())) {
+    throw new Error('--audit requires read-only backfill-attributes without retries or rechecks; --frozen-through-ms requires --audit and a past timestamp.');
+  }
   if (values['retry-blocked'] && command !== 'backfill-attributes') throw new Error('--retry-blocked requires backfill-attributes.');
   const recheckTokenId = values['recheck-token'];
   if (recheckTokenId !== undefined && (command !== 'backfill-attributes' || values['retry-blocked'] || !isRevealArtworkTokenId(recheckTokenId))) {
@@ -59,7 +66,8 @@ export function parseEthereumRevealControlArgs(argv: string[]): Args {
     throw new Error('A transition requires --manifest or --deployment-id, and --expected-revision.');
   }
   return { command, write: values.write, deploymentId, expectedRevision, manifest: values.manifest,
-    ...(values['retry-blocked'] && { retryBlocked: true }), ...(recheckTokenId && { recheckTokenId }) };
+    ...(values['retry-blocked'] && { retryBlocked: true }), ...(recheckTokenId && { recheckTokenId }),
+    ...(values.audit && { audit: true }), ...(frozenThroughMs !== undefined && { frozenThroughMs }) };
 }
 
 type Registration = Omit<EthereumRevealDeployment, 'state' | 'revision' | 'createdAtMs' | 'updatedAtMs' | 'activatedAtMs' | 'provisionedAtMs' | 'lastError' | 'retiredAtMs' | 'replacementDeploymentId'>;
@@ -219,10 +227,14 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
   const current = deployments[0];
   if (args.command === 'backfill-attributes') {
     const revision = args.expectedRevision ?? current.revision;
-    if (current.chainId !== 11155111 || current.dropId !== '111k_devnet' || current.state !== 'active' ||
+    const supportedScope = current.chainId === 11155111 && current.dropId === '111k_devnet' ||
+      current.chainId === 1 && current.dropId === '111k';
+    if (!supportedScope || current.state !== 'active' ||
       current.retiredAtMs != null || current.catalogUpdateId != null || !isSupportedRevealDeployment(current) || current.revision !== revision) {
-      throw new Error('Attribute backfill requires the active Sepolia deployment at the expected revision.');
+      throw new Error('Attribute backfill requires an active 111k deployment at the expected revision.');
     }
+    const frozenThroughMs = args.audit ? args.frozenThroughMs ?? Math.max(0, Date.now() - 1) : undefined;
+    const tokens: EthereumRevealAttributeAuditToken[] = [];
     const totals = await (overrides.maintenance ?? withEthereumRevealMaintenance)(async transport => {
       if (!transport.backfillAttributes) throw new Error('The reveal maintenance binding does not support attribute backfill.');
       const counts = { eligible: 0, missing: 0, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0 };
@@ -231,9 +243,16 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
         const page: EthereumRevealAttributeBackfillPage = await transport.backfillAttributes({
           deploymentId: current.deploymentId, expectedRevision: revision, afterTokenId, write: args.write,
           ...(args.retryBlocked && { retryBlocked: true }), ...(args.recheckTokenId && { recheckTokenId: args.recheckTokenId }),
+          ...(args.audit && { audit: true, frozenThroughMs }),
         });
         if (page.nextCursor !== null && (args.recheckTokenId || !isRevealArtworkTokenId(page.nextCursor) ||
           page.nextCursor <= (afterTokenId ?? ''))) throw new Error('Attribute backfill returned an invalid cursor.');
+        if (args.audit) {
+          if (page.frozenThroughMs !== frozenThroughMs || !Array.isArray(page.tokens) || page.tokens.length > 256 ||
+            page.tokens.some((token, index) => !isRevealArtworkTokenId(token.tokenId) || token.tokenId <= (index ? page.tokens![index - 1].tokenId : afterTokenId ?? '')) ||
+            page.nextCursor !== null && page.nextCursor !== page.tokens.at(-1)?.tokenId) throw new Error('Attribute audit returned an invalid page.');
+          tokens.push(...page.tokens);
+        }
         counts.eligible += page.eligible;
         counts.missing += page.missing;
         counts.invalid += page.invalid;
@@ -246,7 +265,8 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
       return counts;
     });
     return { command: args.command, dryRun: !args.write, ...(args.retryBlocked && { retryBlocked: true }),
-      ...(args.recheckTokenId && { recheckTokenId: args.recheckTokenId }), deploymentId: current.deploymentId, revision, ...totals };
+      ...(args.recheckTokenId && { recheckTokenId: args.recheckTokenId }), deploymentId: current.deploymentId, revision, ...totals,
+      ...(args.audit && { audit: true, frozenThroughMs, tokens }) };
   }
   const sql = buildEthereumRevealTransition(args.command, current, args.expectedRevision!);
   if (!args.write) return { dryRun: true, command: args.command, deployment: current, sql };

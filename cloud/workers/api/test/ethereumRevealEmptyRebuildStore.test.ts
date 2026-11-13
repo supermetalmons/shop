@@ -237,7 +237,7 @@ test('an existing store refreshes cached allocation counts after another store r
   assert.equal(before.assignmentRevision, 1);
   assert.equal(before.metadataRevision, 2);
   assert.equal(before.migration, false);
-  assert.deepEqual(before.artwork.attributes, [{ trait_type: 'type', value: 'painting' }]);
+  assert.deepEqual(before.artwork.attributes, [{ trait_type: 'collection block', value: 'watercolor mons' }, { trait_type: 'type', value: 'painting' }]);
   const next: RevealAssetCatalog = structuredClone(target);
   next.catalogVersion = '111k-v10';
   next.categories.eggs.count--;

@@ -11,6 +11,7 @@ import type { EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateRes
 import { EthereumRevealCatalogUpdate, parseCatalogUpdateRequest } from '../src/ethereumRevealCatalogUpdate.ts';
 import { EthereumRevealStore, type RevealSql, type RevealPublicationJob } from '../src/ethereumRevealStore.ts';
 import { d1Database } from './commerceD1Harness.ts';
+import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
 const source = getRevealCatalog('111k-v5')!;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
@@ -27,6 +28,7 @@ function batch() {
   target.categories.eggs.count -= 3;
   target.categories.videos.count += 3;
   target.categories.videos.aspectRatioIndexById = [...target.categories.videos.aspectRatioIndexById!, 0, 0, 0];
+  registerRevealCollectionBlocksFixture(target, 'new videos');
   const body: RevealCatalogUpdateBody = { version: 1, nonce: '10000000-0000-4000-8000-000000000001',
     predecessor: { manifest: source, descriptor: computeRevealCatalogDescriptor(source) },
     target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) },
@@ -297,7 +299,7 @@ test('trait failures do not activate a candidate or stop ordinary reveals', asyn
   await f.run('begin');
   await f.run('advance');
   f.faults.traitFailure = true;
-  await assert.rejects(f.run('advance'), /HTTP 503/);
+  await assert.rejects(f.run('advance'), /http-503/);
   assert.equal(f.current().state, 'active');
   assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
   f.freezeEggs([source.categories.eggs.count]);

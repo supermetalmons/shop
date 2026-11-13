@@ -9,6 +9,7 @@ import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revea
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
+import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
 const source = getRevealCatalog('111k-v5')!;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
@@ -26,6 +27,7 @@ function batch(predecessor: RevealAssetCatalog = source, count = 3): RevealCatal
   target.categories.eggs.count -= count;
   target.categories.videos.count += count;
   target.categories.videos.aspectRatioIndexById = [...target.categories.videos.aspectRatioIndexById!, ...Array<number>(count).fill(0)];
+  registerRevealCollectionBlocksFixture(target, 'new artworks');
   const body: RevealCatalogUpdateBody = { version: 1, nonce: '00000000-0000-4000-8000-000000000001',
     predecessor: { manifest: predecessor, descriptor: computeRevealCatalogDescriptor(predecessor) },
     target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) },
@@ -146,7 +148,7 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   f.store.catalogUpdate.finalize(initial.batchId);
   const owner = f.store.catalogUpdate.ownerHatching;
   owner.prepare({ batchId: 'owner-wave', sourceSha256: 'a'.repeat(64), candidateTokenIds: ['1', '2'], readyCount: 2,
-    grails: [{ category: 'animated', assetId: 422, attributesJson }], freshEggIds: [76700] }, 4000);
+    grails: [{ category: 'animated', assetId: 422, attributesJson: attributesJson.replace('new artworks', 'DROWEE') }], freshEggIds: [76700] }, 4000);
   const next = batch(initial.target.manifest, 1);
   assert.throws(() => f.store.catalogUpdate.begin(next, 4001), /protected by owner hatching/);
   assert.equal(f.store.catalogUpdate.status(next.batchId), null);
@@ -172,7 +174,7 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   stageMetadata(f.store, explicit);
   assert.deepEqual(f.store.catalogUpdate.eligibleCutoffEggs(76699), []);
   assert.throws(() => owner.prepare({ batchId: 'owner-conflict', sourceSha256: 'b'.repeat(64), candidateTokenIds: ['21'], readyCount: 1,
-    grails: [{ category: 'animated', assetId: 423, attributesJson }], freshEggIds: [] }, 5002), /Not enough eligible/);
+    grails: [{ category: 'animated', assetId: 423, attributesJson: attributesJson.replace('new artworks', 'DROWEE') }], freshEggIds: [] }, 5002), /Not enough eligible/);
   f.store.catalogUpdate.generationStage(explicit.batchId);
   owner.hatch(grailId, 5003);
   stageGeneration(f.store, explicit);

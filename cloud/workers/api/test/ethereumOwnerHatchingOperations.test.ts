@@ -430,7 +430,7 @@ test('staging retries traits without partial pages and activation rechecks minti
   await f.run('begin');
   while ((await f.run('scan')).phase === 'scanning') {}
   f.state.traitsFail = true;
-  await assert.rejects(f.run('stage'), /Trait source returned HTTP 503/);
+  await assert.rejects(f.run('stage'), /Trait source unavailable \(http-503\)/);
   assert.equal(f.count('owner_hatching_trait_staging'), 0);
   f.state.traitsFail = false;
   assert.equal((await f.run('stage')).staged, 8);

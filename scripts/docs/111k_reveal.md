@@ -196,7 +196,9 @@ CDN metadata with a newer API revision or let it replace a newer cached token.
 
 Metadata JSON addresses follow the collection's configured base URI plus the decimal token ID and `.json`. The JSON address itself is predictable before minting; it contains only the placeholder until reveal. Use the methods above to establish reveal status and obtain media immediately, without waiting for CDN or marketplace refreshes.
 
-After initial media publication, the token’s CDN JSON receives its artwork traits in a background update. Paintings, videos, 3D models and animated works list `collection block` first, then their original attributes, then the source traits. Eggs keep their original attributes. The reveal API's `collectionBlock` field is available independently of this metadata update and its `attributes` array. Read the token URI for the other enriched attributes.
+Newly revealed paintings, videos, 3D models and animated works include `collection block` as the first attribute in their initial CDN JSON. The value comes from the local artwork catalog, including the grail catalog for owner hatching. A background update adds the remaining source traits after the original attributes, preserving one matching collection block. Temporary source failures retry with backoff and do not remove the initial block. Unhatched eggs keep their original attributes. The reveal API's `collectionBlock` field remains available independently of background enrichment; read the token URI for the other enriched attributes.
+
+Previously frozen metadata retains its original recorded bytes. Older tokens whose enrichment was blocked can be repaired through the [guarded attribute recovery procedure](111k_reveal_ops.md#artwork-attributes-and-recovery), including explicitly authorized mainnet recovery.
 
 Published revealed metadata also contains `revealStatus: "revealed"`, which the
 shop uses to skip redundant recovery requests. Baseline placeholder metadata

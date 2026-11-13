@@ -5,7 +5,10 @@ import test from 'node:test';
 import { backfillRevealAttributePage } from '../src/ethereumRevealAttributeBackfill.ts';
 import { acknowledgedEnrichmentHash, EthereumRevealEnrichmentStore, REVEAL_ENRICHMENT_SCHEMA } from '../src/ethereumRevealEnrichmentStore.ts';
 import { parseRevealAttributeBackfillRequest } from '../src/ethereumRevealMaintenanceSupport.ts';
-import type { RevealSql } from '../src/ethereumRevealStore.ts';
+import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
+import { buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
+import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
+import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 
 function revealSql(db: DatabaseSync): RevealSql {
   return { exec<T>(query: string, ...args: Array<string | number | null | ArrayBuffer>) {
@@ -13,6 +16,37 @@ function revealSql(db: DatabaseSync): RevealSql {
     return { toArray: () => rows as T[] };
   } };
 }
+
+test('source failures retain durable retry alarms indefinitely with a five-minute backoff cap', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const sql = revealSql(db);
+  db.exec(`CREATE TABLE assignments(token_id TEXT PRIMARY KEY,category TEXT,asset_id INTEGER,metadata_json TEXT,assignment_revision INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE publication(token_id TEXT PRIMARY KEY,status TEXT);
+    INSERT INTO assignments VALUES('1','painting',41171,'{"attributes":[]}',0);
+    INSERT INTO publication VALUES('1','published');`);
+  for (const statement of REVEAL_ENRICHMENT_SCHEMA) db.exec(statement);
+  db.exec("INSERT INTO reveal_enrichment(token_id,version) VALUES('1','v0')");
+  let now = 1_000;
+  for (let attempt = 1; attempt <= 100; attempt++) {
+    const store = new EthereumRevealEnrichmentStore(sql, action => action());
+    const [job] = store.claim(now);
+    assert.equal(job.attempts, attempt);
+    assert.equal(store.complete(job, 'source-unavailable', now), true);
+    assert.deepEqual(store.summary(), { 'source-unavailable': 1 });
+    const wake = store.nextWake(now, false)!;
+    assert.equal(wake - now, Math.min(300_000, 1_000 * 2 ** Math.min(attempt, 9)));
+    assert.deepEqual(store.claim(wake - 1), []);
+    now = wake;
+  }
+  const store = new EthereumRevealEnrichmentStore(sql, action => action());
+  const [job] = store.claim(now);
+  const target = '{"attributes":[{"trait_type":"collection block","value":"little swag"}]}';
+  assert.equal(store.stage(job, target, createHash('sha256').update(target).digest('hex')), true);
+  assert.equal(store.complete(job, 'published', now), true);
+  assert.deepEqual(store.summary(), { published: 1 });
+  assert.equal(store.nextWake(now, false), null);
+});
 
 test('backfill skips fresh egg origins and never rechecks their obsolete artwork traits', t => {
   const db = new DatabaseSync(':memory:');
@@ -92,10 +126,13 @@ test('private attribute backfill requires an explicit mode, pinned identity and 
   assert.deepEqual(parseRevealAttributeBackfillRequest(request), request);
   assert.deepEqual(parseRevealAttributeBackfillRequest({ ...request, retryBlocked: true }), { ...request, retryBlocked: true });
   assert.deepEqual(parseRevealAttributeBackfillRequest({ ...request, recheckTokenId: '42' }), { ...request, recheckTokenId: '42' });
+  assert.deepEqual(parseRevealAttributeBackfillRequest({ ...request, audit: true, frozenThroughMs: 1000 }), { ...request, audit: true, frozenThroughMs: 1000 });
   for (const changed of [{ write: 'false' }, { deploymentId: null }, { expectedRevision: -1 }, { afterTokenId: 0 },
     { afterTokenId: '0001' }, { afterTokenId: '111112' }, { afterTokenId: undefined }, { retryBlocked: 'true' },
     { recheckTokenId: '01' }, { recheckTokenId: '111112' }, { recheckTokenId: '42', retryBlocked: true },
-    { recheckTokenId: '42', afterTokenId: '1' }, { force: true }]) {
+    { recheckTokenId: '42', afterTokenId: '1' }, { force: true }, { audit: 'true' }, { audit: true }, { frozenThroughMs: 1000 },
+    { audit: true, frozenThroughMs: 1000, write: true }, { audit: true, frozenThroughMs: 1000, retryBlocked: true },
+    { audit: true, frozenThroughMs: 1000, recheckTokenId: '42' }, { audit: true, frozenThroughMs: Date.now() + 100_000 }]) {
     assert.throws(() => parseRevealAttributeBackfillRequest({ ...request, ...changed }));
   }
 });
@@ -276,4 +313,79 @@ test('repair requeues only eligible terminal v0 jobs and preserves the conflict 
   assert.equal(store.complete(retry, 'published', Date.now()), true);
   assert.equal(lastError(), null);
   assert.equal(backfillRevealAttributePage(sql, request).conflictRechecks, 0);
+});
+
+test('attribute audit is query-only, bounded, frozen, and resolves owner metadata independently of the assignment origin', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const sql = revealSql(db);
+  const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [] });
+  const deployment: EthereumRevealDeployment = { deploymentId: 'mainnet-audit', chainId: 1, dropId: '111k',
+    contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k/mainnet-audit/', deploymentBlock: 100,
+    catalogVersion: '111k-v9', templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex'),
+    state: 'active', revision: 3, createdAtMs: 1, updatedAtMs: 3, activatedAtMs: 3, provisionedAtMs: 2, lastError: null };
+  const store = new EthereumRevealStore(sql, action => action());
+  store.configure(deployment);
+  db.exec("INSERT INTO crates(crate_token_id) VALUES('111112')");
+  const catalog = getRevealCatalog('111k-v9')!;
+  const observation = { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 };
+  const values = new Map<string, ReturnType<typeof buildRevealedArtwork>>();
+  for (let id = 1; id <= 260; id++) {
+    const tokenId = String(id);
+    const category = id === 13 || id === 14 ? 'egg' : 'painting';
+    const built = buildRevealedArtwork({ category: id === 15 ? 'egg' : category, assetId: id === 15 ? 70000 : id,
+      tokenId, crateTokenId: '111112', templateJson, observation, catalog, allocatedEgg: id === 15 });
+    values.set(tokenId, built);
+    db.prepare(`INSERT INTO assignments(category,asset_id,crate_token_id,slot,token_id,artwork_json,metadata_json,placeholder_json,frozen_at_ms)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(category, id, '111112', id - 1, tokenId, JSON.stringify(built.artwork), built.metadataJson, built.placeholderJson, id === 260 ? 2001 : 1000);
+    db.prepare('INSERT INTO publication(token_id,status) VALUES(?,?)').run(tokenId, id === 259 ? 'pending' : 'published');
+  }
+  const target = JSON.stringify({ ...JSON.parse(values.get('1')!.metadataJson), attributes: [{ trait_type: 'collection block', value: 'plane of existence' }] }) + '\n';
+  const targetSha256 = createHash('sha256').update(target).digest('hex');
+  db.prepare(`INSERT INTO reveal_enrichment(token_id,version,status,target_json,target_sha256,attempts) VALUES('1','v0','published',?,?,2)`)
+    .run(target, targetSha256);
+  db.exec("INSERT INTO reveal_enrichment(token_id,version,status,last_error,attempts) VALUES('2','v0','invalid','invalid',1)");
+  const owner = buildRevealedArtwork({ category: 'painting', assetId: 41171, tokenId: '14', crateTokenId: '111112', templateJson, observation, catalog });
+  const ownerHash = createHash('sha256').update(owner.metadataJson).digest('hex');
+  const canonical = { tokenId: '14', category: 'painting', assetId: 41171, assignmentRevision: 0, metadataRevision: 4,
+    artwork: owner.artwork, metadataJson: owner.metadataJson, targetSha256: ownerHash,
+    expectedJsons: [values.get('14')!.metadataJson], allowMissing: false, migration: false };
+  db.prepare(`INSERT INTO owner_hatching_batches(batch_id,source_sha256,input_sha256,ready_count,grail_count,fresh_egg_count,created_at_ms)
+    VALUES('owner-audit',?,?,1,0,1,1000)`).run('a'.repeat(64), 'b'.repeat(64));
+  db.prepare(`INSERT INTO owner_hatching_tokens(token_id,batch_id,egg_id,original_json,status,canonical_json,metadata_revision,hatched_at_ms)
+    VALUES('14','owner-audit',14,?,'hatched',?,4,1001)`).run(JSON.stringify(canonical), JSON.stringify(canonical));
+  db.exec(`INSERT INTO owner_hatching_slot_overrides(origin_category,origin_asset_id,category,asset_id,token_id)
+    VALUES('painting',15,'egg',70000,'14');
+    INSERT INTO reveal_enrichment(token_id,version,status,last_error)
+      VALUES('14','v0','invalid','obsolete-owner-job'),('15','v0','invalid','obsolete-replaced-slot');`);
+  const before = db.prepare('SELECT * FROM reveal_enrichment ORDER BY token_id').all();
+  db.exec('PRAGMA query_only=ON');
+  const first = backfillRevealAttributePage(sql, { afterTokenId: null, write: false, audit: true, frozenThroughMs: 2000 });
+  assert.equal(first.tokens!.length, 256);
+  assert.ok(first.nextCursor);
+  const second = backfillRevealAttributePage(sql, { afterTokenId: first.nextCursor, write: false, audit: true, frozenThroughMs: 2000 });
+  assert.equal(second.nextCursor, null);
+  const tokens = [...first.tokens!, ...second.tokens!];
+  assert.equal(tokens.length, 258);
+  assert.equal(new Set(tokens.map(row => row.tokenId)).size, 258);
+  assert.equal(tokens.some(row => row.tokenId === '259' || row.tokenId === '260'), false);
+  const enriched = tokens.find(row => row.tokenId === '1')!;
+  assert.equal(enriched.metadataSha256, targetSha256);
+  assert.equal(enriched.metadataRevision, 1);
+  assert.equal(enriched.frozenMetadataSha256, createHash('sha256').update(values.get('1')!.metadataJson).digest('hex'));
+  assert.deepEqual(enriched.enrichment, { status: 'published', assignmentRevision: 0, attempts: 2,
+    lastError: null, targetSha256, checksumValid: true });
+  assert.equal(tokens.find(row => row.tokenId === '2')!.enrichment!.status, 'invalid');
+  assert.equal(tokens.find(row => row.tokenId === '13')!.collectionBlock, null);
+  const hatched = tokens.find(row => row.tokenId === '14')!;
+  assert.equal(hatched.category, 'painting');
+  assert.equal(hatched.assetId, 41171);
+  assert.equal(hatched.collectionBlock, 'little swag');
+  assert.equal(hatched.metadataSha256, ownerHash);
+  assert.equal(hatched.metadataRevision, 4);
+  assert.equal(hatched.enrichment, null);
+  assert.equal(tokens.find(row => row.tokenId === '15')!.category, 'egg');
+  assert.equal(tokens.find(row => row.tokenId === '15')!.enrichment, null);
+  assert.equal(first.invalid + second.invalid, 1);
+  assert.deepEqual(db.prepare('SELECT * FROM reveal_enrichment ORDER BY token_id').all(), before);
 });

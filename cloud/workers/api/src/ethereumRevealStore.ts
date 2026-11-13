@@ -6,7 +6,7 @@ export type { RevealDispatchState, RevealReceiptClaim, RevealScanClaim, RevealWo
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumRevealEnrichmentStore, REVEAL_ENRICHMENT_SCHEMA } from './ethereumRevealEnrichmentStore.js';
 import { EthereumRevealCatalogUpdateStore, type RevealArtworkReadOptions } from './ethereumRevealCatalogUpdateStore.js';
-import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, revealCategoryCounts, revealDeploymentCatalog,
+import { buildNewRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, revealCategoryCounts, revealDeploymentCatalog,
   revealCrateSize, revealRandomInteger } from './ethereumRevealCatalog.js';
 
 type SqlValue = string | number | null | ArrayBuffer;
@@ -270,7 +270,7 @@ export class EthereumRevealStore {
           const reservation = this.privateSlot(crate.crateTokenId, slot) || this.takeAsset(crate.crateTokenId, slot, true, frozenEggs);
           if (!reservation) throw new Error('Reveal inventory invariant failed.');
           const effective = this.catalogUpdate.resolveUnit({ category: reservation.category, assetId: reservation.asset_id });
-          const value = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: crate.crateTokenId,
+          const value = buildNewRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: crate.crateTokenId,
             category: effective.category, assetId: effective.assetId, observation, catalog, allocatedEgg: effective.category === 'egg',
             ownerHatching: this.catalogUpdate.ownerHatching.slotOverride({ category: reservation.category, assetId: reservation.asset_id }) !== null });
           this.sql.exec(`UPDATE assignments SET token_id=?,artwork_json=?,metadata_json=?,placeholder_json=?,frozen_at_ms=?,assignment_revision=?

@@ -1,10 +1,12 @@
 import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 import descriptor from '../../../../shared/ethereum/revealCatalog.json';
-import { revealCatalogMedia, validateRevealAssetCatalog, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
+import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
+import { lookupRevealCollectionBlock, type RevealCollectionBlockLookup } from '../../../../shared/ethereum/revealCollectionBlocks.js';
+import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
 
 export function revealCategoryCounts(catalog: { categories: Record<'eggs' | 'paintings' | 'videos' | '3d' | 'animated', { count: number }> }) { return {
   egg: catalog.categories.eggs.count,
@@ -27,6 +29,7 @@ export function isSupportedRevealDeployment(deployment: EthereumRevealDeployment
 export const REVEAL_ARTWORK_COUNT = 111_111;
 export const REVEAL_CATEGORIES = ['egg', 'painting', 'video', '3d', 'animated'] as const;
 let validatedCatalog: RevealAssetCatalog | undefined;
+const collectionBlockLookups = new WeakMap<RevealAssetCatalog, RevealCollectionBlockLookup | null>();
 
 export function revealCrateSize(crateTokenId: string): number {
   const id = Number(crateTokenId);
@@ -57,21 +60,38 @@ function revealAssetMedia(category: EthereumArtworkCategory, assetId: number, su
   return revealCatalogMedia(validatedCatalog!, category, assetId);
 }
 
-export function buildRevealedArtwork(input: {
+type RevealArtworkInput = {
   templateJson: string; tokenId: string; crateTokenId: string; category: EthereumArtworkCategory;
   assetId: number; observation: EthereumRevealObservation;
   catalog?: RevealAssetCatalog;
   ownerHatching?: boolean;
   allocatedEgg?: boolean;
-}): { artwork: EthereumRevealedArtwork; metadataJson: string; placeholderJson: string } {
+};
+
+function buildArtwork(input: RevealArtworkInput, includeCollectionBlock: boolean): {
+  artwork: EthereumRevealedArtwork; metadataJson: string; placeholderJson: string;
+} {
   const template = JSON.parse(input.templateJson.replaceAll('{{tokenId}}', input.tokenId).replaceAll('{{displayId}}', input.tokenId)) as {
     name: string; description?: string; image: string; attributes?: Array<{ trait_type: string; value: string | number }>;
   };
   const media = revealAssetMedia(input.category, input.assetId, input.catalog, input.ownerHatching, input.allocatedEgg);
   const name = input.category === 'egg' ? `Egg #${input.assetId}` : template.name;
   const description = input.category === 'egg' ? 'a unrevealed gan egg. what will hatch from it?' : template.description;
-  const attributes = [...(template.attributes || []).filter(attribute => attribute.trait_type !== 'type'),
+  let attributes = [...(template.attributes || []).filter(attribute => attribute.trait_type !== 'type'),
     { trait_type: 'type', value: input.category }];
+  if (includeCollectionBlock && input.category !== 'egg') {
+    const grail = input.ownerHatching ? getOwnerHatchingGrail(input.category, input.assetId) : undefined;
+    const selected = input.catalog ?? (validateRevealCatalog(), validatedCatalog!);
+    let blocks = collectionBlockLookups.get(selected);
+    if (blocks === undefined) {
+      blocks = revealCollectionBlocks(computeRevealCatalogDescriptor(selected));
+      collectionBlockLookups.set(selected, blocks);
+    }
+    const block = grail?.collectionBlock ?? lookupRevealCollectionBlock(blocks, input.category, input.assetId);
+    if (!block) throw new Error('Reveal collection block is unavailable.');
+    attributes = [{ trait_type: 'collection block', value: block },
+      ...attributes.filter(attribute => attribute.trait_type !== 'collection block')];
+  }
   const metadata = { ...template, name, description, ...media, attributes, category: input.category, revealStatus: 'revealed' as const };
   return {
     artwork: { tokenId: input.tokenId, crateTokenId: input.crateTokenId, category: input.category,
@@ -80,6 +100,14 @@ export function buildRevealedArtwork(input: {
     metadataJson: `${JSON.stringify(metadata, null, 2)}\n`,
     placeholderJson: `${JSON.stringify(template, null, 2)}\n`,
   };
+}
+
+export function buildRevealedArtwork(input: RevealArtworkInput) {
+  return buildArtwork(input, false);
+}
+
+export function buildNewRevealedArtwork(input: RevealArtworkInput) {
+  return buildArtwork(input, true);
 }
 
 export function revealRandomInteger(maximum: number): number {

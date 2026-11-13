@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { requireRetiredRevealDeployment } from '../src/ethereumRevealMaintenanceSupport.ts';
+import { requireAttributeBackfillDeployment, requireRetiredRevealDeployment, requireRevealReplacement } from '../src/ethereumRevealMaintenanceSupport.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
+import { encodeAbi } from '../../../../shared/ethereum/abi.ts';
 
 const { EthereumRevealMaintenance } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealMaintenance.ts'));
 const { EthereumRevealObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealObject.ts'));
@@ -181,6 +182,80 @@ test('a cold coordinator counts historical attributes without schema writes or a
   f.registry.row!.revision = 5;
   await assert.rejects(object.backfillAttributes({ ...query, write: true }), /Backfill reveal deployment/);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='reveal_enrichment'").get()?.n, 0);
+});
+
+test('mainnet attribute maintenance is registry-scoped independently of the Sepolia storefront', async () => {
+  const f = fixture();
+  Object.assign(f.registry.row!, { chain_id: 1, drop_id: '111k', metadata_base_uri: 'https://cdn.mons.shop/111k/',
+    catalog_version: '111k-v9', state: 'active', retired_at_ms: null, replacement_deployment_id: null });
+  const before = JSON.stringify([f.registry, f.control]);
+  const query = { ...request, afterTokenId: null, write: false };
+  const mainnet = await requireAttributeBackfillDeployment(f.env, query);
+  assert.equal(mainnet.chainId, 1);
+  assert.equal(mainnet.contractAddress, oldContract);
+  assert.equal(mainnet.metadataBaseUri, 'https://cdn.mons.shop/111k/');
+  assert.equal(JSON.stringify([f.registry, f.control]), before);
+  await assert.rejects(requireRevealReplacement(f.env, request), /Replacement reveal deployment/);
+  const baseline = { ...f.registry.row };
+  for (const change of [{ revision: 5 }, { state: 'paused' }, { retired_at_ms: 1 }, { provisioned_at_ms: null },
+    { catalog_update_id: 'catalog-running' }, { drop_id: '111k_devnet' }, { catalog_version: '111k-v4' }]) {
+    f.registry.row = { ...baseline, ...change };
+    await assert.rejects(requireAttributeBackfillDeployment(f.env, query), /Backfill reveal deployment|Invalid reveal/);
+  }
+});
+
+test('mainnet attribute write preflight uses Worker RPC credentials, rejects changed chain identity, and skips read-only or continuation pages', async t => {
+  const f = fixture();
+  Object.assign(f.registry.row!, { chain_id: 1, drop_id: '111k', metadata_base_uri: 'https://cdn.mons.shop/111k/',
+    catalog_version: '111k-v9', state: 'active', retired_at_ms: null, replacement_deployment_id: null });
+  f.env.ALCHEMY_MI_NOTE_API_KEY = 'worker-test-only';
+  const calls: string[] = [];
+  const forwarded: unknown[] = [];
+  let chain = 1;
+  let metadataBaseUri = 'https://cdn.mons.shop/111k/';
+  const hash = (number: number) => `0x${number.toString(16).padStart(64, '0')}`;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(String(input), 'https://eth-mainnet.g.alchemy.com/v2/worker-test-only');
+    const { id, method, params } = JSON.parse(String(init?.body)) as { id: number; method: string; params: unknown[] };
+    calls.push(method);
+    let result: unknown;
+    if (method === 'eth_chainId') result = `0x${chain.toString(16)}`;
+    else if (method === 'eth_getBlockByNumber') {
+      const number = params[0] === 'latest' ? 200 : Number(params[0]);
+      result = { number: `0x${number.toString(16)}`, hash: hash(number) };
+    } else if (method === 'eth_getCode') result = (params[1] as { blockHash: string }).blockHash === hash(99) ? '0x' : '0x6000';
+    else if (method === 'eth_call') result = encodeAbi(['string'], [metadataBaseUri]);
+    else assert.fail(`Unexpected RPC method ${method}`);
+    return Response.json({ jsonrpc: '2.0', id, result });
+  });
+  t.mock.method(f.env.ETHEREUM_REVEAL, 'getByName', (name: string) => {
+    assert.equal(name, `1:${oldContract}`);
+    return { backfillAttributes: async (value: unknown) => {
+      forwarded.push(value);
+      return { nextCursor: null, eligible: 1, missing: 0, invalid: 1, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0 };
+    } } as unknown as DurableObjectStub<InstanceType<typeof EthereumRevealObject>>;
+  });
+  const query = { ...request, afterTokenId: null, write: false };
+  await f.maintenance.backfillAttributes(query);
+  await f.maintenance.backfillAttributes({ ...query, audit: true, frozenThroughMs: 1000 });
+  await f.maintenance.backfillAttributes({ ...query, write: true, afterTokenId: '1' });
+  assert.equal(calls.length, 0);
+  assert.equal(forwarded.length, 3);
+  chain = 11155111;
+  await assert.rejects(f.maintenance.backfillAttributes({ ...query, write: true }));
+  assert.equal(forwarded.length, 3);
+  chain = 1;
+  metadataBaseUri = 'https://cdn.mons.shop/111k/other/';
+  await assert.rejects(f.maintenance.backfillAttributes({ ...query, write: true }), /does not match/);
+  assert.equal(forwarded.length, 3);
+  metadataBaseUri = 'https://cdn.mons.shop/111k/';
+  await f.maintenance.backfillAttributes({ ...query, write: true });
+  assert.equal(forwarded.length, 4);
+  assert.ok(calls.includes('eth_getCode') && calls.includes('eth_call'));
+  const verified = calls.length;
+  await f.maintenance.backfillAttributes({ ...query, write: true, recheckTokenId: '24482' });
+  assert.ok(calls.length > verified);
+  assert.equal(forwarded.length, 5);
 });
 
 test('a failed storage purge can retry without changing the permanent registration', async () => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { withEthereumRevealMaintenance } from '../scripts/shared/ethereumRevealMaintenance.ts';
-import type { EthereumRevealPurgeResult } from '../shared/ethereum/revealMaintenance.ts';
+import type { EthereumRevealAttributeBackfillPage, EthereumRevealPurgeResult } from '../shared/ethereum/revealMaintenance.ts';
 import type { OwnerHatchingMaintenanceResult } from '../shared/ethereum/ownerHatchingMaintenance.ts';
 
 test('private maintenance transport uses named binding and always disposes', async () => {
@@ -47,6 +47,26 @@ test('owner hatching transport preserves enrichment counts while stripping priva
     assert.deepEqual(JSON.parse(JSON.stringify(result)), expected);
   }, async () => ({ env: { REVEAL_MAINTENANCE: {
     ownerHatching: async () => proxied,
+    purgeRetired: async () => { throw new Error('Unused.'); },
+    inspectRetired: async () => { throw new Error('Unused.'); },
+  } }, dispose: async () => {} }));
+});
+
+test('attribute audit transport materializes bounded token and enrichment RPC fields', async () => {
+  const expected: EthereumRevealAttributeBackfillPage = { nextCursor: null, eligible: 1, missing: 0, invalid: 0, conflict: 0,
+    conflictRechecks: 0, enqueued: 0, requeued: 0, frozenThroughMs: 1000, tokens: [{ tokenId: '24482', category: 'painting', assetId: 41171,
+      assignmentRevision: 1, metadataRevision: 3, metadataSha256: 'a'.repeat(64), frozenMetadataSha256: 'b'.repeat(64),
+      nonAttributeSha256: 'c'.repeat(64), collectionBlock: 'little swag', enrichment: { status: 'published', assignmentRevision: 1,
+        attempts: 2, lastError: null, targetSha256: 'a'.repeat(64), checksumValid: true } }] };
+  const token = new Proxy({ ...expected.tokens![0], privateField: 'excluded',
+    enrichment: new Proxy(expected.tokens![0].enrichment!, { ownKeys: () => [] }) }, { ownKeys: () => [] });
+  const proxied = new Proxy({ ...expected, tokens: [token] }, { ownKeys: () => [] });
+  await withEthereumRevealMaintenance(async transport => {
+    const result = await transport.backfillAttributes!({ deploymentId: 'mainnet-v1', expectedRevision: 9,
+      afterTokenId: null, write: false, audit: true, frozenThroughMs: 1000 });
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), expected);
+  }, async () => ({ env: { REVEAL_MAINTENANCE: {
+    backfillAttributes: async () => proxied,
     purgeRetired: async () => { throw new Error('Unused.'); },
     inspectRetired: async () => { throw new Error('Unused.'); },
   } }, dispose: async () => {} }));
