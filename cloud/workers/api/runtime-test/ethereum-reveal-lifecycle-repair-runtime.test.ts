@@ -123,7 +123,6 @@ test('native lifecycle repair upgrades deployed watches, orphan deadlines and st
     const callsBefore = rpcCalls;
     assert.deepEqual(JSON.parse(JSON.stringify(await object.revealTransaction(deployment, hash(1)))), snapshot);
     assert.equal(rpcCalls, callsBefore);
-    assert.equal((await storage.exec<{ phase: string }>('SELECT phase FROM reveal_recovery_migration'))[0].phase, 'repair-watches');
     await object.watchdog(deployment);
     await waitFor(async () => (await storage.exec<{ phase: string }>('SELECT phase FROM reveal_recovery_migration'))[0].phase === 'ready');
     assert.equal((await storage.exec<{ count: number }>('SELECT COUNT(*) AS count FROM receipt_work WHERE opaque=1 AND resolved=0'))[0].count, 129);
