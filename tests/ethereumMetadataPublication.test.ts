@@ -8,9 +8,22 @@ import {
   fileSha256, loadMetadataTemplates, md5, metadataBody, metadataCounts, metadataIdentities, sha256,
   type MetadataManifest,
 } from '../scripts/ethereum-metadata/catalog.ts';
-import { uploadMetadata, verifyMetadata } from '../scripts/ethereum-metadata/remote.ts';
+import { restoreMetadata, uploadMetadata, verifyMetadata } from '../scripts/ethereum-metadata/remote.ts';
+import { acquireMetadataPublicationLease, assertMetadataPublicationAllowed } from '../scripts/ethereum-metadata/publicationLease.ts';
 import { type MetadataStorage } from '../scripts/ethereum-metadata/storage.ts';
 import { runEthereumRevealControl } from '../scripts/ops/ethereumRevealControl.ts';
+
+test('generic upload, restore and lease acquisition permanently refuse the retired Sepolia preview', async () => {
+  const prefix = '111k-sepolia/reliquaries-v1/';
+  const uri = `https://cdn.mons.shop/${prefix}`;
+  await assert.rejects(uploadMetadata('/unused', 'sepolia', { prefix }), /retired/);
+  await assert.rejects(restoreMetadata('/unused', 'sepolia', { prefix }), /retired/);
+  let queries = 0;
+  await assert.rejects(acquireMetadataPublicationLease(uri, { query: () => { queries++; return []; } }), /retired/);
+  assert.equal(queries, 0);
+  assertMetadataPublicationAllowed('https://cdn.mons.shop/111k/reliquaries-v1/');
+  assertMetadataPublicationAllowed('https://cdn.mons.shop/111k-sepolia/current/');
+});
 
 async function publicationFixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), '111k-publication-'));

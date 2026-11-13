@@ -171,7 +171,9 @@ test('finalize CLI is explicit and defaults to a read-only plan', () => {
   assert.equal(parse111kReplacementCleanupArgs(['finalize', '--release-directory', '/private/release', '--write']).write, true);
   assert.deepEqual(parse111kReplacementCleanupArgs(['cancel', '--release-directory', '/private/release']),
     { releaseDirectory: '/private/release', write: false, cancel: true });
-  for (const argv of [[], ['finalize'], ['finalize', '--manifest', '/x'], ['finalize', '--release-directory', '/x', '--release-directory', '/y']]) {
+  for (const argv of [[], ['finalize'], ['finalize', '--manifest', '/x'], ['finalize', '--release-directory', '/x', '--release-directory', '/y'],
+    ...['plan', 'apply', 'verify'].map(command => [command, '--manifest', '/x']),
+    ...['plan', 'apply', 'verify'].map(command => [command, '--release-directory', '/x'])]) {
     assert.throws(() => parse111kReplacementCleanupArgs(argv));
   }
 });

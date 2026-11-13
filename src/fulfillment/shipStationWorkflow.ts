@@ -10,7 +10,7 @@ import type { FulfillmentShipStationAddressCorrectionSession } from '../lib/fulf
 import { normalizeOptionalFulfillmentTrackingCode } from '../../shared/fulfillmentTracking.ts';
 import { defaultShipStationPackage } from '../../shared/shipstationPackage.js';
 import { buildShipStationCustomsDeclaration } from '../../shared/shipstationCustoms.js';
-import { parseShipStationShipTo } from '../../shared/shipstationRates.js';
+import { parseShipStationShipTo } from '../../shared/shipstationAddress.js';
 import { normalizeCountryCode } from '../../shared/countryNormalization.ts';
 
 export type ShipStationPackageDraft = { length: string; width: string; height: string; weight: string };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseShipStationShipTo, validateShipStationShipTo } from '../shared/shipstationRates.ts';
+import { parseShipStationShipTo, validateShipStationShipTo } from '../shared/shipstationAddress.ts';
 
 import {
   fulfillmentShipStationAddressCanRetry,

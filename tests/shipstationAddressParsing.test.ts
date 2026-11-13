@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import {
   getShipStationShipmentById,
+} from '../shared/shipstationRates.ts';
+import {
   parseShipStationShipTo,
   validateShipStationShipTo,
   type ShipStationAddress,
-} from '../shared/shipstationRates.ts';
+} from '../shared/shipstationAddress.ts';
 
 function address(locality: string, country: string): string {
   return `Morgan Example\n12 Example Street\n${locality}\n${country}`;

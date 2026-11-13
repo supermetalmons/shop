@@ -93,7 +93,7 @@ import {
 } from '../cloud/workers/api/src/bubblegum.ts';
 import { COUNTRIES } from '../src/lib/countries.ts';
 import { isManualReviewCheckout, manualReviewCheckoutFromRecord } from '../shared/fulfillmentReadModel.ts';
-import { parseShipStationShipTo } from '../shared/shipstationRates.ts';
+import { parseShipStationShipTo } from '../shared/shipstationAddress.ts';
 
 function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));

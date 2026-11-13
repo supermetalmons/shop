@@ -10,13 +10,15 @@ import {
   createShipStationShipment,
   getShipStationShipmentByExternalId,
   parseShipStationShipFrom,
-  parseShipStationShipTo,
-  validateShipStationShipTo,
   shipStationExternalId,
   shipStationPackageDetails,
   ShipStationRatesProviderError,
-  type ShipStationAddress,
 } from '../../../../../shared/shipstationRates.js';
+import {
+  parseShipStationShipTo,
+  validateShipStationShipTo,
+  type ShipStationAddress,
+} from '../../../../../shared/shipstationAddress.js';
 import {
   defaultShipStationPackage,
   normalizeShipStationPackage,

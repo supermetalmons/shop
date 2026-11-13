@@ -15,7 +15,7 @@ import {
 import { normalizeBoxDisplayImage } from '../src/lib/dropContent.ts';
 import { figureMetadataCacheKey } from '../src/lib/figureMetadata.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
-import { parseShipStationShipTo } from '../shared/shipstationRates.ts';
+import { parseShipStationShipTo } from '../shared/shipstationAddress.ts';
 import {
   filterFulfillmentOrdersByVisibility,
 } from '../src/lib/fulfillmentOrderVisibility.ts';

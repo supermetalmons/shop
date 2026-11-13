@@ -3,7 +3,7 @@ import test, { afterEach, mock } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { useCallback, useState } from 'react';
 import { fulfillmentOrderKey } from '../src/fulfillment/orders.ts';
-import { parseShipStationShipTo, validateShipStationShipTo } from '../shared/shipstationRates.ts';
+import { parseShipStationShipTo, validateShipStationShipTo } from '../shared/shipstationAddress.ts';
 import type {
   FulfillmentOrder,
   FulfillmentShipStationRate,

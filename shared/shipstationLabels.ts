@@ -1,12 +1,9 @@
+import { createShipStationTransport, type ShipStationClientOptions, type ShipStationProviderErrorCode } from './shipstationTransport.ts';
 import type {
   FulfillmentShipStationLabel,
   ShipStationMoney,
 } from './contracts.ts';
 import { shipStationErrorDetails, type ShipStationErrorDiagnostics } from './shipstationErrors.ts';
-
-const SHIPSTATION_API_BASE = 'https://api.shipstation.com/v2';
-const SHIPSTATION_LABEL_TIMEOUT_MS = 15_000;
-const SHIPSTATION_LABEL_MAX_RESPONSE_BYTES = 256 * 1024;
 
 export type ShipStationLabelResult = {
   label: FulfillmentShipStationLabel;
@@ -17,12 +14,7 @@ export type ShipStationLabelVoidResult = {
   alreadyVoided: boolean;
 };
 
-export type ShipStationLabelProviderErrorCode =
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'unavailable'
-  | 'deadline-exceeded'
-  | 'internal';
+export type ShipStationLabelProviderErrorCode = ShipStationProviderErrorCode;
 
 export class ShipStationLabelProviderError extends Error {
   constructor(
@@ -35,17 +27,9 @@ export class ShipStationLabelProviderError extends Error {
   }
 }
 
-type ShipStationLabelProviderFetch = (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>;
+const { request: shipStationLabelFetch, errorForStatus } = createShipStationTransport(ShipStationLabelProviderError, 256 * 1024);
 
-export type ShipStationLabelClientOptions = Readonly<{
-  fetch?: ShipStationLabelProviderFetch;
-  maxResponseBytes?: number;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-}>;
+export type ShipStationLabelClientOptions = ShipStationClientOptions;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -206,124 +190,6 @@ export function storedFulfillmentShipStationLabel(value: unknown): FulfillmentSh
     ...(purchasedAt && purchasedAt > 0 ? { purchasedAt } : {}),
     ...(optionalString(raw.purchasedBy) ? { purchasedBy: optionalString(raw.purchasedBy) } : {}),
   };
-}
-
-async function readBoundedText(response: Response, maxBytes: number, signal: AbortSignal): Promise<string> {
-  const contentLength = Number(response.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new ShipStationLabelProviderError('unavailable', 'ShipStation returned an oversized response');
-  }
-  if (!response.body) return '';
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const chunk = await reader.read();
-      if (signal.aborted) throw signal.reason;
-      if (chunk.done) break;
-      size += chunk.value.byteLength;
-      if (size > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new ShipStationLabelProviderError('unavailable', 'ShipStation returned an oversized response');
-      }
-      chunks.push(chunk.value);
-    }
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-    reader.releaseLock();
-  }
-  const merged = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(merged);
-}
-
-function errorForStatus(
-  status: number,
-  value: unknown,
-  operation: string,
-): ShipStationLabelProviderError {
-  const details = shipStationErrorDetails(value, 'ShipStation returned an unrecognized error.', status);
-  const { message } = details;
-  const diagnostics = { ...details.diagnostics, operation };
-  if (status === 401 || status === 403) {
-    return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the API key during ${operation}: ${message}`, diagnostics);
-  }
-  if (status === 429) {
-    return new ShipStationLabelProviderError('resource-exhausted', `ShipStation rate limit during ${operation}: ${message}`, diagnostics);
-  }
-  if (status >= 500) {
-    return new ShipStationLabelProviderError('unavailable', `ShipStation is unavailable during ${operation}: ${message}`, diagnostics);
-  }
-  return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the ${operation}: ${message}`, diagnostics);
-}
-
-async function shipStationLabelFetch(
-  apiKey: string,
-  path: string,
-  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown },
-  options: ShipStationLabelClientOptions,
-): Promise<{ status: number; json: unknown }> {
-  const providerFetch = options.fetch ?? fetch;
-  const controller = new AbortController();
-  const forwardAbort = () => controller.abort(options.signal?.reason);
-  if (options.signal?.aborted) forwardAbort();
-  else options.signal?.addEventListener('abort', forwardAbort, { once: true });
-  const timer = setTimeout(
-    () => controller.abort(new DOMException('ShipStation request timed out', 'TimeoutError')),
-    options.timeoutMs ?? SHIPSTATION_LABEL_TIMEOUT_MS,
-  );
-  try {
-    const response = await providerFetch(`${SHIPSTATION_API_BASE}${path}`, {
-      method: init.method,
-      headers: {
-        'API-Key': apiKey,
-        Accept: 'application/json',
-        ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-      redirect: 'manual',
-      signal: controller.signal,
-    });
-    const text = await readBoundedText(
-      response,
-      options.maxResponseBytes ?? SHIPSTATION_LABEL_MAX_RESPONSE_BYTES,
-      controller.signal,
-    );
-    let json: unknown = null;
-    if (text) {
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = null;
-      }
-    }
-    return { status: response.status, json };
-  } catch (error) {
-    if (error instanceof ShipStationLabelProviderError) throw error;
-    if (options.signal?.aborted && error === options.signal.reason) throw error;
-    throw new ShipStationLabelProviderError(
-      controller.signal.aborted ? 'deadline-exceeded' : 'unavailable',
-      controller.signal.aborted ? 'ShipStation request timed out' : 'Could not reach ShipStation',
-    );
-  } finally {
-    clearTimeout(timer);
-    options.signal?.removeEventListener('abort', forwardAbort);
-  }
 }
 
 export async function listShipStationLabelsForShipment(

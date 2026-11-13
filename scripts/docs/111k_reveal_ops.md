@@ -525,19 +525,14 @@ for `finalize` and never reactivates the old deployment.
 
 ### November 8 cleanup tooling
 
-The [cleanup record](../../releases/111k-testnet-cleanup-2026-11-08/README.md) tracks the approved removal of deployments preceding v16. This operation creates no archive. It preserves the current collection, mainnet and pre111k data, shared media, and the deployment ownership records that permanently reserve retired IDs and prefixes.
+The [cleanup record](../../releases/111k-testnet-cleanup-2026-11-08/README.md) records
+the completed removal of deployments preceding v16, including its exact manifests,
+verification evidence, and historical tooling revision. The fixed v16
+`plan`/`apply`/`verify` commands and one-off artifact pruner have been retired from
+the active tools. Use replacement finalization above for current releases.
 
-The version-1 `plan`/`apply`/`verify` commands below remain specific to that
-historical v16 cleanup. Use replacement finalization above for future releases;
-changing a version-1 manifest does not retarget its fixed scope.
-
-```sh
-npm run cleanup:ethereum111k -- plan --manifest '<reviewed-retirement-manifest.json>'
-npm run cleanup:ethereum111k -- apply --manifest '<reviewed-retirement-manifest.json>' --write
-npm run cleanup:ethereum111k -- verify --manifest '<reviewed-retirement-manifest.json>'
-```
-
-Apply only the reviewed manifest after confirming its protected v16 identity and exact retired contracts and prefixes. Deployment and publication guards must be active before the maintenance service purges old Durable Object data. The private `EthereumRevealMaintenance.purgeRetired({ deploymentId, expectedRevision })` operation retains registry ownership records; retirement does not free an ID or prefix for reuse. Verification must show the retired data is absent and current v16 behavior is intact before local release trees, scratch files, and obsolete backups are pruned.
+The permanent deployment ownership records and retired-preview publication block
+remain active. Retirement never frees a deployment ID or metadata prefix for reuse.
 
 After purging, do not roll back to Worker or publication tooling that ignores `retired_at_ms`, including the historical catalog-only retirement implementation. Preserve the Commerce retirement fences and their recovery support as well. Older code could recreate removed prefixes or accept work for deleted ledgers. Use a forward fix that preserves the permanent marker and writer guards. Never reset the current collection or restore an older active ledger without reconciling every published immutable assignment.
 

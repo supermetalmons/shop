@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { DropFamily } from '../shared/deploymentCore.ts';
-import { parseShipStationShipTo } from '../shared/shipstationRates.ts';
+import { parseShipStationShipTo } from '../shared/shipstationAddress.ts';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window });

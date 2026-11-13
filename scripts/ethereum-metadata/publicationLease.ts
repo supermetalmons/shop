@@ -28,10 +28,6 @@ export async function acquireMetadataPublicationLease(metadataBaseUri: string, o
   return acquireLease(metadataBaseUri, options);
 }
 
-export async function acquireRetired111kPreviewCleanupLease(options: LeaseOptions = {}): Promise<MetadataPublicationLease> {
-  return acquireLease(RETIRED_PREVIEW, options);
-}
-
 async function acquireLease(metadataBaseUri: string, options: LeaseOptions): Promise<MetadataPublicationLease> {
   const query = options.query ?? createAsyncD1MaintenanceQuery('ops');
   const now = options.now ?? (() => performance.now());

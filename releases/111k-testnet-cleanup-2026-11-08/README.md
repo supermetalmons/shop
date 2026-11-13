@@ -2,6 +2,17 @@
 
 **Completed and verified.**
 
+The fixed v16 cleanup commands and one-off artifact pruner were retired from the
+active tools on November 13, 2026. Their exact pre-removal source is preserved at
+[`672e6da337c7f37f5370aecab69f9be438a53001`](https://github.com/supermetalmons/shop/tree/672e6da337c7f37f5370aecab69f9be438a53001):
+[backend cleanup](https://github.com/supermetalmons/shop/blob/672e6da337c7f37f5370aecab69f9be438a53001/scripts/ops/cleanupEthereum111k.ts),
+[local artifact pruner](https://github.com/supermetalmons/shop/blob/672e6da337c7f37f5370aecab69f9be438a53001/scripts/ops/pruneRetired111kArtifacts.mjs),
+and [matching runbook](https://github.com/supermetalmons/shop/blob/672e6da337c7f37f5370aecab69f9be438a53001/scripts/docs/111k_reveal_ops.md#november-8-cleanup-tooling).
+These tools describe this completed operation. Current replacements use the
+[automatic finalizer](../../scripts/docs/111k_reveal_ops.md#automatic-finalization).
+The manifests and verification records below remain unchanged, as do permanent
+ownership tombstones, retirement guards, and the retired-preview publication block.
+
 The cleanup retains Sepolia v16 at
 `0x938b6a488951b2797b29284d6939dd70efe146a0`, metadata prefix
 `111k-sepolia/v16/`, and catalog `111k-v5`. Earlier testnet metadata, reveal state,
