@@ -19,7 +19,10 @@ import { miNoteDropFixture } from './helpers/miNoteDropFixture.ts';
 import { verifyMiNoteMintResources } from '../scripts/shared/miNoteMintResources.ts';
 import { preparePreorderCollectionConfig } from '../scripts/shared/preorderCollectionConfig.ts';
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards_devnet.ts';
-import { bubblegumTreeConfigPda, getConcurrentMerkleTreeAccountSize } from '../scripts/deploy-all-onchain.ts';
+import {
+  bubblegumTreeConfigPda,
+  getConcurrentMerkleTreeAccountSize,
+} from '../scripts/shared/receiptTree.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS, MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS, MPL_CORE_CPI_SIGNER_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS, SPL_NOOP_PROGRAM_ADDRESS,

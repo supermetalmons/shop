@@ -17,11 +17,14 @@ import {
   bubblegumTreeConfigPda,
   decodeReceiptTreeState,
   getConcurrentMerkleTreeAccountSize,
-} from '../deploy-all-onchain.ts';
-import { validatePreorderCollectionAccount } from '../deploy-preorder-collection.ts';
+} from './receiptTree.ts';
+import { validatePreorderCollectionAccount } from './preorderCollectionValidation.ts';
 import { closedMiNotePreorderConfig } from './miNoteDropManifest.ts';
 import type { PreparedPreorderCollectionConfig } from './preorderCollectionConfig.ts';
-import type { TwoConfigDeploymentPlan, TwoConfigJournalTransaction } from '../deploy-two-config-drop.ts';
+import {
+  buildTwoConfigDelegateUpdateInstruction, validateTwoConfigJournalTransaction,
+  type TwoConfigDeploymentPlan, type TwoConfigJournalTransaction,
+} from './twoConfigDeployment.ts';
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -63,7 +66,6 @@ export async function resolveMiNoteCollectionDelegates(
   const entry = record.transactions.findLast(value => object(value) && value.step === 'delegates' &&
     (value.status === 'finalized' || value.status === 'state-verified'));
   if (!entry) return approvedDelegates(required, required);
-  const { validateTwoConfigJournalTransaction, buildTwoConfigDelegateUpdateInstruction } = await import('../deploy-two-config-drop.ts');
   const transaction = validateTwoConfigJournalTransaction(entry as TwoConfigJournalTransaction, authority);
   const data = TransactionMessage.decompile(transaction.message).instructions[1]?.data;
   if (!data || data.length < 6 || data[0] !== IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1 || data[1] !== 4 ||

@@ -9,7 +9,9 @@ import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../shared/pendingOpenCodec.ts
 import { closedMiNotePreorderConfig, MI_NOTE_CLUSTER_GENESIS, miNoteReadOnlyConnection, type MiNoteDropManifest } from './miNoteDropManifest.ts';
 import { queryRemoteOpsD1 } from './opsD1Maintenance.ts';
 import { sqlString } from './commerceD1Maintenance.ts';
-import { assertExistingConfigMatchesResume } from '../deploy-all-onchain.ts';
+import {
+  assertExistingConfigMatchesResume,
+} from './boxMinterDeployment.ts';
 
 function inventoryRoles(drop: DeploymentRegistryDrop | undefined, manifest: MiNoteDropManifest) {
   const preorder = closedMiNotePreorderConfig(manifest.sourcePreorder.preorderId);

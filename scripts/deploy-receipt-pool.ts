@@ -42,6 +42,8 @@ import {
   promptYConfirmation,
 } from './shared/interactive.ts';
 import {
+  assertReceiptPoolRpcGenesisHash,
+  type ReceiptPoolSolanaCluster,
   receiptPoolJournalPathSegment,
   requireReceiptPoolSpec,
   type ReceiptPoolSpec,
@@ -52,7 +54,7 @@ import {
   buildCreateBubblegumTreeConfigV2Ix,
   getConcurrentMerkleTreeAccountSize,
   validateReceiptPoolDeploymentOnchain,
-} from './deploy-all-onchain.ts';
+} from './shared/receiptTree.ts';
 
 type ReceiptPoolDeployJournal = {
   version: 1;
@@ -74,30 +76,6 @@ export type ReceiptPoolJournalRetryState =
 
 export const RECEIPT_POOL_FINALIZED_COMMITMENT =
   'finalized' as const satisfies Commitment;
-
-export type ReceiptPoolSolanaCluster = Extract<
-  SolanaCluster,
-  'devnet' | 'mainnet-beta'
->;
-
-export const RECEIPT_POOL_CLUSTER_GENESIS_HASHES: Readonly<
-  Record<ReceiptPoolSolanaCluster, string>
-> = {
-  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
-  'mainnet-beta': '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
-};
-
-export function assertReceiptPoolRpcGenesisHash(args: {
-  solanaCluster: ReceiptPoolSolanaCluster;
-  genesisHash: string;
-}): void {
-  const expected = RECEIPT_POOL_CLUSTER_GENESIS_HASHES[args.solanaCluster];
-  if (args.genesisHash !== expected) {
-    throw new Error(
-      `Receipt pool RPC genesis hash mismatch for ${args.solanaCluster}: expected ${expected}, got ${args.genesisHash}`,
-    );
-  }
-}
 
 export function classifyReceiptPoolJournalRetry(args: {
   collectionExists: boolean;

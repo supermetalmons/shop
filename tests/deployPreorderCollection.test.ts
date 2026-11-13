@@ -9,9 +9,9 @@ import {
   assertPreorderCollectionMetadata,
   parsePreorderCollectionArgs,
   runPreorderCollectionDeployment,
-  validatePreorderCollectionAccount,
   type PreorderCollectionDeployDependencies,
 } from '../scripts/deploy-preorder-collection.ts';
+import { validatePreorderCollectionAccount } from '../scripts/shared/preorderCollectionValidation.ts';
 import {
   preparePreorderCollectionConfig,
   type PreparedPreorderCollectionConfig,

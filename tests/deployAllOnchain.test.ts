@@ -16,26 +16,34 @@ import {
 } from '../scripts/shared/mplCoreCollection.ts';
 import {
   assertCollectionRoyaltyCreatorsUnchanged,
-  assertExistingConfigMatchesResume,
-  assertReceiptPoolCollectionUpdateDelegatePolicy,
   assertReceiptPoolCapacity,
   assertReceiptMetadataRange,
   commitDeploymentRegistry,
+  formatFreshProgramKeypairNotice,
+  prepareStripeCheckoutConfig,
+  revalidateReusableProgramResolution,
+} from '../scripts/deploy-all-onchain.ts';
+import {
+  assertExistingConfigMatchesResume,
   buildInitializeIx,
   buildInitializeSplitPaymentsV1Ix,
   buildSplitPaymentsV1CapabilityIx,
   decodeBoxMinterConfigForDeployPreflight,
-  decodeReceiptTreeState,
-  finalizeDiscountMerkleAndDeploymentRegistry,
-  formatFreshProgramKeypairNotice,
   IX_INITIALIZE_SPLIT_PAYMENTS_V1,
   IX_SPLIT_PAYMENTS_V1_CAPABILITY,
-  prepareStripeCheckoutConfig,
-  registerDeploymentCleanup,
-  revalidateReusableProgramResolution,
+} from '../scripts/shared/boxMinterDeployment.ts';
+import {
+  assertReceiptPoolCollectionUpdateDelegatePolicy,
+  decodeReceiptTreeState,
   validateReceiptPoolDeploymentOnchain,
+} from '../scripts/shared/receiptTree.ts';
+import {
+  finalizeDiscountMerkleAndDeploymentRegistry,
   validateDiscountMerkleDatasetForDeploy,
-} from '../scripts/deploy-all-onchain.ts';
+} from '../scripts/shared/deploymentDiscounts.ts';
+import {
+  registerDeploymentCleanup,
+} from '../scripts/shared/deploymentCleanup.ts';
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
@@ -45,12 +53,10 @@ import {
   BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION,
 } from '../shared/boxMinterConfigCodec.ts';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
-import { MONS_SHOP_RECEIPTS_POOL_ID } from '../scripts/shared/receiptPoolConfig.ts';
+import { MONS_SHOP_RECEIPTS_POOL_ID, assertReceiptPoolRpcGenesisHash, RECEIPT_POOL_CLUSTER_GENESIS_HASHES } from '../scripts/shared/receiptPoolConfig.ts';
 import {
-  assertReceiptPoolRpcGenesisHash,
   classifyReceiptPoolJournalRetry,
   completeReceiptPoolJournal,
-  RECEIPT_POOL_CLUSTER_GENESIS_HASHES,
   RECEIPT_POOL_FINALIZED_COMMITMENT,
 } from '../scripts/deploy-receipt-pool.ts';
 import {

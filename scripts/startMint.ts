@@ -18,8 +18,10 @@ import {
 } from '../shared/deploymentCore.ts';
 import { BOX_MINTER_CONFIG_SEED } from '../shared/boxMinterProtocol.ts';
 import type { DeploymentRegistryDrop } from '../shared/deploymentRegistry.ts';
-import { assertReceiptPoolRpcGenesisHash } from './deploy-receipt-pool.ts';
-import { registerDeploymentCleanup } from './deploy-all-onchain.ts';
+import { assertReceiptPoolRpcGenesisHash } from './shared/receiptPoolConfig.ts';
+import {
+  registerDeploymentCleanup,
+} from './shared/deploymentCleanup.ts';
 import { createScriptSolanaConnection, scriptSolanaRpcHost, type ScriptSolanaRpcOptions } from './shared/solanaRpcEnvironment.ts';
 import {
   buildMintActivationTransaction, inspectMintActivationAttempt, readMintActivationJournal,

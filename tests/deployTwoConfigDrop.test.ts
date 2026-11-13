@@ -20,12 +20,15 @@ import { readDeploymentDropRegistry } from '../scripts/shared/deploymentRegistry
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards.ts';
 import { NEW_PREORDER_COLLECTION as DEVNET_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards_devnet.ts';
 import { decodeMplCoreCollectionUpdateDelegates } from '../scripts/shared/mplCoreCollection.ts';
-import { bubblegumTreeConfigPda } from '../scripts/deploy-all-onchain.ts';
+import { bubblegumTreeConfigPda } from '../scripts/shared/receiptTree.ts';
 import {
-  buildTwoConfigDelegateUpdateInstruction, createTwoConfigDeploymentPlan, inspectTwoConfigJournalTransaction,
-  parseTwoConfigDeploymentArgs, runTwoConfigDropDeployment, validateTwoConfigJournalTransaction,
-  type TwoConfigDeploymentDependencies, type TwoConfigDeploymentPlan, type TwoConfigJournalTransaction,
+  createTwoConfigDeploymentPlan, parseTwoConfigDeploymentArgs, runTwoConfigDropDeployment,
+  type TwoConfigDeploymentDependencies,
 } from '../scripts/deploy-two-config-drop.ts';
+import {
+  buildTwoConfigDelegateUpdateInstruction, inspectTwoConfigJournalTransaction, validateTwoConfigJournalTransaction,
+  type TwoConfigDeploymentPlan, type TwoConfigJournalTransaction,
+} from '../scripts/shared/twoConfigDeployment.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS, MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS, MPL_CORE_PROGRAM_ADDRESS,
 } from '../shared/solanaProgramAddresses.ts';

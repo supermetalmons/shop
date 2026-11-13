@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { Keypair, SystemProgram } from '@solana/web3.js';
-import { buildDiscountMerkleData, prepareInitDropInputs } from '../scripts/deploy-all-onchain.ts';
+import {
+  buildDiscountMerkleData,
+  prepareInitDropInputs,
+} from '../scripts/shared/deploymentDiscounts.ts';
 import { resolveDeploymentDiscountAddresses } from '../scripts/shared/deploymentDiscounts.ts';
 import { validateDiscountMerkleFamilyRootInvariant } from '../scripts/shared/discountMerkleDataset.ts';
 import type { NewDropOnchainConfig } from '../scripts/shared/newDropConfig.ts';

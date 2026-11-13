@@ -1,6 +1,4 @@
-import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
 import { matchesCommittedDropConfig } from './committedDropConfig.js';
-import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { z } from 'zod';
 import {
   type AddressLookupTableAccount,
@@ -26,10 +24,6 @@ import {
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
 import { readBoxMinterConfig } from './boxMinterConfigRead.js';
-import {
-  BOX_MINTER_CONFIG_SEED,
-  isConfiguredBoxMinterItemsPerBox,
-} from '../../../../shared/boxMinterProtocol.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
@@ -85,6 +79,7 @@ import {
 } from './solanaReadProvider.js';
 import { readLatestBlockhash, readSolanaLookupTable } from './solanaRpcReads.js';
 import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
+import { buildReceiptDropRuntime } from './solanaDropRuntime.js';
 
 export const RECEIPT_TRANSFER_PREPARE_PATH = '/receipts/transfer/prepare';
 
@@ -204,59 +199,12 @@ function canonicalPublicKey(value: string, label: string): PublicKey {
   }
 }
 
-function configuredPublicKey(label: string, value: string | undefined, required = true): PublicKey | undefined {
-  const normalized = String(value || '').trim();
-  if (!normalized) {
-    if (!required) return undefined;
-    throw new ReceiptTransferError('failed-precondition', `${label} is not configured.`);
-  }
-  try {
-    const key = new PublicKey(normalized);
-    if (required && key.equals(PublicKey.default)) {
-      throw new ReceiptTransferError('failed-precondition', `${label} is not configured.`);
-    }
-    return key;
-  } catch (error) {
-    if (error instanceof ReceiptTransferError) throw error;
-    throw new ReceiptTransferError('failed-precondition', `${label} is invalid.`);
-  }
-}
-
 function buildRuntime(config: ApiDropConfig): ReceiptTransferRuntime {
-  const dropId = normalizeDropId(config.dropId);
-  const maxSupply = Number(config.maxSupply);
-  const itemsPerBox = Number(config.itemsPerBox);
-  const receiptMaxId = Number(config.receiptMaxId ?? maxSupply);
-  const maxDudeId = resolveDropMaxFigureId(config);
-  const receiptsTreeMaxDepth = Number(config.receiptsTreeMaxDepth);
-  const receiptsTreeCanopyDepth = Number(config.receiptsTreeCanopyDepth ?? 0);
-  if (
-    !Number.isInteger(maxSupply) || maxSupply < 1 ||
-    !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
-    !Number.isInteger(receiptMaxId) || receiptMaxId < maxSupply || receiptMaxId > 0xffff_ffff ||
-    !Number.isSafeInteger(maxDudeId) || maxDudeId > 0xffff ||
-    !Number.isInteger(receiptsTreeCanopyDepth) || receiptsTreeCanopyDepth < 0 ||
-    (Number.isInteger(receiptsTreeMaxDepth) && receiptsTreeCanopyDepth >= receiptsTreeMaxDepth)
-  ) {
-    throw new ReceiptTransferError('failed-precondition', 'Receipt transfer drop configuration is invalid.', { dropId });
-  }
-  const boxMinterProgramId = configuredPublicKey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId)!;
-  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', resolveDropConfigRole(config, 'operations').boxMinterConfigPda, false) ||
-    PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
-  return {
-    config,
-    dropId,
-    cluster: config.solanaCluster,
-    boxMinterProgramId,
-    boxMinterConfigPda,
-    collectionMint: configuredPublicKey('COLLECTION_MINT', config.collectionMint)!,
-    receiptsMerkleTree: configuredPublicKey('RECEIPTS_MERKLE_TREE', config.receiptsMerkleTree)!,
-    deliveryLookupTable: configuredPublicKey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable, false),
-    ...(Number.isInteger(receiptsTreeMaxDepth) && receiptsTreeMaxDepth > 0 ? { receiptsTreeMaxDepth } : {}),
-    receiptsTreeCanopyDepth,
-    receiptMaxId,
-    maxDudeId,
-  };
+  const { itemsPerBox: _itemsPerBox, maxSupply: _maxSupply, ...runtime } = buildReceiptDropRuntime(config, {
+    error: ReceiptTransferError,
+    invalidConfigurationMessage: 'Receipt transfer drop configuration is invalid.',
+  });
+  return runtime;
 }
 
 function provider(context: ProviderContext, runtime: ReceiptTransferRuntime) {

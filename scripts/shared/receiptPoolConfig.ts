@@ -74,3 +74,27 @@ export function receiptPoolJournalPathSegment(args: {
   const spec = requireReceiptPoolSpec(args.receiptPoolId);
   return `${args.solanaCluster}-${spec.receiptPoolId}`;
 }
+
+export type ReceiptPoolSolanaCluster = Extract<
+  SolanaCluster,
+  'devnet' | 'mainnet-beta'
+>;
+
+export const RECEIPT_POOL_CLUSTER_GENESIS_HASHES: Readonly<
+  Record<ReceiptPoolSolanaCluster, string>
+> = {
+  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+  'mainnet-beta': '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
+};
+
+export function assertReceiptPoolRpcGenesisHash(args: {
+  solanaCluster: ReceiptPoolSolanaCluster;
+  genesisHash: string;
+}): void {
+  const expected = RECEIPT_POOL_CLUSTER_GENESIS_HASHES[args.solanaCluster];
+  if (args.genesisHash !== expected) {
+    throw new Error(
+      `Receipt pool RPC genesis hash mismatch for ${args.solanaCluster}: expected ${expected}, got ${args.genesisHash}`,
+    );
+  }
+}

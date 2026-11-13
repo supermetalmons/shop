@@ -8,7 +8,9 @@ import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
 } from '../shared/boxMinterConfigCodec.ts';
-import { decodeBoxMinterConfigForDeployPreflight } from '../scripts/deploy-all-onchain.ts';
+import {
+  decodeBoxMinterConfigForDeployPreflight,
+} from '../scripts/shared/boxMinterDeployment.ts';
 import { decodeBoxMinterConfigForPriceUpdate } from '../scripts/setMintPrices.ts';
 import { decodeStartMintMetadataBase } from '../scripts/startMint.ts';
 

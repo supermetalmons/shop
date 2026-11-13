@@ -1,5 +1,3 @@
-import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
-import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import { z } from 'zod';
@@ -23,7 +21,6 @@ import { readBoxMinterConfig } from './boxMinterConfigRead.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   isBoxMinterDiscountMintsPerWallet,
-  isConfiguredBoxMinterItemsPerBox,
 } from '../../../../shared/boxMinterProtocol.js';
 import type {
   PrepareDeliveryRequest,
@@ -92,6 +89,7 @@ import {
 } from './profileD1.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
+import { buildDeliveryDropRuntime, configuredDropPublicKey } from './solanaDropRuntime.js';
 
 import { DeliveryPrepareError } from './deliveryPrepareErrors.js';
 import {
@@ -252,50 +250,13 @@ function canonicalPublicKey(value: string, label: string): PublicKey {
   }
 }
 
-function configuredPublicKey(label: string, value: string | undefined, required = true): PublicKey | undefined {
-  const normalized = String(value || '').trim();
-  if (!normalized) {
-    if (!required) return undefined;
-    throw new DeliveryPrepareError('failed-precondition', `${label} is not configured.`);
-  }
-  try {
-    const key = new PublicKey(normalized);
-    if (required && key.equals(PublicKey.default)) {
-      throw new DeliveryPrepareError('failed-precondition', `${label} is not configured.`);
-    }
-    return key;
-  } catch (error) {
-    if (error instanceof DeliveryPrepareError) throw error;
-    throw new DeliveryPrepareError('failed-precondition', `${label} is invalid.`);
-  }
-}
-
 function buildRuntime(config: ApiDropConfig): DeliveryRuntime {
-  const dropId = normalizeDropId(config.dropId);
-  const itemsPerBox = Number(config.itemsPerBox);
-  const maxSupply = Number(config.maxSupply);
-  const maxDudeId = resolveDropMaxFigureId(config);
-  if (
-    !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
-    !Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff ||
-    !Number.isSafeInteger(maxDudeId) || maxDudeId > 0xffff
-  ) {
-    throw new DeliveryPrepareError('failed-precondition', 'Delivery drop configuration is invalid.', { dropId });
-  }
-  const boxMinterProgramId = configuredPublicKey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId)!;
-  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', resolveDropConfigRole(config, 'operations').boxMinterConfigPda, false) ||
-    PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
   return {
-    config,
-    dropId,
-    cluster: config.solanaCluster,
-    boxMinterProgramId,
-    boxMinterConfigPda,
-    collectionMint: configuredPublicKey('COLLECTION_MINT', config.collectionMint)!,
-    deliveryLookupTable: configuredPublicKey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable, false),
-    itemsPerBox,
-    maxSupply,
-    maxDudeId,
+    ...buildDeliveryDropRuntime(config, {
+      error: DeliveryPrepareError,
+      invalidConfigurationMessage: 'Delivery drop configuration is invalid.',
+    }),
+    deliveryLookupTable: configuredDropPublicKey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable, DeliveryPrepareError, false),
   };
 }
 

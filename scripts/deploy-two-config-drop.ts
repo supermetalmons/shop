@@ -4,7 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import bs58 from 'bs58';
-import nacl from 'tweetnacl';
 import {
   AddressLookupTableAccount, AddressLookupTableProgram, ComputeBudgetProgram, Connection,
   Keypair, PublicKey, SystemInstruction, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction,
@@ -21,27 +20,22 @@ import {
   decodeMplCoreCollectionRoyalties,
   decodeMplCoreCollectionUpdateDelegates,
   IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1,
-  mplCorePluginUpdateDelegate,
   readMplCoreCollectionPluginRecords,
 } from './shared/mplCoreCollection.ts';
+import { assertExistingConfigMatchesResume, buildInitializeSplitPaymentsV1Ix } from './shared/boxMinterDeployment.ts';
 import {
-  assertExistingConfigMatchesResume,
-  bubblegumTreeConfigPda,
-  buildCreateBubblegumTreeConfigV2Ix,
-  buildDiscountMerkleData,
-  buildInitializeSplitPaymentsV1Ix,
-  decodeReceiptTreeState,
-  finalizeDiscountMerkleAndDeploymentRegistry,
-  getConcurrentMerkleTreeAccountSize,
-  registerDeploymentCleanup,
-  validateDiscountMerkleDatasetForDeploy,
-} from './deploy-all-onchain.ts';
+  bubblegumTreeConfigPda, buildCreateBubblegumTreeConfigV2Ix, decodeReceiptTreeState, getConcurrentMerkleTreeAccountSize,
+} from './shared/receiptTree.ts';
+import { registerDeploymentCleanup } from './shared/deploymentCleanup.ts';
 import {
   acquireDeploymentRegistryMutationLock, normalizeAndValidateDropId, normalizeDeploymentDropForRegistry, readDeploymentDropRegistry,
   renderDeploymentRegistryFileFromSource, writeDeploymentRegistryFile, type DeploymentDropConfigSerialized,
 } from './shared/deploymentRegistry.ts';
 import { loadNewDropConfigById } from './shared/newDropLoader.ts';
-import { resolveDeploymentDiscountAddresses } from './shared/deploymentDiscounts.ts';
+import {
+  buildDiscountMerkleData, finalizeDiscountMerkleAndDeploymentRegistry,
+  resolveDeploymentDiscountAddresses, validateDiscountMerkleDatasetForDeploy,
+} from './shared/deploymentDiscounts.ts';
 import { createScriptSolanaConnection, resolveScriptSolanaRpcUrl, scriptSolanaRpcHost } from './shared/solanaRpcEnvironment.ts';
 import type { NewDropConfig } from './shared/newDropConfig.ts';
 import { loadPreorderCollectionConfig, type PreparedPreorderCollectionConfig } from './shared/preorderCollectionConfig.ts';
@@ -51,6 +45,12 @@ import {
   verifyMiNoteDropManifest, type MiNoteDropManifest,
 } from './shared/miNoteDropManifest.ts';
 import { verifyTwoConfigGateForDeployment } from './verify-two-config-programs.ts';
+import {
+  buildTwoConfigDelegateUpdateInstruction, inspectTwoConfigJournalTransaction, validateTwoConfigJournalTransaction,
+  type TwoConfigDeploymentCluster as Cluster, type TwoConfigDeploymentStep as StepKind,
+  type TwoConfigDeploymentPlan, type TwoConfigJournalTransaction,
+} from './shared/twoConfigDeployment.ts';
+import { resolveMiNoteCollectionDelegates } from './shared/miNoteMintResources.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const USAGE = 'npm run deploy-two-config-drop -- <dropId> --manifest <inventory.json> [--write] [--yes] [--allow-mainnet]';
@@ -61,8 +61,6 @@ const APPROVED_PROGRAMS = {
 const CORE_PROGRAM = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const COMPRESSION_PROGRAM = new PublicKey(MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS);
 const TREE = { maxDepth: 14, maxBufferSize: 64, canopyDepth: 0 } as const;
-type Cluster = keyof typeof APPROVED_PROGRAMS;
-type StepKind = 'delegates' | 'mint-config' | 'operations-config' | 'receipt-tree' | 'lookup-table';
 
 export type TwoConfigDeploymentArgs = {
   dropId: string;
@@ -91,20 +89,6 @@ export function parseTwoConfigDeploymentArgs(argv: string[]): TwoConfigDeploymen
   if (!dropId || !manifestPath || (allowMainnet || yes) && !write) throw new Error(USAGE);
   return { dropId, manifestPath, write, allowMainnet, yes };
 }
-
-export type TwoConfigDeploymentPlan = {
-  version: 1;
-  dropId: string;
-  cluster: Cluster;
-  authority: string;
-  collection: string;
-  programId: string;
-  mintConfig: { configId: string; boxMinterConfigPda: string; maxSupply: number; itemsPerBox: 0 };
-  operationsConfig: { configId: string; boxMinterConfigPda: string; maxSupply: number; itemsPerBox: 2 };
-  receiptTree: { address: string; seed: string; space: number; maxDepth: 14; maxBufferSize: 64; canopyDepth: 0 };
-  recipeSha256: string;
-  manifestSha256: string;
-};
 
 function digest(value: unknown): string {
   return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
@@ -210,34 +194,6 @@ function inspectCollection(account: AccountInfo<Buffer> | null, plan: TwoConfigD
   return snapshot;
 }
 
-export function buildTwoConfigDelegateUpdateInstruction(plan: TwoConfigDeploymentPlan, delegates: readonly string[]): TransactionInstruction {
-  const union = [...new Set([...delegates, plan.mintConfig.boxMinterConfigPda, plan.operationsConfig.boxMinterConfigPda])];
-  const authority = new PublicKey(plan.authority);
-  return new TransactionInstruction({
-    programId: CORE_PROGRAM,
-    keys: [
-      { pubkey: new PublicKey(plan.collection), isSigner: false, isWritable: true },
-      { pubkey: authority, isSigner: true, isWritable: true },
-      { pubkey: authority, isSigner: true, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: new PublicKey(SPL_NOOP_PROGRAM_ADDRESS), isSigner: false, isWritable: false },
-    ],
-    data: Buffer.concat([Buffer.from([IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1]), mplCorePluginUpdateDelegate(union.map(value => new PublicKey(value)))]),
-  });
-}
-
-export type TwoConfigJournalTransaction = {
-  step: StepKind;
-  signature: string;
-  transactionBase64: string;
-  blockhash: string;
-  lastValidBlockHeight: number;
-  resources: string[];
-  signedAt: string;
-  status: 'signed' | 'finalized' | 'failed' | 'expired' | 'state-verified';
-  finalizedSlot?: number;
-};
-
 type DeploymentJournal = {
   version: 1;
   plan: TwoConfigDeploymentPlan;
@@ -247,36 +203,6 @@ type DeploymentJournal = {
   transactions: TwoConfigJournalTransaction[];
   finalizedSlot?: number;
 };
-
-export function validateTwoConfigJournalTransaction(entry: TwoConfigJournalTransaction, authority: string): VersionedTransaction {
-  if (!['delegates', 'mint-config', 'operations-config', 'receipt-tree', 'lookup-table'].includes(entry.step) ||
-    !['signed', 'finalized', 'failed', 'expired', 'state-verified'].includes(entry.status) ||
-    !Number.isSafeInteger(entry.lastValidBlockHeight) || entry.lastValidBlockHeight < 0 ||
-    !Array.isArray(entry.resources) || entry.resources.some(value => new PublicKey(value).toBase58() !== value) ||
-    !Number.isFinite(Date.parse(entry.signedAt))) throw new Error('Invalid transaction journal entry.');
-  const bytes = Buffer.from(entry.transactionBase64, 'base64');
-  const transaction = VersionedTransaction.deserialize(bytes);
-  if (Buffer.from(transaction.serialize()).toString('base64') !== entry.transactionBase64 ||
-    transaction.message.header.numRequiredSignatures !== 1 || transaction.signatures.length !== 1 ||
-    transaction.message.staticAccountKeys[0].toBase58() !== authority || transaction.message.recentBlockhash !== entry.blockhash ||
-    bs58.encode(transaction.signatures[0]) !== entry.signature ||
-    !nacl.sign.detached.verify(transaction.message.serialize(), transaction.signatures[0], new PublicKey(authority).toBytes())) {
-    throw new Error('Journal transaction bytes or signature do not match the expected authority.');
-  }
-  return transaction;
-}
-
-export async function inspectTwoConfigJournalTransaction(connection: Pick<Connection, 'getSignatureStatuses' | 'getBlockHeight'>,
-  entry: TwoConfigJournalTransaction): Promise<{ status: 'finalized' | 'failed' | 'expired' | 'pending'; slot?: number }> {
-  const read = () => connection.getSignatureStatuses([entry.signature], { searchTransactionHistory: true });
-  let result = (await read()).value[0];
-  if (result?.confirmationStatus === 'finalized') return { status: result.err ? 'failed' : 'finalized', slot: result.slot };
-  if (result) return { status: 'pending' };
-  if (await connection.getBlockHeight('finalized') <= entry.lastValidBlockHeight) return { status: 'pending' };
-  result = (await read()).value[0];
-  if (result?.confirmationStatus === 'finalized') return { status: result.err ? 'failed' : 'finalized', slot: result.slot };
-  return { status: result ? 'pending' : 'expired' };
-}
 
 function writeDurableJson(filePath: string, value: unknown, expectedContent?: string): string {
   const content = `${JSON.stringify(value, null, 2)}\n`;
@@ -742,7 +668,6 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
       if (!previousRecord || !isDeepStrictEqual(previousRecord.plan, plan) || !isDeepStrictEqual(previousRecord.drop, row)) {
         throw new Error('A different public deployment record already exists.');
       }
-      const { resolveMiNoteCollectionDelegates } = await import('./shared/miNoteMintResources.ts');
       if (!isDeepStrictEqual(await resolveMiNoteCollectionDelegates(previousRecord, row, plan.authority), collectionDelegates)) {
         throw new Error('Collection delegates differ from the approved deployment baseline.');
       }

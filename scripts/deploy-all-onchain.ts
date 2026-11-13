@@ -1,27 +1,50 @@
+import {
+  writeDiscountMerkleJson,
+  prepareInitDropInputs,
+  validateDiscountMerkleDatasetForDeploy,
+  finalizeDiscountMerkleAndDeploymentRegistry,
+} from './shared/deploymentDiscounts.ts';
+import {
+  boxMinterConfigPda,
+  decodeBoxMinterConfigForDeployPreflight,
+  assertExistingConfigMatchesResume,
+  buildSplitPaymentsV1CapabilityIx,
+  buildInitializeIx,
+  buildInitializeSplitPaymentsV1Ix,
+} from './shared/boxMinterDeployment.ts';
+import {
+  getConcurrentMerkleTreeAccountSize,
+  bubblegumTreeConfigPda,
+  buildCreateBubblegumTreeConfigV2Ix,
+  validateReceiptPoolDeploymentOnchain,
+} from './shared/receiptTree.ts';
+import { retryRpcRead } from './shared/solanaRpcRead.ts';
+import { requireIntegerInRange, requireDiscountMintsPerWallet } from './shared/deploymentInputValidation.ts';
+import { registerDeploymentCleanup } from './shared/deploymentCleanup.ts';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
-import { isDeepStrictEqual } from 'node:util';
+
 import { loadNewDropConfigById, newDropConfigUsage } from './shared/newDropLoader.ts';
 import type { NewDropOnchainConfig, SolanaCluster } from './shared/newDropConfig.ts';
 import { parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
 import {
-  assertMplCoreCollectionHasUpdateDelegates, buildAddMplCoreCollectionRoyaltiesV1Ix,
-  buildCreateMplCoreCollectionV2Ix, buildUpdateMplCoreCollectionRoyaltiesV1Ix,
-  decodeMplCoreCollectionBase, decodeMplCoreCollectionRoyalties, decodeMplCoreCollectionUpdateAuthority,
-  decodeMplCoreCollectionUpdateDelegates, MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY,
-  parseCollectionRoyaltyCreators, readMplCoreCollectionPluginRecords, type MplCoreRoyaltyCreator,
+  assertMplCoreCollectionHasUpdateDelegates,
+  buildAddMplCoreCollectionRoyaltiesV1Ix,
+  buildCreateMplCoreCollectionV2Ix,
+  buildUpdateMplCoreCollectionRoyaltiesV1Ix,
+  decodeMplCoreCollectionRoyalties,
+  decodeMplCoreCollectionUpdateAuthority,
+  parseCollectionRoyaltyCreators,
+  type MplCoreRoyaltyCreator,
 } from './shared/mplCoreCollection.ts';
-import { borshString, canRead, u32LE, u8, uniquePubkeys } from './shared/solanaInstructionData.ts';
-import { resolveDeploymentDiscountAddresses } from './shared/deploymentDiscounts.ts';
 import {
-  requireDiscountMerkleDatasetIdentity,
-  validateDiscountMerkleFamilyRootInvariant,
-  type DiscountMerkleDatasetReference,
-} from './shared/discountMerkleDataset.ts';
+  uniquePubkeys,
+} from './shared/solanaInstructionData.ts';
+
 import {
   acquireDeploymentRegistryMutationLock,
   assertReceiptPoolDropRelations,
@@ -48,23 +71,15 @@ import {
   requireReceiptPoolSpec,
   type ReceiptPoolSpec,
 } from './shared/receiptPoolConfig.ts';
-import {
-  BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
-  decodeBoxMinterConfigData,
-} from '../shared/boxMinterConfigCodec.ts';
+
 import {
   assertStripeLivePriceConfigured,
   STRIPE_UNIT_AMOUNT_CENTS_MAX,
   STRIPE_UNIT_AMOUNT_CENTS_MIN,
 } from '../shared/stripeCheckoutCore.ts';
 import {
-  BOX_MINTER_CONFIG_SEED,
-  BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
   BOX_MINTER_MAX_ITEMS_PER_BOX,
   BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
-  BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET,
-  BOX_MINTER_MINT_VARIANT_KIND_NONE,
-  BOX_MINTER_MINT_VARIANT_KIND_SIZE,
   BOX_MINTER_MINT_VARIANT_OPTION_COUNT,
 } from '../shared/boxMinterProtocol.ts';
 import {
@@ -85,9 +100,7 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  TransactionInstruction,
   sendAndConfirmTransaction,
-  type Commitment,
 } from '@solana/web3.js';
 
 // MPL Core program id.
@@ -124,15 +137,6 @@ function setActiveNewDropConfigPath(root: string, configPath: string) {
 
 function getActiveNewDropConfigPath(): string {
   return activeNewDropConfigPath;
-}
-
-export function getConcurrentMerkleTreeAccountSize(maxDepth: number, maxBufferSize: number, canopyDepth: number): number {
-  // Matches @solana/spl-account-compression sizing (ConcurrentMerkleTreeHeaderDataV1 + tree + optional canopy).
-  const headerSize = 4 + 4 + 32 + 8 + 1 + 5;
-  const nodeSize = 40 + 32 * maxDepth;
-  const treeSize = 24 + (maxBufferSize + 1) * nodeSize;
-  const canopySize = canopyDepth > 0 ? Math.max((Math.pow(2, canopyDepth + 1) - 2) * 32, 0) : 0;
-  return 2 + headerSize + treeSize + canopySize;
 }
 
 async function assertExecutableProgram(args: {
@@ -236,111 +240,12 @@ function writeTempKeypairFile(kp: Keypair, prefix = 'mons-shop-deployer'): strin
   return filePath;
 }
 
-type DeploymentCleanupEvent = 'exit' | 'SIGINT' | 'SIGTERM';
-
-type DeploymentCleanupRuntime = {
-  once: (event: DeploymentCleanupEvent, listener: () => void) => void;
-  off: (event: DeploymentCleanupEvent, listener: () => void) => void;
-  exit: (code: number) => void;
-};
-
-export function registerDeploymentCleanup(args: {
-  releaseDeploymentRegistryLock: () => boolean;
-  runtime?: DeploymentCleanupRuntime;
-}): {
-  setTempKeypairPath: (filePath: string) => void;
-  cleanup: () => boolean;
-} {
-  const runtime =
-    args.runtime ||
-    ({
-      once: (event, listener) => process.once(event, listener),
-      off: (event, listener) => process.off(event, listener),
-      exit: (code) => process.exit(code),
-    } satisfies DeploymentCleanupRuntime);
-  let tempKeypairPath: string | undefined;
-  let complete = false;
-  let terminating = false;
-
-  const removeTempKeypair = (): boolean => {
-    if (!tempKeypairPath) return true;
-    try {
-      unlinkSync(tempKeypairPath);
-      tempKeypairPath = undefined;
-      return true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-        tempKeypairPath = undefined;
-        return true;
-      }
-      try {
-        console.warn(
-          `⚠️  Failed to remove temporary deployer keypair ${tempKeypairPath}: ${errorMessage(err)}`,
-        );
-      } catch {
-        // Cleanup warnings must not disrupt the caller.
-      }
-      return false;
-    }
-  };
-
-  const onExit = () => {
-    cleanup();
-  };
-  const terminate = (exitCode: number) => {
-    if (terminating) return;
-    terminating = true;
-    cleanup();
-    runtime.exit(exitCode);
-  };
-  const onSigint = () => terminate(130);
-  const onSigterm = () => terminate(143);
-  const detach = () => {
-    runtime.off('exit', onExit);
-    runtime.off('SIGINT', onSigint);
-    runtime.off('SIGTERM', onSigterm);
-  };
-  const cleanup = (): boolean => {
-    if (complete) return true;
-    const tempKeypairRemoved = removeTempKeypair();
-    let lockReleased = false;
-    try {
-      lockReleased = args.releaseDeploymentRegistryLock();
-    } catch (err) {
-      try {
-        console.warn(`⚠️  Failed to release deployment-registry lock: ${errorMessage(err)}`);
-      } catch {
-        // Cleanup warnings must not disrupt the caller.
-      }
-    }
-    if (tempKeypairRemoved && lockReleased) {
-      complete = true;
-      detach();
-    }
-    return complete;
-  };
-
-  runtime.once('exit', onExit);
-  runtime.once('SIGINT', onSigint);
-  runtime.once('SIGTERM', onSigterm);
-
-  return {
-    setTempKeypairPath: (filePath) => {
-      if (complete) {
-        throw new Error('Cannot register a temporary deployer keypair after deployment cleanup completed');
-      }
-      tempKeypairPath = filePath;
-    },
-    cleanup,
-  };
-}
-
 function normalizeDropId(value: string | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
 function deriveDropSeed(dropId: string): Buffer {
-  return sha256(Buffer.from(normalizeDropId(dropId), 'utf8'));
+  return createHash('sha256').update(Buffer.from(normalizeDropId(dropId), 'utf8')).digest();
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -380,20 +285,6 @@ function requireRoyaltiesBps(value: number | undefined): number {
   return bps;
 }
 
-function requireIntegerInRange(args: {
-  value: number;
-  label: string;
-  min: number;
-  max?: number;
-}): number {
-  const n = Number(args.value);
-  if (!Number.isInteger(n) || n < args.min || (typeof args.max === 'number' && n > args.max)) {
-    const range = typeof args.max === 'number' ? `${args.min}..${args.max}` : `>= ${args.min}`;
-    throw new Error(`Invalid ${args.label}: ${args.value} (expected an integer in ${range})`);
-  }
-  return n;
-}
-
 type PreparedReceiptsTreeConfig = {
   maxDepth: number;
   maxBufferSize: number;
@@ -408,50 +299,12 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function retryRpcRead<T>(
-  label: string,
-  fn: () => Promise<T>,
-  opts: { retries?: number; baseDelayMs?: number; maxDelayMs?: number } = {},
-): Promise<T> {
-  const retries = Math.max(0, opts.retries ?? 4);
-  const baseDelayMs = Math.max(1, opts.baseDelayMs ?? 500);
-  const maxDelayMs = Math.max(baseDelayMs, opts.maxDelayMs ?? 4_000);
-
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt >= retries) break;
-      const delayMs = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
-      console.warn(`⚠️  ${label} failed (${errorMessage(err)}). Retrying in ${delayMs}ms...`);
-      await sleep(delayMs);
-    }
-  }
-
-  throw new Error(`${label} failed after ${retries + 1} attempts: ${errorMessage(lastErr)}`);
-}
-
 function requireItemsPerBox(value: number, label: string): number {
   return requireIntegerInRange({
     value,
     label,
     min: BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
     max: BOX_MINTER_MAX_ITEMS_PER_BOX,
-  });
-}
-
-function requireDiscountMintsPerWallet(value: number, label: string): number {
-  return requireIntegerInRange({
-    value,
-    label,
-    min: BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET,
-    max: BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
   });
 }
 
@@ -677,11 +530,6 @@ export function assertReceiptPoolCapacity(args: {
   }
   return { reservedLeaves, capacity };
 }
-
-type PreparedInitDropInputs = {
-  requiredDropMetadataBase: string;
-  discountMerkle: { root: Buffer; proofs: Record<string, string[]> };
-};
 
 function prepareMintSelectionConfig(dropCfg: NewDropOnchainConfig): MintSelectionConfigSerialized | undefined {
   const selection = dropCfg.mintSelection;
@@ -1068,209 +916,12 @@ export async function assertReceiptMetadataRange(args: {
   if (failed) throw firstError;
 }
 
-export function prepareInitDropInputs(args: {
-  root: string;
-  dropCfg: NewDropOnchainConfig;
-  dropMetadataBase: string;
-}): PreparedInitDropInputs {
-  const requiredDropMetadataBase = requireNonEmptyString(args.dropMetadataBase, 'NEW_DROP.onchain.metadataBase');
-  const discountAddresses = resolveDeploymentDiscountAddresses({ root: args.root, config: args.dropCfg });
-  const discountMerkle = buildDiscountMerkleData(discountAddresses);
-  return {
-    requiredDropMetadataBase,
-    discountMerkle,
-  };
-}
-
 function writeTextFileIfChanged(filePath: string, content: string) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   const next = content.endsWith('\n') ? content : `${content}\n`;
   const prev = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
   if (prev === next) return;
   writeFileSync(filePath, next, 'utf8');
-}
-
-function sha256(data: Buffer): Buffer {
-  return createHash('sha256').update(data).digest();
-}
-
-function hashLeafAddress(address: string): Buffer {
-  return sha256(new PublicKey(address).toBuffer());
-}
-
-function hashSortedPair(left: Buffer, right: Buffer): Buffer {
-  const ordered = Buffer.compare(left, right) <= 0 ? [left, right] : [right, left];
-  return sha256(Buffer.concat(ordered));
-}
-
-function buildMerkleTree(leaves: Buffer[]): Buffer[][] {
-  if (!leaves.length) return [];
-  const levels: Buffer[][] = [leaves];
-  let level = leaves;
-  while (level.length > 1) {
-    const next: Buffer[] = [];
-    for (let i = 0; i < level.length; i += 2) {
-      const left = level[i];
-      const right = level[i + 1] ?? left;
-      next.push(hashSortedPair(left, right));
-    }
-    levels.push(next);
-    level = next;
-  }
-  return levels;
-}
-
-function buildMerkleProof(levels: Buffer[][], leafIndex: number): Buffer[] {
-  const proof: Buffer[] = [];
-  let idx = leafIndex;
-  for (let level = 0; level < levels.length - 1; level += 1) {
-    const nodes = levels[level];
-    const isRight = idx % 2 === 1;
-    const siblingIndex = isRight ? idx - 1 : idx + 1;
-    const sibling = nodes[siblingIndex] ?? nodes[idx];
-    proof.push(sibling);
-    idx = Math.floor(idx / 2);
-  }
-  return proof;
-}
-
-export function buildDiscountMerkleData(addresses: string[]) {
-  const leaves = addresses
-    .map((address) => ({ address, hash: hashLeafAddress(address) }))
-    .sort((a, b) => Buffer.compare(a.hash, b.hash));
-  const leafHashes = leaves.map((leaf) => leaf.hash);
-  const levels = buildMerkleTree(leafHashes);
-  const root = levels.length ? levels[levels.length - 1][0] : Buffer.alloc(32);
-  const proofs: Record<string, string[]> = {};
-  leaves.forEach((leaf, index) => {
-    proofs[leaf.address] = buildMerkleProof(levels, index).map((buf) => buf.toString('hex'));
-  });
-  return { root, proofs };
-}
-
-function renderDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, string[]> }): string {
-  return `${JSON.stringify(discountMerkleJsonValue(args), null, 2)}\n`;
-}
-
-function discountMerkleJsonValue(args: { root: Buffer; proofs: Record<string, string[]> }) {
-  return {
-    root: args.root.toString('hex'),
-    proofs: args.proofs,
-  };
-}
-
-function assertExistingDiscountMerkleJsonMatches(args: {
-  root: Buffer;
-  proofs: Record<string, string[]>;
-  filePath: string;
-}): void {
-  const existingSource = readFileSync(args.filePath, 'utf8');
-  let existingValue: unknown;
-  try {
-    existingValue = JSON.parse(existingSource);
-  } catch (err) {
-    throw new Error(
-      `Existing discount Merkle dataset is not valid JSON: ${args.filePath} (${errorMessage(err)})`,
-    );
-  }
-  if (!isDeepStrictEqual(existingValue, discountMerkleJsonValue(args))) {
-    throw new Error(
-      `Existing discount Merkle dataset conflicts with the generated dataset for root ${args.root.toString('hex')}: ${args.filePath}`,
-    );
-  }
-}
-
-function discountMerkleRegistryReferences(
-  root: string,
-  registryPath: string,
-  drops: Record<string, { dropId: string; dropFamily: string; discountMerkleRoot: string }>,
-): DiscountMerkleDatasetReference[] {
-  const registryLabel = path.relative(root, registryPath);
-  return Object.values(drops).map((drop) => ({
-    dropFamily: drop.dropFamily,
-    rootHex: drop.discountMerkleRoot,
-    source: `${registryLabel}:${drop.dropId}`,
-  }));
-}
-
-export async function validateDiscountMerkleDatasetForDeploy(args: {
-  root: string;
-  dropId: string;
-  dropFamily: DropFamily;
-  merkleRoot: Buffer;
-  proofs: Record<string, string[]>;
-}): Promise<{
-  dropFamily: string;
-  rootHex: string;
-  fileName: string;
-  relativePath: string;
-  filePath: string;
-}> {
-  const desired = requireDiscountMerkleDatasetIdentity({
-    dropFamily: args.dropFamily,
-    rootHex: args.merkleRoot.toString('hex'),
-    source: `${getActiveNewDropConfigPath()}:${args.dropId}`,
-  });
-  const registryPath = path.join(
-    args.root,
-    'shared',
-    'deploymentRegistry.ts',
-  );
-  const registry = await readDeploymentDropRegistry(registryPath);
-  validateDiscountMerkleFamilyRootInvariant([
-    ...discountMerkleRegistryReferences(
-      args.root,
-      registryPath,
-      registry.drops,
-    ),
-    {
-      dropFamily: desired.dropFamily,
-      rootHex: desired.rootHex,
-      source: `${getActiveNewDropConfigPath()}:${args.dropId}`,
-    },
-  ]);
-
-  const filePath = path.join(args.root, desired.relativePath);
-  if (existsSync(filePath)) {
-    assertExistingDiscountMerkleJsonMatches({
-      root: args.merkleRoot,
-      proofs: args.proofs,
-      filePath,
-    });
-  }
-  return { ...desired, filePath };
-}
-
-function writeDiscountMerkleJson(args: {
-  root: Buffer;
-  proofs: Record<string, string[]>;
-  filePath: string;
-}): void {
-  const payload = renderDiscountMerkleJson(args);
-  mkdirSync(path.dirname(args.filePath), { recursive: true });
-  if (existsSync(args.filePath)) {
-    assertExistingDiscountMerkleJsonMatches(args);
-    return;
-  }
-  try {
-    writeFileSync(args.filePath, payload, { encoding: 'utf8', flag: 'wx' });
-    return;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
-  }
-  assertExistingDiscountMerkleJsonMatches(args);
-}
-
-export async function finalizeDiscountMerkleAndDeploymentRegistry<T>(args: {
-  root: Buffer;
-  proofs: Record<string, string[]>;
-  filePath: string;
-  commitRegistryChanges: () => Promise<T>;
-}): Promise<T> {
-  // The initialize transaction may already have committed this root. Registry
-  // rollback must never remove the only data capable of producing its proofs.
-  writeDiscountMerkleJson(args);
-  return args.commitRegistryChanges();
 }
 
 type TextFileSnapshot =
@@ -1576,42 +1227,6 @@ async function prepareDeploymentRegistry(args: {
   };
 }
 
-function u64LE(value: bigint): Buffer {
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64LE(value);
-  return buf;
-}
-
-function encodeMintSelectionInitializeArgs(mintSelection: MintSelectionConfigSerialized | undefined): Buffer {
-  const zeroArray = Array.from(
-    { length: BOX_MINTER_MINT_VARIANT_OPTION_COUNT },
-    () => u32LE(0),
-  );
-  if (!mintSelection) {
-    return Buffer.concat([
-      u8(BOX_MINTER_MINT_VARIANT_KIND_NONE),
-      ...zeroArray,
-      ...zeroArray,
-      ...zeroArray,
-    ]);
-  }
-  if (
-    mintSelection.kind !== 'size' ||
-    mintSelection.options.length !== BOX_MINTER_MINT_VARIANT_OPTION_COUNT
-  ) {
-    throw new Error('Invalid mintSelection config for initialize');
-  }
-  const startIds = mintSelection.options.map((option) => u32LE(option.startId));
-  const endIds = mintSelection.options.map((option) => u32LE(option.endId));
-  const nextIds = mintSelection.options.map((option) => u32LE(option.startId));
-  return Buffer.concat([
-    u8(BOX_MINTER_MINT_VARIANT_KIND_SIZE),
-    ...startIds,
-    ...endIds,
-    ...nextIds,
-  ]);
-}
-
 async function upsertMplCoreCollectionRoyalties(args: {
   connection: Connection;
   payer: Keypair;
@@ -1659,24 +1274,6 @@ async function upsertMplCoreCollectionRoyalties(args: {
   tx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(add core collection royalties)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
   const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'add core collection royalties', commitment: 'confirmed' });
   console.log('✅ Collection royalties added:', sig);
-}
-
-export function assertReceiptPoolCollectionUpdateDelegatePolicy(args: {
-  data: Buffer;
-  authority: PublicKey;
-}): void {
-  const updateDelegate = decodeMplCoreCollectionUpdateDelegates(args.data);
-  if (
-    !updateDelegate ||
-    updateDelegate.authorityKind !==
-      MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY ||
-    updateDelegate.delegates.length !== 1 ||
-    !updateDelegate.delegates[0].equals(args.authority)
-  ) {
-    throw new Error(
-      'Receipt pool collection must delegate only to its fixed authority',
-    );
-  }
 }
 
 async function assertMplCoreCollectionRoyalties(args: {
@@ -1785,154 +1382,6 @@ async function ensureMplCoreCollectionRoyalties(args: {
   });
 }
 
-export function decodeBoxMinterConfigForDeployPreflight(data: Buffer) {
-  if (data.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
-    throw new Error(
-      `Existing on-chain config uses an older schema and cannot be reused.\n` +
-        `- expected config account size >= ${BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS} bytes\n` +
-        `- actual config account size      : ${data.length} bytes\n` +
-        `\n` +
-        `This configurable items-per-box change requires a fresh deployment/init.\n` +
-        `Fix: deploy to a fresh program id and rerun this script.`,
-    );
-  }
-  // Preserve the historical deploy preflight policy: the discriminator is not
-  // consulted here because ownership is validated by the caller.
-  const decoded = decodeBoxMinterConfigData(data, {
-    validateDiscriminator: false,
-    validateItemsPerBox: false,
-    decodeExtensions: false,
-  });
-  return {
-    ...decoded,
-    admin: new PublicKey(decoded.admin),
-    treasury: new PublicKey(decoded.treasury),
-    coreCollection: new PublicKey(decoded.coreCollection),
-    discountMerkleRoot: Buffer.from(decoded.discountMerkleRoot),
-  };
-}
-
-export function assertExistingConfigMatchesResume(args: {
-  data: Buffer;
-  admin: PublicKey;
-  treasury: PublicKey;
-  coreCollection: PublicKey;
-  priceLamports: bigint;
-  discountPriceLamports: bigint;
-  discountMintsPerWallet: number;
-  discountMerkleRoot: Buffer;
-  maxSupply: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  figureNamePrefix: string;
-  symbol: string;
-  metadataBase: string;
-  mintSelection?: MintSelectionConfigSerialized;
-  mintProceeds?: MplCoreRoyaltyCreator[];
-  dropSeed: Buffer;
-  allowStartedMint?: boolean;
-}): void {
-  const decodedRaw = decodeBoxMinterConfigData(args.data, {
-    validateDiscriminator: true,
-    validateItemsPerBox: true,
-    decodeExtensions: true,
-  });
-  const decoded = {
-    ...decodedRaw,
-    admin: new PublicKey(decodedRaw.admin),
-    treasury: new PublicKey(decodedRaw.treasury),
-    coreCollection: new PublicKey(decodedRaw.coreCollection),
-    discountMerkleRoot: Buffer.from(decodedRaw.discountMerkleRoot),
-  };
-  const expectedVariantKind = args.mintSelection
-    ? BOX_MINTER_MINT_VARIANT_KIND_SIZE
-    : BOX_MINTER_MINT_VARIANT_KIND_NONE;
-  const expectedStarts = args.mintSelection
-    ? args.mintSelection.options.map((option) => option.startId)
-    : [0, 0, 0];
-  const expectedEnds = args.mintSelection
-    ? args.mintSelection.options.map((option) => option.endId)
-    : [0, 0, 0];
-  const expectedNext = expectedStarts;
-  const routingMatches = args.mintProceeds
-    ? decodedRaw.paymentRouting?.schema === 'split-payments-v1' &&
-      decodedRaw.paymentRouting.mintProceeds.length === args.mintProceeds.length &&
-      decodedRaw.paymentRouting.mintProceeds.every(
-        (recipient, index) =>
-          new PublicKey(recipient.address).equals(
-            args.mintProceeds![index].address,
-          ) &&
-          recipient.percentage === args.mintProceeds![index].percentage,
-      ) &&
-      new PublicKey(
-        decodedRaw.paymentRouting.deliveryPaymentReceiver,
-      ).equals(args.treasury)
-    : decodedRaw.paymentRouting?.schema === 'legacy';
-  const mismatches = [
-    decoded.admin.equals(args.admin) ? '' : 'admin',
-    decoded.treasury.equals(args.treasury) ? '' : 'treasury',
-    decoded.coreCollection.equals(args.coreCollection)
-      ? ''
-      : 'coreCollection',
-    decoded.priceLamports === args.priceLamports ? '' : 'priceLamports',
-    decoded.discountPriceLamports === args.discountPriceLamports
-      ? ''
-      : 'discountPriceLamports',
-    decoded.discountMintsPerWallet === args.discountMintsPerWallet
-      ? ''
-      : 'discountMintsPerWallet',
-    decoded.discountMerkleRoot.equals(args.discountMerkleRoot)
-      ? ''
-      : 'discountMerkleRoot',
-    decoded.maxSupply === args.maxSupply ? '' : 'maxSupply',
-    decoded.itemsPerBox === args.itemsPerBox ? '' : 'itemsPerBox',
-    decoded.maxPerTx === args.maxPerTx ? '' : 'maxPerTx',
-    decoded.namePrefix === args.namePrefix ? '' : 'namePrefix',
-    decoded.figureNamePrefix === args.figureNamePrefix
-      ? ''
-      : 'figureNamePrefix',
-    decoded.symbol === args.symbol ? '' : 'symbol',
-    normalizeDropBase(decoded.uriBase) ===
-    normalizeDropBase(args.metadataBase)
-      ? ''
-      : 'metadataBase',
-    decoded.mintVariantKind === expectedVariantKind
-      ? ''
-      : 'mintVariantKind',
-    isDeepStrictEqual(decoded.mintVariantStartIds, expectedStarts)
-      ? ''
-      : 'mintVariantStartIds',
-    isDeepStrictEqual(decoded.mintVariantEndIds, expectedEnds)
-      ? ''
-      : 'mintVariantEndIds',
-    isDeepStrictEqual(decoded.mintVariantNextIds, expectedNext)
-      ? ''
-      : 'mintVariantNextIds',
-    decoded.dropSeed &&
-    Buffer.from(decoded.dropSeed).equals(args.dropSeed)
-      ? ''
-      : 'dropSeed',
-    routingMatches ? '' : 'paymentRouting',
-    !decoded.started || args.allowStartedMint ? '' : 'started',
-    (args.allowStartedMint
-      ? Number.isSafeInteger(decoded.minted) && decoded.minted >= 0 && decoded.minted <= args.maxSupply &&
-        (decoded.started || decoded.minted === 0)
-      : decoded.minted === 0) ? '' : 'minted',
-  ].filter(Boolean);
-  if (mismatches.length) {
-    throw new Error(
-      `Existing unregistered config cannot be resumed because ${mismatches.join(', ')} differ`,
-    );
-  }
-}
-
-function boxMinterConfigPda(programId: PublicKey, dropSeed?: Buffer): PublicKey {
-  return (dropSeed?.length === 32
-    ? PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED), dropSeed], programId)
-    : PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], programId))[0];
-}
-
 async function assertLegacySingletonConfigAbsentForSharedProgramReuse(args: {
   connection: Connection;
   programId: PublicKey;
@@ -2014,27 +1463,6 @@ async function assertProgramReuseMatchesMetadataPathFormat(args: {
   );
 }
 
-// Anchor instruction discriminator: sha256("global:initialize")[0..8]
-const IX_INITIALIZE = Buffer.from('afaf6d1f0d989bed', 'hex');
-export const IX_INITIALIZE_SPLIT_PAYMENTS_V1 = createHash('sha256')
-  .update('global:initialize_split_payments_v1')
-  .digest()
-  .subarray(0, 8);
-export const IX_SPLIT_PAYMENTS_V1_CAPABILITY = createHash('sha256')
-  .update('global:split_payments_v1_capability')
-  .digest()
-  .subarray(0, 8);
-
-export function buildSplitPaymentsV1CapabilityIx(
-  programId: PublicKey,
-): TransactionInstruction {
-  return new TransactionInstruction({
-    programId,
-    keys: [],
-    data: IX_SPLIT_PAYMENTS_V1_CAPABILITY,
-  });
-}
-
 async function assertSplitPaymentsV1Capability(args: {
   connection: Connection;
   programId: PublicKey;
@@ -2059,123 +1487,6 @@ async function assertSplitPaymentsV1Capability(args: {
     );
   }
   console.log('✅ split-payments-v1 program capability verified');
-}
-
-export function buildInitializeIx(args: {
-  programId: PublicKey;
-  admin: PublicKey;
-  treasury: PublicKey;
-  coreCollection: PublicKey;
-  priceLamports: bigint;
-  discountPriceLamports: bigint;
-  discountMintsPerWallet: number;
-  discountMerkleRoot: Buffer;
-  maxSupply: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  figureNamePrefix: string;
-  symbol: string;
-  mintSelection?: MintSelectionConfigSerialized;
-  dropSeed: Buffer;
-  /**
-   * Canonical drop base, e.g. `https://assets.example.com/drops/your-drop` or `ipfs://bafy...`.
-   *
-   * The on-chain program derives per-asset JSON URIs from this base.
-   */
-  metadataBase: string;
-}): TransactionInstruction {
-  const configPda = boxMinterConfigPda(args.programId, args.dropSeed);
-  const data = Buffer.concat([
-    IX_INITIALIZE,
-    u64LE(args.priceLamports),
-    u64LE(args.discountPriceLamports),
-    Buffer.from(args.discountMerkleRoot),
-    u32LE(args.maxSupply),
-    Buffer.from([args.maxPerTx & 0xff]),
-    Buffer.from([args.itemsPerBox & 0xff]),
-    borshString(args.namePrefix),
-    borshString(args.symbol),
-    borshString(args.metadataBase),
-    Buffer.from([requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'initialize discountMintsPerWallet') & 0xff]),
-    borshString(args.figureNamePrefix),
-    encodeMintSelectionInitializeArgs(args.mintSelection),
-    Buffer.from(args.dropSeed),
-  ]);
-
-  return new TransactionInstruction({
-    programId: args.programId,
-    keys: [
-      { pubkey: configPda, isSigner: false, isWritable: true },
-      { pubkey: args.admin, isSigner: true, isWritable: true },
-      { pubkey: args.treasury, isSigner: false, isWritable: false },
-      { pubkey: args.coreCollection, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
-  });
-}
-
-export function buildInitializeSplitPaymentsV1Ix(
-  args: Parameters<typeof buildInitializeIx>[0] & {
-    mintProceeds: MplCoreRoyaltyCreator[];
-  },
-): TransactionInstruction {
-  if (args.treasury.equals(PublicKey.default)) {
-    throw new Error(
-      'split-payments-v1 delivery receiver must not be the default address',
-    );
-  }
-  if (args.mintProceeds.length < 2 || args.mintProceeds.length > 3) {
-    throw new Error('split-payments-v1 requires 2 or 3 mint recipients');
-  }
-  const seen = new Set<string>();
-  let totalPercentage = 0;
-  for (const [index, recipient] of args.mintProceeds.entries()) {
-    if (recipient.address.equals(PublicKey.default)) {
-      throw new Error(`split-payments-v1 recipient ${index} must not be the default address`);
-    }
-    const address = recipient.address.toBase58();
-    if (seen.has(address)) {
-      throw new Error(`split-payments-v1 recipient ${index} duplicates ${address}`);
-    }
-    seen.add(address);
-    if (
-      !Number.isInteger(recipient.percentage) ||
-      recipient.percentage <= 0 ||
-      recipient.percentage > 100
-    ) {
-      throw new Error(`split-payments-v1 recipient ${index} has an invalid percentage`);
-    }
-    totalPercentage += recipient.percentage;
-  }
-  if (totalPercentage !== 100) {
-    throw new Error(`split-payments-v1 percentages must total 100, got ${totalPercentage}`);
-  }
-
-  const legacy = buildInitializeIx(args);
-  const recipients = [
-    ...args.mintProceeds.map((recipient) => recipient.address),
-    ...Array.from(
-      { length: 3 - args.mintProceeds.length },
-      () => PublicKey.default,
-    ),
-  ];
-  const percentages = [
-    ...args.mintProceeds.map((recipient) => recipient.percentage),
-    ...Array.from({ length: 3 - args.mintProceeds.length }, () => 0),
-  ];
-  return new TransactionInstruction({
-    programId: legacy.programId,
-    keys: legacy.keys,
-    data: Buffer.concat([
-      IX_INITIALIZE_SPLIT_PAYMENTS_V1,
-      legacy.data.subarray(IX_INITIALIZE.length),
-      u8(args.mintProceeds.length),
-      ...recipients.map((recipient) => recipient.toBuffer()),
-      Buffer.from(percentages),
-    ]),
-  });
 }
 
 function canRunSolanaCargo(): boolean {
@@ -2520,54 +1831,6 @@ async function ensureDeliveryLookupTable(args: {
   return lutAddress;
 }
 
-// ---------------------------------------------------------------------------
-// Receipt cNFT Merkle tree sizing (Bubblegum v2).
-//
-// This tree ONLY stores *compressed receipt NFTs* minted by the box minter receipt instructions.
-// The uncompressed MPL-Core assets (boxes + revealed figures) are NOT stored in this tree.
-//
-// Sizing is configured in the selected NEW_DROP.onchain.receiptsTree config and validated
-// against NEW_DROP.onchain.maxSupply before deploy side effects begin.
-// ---------------------------------------------------------------------------
-const IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
-
-export function bubblegumTreeConfigPda(merkleTree: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([merkleTree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
-}
-
-export function buildCreateBubblegumTreeConfigV2Ix(args: {
-  merkleTree: PublicKey;
-  payer: PublicKey;
-  treeCreator: PublicKey;
-  maxDepth: number;
-  maxBufferSize: number;
-  // If undefined/null, encodes Option::None (private tree).
-  isPublic?: boolean | null;
-}): TransactionInstruction {
-  const treeConfig = bubblegumTreeConfigPda(args.merkleTree);
-  const publicOpt = args.isPublic == null ? Buffer.from([0]) : Buffer.from([1, args.isPublic ? 1 : 0]);
-  const data = Buffer.concat([
-    IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2,
-    u32LE(args.maxDepth),
-    u32LE(args.maxBufferSize),
-    publicOpt,
-  ]);
-
-  return new TransactionInstruction({
-    programId: BUBBLEGUM_PROGRAM_ID,
-    keys: [
-      { pubkey: treeConfig, isSigner: false, isWritable: true },
-      { pubkey: args.merkleTree, isSigner: false, isWritable: true },
-      { pubkey: args.payer, isSigner: true, isWritable: true },
-      { pubkey: args.treeCreator, isSigner: true, isWritable: false },
-      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
-  });
-}
-
 async function createReceiptsMerkleTree(args: {
   connection: Connection;
   payer: Keypair;
@@ -2694,179 +1957,6 @@ async function getMplCoreCollectionUpdateAuthority(connection: Connection, coreC
     throw new Error(`Missing core collection account: ${coreCollection.toBase58()}`);
   }
   return decodeMplCoreCollectionUpdateAuthority(info.data);
-}
-
-export type DecodedReceiptTreeState = {
-  maxDepth: number;
-  maxBufferSize: number;
-  authority: PublicKey;
-  creator: PublicKey;
-  delegate: PublicKey;
-  totalCapacity: number;
-  numMinted: number;
-  isPublic: boolean;
-  version: number;
-};
-
-const BUBBLEGUM_TREE_CONFIG_V2_DISCRIMINATOR = Buffer.from([
-  122, 245, 175, 248, 171, 34, 0, 207,
-]);
-
-function readSafeU64(data: Buffer, offset: number, label: string): number {
-  if (!canRead(data, offset, 8)) {
-    throw new Error(`Truncated ${label}`);
-  }
-  const value = data.readBigUInt64LE(offset);
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error(`${label} exceeds the JavaScript safe integer range`);
-  }
-  return Number(value);
-}
-
-export function decodeReceiptTreeState(args: {
-  merkleTreeData: Buffer;
-  treeConfigData: Buffer;
-}): DecodedReceiptTreeState {
-  const merkle = args.merkleTreeData;
-  const config = args.treeConfigData;
-  if (merkle.length < 56 || merkle[0] !== 1 || merkle[1] !== 0) {
-    throw new Error('Invalid concurrent Merkle tree account header');
-  }
-  if (
-    config.length < 96 ||
-    !config
-      .subarray(0, BUBBLEGUM_TREE_CONFIG_V2_DISCRIMINATOR.length)
-      .equals(BUBBLEGUM_TREE_CONFIG_V2_DISCRIMINATOR)
-  ) {
-    throw new Error('Invalid Bubblegum TreeConfig account');
-  }
-  return {
-    maxBufferSize: merkle.readUInt32LE(2),
-    maxDepth: merkle.readUInt32LE(6),
-    authority: new PublicKey(merkle.subarray(10, 42)),
-    creator: new PublicKey(config.subarray(8, 40)),
-    delegate: new PublicKey(config.subarray(40, 72)),
-    totalCapacity: readSafeU64(config, 72, 'TreeConfig totalCapacity'),
-    numMinted: readSafeU64(config, 80, 'TreeConfig numMinted'),
-    isPublic: config[88] !== 0,
-    version: config[90],
-  };
-}
-
-export async function validateReceiptPoolDeploymentOnchain(args: {
-  connection: Connection;
-  collectionMint: PublicKey;
-  receiptsMerkleTree: PublicKey;
-  authority: PublicKey;
-  collectionMetadataUri: string;
-  collectionName: string;
-  royaltiesBasisPoints: number;
-  royaltiesRecipient: PublicKey;
-  receiptsTreeMaxDepth: number;
-  receiptsTreeMaxBufferSize: number;
-  receiptsTreeCanopyDepth: number;
-  commitment?: Commitment;
-}): Promise<DecodedReceiptTreeState> {
-  const commitment = args.commitment || 'confirmed';
-  const treeConfig = bubblegumTreeConfigPda(args.receiptsMerkleTree);
-  const [collectionInfo, merkleTreeInfo, treeConfigInfo] =
-    await retryRpcRead('getMultipleAccountsInfo(receipt pool)', () =>
-      args.connection.getMultipleAccountsInfo(
-        [args.collectionMint, args.receiptsMerkleTree, treeConfig],
-        { commitment },
-      ),
-    );
-  if (!collectionInfo) {
-    throw new Error(
-      `Missing receipt pool collection ${args.collectionMint.toBase58()}`,
-    );
-  }
-  if (!collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
-    throw new Error('Receipt pool collection has the wrong owner');
-  }
-  if (!merkleTreeInfo) {
-    throw new Error(
-      `Missing receipt pool Merkle tree ${args.receiptsMerkleTree.toBase58()}`,
-    );
-  }
-  if (!merkleTreeInfo.owner.equals(MPL_ACCOUNT_COMPRESSION_PROGRAM_ID)) {
-    throw new Error('Receipt pool Merkle tree has the wrong owner');
-  }
-  if (!treeConfigInfo) {
-    throw new Error(`Missing receipt pool TreeConfig ${treeConfig.toBase58()}`);
-  }
-  if (!treeConfigInfo.owner.equals(BUBBLEGUM_PROGRAM_ID)) {
-    throw new Error('Receipt pool TreeConfig has the wrong owner');
-  }
-
-  const collection = decodeMplCoreCollectionBase(
-    Buffer.from(collectionInfo.data),
-  );
-  if (!collection.updateAuthority.equals(args.authority)) {
-    throw new Error('Receipt pool collection update authority mismatch');
-  }
-  if (
-    collection.name !== args.collectionName ||
-    collection.uri !== args.collectionMetadataUri
-  ) {
-    throw new Error(
-      `Receipt pool collection identity mismatch: ${collection.name} ${collection.uri}`,
-    );
-  }
-  const pluginRecords = readMplCoreCollectionPluginRecords(
-    Buffer.from(collectionInfo.data),
-  );
-  if (!pluginRecords?.some((record) => record.pluginType === 15)) {
-    throw new Error('Receipt pool collection is missing BubblegumV2');
-  }
-  const royalties = decodeMplCoreCollectionRoyalties(
-    Buffer.from(collectionInfo.data),
-  );
-  if (
-    !royalties ||
-    royalties.basisPoints !== args.royaltiesBasisPoints ||
-    royalties.ruleSetKind !== 0 ||
-    royalties.authorityKind !==
-      MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY ||
-    royalties.creators.length !== 1 ||
-    !royalties.creators[0].address.equals(args.royaltiesRecipient) ||
-    royalties.creators[0].percentage !== 100
-  ) {
-    throw new Error('Receipt pool collection royalties mismatch');
-  }
-  assertReceiptPoolCollectionUpdateDelegatePolicy({
-    data: Buffer.from(collectionInfo.data),
-    authority: args.authority,
-  });
-
-  const tree = decodeReceiptTreeState({
-    merkleTreeData: Buffer.from(merkleTreeInfo.data),
-    treeConfigData: Buffer.from(treeConfigInfo.data),
-  });
-  const expectedTreeSize = getConcurrentMerkleTreeAccountSize(
-    args.receiptsTreeMaxDepth,
-    args.receiptsTreeMaxBufferSize,
-    args.receiptsTreeCanopyDepth,
-  );
-  if (merkleTreeInfo.data.length !== expectedTreeSize) {
-    throw new Error(
-      `Receipt pool Merkle tree size mismatch: expected ${expectedTreeSize}, got ${merkleTreeInfo.data.length}`,
-    );
-  }
-  if (
-    tree.maxDepth !== args.receiptsTreeMaxDepth ||
-    tree.maxBufferSize !== args.receiptsTreeMaxBufferSize ||
-    !tree.authority.equals(treeConfig) ||
-    !tree.creator.equals(args.authority) ||
-    !tree.delegate.equals(args.authority) ||
-    tree.totalCapacity !== 2 ** args.receiptsTreeMaxDepth ||
-    tree.numMinted > tree.totalCapacity ||
-    tree.isPublic ||
-    tree.version !== 1
-  ) {
-    throw new Error('Receipt pool Merkle tree configuration mismatch');
-  }
-  return tree;
 }
 
 async function main() {
@@ -3164,11 +2254,13 @@ async function main() {
     itemsPerBoxLabel: 'NEW_DROP.onchain.itemsPerBox',
   });
   const initDropInputs = prepareInitDropInputs({
+    configPath: getActiveNewDropConfigPath(),
     root,
     dropCfg,
     dropMetadataBase,
   });
   let discountMerkleDataset = await validateDiscountMerkleDatasetForDeploy({
+    configPath: getActiveNewDropConfigPath(),
     root,
     dropId,
     dropFamily,
@@ -3266,6 +2358,7 @@ async function main() {
     });
   }
   discountMerkleDataset = await validateDiscountMerkleDatasetForDeploy({
+    configPath: getActiveNewDropConfigPath(),
     root,
     dropId,
     dropFamily,
