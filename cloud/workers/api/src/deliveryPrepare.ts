@@ -19,7 +19,6 @@ import {
 import { dropDeliveryOrderPath } from './dropPaths.js';
 import { readBoxMinterConfig } from './boxMinterConfigRead.js';
 import {
-  BOX_MINTER_CONFIG_SEED,
   isBoxMinterDiscountMintsPerWallet,
 } from '../../../../shared/boxMinterProtocol.js';
 import type {
@@ -91,6 +90,7 @@ import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
 import { buildDeliveryDropRuntime, configuredDropPublicKey } from './solanaDropRuntime.js';
 
+import { deriveDeliveryAddress, encodeDeliverInstruction } from './deliveryProtocol.js';
 import { DeliveryPrepareError } from './deliveryPrepareErrors.js';
 import {
   createPreparedDeliveryOrder as createDeliveryOrder,
@@ -117,7 +117,6 @@ const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 const SERVER_INVALID_DELIVERY_UNITS_POLICY = 'arithmetic' as const;
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const ATTEMPT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 
@@ -508,18 +507,6 @@ function decodeCosigner(secret: string): Keypair {
   }
 }
 
-function u32LE(value: number): Buffer {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32LE(value >>> 0, 0);
-  return buffer;
-}
-
-function u64LE(value: number): Buffer {
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64LE(BigInt(value), 0);
-  return buffer;
-}
-
 function maximumDeliveryLamports(runtime: DeliveryRuntime): number {
   const maximumFigures = MAX_DELIVERY_ITEMS * Math.max(
     1,
@@ -562,20 +549,11 @@ function encodeDeliverArgs(
   if (!Number.isInteger(deliveryBump) || deliveryBump < 0 || deliveryBump > 255) {
     throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery bump');
   }
-  return Buffer.concat([IX_DELIVER, u32LE(deliveryId), u64LE(feeLamports), Buffer.from([deliveryBump])]);
-}
-
-function isLegacySingletonConfigPda(programId: PublicKey, configPda: PublicKey): boolean {
-  return configPda.equals(PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], programId)[0]);
+  return encodeDeliverInstruction(deliveryId, BigInt(feeLamports), deliveryBump);
 }
 
 function deriveDeliveryPda(runtime: DeliveryRuntime, deliveryId: number): [PublicKey, number] {
-  const seeds: Uint8Array[] = [Buffer.from('delivery')];
-  if (!isLegacySingletonConfigPda(runtime.boxMinterProgramId, runtime.boxMinterConfigPda)) {
-    seeds.push(runtime.boxMinterConfigPda.toBuffer());
-  }
-  seeds.push(u32LE(deliveryId));
-  return PublicKey.findProgramAddressSync(seeds, runtime.boxMinterProgramId);
+  return deriveDeliveryAddress(runtime, deliveryId >>> 0);
 }
 
 function buildInstruction(args: {

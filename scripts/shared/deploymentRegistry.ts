@@ -1318,11 +1318,13 @@ export async function readDeploymentDropRegistry(
     throw new Error(`Missing canonical deployment registry: ${filePath}`);
   }
   const sourceBeforeImport = readFileSync(filePath, 'utf8');
-  findUniqueDeploymentDropsExport({
+  findUniqueExportedConst({
+    exportName: 'DEPLOYMENT_DROPS',
     filePath,
     content: sourceBeforeImport,
   });
-  findUniqueBoxMinterConfigTombstonesExport({
+  findUniqueExportedConst({
+    exportName: 'BOX_MINTER_CONFIG_TOMBSTONES',
     filePath,
     content: sourceBeforeImport,
   });
@@ -1346,7 +1348,8 @@ export async function readDeploymentDropRegistry(
       `Canonical deployment registry must export DEPLOYMENT_DROPS as an object: ${filePath}`,
     );
   }
-  findUniqueDeploymentDropsExport({
+  findUniqueExportedConst({
+    exportName: 'DEPLOYMENT_DROPS',
     filePath,
     content: sourceContent,
   });
@@ -1394,7 +1397,8 @@ export async function readDeploymentDropRegistry(
       `Canonical deployment registry must export BOX_MINTER_CONFIG_TOMBSTONES as an object: ${filePath}`,
     );
   }
-  findUniqueBoxMinterConfigTombstonesExport({
+  findUniqueExportedConst({
+    exportName: 'BOX_MINTER_CONFIG_TOMBSTONES',
     filePath,
     content: sourceContent,
   });
@@ -1860,15 +1864,16 @@ ${entries}
 };`;
 }
 
-type DeploymentDropsExportBounds = {
+type ExportedConstBounds = {
   start: number;
   end: number;
 };
 
-function findUniqueDeploymentDropsExport(args: {
+function findUniqueExportedConst(args: {
   filePath: string;
   content: string;
-}): DeploymentDropsExportBounds {
+  exportName: string;
+}): ExportedConstBounds {
   const sourceFile = ts.createSourceFile(
     args.filePath,
     args.content,
@@ -1891,14 +1896,14 @@ function findUniqueDeploymentDropsExport(args: {
       .filter(
         (declaration) =>
           ts.isIdentifier(declaration.name) &&
-          declaration.name.text === 'DEPLOYMENT_DROPS',
+          declaration.name.text === args.exportName,
       )
       .map(() => statement);
   });
   const declaration = declarations[0];
   if (declarations.length !== 1) {
     throw new Error(
-      `Canonical deployment registry must contain exactly one top-level exported const DEPLOYMENT_DROPS declaration: ${args.filePath}`,
+      `Canonical deployment registry must contain exactly one top-level exported const ${args.exportName} declaration: ${args.filePath}`,
     );
   }
   return {
@@ -1907,116 +1912,18 @@ function findUniqueDeploymentDropsExport(args: {
   };
 }
 
-function replaceDeploymentDropsExport(args: {
+function replaceExportedConst(args: {
   filePath: string;
   existingContent: string;
   nextDeclaration: string;
+  exportName: string;
 }): string {
-  const bounds = findUniqueDeploymentDropsExport({
+  const bounds = findUniqueExportedConst({
     filePath: args.filePath,
     content: args.existingContent,
-  });
-  return `${
-    args.existingContent.slice(0, bounds.start)
-  }${args.nextDeclaration}${
-    args.existingContent.slice(bounds.end)
-  }`;
-}
-
-function findUniqueBoxMinterConfigTombstonesExport(args: {
-  filePath: string;
-  content: string;
-}): DeploymentDropsExportBounds {
-  const sourceFile = ts.createSourceFile(
-    args.filePath,
-    args.content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const declarations = sourceFile.statements.flatMap((statement) => {
-    if (
-      !ts.isVariableStatement(statement) ||
-      !(statement.declarationList.flags & ts.NodeFlags.Const) ||
-      statement.declarationList.declarations.length !== 1 ||
-      !statement.modifiers?.some(
-        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-      )
-    ) {
-      return [];
-    }
-    return statement.declarationList.declarations
-      .filter(
-        (declaration) =>
-          ts.isIdentifier(declaration.name) &&
-          declaration.name.text === 'BOX_MINTER_CONFIG_TOMBSTONES',
-      )
-      .map(() => statement);
-  });
-  const declaration = declarations[0];
-  if (declarations.length !== 1) {
-    throw new Error(
-      `Canonical deployment registry must contain exactly one top-level exported const BOX_MINTER_CONFIG_TOMBSTONES declaration: ${args.filePath}`,
-    );
-  }
-  return {
-    start: declaration.getStart(sourceFile),
-    end: declaration.end,
-  };
-}
-
-function replaceBoxMinterConfigTombstonesExport(args: {
-  filePath: string;
-  existingContent: string;
-  nextDeclaration: string;
-}): string {
-  const bounds = findUniqueBoxMinterConfigTombstonesExport({
-    filePath: args.filePath,
-    content: args.existingContent,
+    exportName: args.exportName,
   });
   return `${args.existingContent.slice(0, bounds.start)}${args.nextDeclaration}${args.existingContent.slice(bounds.end)}`;
-}
-
-function findUniqueReceiptPoolDeploymentsExport(args: {
-  filePath: string;
-  content: string;
-}): DeploymentDropsExportBounds {
-  const sourceFile = ts.createSourceFile(
-    args.filePath,
-    args.content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const declarations = sourceFile.statements.flatMap((statement) => {
-    if (
-      !ts.isVariableStatement(statement) ||
-      !(statement.declarationList.flags & ts.NodeFlags.Const) ||
-      statement.declarationList.declarations.length !== 1 ||
-      !statement.modifiers?.some(
-        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-      )
-    ) {
-      return [];
-    }
-    return statement.declarationList.declarations
-      .filter(
-        (declaration) =>
-          ts.isIdentifier(declaration.name) &&
-          declaration.name.text === 'RECEIPT_POOL_DEPLOYMENTS',
-      )
-      .map(() => statement);
-  });
-  const declaration = declarations[0];
-  if (declarations.length !== 1) {
-    throw new Error(
-      `Canonical deployment registry must contain exactly one top-level exported const RECEIPT_POOL_DEPLOYMENTS declaration: ${args.filePath}`,
-    );
-  }
-  return {
-    start: declaration.getStart(sourceFile),
-    end: declaration.end,
-  };
 }
 
 export function renderReceiptPoolDeploymentsFileFromSource(args: {
@@ -2024,7 +1931,8 @@ export function renderReceiptPoolDeploymentsFileFromSource(args: {
   existingContent: string;
   receiptPools: Record<string, ReceiptPoolDeployment>;
 }): string {
-  const bounds = findUniqueReceiptPoolDeploymentsExport({
+  const bounds = findUniqueExportedConst({
+    exportName: 'RECEIPT_POOL_DEPLOYMENTS',
     filePath: args.filePath,
     content: args.existingContent,
   });
@@ -2070,13 +1978,15 @@ export function renderDeploymentRegistryFileFromSource(args: {
       filePath: args.filePath,
     });
   }
-  const dropsNext = replaceDeploymentDropsExport({
+  const dropsNext = replaceExportedConst({
+    exportName: 'DEPLOYMENT_DROPS',
     filePath: args.filePath,
     existingContent: args.existingContent,
     nextDeclaration: renderDeploymentRegistrySection({ drops: args.drops }),
   });
   const next = args.tombstones
-    ? replaceBoxMinterConfigTombstonesExport({
+    ? replaceExportedConst({
+        exportName: 'BOX_MINTER_CONFIG_TOMBSTONES',
         filePath: args.filePath,
         existingContent: dropsNext,
         nextDeclaration: renderBoxMinterConfigTombstonesSection({

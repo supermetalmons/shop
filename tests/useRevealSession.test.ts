@@ -32,6 +32,8 @@ function options(overrides: Partial<Options> = {}): Options {
       dropRevealIsAnimated: () => false,
       revealFrameCountForDropId: () => 10,
       revealMediaStartForDropId: () => 7,
+      revealClickMaxForDropId: () => 5,
+      revealAutoplayStartForDropId: () => 6,
       revealRendererForDropId: () => undefined,
       boxAspectRatioForDropId: () => 1,
       clearRevealVideos: () => undefined,
@@ -123,8 +125,6 @@ test('a reveal holds both inventory snapshots until dismissal and flushes queued
   const initial = options({ inventory: initialInventory, pendingOpenBoxes: initialPending });
   const { result, rerender } = renderHook(useRevealSession, { initialProps: initial });
   act(() => {
-    result.current.setInventorySnapshot(initialInventory);
-    result.current.setPendingOpenSnapshot(initialPending);
     result.current.presentRevealOverlay(overlay());
   });
   const nextInventory = [item('new')];
@@ -158,7 +158,6 @@ for (const override of [undefined, [item('claimed')], []]) {
       assert.equal(result.current.presentViewerOverlay(viewerInput(), { inventorySnapshot: override }), true);
     });
     assert.equal(result.current.canDismissAssetGatedRevealOverlay({ revealedIds: [1] }), false);
-    assert.equal(result.current.revealDismissLockedUntilRef.current, 0);
     act(() => clock.flushFrame());
     assert.equal(result.current.revealOverlayActive, false);
     act(() => clock.flushFrame());
@@ -358,7 +357,7 @@ test('transactional presentation preserves its preparing state during the openin
   const { result } = renderHook(useRevealSession, { initialProps: options() });
   const preparing = overlay({ phase: 'preparing', hasRevealAttempted: false });
   act(() => {
-    result.current.setStartOpenLoading(preparing.id);
+    result.current.beginBoxOpening(preparing.id);
     result.current.presentRevealOverlay(preparing);
   });
   assert.equal(result.current.startOpenLoading, preparing.id);
@@ -386,22 +385,20 @@ test('a wallet change aborts the previous reveal session and discards its deferr
   scheduler();
   const initial = options();
   const { result, rerender } = renderHook(useRevealSession, { initialProps: initial });
-  const request = new AbortController();
-  const requestSession = result.current.revealOverlaySessionRef.current;
+  let request!: NonNullable<ReturnType<typeof result.current.beginRevealRequest>>;
+  const requestSession = result.current.getSessionGeneration();
   const calls: string[] = [];
   act(() => {
     result.current.presentRevealOverlay(overlay());
-    result.current.revealSubmissionReconciliationAbortControllerRef.current = request;
-    result.current.revealLoadingRequestIdRef.current = 5;
-    result.current.setRevealLoading('box-a');
+    request = result.current.beginRevealRequest('box-a', 'wallet-a')!;
     result.current.queueOverlayAction(() => calls.push('reconcile'));
     result.current.queueOverlayAction(() => calls.push('presentation'), 'presentation');
   });
   rerender({ ...initial, connectedWallet: 'wallet-b', owner: 'wallet-b', localAccountWallet: 'wallet-b' });
   assert.equal(request.signal.aborted, true);
-  assert.ok(result.current.revealOverlaySessionRef.current > requestSession);
-  assert.equal(result.current.connectedWalletRef.current, 'wallet-b');
-  assert.equal(result.current.revealLoadingRequestIdRef.current, null);
+  assert.ok(result.current.getSessionGeneration() > requestSession);
+  assert.equal(request.isCurrent(), false);
+  assert.equal(result.current.isRevealRequestPending(), false);
   assert.equal(result.current.revealLoading, null);
   assert.equal(result.current.revealOverlay, null);
   assert.deepEqual(calls, []);
@@ -411,14 +408,57 @@ test('presentation queued during an opening request waits until loading clears',
   scheduler();
   const { result } = renderHook(useRevealSession, { initialProps: options() });
   const calls: string[] = [];
-  act(() => result.current.setStartOpenLoading('box-a'));
+  let opening!: ReturnType<typeof result.current.beginBoxOpening>;
+  act(() => { opening = result.current.beginBoxOpening('box-a'); });
   act(() => {
     result.current.queueOverlayAction(() => calls.push('presentation'), 'presentation');
     result.current.queueOverlayAction(() => calls.push('reconcile'));
   });
   assert.deepEqual(calls, ['reconcile']);
-  act(() => result.current.setStartOpenLoading(null));
+  act(() => opening.finish());
   assert.deepEqual(calls, ['reconcile', 'presentation']);
+});
+
+test('finishing a discarded request cannot release a newer request for the same box', () => {
+  scheduler();
+  const { result } = renderHook(useRevealSession, { initialProps: options() });
+  let first!: NonNullable<ReturnType<typeof result.current.beginRevealRequest>>;
+  let second!: typeof first;
+  act(() => {
+    result.current.presentRevealOverlay(overlay());
+    first = result.current.beginRevealRequest('box-a', 'wallet-a')!;
+    assert.equal(result.current.beginRevealRequest('box-b', 'wallet-a'), null);
+  });
+  assert.equal(result.current.revealLoading, 'box-a');
+  act(() => result.current.discardRevealOverlay());
+  assert.equal(first.signal.aborted, true);
+  assert.equal(first.isCurrent(), false);
+  act(() => {
+    result.current.presentRevealOverlay(overlay());
+    second = result.current.beginRevealRequest('box-a', 'wallet-a')!;
+    first.finish();
+  });
+  assert.equal(second.isCurrent(), true);
+  assert.equal(second.signal.aborted, false);
+  assert.equal(result.current.revealLoading, 'box-a');
+  assert.equal(result.current.isRevealRequestPending(), true);
+  act(() => second.finish());
+  assert.equal(result.current.revealLoading, null);
+  assert.equal(result.current.isRevealRequestPending(), false);
+});
+
+test('a retry from a discarded attempt cannot reset a new attempt for the same box', () => {
+  scheduler();
+  const { result } = renderHook(useRevealSession, { initialProps: options() });
+  let attempt!: ReturnType<typeof result.current.beginRevealAttempt>;
+  act(() => result.current.presentRevealOverlay(overlay()));
+  act(() => { attempt = result.current.beginRevealAttempt('box-a', 'drop-a', 'static'); });
+  assert.equal(result.current.revealOverlay?.hasRevealAttempted, true);
+  act(() => result.current.discardRevealOverlay());
+  act(() => result.current.presentRevealOverlay(overlay()));
+  act(() => result.current.beginRevealAttempt('box-a', 'drop-a', 'static'));
+  act(() => attempt.finish('retry'));
+  assert.equal(result.current.revealOverlay?.hasRevealAttempted, true);
 });
 
 test('animated closing keeps snapshots until its fallback completes and releases them once', () => {
@@ -448,9 +488,9 @@ test('unmount cancels reveal frames, resize work, closing fallback, and request 
   act(() => result.current.presentRevealOverlay(overlay()));
   act(() => clock.flushFrame());
   act(() => clock.flushFrame());
-  const request = new AbortController();
+  let request!: NonNullable<ReturnType<typeof result.current.beginRevealRequest>>;
   act(() => {
-    result.current.revealSubmissionReconciliationAbortControllerRef.current = request;
+    request = result.current.beginRevealRequest('box-a', 'wallet-a')!;
     window.dispatchEvent(new window.Event('resize'));
     result.current.closeRevealOverlay();
   });

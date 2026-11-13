@@ -1,3 +1,4 @@
+import { decodeDeliverInstruction, hasDeliverDiscriminator } from './deliveryProtocol.js';
 import { parseDeliveryOrderReceiptView, type DeliveryOrderReceiptView } from './deliveryOrderReceiptView.js';
 import { parseDeliveryOrderOwnership, parseDeliveryOrderStatus, parseDeliveryRecoveryState } from './deliveryOrderReadModel.js';
 import bs58 from 'bs58';
@@ -139,7 +140,6 @@ const TX_MAX_SEND_ATTEMPTS = 3;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const CANONICAL_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const ACCOUNT_DELIVERY_RECORD = Buffer.from('2b0f869afad50393', 'hex');
-const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 
 const deliveryIdSchema = z.number().int().min(1).max(MAX_U32);
 const dropIdSchema = z.string().min(1).max(64).refine((value) =>
@@ -330,17 +330,17 @@ function normalizeAssignedDudeIds(
 }
 
 function decodeDeliverArgs(data: Buffer): { deliveryId: number; feeLamports: number; deliveryBump: number } {
-  if (data.length < 21 || !data.subarray(0, 8).equals(IX_DELIVER)) {
+  const decoded = decodeDeliverInstruction(data);
+  if (!decoded) {
     throw new DeliveryReceiptError('failed-precondition', 'Transaction has an invalid deliver instruction.');
   }
-  const fee = data.readBigUInt64LE(12);
+  const fee = decoded.feeLamports;
   if (fee > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery fee is too large.');
   }
   return {
-    deliveryId: data.readUInt32LE(8),
+    ...decoded,
     feeLamports: Number(fee),
-    deliveryBump: data.readUInt8(20),
   };
 }
 
@@ -457,7 +457,7 @@ async function verifyReceiptIssuanceBySignature(args: {
     const program = keys[instruction.programIdIndex];
     if (!program?.equals(args.runtime.boxMinterProgramId)) continue;
     const data = Buffer.from(instruction.data);
-    if (!data.subarray(0, 8).equals(IX_DELIVER)) continue;
+    if (!hasDeliverDiscriminator(data)) continue;
     const accounts = Array.from(instruction.accountKeyIndexes).map((index) => keys[index]);
     if (accounts.length >= fixedAccountCount && accounts[8]?.equals(expectedDeliveryPda)) {
       deliverAccounts = accounts;

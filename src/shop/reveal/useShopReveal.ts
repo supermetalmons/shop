@@ -30,18 +30,13 @@ import {
   offsetRevealOverlayRectForViewport,
   toRevealOverlayRect,
 } from '../../lib/revealOverlayLayout';
-import {
-  applyRevealRequestRetry,
-  requestRevealWithSubmissionRecovery,
-  resolveRevealOverlayPhaseAfterReveal,
-  type RevealOverlayPhase,
-} from '../reveal';
+import { requestRevealWithSubmissionRecovery, type RevealOverlayPhase } from '../reveal';
 import { isUserRejectedError } from '../commerce/transactionSupport';
 import { persistCompletedReveal } from '../persistedState';
 import type { InventoryItem } from '../../types';
 import { calcInteractiveCardViewerTargetRectInViewport, calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
-import { pickRandomSoundUrl, REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS } from './sounds';
-import type { EarlyPackRevealGate, ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
+import { pickRandomSoundUrl } from './sounds';
+import type { ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
 import type { ShopRevealOptions } from './contracts';
 import { useRevealAssets } from './useRevealAssets';
 import { useRevealSession } from './useRevealSession';
@@ -49,7 +44,7 @@ import { useRevealPresentation } from './useRevealPresentation';
 
 export function useShopReveal(options: ShopRevealOptions) {
   const {
-    connectedWallet, publicKey, owner, inventory, pendingOpenBoxes, routeDrop,
+    connectedWallet, publicKey, owner, inventory, routeDrop,
     getDropContent, getDropConnection, requireKnownDropConfig,
     boxLabelForDropId, figureLabelForDropId, openGerundForDropId,
     canOpenBoxesForDropId, showToast, blockViewerModeAction,
@@ -61,9 +56,7 @@ export function useShopReveal(options: ShopRevealOptions) {
   const assets = useRevealAssets(options);
   const {
     usesInteractiveCardPackRevealForDropId, usesClearCard3dRevealForDropId,
-    usesAssetGatedRevealForDropId, dropRevealIsAnimated,
-    revealFrameCountForDropId, revealClickMaxForDropId, revealAutoplayStartForDropId,
-    revealMediaStartForDropId, revealRendererForDropId, boxAspectRatioForDropId,
+    revealFrameCountForDropId, revealRendererForDropId, boxAspectRatioForDropId,
     resolveInteractiveCardPackMediaIdForBox, revealSoundUrlsForDropId,
     preloadRevealAssetsForPackMedia, preloadInteractiveCardPackRevealCardAssetsForDropId,
     preloadRevealVideos, ensureSoundReady,
@@ -71,18 +64,12 @@ export function useShopReveal(options: ShopRevealOptions) {
   } = assets;
   const session = useRevealSession({ ...options, assets });
   const {
-    startOpenLoading, setStartOpenLoading, revealLoading, setRevealLoading,
-    revealOverlay, setRevealOverlay, revealOverlayClosing, revealOverlayCloseMode,
-    setInventorySnapshot, setPendingOpenSnapshot,
-    ownerRef, connectedWalletRef, suspendedRef, presentationLoadingRef,
-    openSelectedLockRef, openSelectedBoxIdRef, earlyPackRevealGateRef,
-    revealOverlayRef, revealOverlaySessionRef, revealLoadingRequestCounterRef,
-    revealLoadingRequestIdRef, revealSubmissionReconciliationAbortControllerRef,
-    revealDismissLockedUntilRef, revealOverlayClosingRef,
-    queueOverlayAction, clearRevealOverlayCloseTimeout, resetAssetGatedRevealDismissState,
-    abortRevealSubmissionReconciliation, finalizeRevealOverlayDismissal,
-    closeRevealOverlay, dismissRevealOverlay,
-    canDismissAssetGatedRevealOverlay, startAutoOpening, presentRevealOverlay, presentViewerOverlay,
+    startOpenLoading, revealLoading, revealOverlay, revealOverlayClosing, revealOverlayCloseMode,
+    beginBoxOpening, beginRevealRequest, beginSelectedBox, finishSelectedBox,
+    revealAfterOpeningConfirmation, resolvePackIdentity, lockRevealDismissal, resolveReveal, beginRevealAttempt,
+    getCurrentOverlay, isClosing, isPresentationLoading, isRevealRequestPending,
+    queueOverlayAction, finalizeRevealOverlayDismissal,
+    closeRevealOverlay, dismissRevealOverlay, prepareRevealOverlay, presentRevealOverlay, presentViewerOverlay,
   } = session;
   useEffect(() => {
     if (!revealOverlay || revealOverlayClosing || options.suspended || revealOverlay.packMediaId ||
@@ -100,9 +87,7 @@ export function useShopReveal(options: ShopRevealOptions) {
         if (cancelled) return;
         const packMediaId = resolveInteractiveCardPackMediaIdForBox(dropId, boxId);
         if (packMediaId) {
-          setRevealOverlay(previous => previous?.id === id && previous.dropId === dropId && !previous.packMediaId
-            ? { ...previous, packMediaId, name: item?.name || previous.name, image: normalizeBoxDisplayImage({ dropId, boxId }) }
-            : previous);
+          resolvePackIdentity({ id, dropId, packMediaId, name: item?.name, image: normalizeBoxDisplayImage({ dropId, boxId }) });
           return;
         }
       } catch {}
@@ -111,7 +96,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     void resolveIdentity();
     return () => { cancelled = true; clearTimeout(retry); };
   }, [inventory, revealOverlay, revealOverlayClosing, options.suspended, getDropConnection, requireKnownDropConfig,
-    resolveInteractiveCardPackMediaIdForBox, setRevealOverlay]);
+    resolveInteractiveCardPackMediaIdForBox, resolvePackIdentity]);
 
   const openRevealOverlay = (
     item: InventoryItem,
@@ -119,13 +104,12 @@ export function useShopReveal(options: ShopRevealOptions) {
     phase: RevealOverlayPhase = 'ready',
   ) => {
     const id = item.id;
-    if (revealOverlayRef.current || revealLoading) return;
+    if (getCurrentOverlay() || revealLoading) return;
     if (startOpenLoading && startOpenLoading !== id) return;
     if (typeof window === 'undefined') return;
     const overlayDropId = item.dropId || routeDrop?.dropId;
     if (!overlayDropId) return;
-    resetAssetGatedRevealDismissState();
-    clearRevealOverlayCloseTimeout();
+    prepareRevealOverlay();
     const packMediaId = resolveInteractiveCardPackMediaIdForBox(overlayDropId, item.boxId);
     preloadRevealAssetsForPackMedia(overlayDropId, packMediaId);
     const inventoryOriginRect = toRevealOverlayRect(rect);
@@ -138,8 +122,6 @@ export function useShopReveal(options: ShopRevealOptions) {
     const originRect = usesClearCard3dRevealFlow(revealRenderer)
       ? calcContainedMediaRevealOriginRect(inventoryOriginRect, targetRect, boxAspectRatio)
       : inventoryOriginRect;
-    setInventorySnapshot(inventory);
-    setPendingOpenSnapshot(pendingOpenBoxes);
     const nextOverlay: RevealOverlayState = {
       id,
       dropId: overlayDropId,
@@ -186,28 +168,14 @@ export function useShopReveal(options: ShopRevealOptions) {
       assetId: item.id,
       dropId: item.dropId,
     });
-    setStartOpenLoading(item.id);
-    let earlyRevealGate: EarlyPackRevealGate | null = null;
+    const opening = beginBoxOpening(item.id);
     try {
       const targetDrop = requireKnownDropConfig(item.dropId, `inventory item ${item.id}`);
       const targetConnection = getDropConnection(targetDrop.dropId);
       const cfg = await fetchBoxMinterConfig(targetConnection, targetDrop, 'operations');
       const enablesEarlyPackInteraction = isDropFamily(targetDrop, 'clear_cards') || isDropFamily(targetDrop, 'mi_note_cards');
       if (enablesEarlyPackInteraction) {
-        let settleConfirmation!: (confirmed: boolean) => void;
-        const confirmation = new Promise<boolean>((resolve) => {
-          settleConfirmation = resolve;
-        });
-        earlyRevealGate = {
-          boxAssetId: item.id,
-          dropId: targetDrop.dropId,
-          owner,
-          revealSession: revealOverlaySessionRef.current,
-          wallet: connectedWallet,
-          confirmation,
-          settleConfirmation,
-        };
-        earlyPackRevealGateRef.current = earlyRevealGate;
+        opening.enableEarlyReveal(targetDrop.dropId, owner, connectedWallet);
       }
       const sendOnce = async () => {
         const { tx, pendingPda } = await buildStartOpenBoxTxWithPending(
@@ -218,10 +186,7 @@ export function useShopReveal(options: ShopRevealOptions) {
           targetDrop,
         );
         if (enablesEarlyPackInteraction) {
-          setRevealOverlay((prev) => {
-            if (!prev || prev.id !== item.id || prev.phase !== 'preparing') return prev;
-            return { ...prev, phase: 'ready' };
-          });
+          opening.allowEarlyInteraction();
         }
         return sendAndConfirmViaConnection(tx, targetConnection, {
           onAlreadyProcessedWithoutSignature: (err) =>
@@ -229,68 +194,37 @@ export function useShopReveal(options: ShopRevealOptions) {
         });
       };
       await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
-      earlyRevealGate?.settleConfirmation(true);
+      opening.confirm();
       console.info('[mons] inventory asset sent to the vault', {
         assetId: item.id,
         dropId: item.dropId,
       });
       queueOverlayAction(() => addLocalPendingReveal(item));
-      setRevealOverlay((prev) => {
-        if (!prev || prev.id !== item.id) return prev;
-        if (enablesEarlyPackInteraction) {
-          return { ...prev, phase: 'ready' };
-        }
-        return {
-          ...prev,
-          phase: 'ready',
-          frame: 1,
-          advanceClicks: 0,
-          revealedIds: undefined,
-          interactiveRevealCardId: undefined,
-          hasRevealAttempted: false,
-          autoOpening: false,
-          autoMode: undefined,
-        };
-      });
-
+      opening.presentConfirmedOpening();
       queueOverlayAction(() => markAssetsHidden([item.id]));
       queueOverlayAction(() => {
         void Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
       });
     } catch (err) {
-      earlyRevealGate?.settleConfirmation(false);
+      opening.cancel();
       console.error(err);
       if (!isUserRejectedError(err)) {
         showToast(err instanceof Error ? err.message : `Failed to open ${boxLabelForDropId(item.dropId)}`);
       }
       dismissRevealOverlay();
     } finally {
-      if (earlyPackRevealGateRef.current === earlyRevealGate) {
-        earlyPackRevealGateRef.current = null;
-      }
-      setStartOpenLoading(null);
+      opening.finish();
     }
   };
 
   const handleRevealDudes = async (boxAssetId: string, dropId: string): Promise<PonchoDrifellaRevealRequestStatus> => {
     if (blockViewerModeAction()) return 'retry';
     if (!canOpenBoxesForDropId(dropId)) return 'resolved';
-    if (revealLoadingRequestIdRef.current !== null) return 'resolved';
+    if (isRevealRequestPending()) return 'resolved';
     if (!connectedWallet || !publicKey) return 'retry';
     const walletAddress = publicKey.toBase58();
-    const requestSession = revealOverlaySessionRef.current;
-    revealLoadingRequestCounterRef.current += 1;
-    const loadingRequestId = revealLoadingRequestCounterRef.current;
-    revealLoadingRequestIdRef.current = loadingRequestId;
-    setRevealLoading(boxAssetId);
-    abortRevealSubmissionReconciliation();
-    const reconciliationController = new AbortController();
-    revealSubmissionReconciliationAbortControllerRef.current = reconciliationController;
-    const requestIsCurrent = () =>
-      !reconciliationController.signal.aborted &&
-      !suspendedRef.current &&
-      revealOverlaySessionRef.current === requestSession &&
-      connectedWalletRef.current === walletAddress;
+    const request = beginRevealRequest(boxAssetId, walletAddress);
+    if (!request) return 'resolved';
     try {
       const signedIn = await ensureSignedIn();
       if (!signedIn) return 'retry';
@@ -299,7 +233,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       const usesInteractiveCardPackFlow = usesInteractiveCardPackRevealFlow(revealContent.reveal.renderer);
       const usesClearCard3dFlow = usesClearCard3dRevealFlow(revealContent.reveal.renderer);
       const usesAssetGatedFlow = usesAssetGatedRevealFlow(revealContent.reveal.renderer);
-      if (!requestIsCurrent()) return 'resolved';
+      if (!request.isCurrent()) return 'resolved';
       const revealResult = await requestRevealWithSubmissionRecovery({
         request: () => revealDudes(walletAddress, boxAssetId, revealDrop.dropId),
         recoveryDetails: (error) => revealDudesSubmissionUnknownDetails(error, revealDrop.dropId),
@@ -309,8 +243,8 @@ export function useShopReveal(options: ShopRevealOptions) {
             submission,
             options,
           ),
-        isCurrent: requestIsCurrent,
-        signal: reconciliationController.signal,
+        isCurrent: request.isCurrent,
+        signal: request.signal,
       });
       if (revealResult.status === 'stale') return 'resolved';
       const resp = revealResult.response;
@@ -335,9 +269,7 @@ export function useShopReveal(options: ShopRevealOptions) {
         ? getInteractiveCardPackRevealFigureIds(revealDrop, revealed, selectedInteractiveRevealCardId)
         : [];
       preloadInteractiveCardPackRevealCardAssetsForDropId(revealDrop.dropId, interactiveRevealFigureIds);
-      if (revealed.length) {
-        revealDismissLockedUntilRef.current = Date.now() + REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS;
-      }
+      if (revealed.length) lockRevealDismissal();
       if (!usesInteractiveCardPackFlow && revealed.length && revealContent.figures.revealPresentation === 'videos') {
         const mediaIds = Array.from(
           new Set(
@@ -350,25 +282,12 @@ export function useShopReveal(options: ShopRevealOptions) {
           preloadRevealVideos(mediaIds, revealDrop.dropId);
         }
       }
-      setRevealOverlay((prev) => {
-        if (!prev || prev.id !== boxAssetId) return prev;
-        const hasResults = revealed.length > 0;
-        const nextPhase = resolveRevealOverlayPhaseAfterReveal({
-          currentPhase: prev.phase,
-          revealMode: revealContent.reveal.mode,
-          usesAssetGatedFlow,
-          frame: prev.frame,
-          mediaStart: revealMediaStartForDropId(prev.dropId),
-          hasResults,
-        });
-        return {
-          ...prev,
-          phase: nextPhase,
-          revealedIds: revealed,
-          interactiveRevealCardId: usesInteractiveCardPackFlow && hasResults
-            ? prev.interactiveRevealCardId ?? selectedInteractiveRevealCardId
-            : undefined,
-        };
+      resolveReveal(boxAssetId, {
+        revealedIds: revealed,
+        revealMode: revealContent.reveal.mode,
+        usesAssetGatedFlow,
+        usesInteractiveCardPackFlow,
+        interactiveRevealCardId: selectedInteractiveRevealCardId,
       });
       queueOverlayAction(() => removeLocalPendingReveal(boxAssetId));
       queueOverlayAction(() => rememberRecentReveal(boxAssetId));
@@ -378,7 +297,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       });
       return 'resolved';
     } catch (err) {
-      if (!requestIsCurrent()) return 'resolved';
+      if (!request.isCurrent()) return 'resolved';
       console.error(err);
       const code = (err as { code?: string })?.code;
       if (code !== 'not-found' && !isUserRejectedError(err)) {
@@ -386,13 +305,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       }
       return 'retry';
     } finally {
-      if (revealSubmissionReconciliationAbortControllerRef.current === reconciliationController) {
-        revealSubmissionReconciliationAbortControllerRef.current = null;
-      }
-      if (revealLoadingRequestIdRef.current === loadingRequestId) {
-        revealLoadingRequestIdRef.current = null;
-        setRevealLoading((current) => (current === boxAssetId ? null : current));
-      }
+      request.finish();
     }
   };
 
@@ -419,90 +332,16 @@ export function useShopReveal(options: ShopRevealOptions) {
     const { click, clickVolume } = revealSoundUrlsForDropId(revealOverlay.dropId);
     void ensureSoundReady().then(() => soundPlayer.playSound(pickRandomSoundUrl(click), clickVolume));
     const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
-    setRevealOverlay((prev) => {
-      if (!prev || prev.id !== revealOverlay.id) return prev;
-      if (prev.phase !== 'ready') return prev;
-      if (prev.autoOpening) return prev;
-      if (revealContent.reveal.mode !== 'animated') {
-        return {
-          ...prev,
-          hasRevealAttempted: true,
-          advanceClicks: 0,
-        };
-      }
-
-      const hasResults = Boolean(prev.revealedIds?.length);
-      const canAdvance =
-        prev.frame < revealClickMaxForDropId(prev.dropId) ||
-        (prev.frame === revealClickMaxForDropId(prev.dropId) && hasResults);
-      const shouldAdvanceNow = canAdvance;
-      const nextFrame = shouldAdvanceNow
-        ? prev.frame < revealClickMaxForDropId(prev.dropId)
-          ? prev.frame + 1
-          : prev.frame === revealClickMaxForDropId(prev.dropId) && hasResults
-            ? revealAutoplayStartForDropId(prev.dropId)
-            : prev.frame
-        : prev.frame;
-      const shouldAuto =
-        hasResults && nextFrame === revealAutoplayStartForDropId(prev.dropId) && prev.frame !== nextFrame;
-      return {
-        ...prev,
-        frame: nextFrame,
-        hasRevealAttempted: true,
-        advanceClicks: 0,
-        autoOpening: shouldAuto ? true : prev.autoOpening,
-        autoMode: shouldAuto ? 'normal' : prev.autoMode,
-      };
-    });
+    const attempt = beginRevealAttempt(revealOverlay.id, revealOverlay.dropId, revealContent.reveal.mode);
 
     if (shouldSendReveal) {
       const boxAssetId = revealOverlay.id;
       const dropId = revealOverlay.dropId;
-      const requestSession = revealOverlaySessionRef.current;
       return (async () => {
         const status = await handleRevealDudes(boxAssetId, dropId);
-        setRevealOverlay((current) => applyRevealRequestRetry(current, {
-          status,
-          requestSession,
-          currentSession: revealOverlaySessionRef.current,
-          boxAssetId,
-          dropId,
-        }));
+        attempt.finish(status);
       })();
     }
-  };
-
-  const handleRevealOverlayDismiss = () => {
-    if (!revealOverlay || revealOverlayClosing) return;
-    if (
-      revealOverlay.viewerMode === 'poncho-card' ||
-      revealOverlay.viewerMode === 'clear-card' ||
-      revealOverlay.viewerMode === 'clear-pack' ||
-      revealOverlay.viewerMode === 'mi-note-pack' ||
-      revealOverlay.viewerMode === 'receipt-image'
-    ) {
-      closeRevealOverlay();
-      return;
-    }
-    const hasResults = Boolean(revealOverlay.revealedIds?.length);
-    if (usesAssetGatedRevealForDropId(revealOverlay.dropId)) {
-      if (!canDismissAssetGatedRevealOverlay(revealOverlay)) {
-        return;
-      }
-      closeRevealOverlay();
-      return;
-    }
-    if (hasResults && dropRevealIsAnimated(revealOverlay.dropId) && revealOverlay.frame < revealFrameCountForDropId(revealOverlay.dropId)) {
-      startAutoOpening('fast');
-      return;
-    }
-    if (revealOverlay.hasRevealAttempted && revealLoading === revealOverlay.id) {
-      return;
-    }
-    if (hasResults && Date.now() < revealDismissLockedUntilRef.current) {
-      return;
-    }
-    closeRevealOverlay();
   };
 
   const handleRevealOverlayTransitionEnd = useCallback(
@@ -550,56 +389,42 @@ export function useShopReveal(options: ShopRevealOptions) {
     ],
   );
 
-	  const openSelectedBox = async (selectedBox: InventoryItem) => {
-      if (blockViewerModeAction()) return;
-	    if (!selectedBox) return;
-      if (!canOpenBoxesForDropId(selectedBox.dropId)) return;
-	    if (!connectedWallet || !publicKey) {
-	      openWalletModal();
-	      return;
-	    }
-	    if (openSelectedLockRef.current) {
-	      const activeId = openSelectedBoxIdRef.current;
-	      if (activeId && activeId !== selectedBox.id) {
-	        showToast(`Check your wallet to finish the current ${openGerundForDropId(selectedBox.dropId)}`);
-	        return;
-	      }
-	      openSelectedBoxIdRef.current = selectedBox.id;
-	      if (revealOverlayRef.current?.id === selectedBox.id) return;
-	      if (revealOverlayRef.current || revealOverlayClosingRef.current) {
-	        queueOverlayAction(() => openPreparingOverlayForBox(selectedBox), 'presentation');
-	        return;
-	      }
-	      openPreparingOverlayForBox(selectedBox);
-	      return;
-	    }
-	    openSelectedLockRef.current = true;
-	    openSelectedBoxIdRef.current = selectedBox.id;
-	    try {
-	      openPreparingOverlayForBox(selectedBox);
-	      const signedIn = await ensureSignedIn();
-	      if (!signedIn) {
-	        if (revealOverlayRef.current?.id === selectedBox.id) {
-	          closeRevealOverlay();
-	        }
-	        return;
-	      }
-      if (
-        !revealOverlayRef.current ||
-        revealOverlayRef.current.id !== selectedBox.id ||
-        revealOverlayClosingRef.current
-      ) {
+  const openSelectedBox = async (selectedBox: InventoryItem) => {
+    if (blockViewerModeAction()) return;
+    if (!selectedBox) return;
+    if (!canOpenBoxesForDropId(selectedBox.dropId)) return;
+    if (!connectedWallet || !publicKey) {
+      openWalletModal();
+      return;
+    }
+    const selection = beginSelectedBox(selectedBox.id);
+    if (selection === 'busy') {
+      showToast(`Check your wallet to finish the current ${openGerundForDropId(selectedBox.dropId)}`);
+      return;
+    }
+    if (selection === 'resume') {
+      if (getCurrentOverlay()?.id === selectedBox.id) return;
+      if (getCurrentOverlay() || isClosing()) {
+        queueOverlayAction(() => openPreparingOverlayForBox(selectedBox), 'presentation');
         return;
       }
-	      clearInventorySelection();
-	      await handleStartOpenBox(selectedBox);
-	    } finally {
-	      if (openSelectedBoxIdRef.current === selectedBox.id) {
-	        openSelectedBoxIdRef.current = null;
-	      }
-	      openSelectedLockRef.current = false;
-	    }
-	  };
+      openPreparingOverlayForBox(selectedBox);
+      return;
+    }
+    try {
+      openPreparingOverlayForBox(selectedBox);
+      const signedIn = await ensureSignedIn();
+      if (!signedIn) {
+        if (getCurrentOverlay()?.id === selectedBox.id) closeRevealOverlay();
+        return;
+      }
+      if (getCurrentOverlay()?.id !== selectedBox.id || isClosing()) return;
+      clearInventorySelection();
+      await handleStartOpenBox(selectedBox);
+    } finally {
+      finishSelectedBox(selectedBox.id);
+    }
+  };
 
   const openInteractiveCardViewer = useCallback((
     {
@@ -623,7 +448,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     },
   ) => {
     if (!usesInteractiveCardPackRevealForDropId(dropId) && !isDropFamily(dropId, 'mi_note_cards')) return false;
-    if (revealOverlayRef.current || revealLoading) return false;
+    if (getCurrentOverlay() || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
 
@@ -658,6 +483,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     return opened;
   }, [
     clearInventorySelection,
+    getCurrentOverlay,
     presentViewerOverlay,
     revealLoading,
     startOpenLoading,
@@ -689,7 +515,7 @@ export function useShopReveal(options: ShopRevealOptions) {
   ) => {
     if (!usesClearCard3dRevealForDropId(dropId)) return false;
     if (viewerMode === 'clear-card' && !clearCardModelUrl(figureId)) return false;
-    if (revealOverlayRef.current || revealLoading) return false;
+    if (getCurrentOverlay() || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
 
@@ -732,6 +558,7 @@ export function useShopReveal(options: ShopRevealOptions) {
   }, [
     boxAspectRatioForDropId,
     clearInventorySelection,
+    getCurrentOverlay,
     presentViewerOverlay,
     revealLoading,
     startOpenLoading,
@@ -740,7 +567,7 @@ export function useShopReveal(options: ShopRevealOptions) {
 
   const openMiNotePackViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null, sourceElement?: HTMLElement | null) => {
     if (item.kind !== 'box' || !isDropFamily(item.dropId, 'mi_note_cards')) return false;
-    if (revealOverlayRef.current || revealLoading || startOpenLoading || typeof window === 'undefined') return false;
+    if (getCurrentOverlay() || revealLoading || startOpenLoading || typeof window === 'undefined') return false;
     const targetRect = calcRevealTargetRectForRendererInViewport(
       revealRendererForDropId(item.dropId), boxAspectRatioForDropId(item.dropId),
     );
@@ -757,7 +584,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     });
     if (opened) clearInventorySelection();
     return opened;
-  }, [boxAspectRatioForDropId, clearInventorySelection, presentViewerOverlay, revealLoading,
+  }, [boxAspectRatioForDropId, clearInventorySelection, getCurrentOverlay, presentViewerOverlay, revealLoading,
     revealRendererForDropId, resolveInteractiveCardPackMediaIdForBox, startOpenLoading]);
 
   const openImageViewer = useCallback((
@@ -776,7 +603,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       sourceElement?: HTMLElement | null;
     },
   ) => {
-    if (revealOverlayRef.current || presentationLoadingRef.current) return false;
+    if (getCurrentOverlay() || isPresentationLoading()) return false;
     if (typeof window === 'undefined') return false;
     const missingImage = options?.receiptImages?.length
       ? options.receiptImages.some((receiptImage) => !receiptImage.image)
@@ -812,6 +639,8 @@ export function useShopReveal(options: ShopRevealOptions) {
       sourceElement: options?.sourceElement,
     }, { inventorySnapshot: options?.inventorySnapshot });
   }, [
+    getCurrentOverlay,
+    isPresentationLoading,
     presentViewerOverlay,
     showToast,
   ]);
@@ -936,26 +765,9 @@ export function useShopReveal(options: ShopRevealOptions) {
 
   const handlePonchoOverlayRequestReveal = useCallback(() => {
     if (!revealOverlay) return 'retry' as const;
-    const earlyRevealGate = earlyPackRevealGateRef.current;
-    if (
-      earlyRevealGate?.boxAssetId === revealOverlay.id &&
-      earlyRevealGate.dropId === revealOverlay.dropId
-    ) {
-      return earlyRevealGate.confirmation.then((confirmed) =>
-        confirmed &&
-        !suspendedRef.current &&
-        ownerRef.current === earlyRevealGate.owner &&
-        connectedWalletRef.current === earlyRevealGate.wallet &&
-        revealOverlaySessionRef.current === earlyRevealGate.revealSession &&
-        revealOverlayRef.current?.id === earlyRevealGate.boxAssetId &&
-        revealOverlayRef.current.dropId === earlyRevealGate.dropId &&
-        !revealOverlayClosingRef.current
-          ? handleRevealDudes(revealOverlay.id, revealOverlay.dropId)
-          : 'resolved' as const,
-      );
-    }
-    return handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
-  }, [handleRevealDudes, revealOverlay?.dropId, revealOverlay?.id]);
+    const reveal = () => handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
+    return revealAfterOpeningConfirmation(revealOverlay.id, revealOverlay.dropId, reveal) ?? reveal();
+  }, [handleRevealDudes, revealOverlay?.dropId, revealOverlay?.id, revealAfterOpeningConfirmation]);
   const handlePonchoOverlayPlayClick = useCallback(() => {
     if (!revealOverlay) return;
     playClickSoundForDropId(revealOverlay.dropId);
@@ -985,7 +797,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     const refreshedRect = findInventoryRect(item.id);
     openRevealOverlay(item, refreshedRect || rect);
     const signedIn = await ensureSignedIn();
-    if (!signedIn && revealOverlayRef.current?.id === item.id) {
+    if (!signedIn && getCurrentOverlay()?.id === item.id) {
       closeRevealOverlay();
     }
   };
@@ -1003,7 +815,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     inventoryView: session.inventoryView,
     pendingOpenBoxesView: session.pendingOpenBoxesView,
     getCurrentOverlay: session.getCurrentOverlay,
-    getSessionGeneration: () => revealOverlaySessionRef.current,
+    getSessionGeneration: session.getSessionGeneration,
     isClosing: session.isClosing,
     queueOverlayAction,
     closeRevealOverlay,
@@ -1024,7 +836,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     routeDrop,
     suspended: options.suspended,
     handleRevealOverlayClick,
-    handleRevealOverlayDismiss,
+    handleRevealOverlayDismiss: session.dismissRevealWhenReady,
     handleRevealOverlayTransitionEnd,
     handlePonchoOverlayRequestReveal,
     handlePonchoOverlayPlayClick,

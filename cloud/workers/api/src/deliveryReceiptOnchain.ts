@@ -16,7 +16,6 @@ import {
   type DecodedBoxMinterConfigData,
 } from '../../../../shared/boxMinterConfigCodec.js';
 import {
-  BOX_MINTER_CONFIG_SEED,
   isBoxMinterDiscountMintsPerWallet,
 } from '../../../../shared/boxMinterProtocol.js';
 import {
@@ -34,6 +33,7 @@ import {
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import { isSignalCancellationError } from './boundedRequest.js';
 import { isRecord } from './dataAccess.js';
+import { deriveDeliveryAddress } from './deliveryProtocol.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
 import { createSolanaConnection } from './solanaConnection.js';
 import { pollSignatureConfirmation } from './signaturePolling.js';
@@ -155,14 +155,10 @@ function u32LE(value: number): Buffer {
 }
 
 export function deriveDeliveryPda(runtime: DeliveryRuntime, deliveryId: number): [PublicKey, number] {
-  const singleton = PublicKey.findProgramAddressSync(
-    [Buffer.from(BOX_MINTER_CONFIG_SEED)],
-    runtime.boxMinterProgramId,
-  )[0];
-  const seeds: Uint8Array[] = [Buffer.from('delivery')];
-  if (!runtime.boxMinterConfigPda.equals(singleton)) seeds.push(runtime.boxMinterConfigPda.toBuffer());
-  seeds.push(u32LE(deliveryId));
-  return PublicKey.findProgramAddressSync(seeds, runtime.boxMinterProgramId);
+  if (!Number.isInteger(deliveryId) || deliveryId < 0 || deliveryId > MAX_U32) {
+    throw new DeliveryReceiptError('invalid-argument', 'Invalid unsigned 32-bit integer.');
+  }
+  return deriveDeliveryAddress(runtime, deliveryId);
 }
 
 function deriveTreeConfigPda(merkleTree: PublicKey): PublicKey {

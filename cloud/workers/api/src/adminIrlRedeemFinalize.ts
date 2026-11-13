@@ -1,3 +1,4 @@
+import { encodeDeliverInstruction } from './deliveryProtocol.js';
 import {
   type FinalizeRequest,
   type AdminIrlRedeemFinalizeResponse,
@@ -134,7 +135,6 @@ const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
-const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const ADMIN_IRL_REDEEM_WALLETS = new Set(ADMIN_IRL_REDEEM_WALLET_ADDRESSES.map((wallet) => new PublicKey(wallet).toBase58()));
 
@@ -651,15 +651,6 @@ async function mintPackReceipts(
   return receiptTxs;
 }
 
-function encodeDeliverArgs(deliveryId: number, deliveryBump: number): Buffer {
-  const data = Buffer.alloc(21);
-  IX_DELIVER.copy(data, 0);
-  data.writeUInt32LE(deliveryId, 8);
-  data.writeBigUInt64LE(0n, 12);
-  data.writeUInt8(deliveryBump, 20);
-  return data;
-}
-
 async function buildTransactionWithLookupTables(
   instructions: TransactionInstruction[],
   signer: Keypair,
@@ -710,7 +701,7 @@ async function ensureInternalDelivery(
         { pubkey: deliveryPda, isSigner: false, isWritable: true },
         ...assets.map((asset) => ({ pubkey: asset, isSigner: false, isWritable: true })),
       ],
-      data: encodeDeliverArgs(deliveryId, bump),
+      data: encodeDeliverInstruction(deliveryId, 0n, bump),
     });
     const instructions = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), instruction];
     const sized = await buildTransactionWithLookupTables(instructions, signer, DUMMY_BLOCKHASH, lookupTables);

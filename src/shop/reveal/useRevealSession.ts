@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { InventoryItem, PendingOpenBox } from '../../types';
-import { usesMiNotePack3dRevealFlow } from '../../config/dropsExtraContent';
+import { usesMiNotePack3dRevealFlow, type DropRevealMode } from '../../config/dropsExtraContent';
 import { useOverlayScrollLock } from '../../hooks/useOverlayScrollLock';
 import { getInventoryRevealRect } from '../../lib/inventoryMediaRect';
 import {
@@ -14,7 +14,8 @@ import {
   toRevealOverlayRect,
 } from '../../lib/revealOverlayLayout';
 import { calcInteractiveCardViewerTargetRectInViewport, calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport } from './layout';
-import { PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS, REVEAL_CLOSE_FALLBACK_MS } from './sounds';
+import { applyRevealRequestRetry, resolveRevealOverlayPhaseAfterReveal, type RevealRequestStatus } from '../reveal';
+import { PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS, REVEAL_CLOSE_FALLBACK_MS, REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS } from './sounds';
 import type { PonchoRevealDismissReadySource } from '../../components/PonchoRevealOverlay';
 import type { EarlyPackRevealGate, RevealOverlayCloseMode, RevealOverlayState, ViewerOverlayInput } from './types';
 import type { ShopRevealOptions } from './contracts';
@@ -27,6 +28,7 @@ type RevealSessionOptions = Pick<ShopRevealOptions,
   assets: Pick<RevealAssets,
     'usesClearCard3dRevealForDropId' | 'usesAssetGatedRevealForDropId' |
     'dropRevealIsAnimated' | 'revealFrameCountForDropId' | 'revealMediaStartForDropId' |
+    'revealClickMaxForDropId' | 'revealAutoplayStartForDropId' |
     'revealRendererForDropId' | 'boxAspectRatioForDropId' | 'clearRevealVideos' | 'resetRevealAssets'
   >;
 };
@@ -38,6 +40,7 @@ export function useRevealSession({
   const {
     usesClearCard3dRevealForDropId, usesAssetGatedRevealForDropId,
     dropRevealIsAnimated, revealFrameCountForDropId, revealMediaStartForDropId,
+    revealClickMaxForDropId, revealAutoplayStartForDropId,
     revealRendererForDropId, boxAspectRatioForDropId, clearRevealVideos, resetRevealAssets,
   } = assets;
   const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
@@ -196,6 +199,165 @@ export function useRevealSession({
     setRevealLoading(null);
   }, [abortRevealSubmissionReconciliation]);
 
+  const beginRevealRequest = useCallback((boxAssetId: string, walletAddress: string) => {
+    if (revealLoadingRequestIdRef.current !== null) return null;
+    const requestSession = revealOverlaySessionRef.current;
+    const requestId = ++revealLoadingRequestCounterRef.current;
+    revealLoadingRequestIdRef.current = requestId;
+    setRevealLoading(boxAssetId);
+    abortRevealSubmissionReconciliation();
+    const controller = new AbortController();
+    revealSubmissionReconciliationAbortControllerRef.current = controller;
+    return {
+      signal: controller.signal,
+      isCurrent: () => !controller.signal.aborted &&
+        !suspendedRef.current &&
+        revealOverlaySessionRef.current === requestSession &&
+        connectedWalletRef.current === walletAddress,
+      finish: () => {
+        if (revealSubmissionReconciliationAbortControllerRef.current === controller) {
+          revealSubmissionReconciliationAbortControllerRef.current = null;
+        }
+        if (revealLoadingRequestIdRef.current === requestId) {
+          revealLoadingRequestIdRef.current = null;
+          setRevealLoading((current) => current === boxAssetId ? null : current);
+        }
+      },
+    };
+  }, [abortRevealSubmissionReconciliation]);
+
+  const beginBoxOpening = useCallback((boxAssetId: string) => {
+    setStartOpenLoading(boxAssetId);
+    let earlyRevealGate: EarlyPackRevealGate | null = null;
+    return {
+      enableEarlyReveal: (dropId: string, openingOwner: string | undefined, wallet: string) => {
+        let settleConfirmation!: (confirmed: boolean) => void;
+        const confirmation = new Promise<boolean>((resolve) => { settleConfirmation = resolve; });
+        earlyRevealGate = {
+          boxAssetId, dropId, owner: openingOwner, wallet,
+          revealSession: revealOverlaySessionRef.current,
+          confirmation, settleConfirmation,
+        };
+        earlyPackRevealGateRef.current = earlyRevealGate;
+      },
+      allowEarlyInteraction: () => {
+        setRevealOverlay((current) => current?.id === boxAssetId && current.phase === 'preparing'
+          ? { ...current, phase: 'ready' }
+          : current);
+      },
+      confirm: () => earlyRevealGate?.settleConfirmation(true),
+      presentConfirmedOpening: () => {
+        setRevealOverlay((current) => {
+          if (!current || current.id !== boxAssetId) return current;
+          if (earlyRevealGate) return { ...current, phase: 'ready' };
+          return {
+            ...current, phase: 'ready', frame: 1, advanceClicks: 0,
+            revealedIds: undefined, interactiveRevealCardId: undefined,
+            hasRevealAttempted: false, autoOpening: false, autoMode: undefined,
+          };
+        });
+      },
+      cancel: () => earlyRevealGate?.settleConfirmation(false),
+      finish: () => {
+        if (earlyPackRevealGateRef.current === earlyRevealGate) earlyPackRevealGateRef.current = null;
+        setStartOpenLoading(null);
+      },
+    };
+  }, []);
+
+  const revealAfterOpeningConfirmation = useCallback((
+    boxAssetId: string,
+    dropId: string,
+    reveal: () => Promise<RevealRequestStatus>,
+  ) => {
+    const gate = earlyPackRevealGateRef.current;
+    if (!gate || gate.boxAssetId !== boxAssetId || gate.dropId !== dropId) return null;
+    return gate.confirmation.then((confirmed) => confirmed &&
+      !suspendedRef.current && ownerRef.current === gate.owner &&
+      connectedWalletRef.current === gate.wallet && revealOverlaySessionRef.current === gate.revealSession &&
+      revealOverlayRef.current?.id === gate.boxAssetId && revealOverlayRef.current.dropId === gate.dropId &&
+      !revealOverlayClosingRef.current
+        ? reveal()
+        : 'resolved' as const);
+  }, []);
+
+  const beginSelectedBox = useCallback((boxAssetId: string): 'busy' | 'resume' | 'started' => {
+    if (openSelectedLockRef.current) {
+      if (openSelectedBoxIdRef.current && openSelectedBoxIdRef.current !== boxAssetId) return 'busy';
+      openSelectedBoxIdRef.current = boxAssetId;
+      return 'resume';
+    }
+    openSelectedLockRef.current = true;
+    openSelectedBoxIdRef.current = boxAssetId;
+    return 'started';
+  }, []);
+
+  const finishSelectedBox = useCallback((boxAssetId: string) => {
+    if (openSelectedBoxIdRef.current === boxAssetId) openSelectedBoxIdRef.current = null;
+    openSelectedLockRef.current = false;
+  }, []);
+
+  const resolvePackIdentity = useCallback((identity: {
+    id: string; dropId: string; packMediaId: number; name?: string; image?: string;
+  }) => {
+    setRevealOverlay((current) => current?.id === identity.id && current.dropId === identity.dropId && !current.packMediaId
+      ? { ...current, packMediaId: identity.packMediaId, name: identity.name || current.name, image: identity.image }
+      : current);
+  }, []);
+
+  const lockRevealDismissal = useCallback(() => {
+    revealDismissLockedUntilRef.current = Date.now() + REVEAL_OUTSIDE_TAP_DISMISS_LOCK_MS;
+  }, []);
+
+  const resolveReveal = useCallback((boxAssetId: string, result: {
+    revealedIds: number[];
+    revealMode: DropRevealMode;
+    usesAssetGatedFlow: boolean;
+    usesInteractiveCardPackFlow: boolean;
+    interactiveRevealCardId?: number;
+  }) => {
+    setRevealOverlay((current) => {
+      if (!current || current.id !== boxAssetId) return current;
+      const hasResults = result.revealedIds.length > 0;
+      return {
+        ...current,
+        phase: resolveRevealOverlayPhaseAfterReveal({
+          currentPhase: current.phase, revealMode: result.revealMode,
+          usesAssetGatedFlow: result.usesAssetGatedFlow, frame: current.frame,
+          mediaStart: revealMediaStartForDropId(current.dropId), hasResults,
+        }),
+        revealedIds: result.revealedIds,
+        interactiveRevealCardId: result.usesInteractiveCardPackFlow && hasResults
+          ? current.interactiveRevealCardId ?? result.interactiveRevealCardId
+          : undefined,
+      };
+    });
+  }, [revealMediaStartForDropId]);
+
+  const beginRevealAttempt = useCallback((boxAssetId: string, dropId: string, revealMode: DropRevealMode) => {
+    setRevealOverlay((current) => {
+      if (!current || current.id !== boxAssetId || current.phase !== 'ready' || current.autoOpening) return current;
+      if (revealMode !== 'animated') return { ...current, hasRevealAttempted: true, advanceClicks: 0 };
+      const hasResults = Boolean(current.revealedIds?.length);
+      const clickMax = revealClickMaxForDropId(current.dropId);
+      const autoplayStart = revealAutoplayStartForDropId(current.dropId);
+      const nextFrame = current.frame < clickMax ? current.frame + 1
+        : current.frame === clickMax && hasResults ? autoplayStart : current.frame;
+      const shouldAuto = hasResults && nextFrame === autoplayStart && current.frame !== nextFrame;
+      return {
+        ...current, frame: nextFrame, hasRevealAttempted: true, advanceClicks: 0,
+        autoOpening: shouldAuto ? true : current.autoOpening,
+        autoMode: shouldAuto ? 'normal' : current.autoMode,
+      };
+    });
+    const requestSession = revealOverlaySessionRef.current;
+    return {
+      finish: (status: RevealRequestStatus) => setRevealOverlay((current) => applyRevealRequestRetry(current, {
+        status, requestSession, currentSession: revealOverlaySessionRef.current, boxAssetId, dropId,
+      })),
+    };
+  }, [revealAutoplayStartForDropId, revealClickMaxForDropId]);
+
   useEffect(
     () => () => abortRevealSubmissionReconciliation(),
     [abortRevealSubmissionReconciliation],
@@ -344,7 +506,27 @@ export function useRevealSession({
     });
   }, [dropRevealIsAnimated, revealFrameCountForDropId]);
 
-  const presentRevealOverlay = useCallback(
+  const dismissRevealWhenReady = () => {
+    if (!revealOverlay || revealOverlayClosing) return;
+    if (revealOverlay.viewerMode) {
+      closeRevealOverlay();
+      return;
+    }
+    const hasResults = Boolean(revealOverlay.revealedIds?.length);
+    if (usesAssetGatedRevealForDropId(revealOverlay.dropId)) {
+      if (canDismissAssetGatedRevealOverlay(revealOverlay)) closeRevealOverlay();
+      return;
+    }
+    if (hasResults && dropRevealIsAnimated(revealOverlay.dropId) && revealOverlay.frame < revealFrameCountForDropId(revealOverlay.dropId)) {
+      startAutoOpening('fast');
+      return;
+    }
+    if (revealOverlay.hasRevealAttempted && revealLoading === revealOverlay.id) return;
+    if (hasResults && Date.now() < revealDismissLockedUntilRef.current) return;
+    closeRevealOverlay();
+  };
+
+  const animateRevealOverlay = useCallback(
     (nextOverlay: RevealOverlayState) => {
       if (suspendedRef.current) return;
       revealOverlayRef.current = nextOverlay;
@@ -363,6 +545,17 @@ export function useRevealSession({
     [cancelRevealOverlayAnimationFrame],
   );
 
+  const prepareRevealOverlay = useCallback(() => {
+    resetAssetGatedRevealDismissState();
+    clearRevealOverlayCloseTimeout();
+  }, [clearRevealOverlayCloseTimeout, resetAssetGatedRevealDismissState]);
+
+  const presentRevealOverlay = useCallback((nextOverlay: RevealOverlayState) => {
+    setInventorySnapshot(inventory);
+    setPendingOpenSnapshot(pendingOpenBoxes);
+    animateRevealOverlay(nextOverlay);
+  }, [animateRevealOverlay, inventory, pendingOpenBoxes]);
+
   const presentViewerOverlay = useCallback(
     (input: ViewerOverlayInput, options?: { inventorySnapshot?: InventoryItem[] }): boolean => {
       if (suspendedRef.current) return false;
@@ -370,7 +563,7 @@ export function useRevealSession({
       clearRevealOverlayCloseTimeout();
       setInventorySnapshot(options?.inventorySnapshot ?? inventory);
       setPendingOpenSnapshot(pendingOpenBoxes);
-      presentRevealOverlay({
+      animateRevealOverlay({
         originViewport: getOverlayViewport(),
         originSourceRect: input.sourceElement ? toRevealOverlayRect(getInventoryRevealRect(input.sourceElement)) : undefined,
         phase: 'revealed',
@@ -387,7 +580,7 @@ export function useRevealSession({
       });
       return true;
     },
-    [clearRevealOverlayCloseTimeout, inventory, pendingOpenBoxes, presentRevealOverlay, resetAssetGatedRevealDismissState],
+    [animateRevealOverlay, clearRevealOverlayCloseTimeout, inventory, pendingOpenBoxes, resetAssetGatedRevealDismissState],
   );
 
 
@@ -535,23 +728,22 @@ export function useRevealSession({
   }, [cancelRevealOverlayAnimationFrame]);
 
   const getCurrentOverlay = useCallback(() => revealOverlayRef.current, []);
+  const getSessionGeneration = useCallback(() => revealOverlaySessionRef.current, []);
   const isClosing = useCallback(() => revealOverlayClosingRef.current, []);
+  const isPresentationLoading = useCallback(() => presentationLoadingRef.current, []);
+  const isRevealRequestPending = useCallback(() => revealLoadingRequestIdRef.current !== null, []);
 
   return {
-    startOpenLoading, setStartOpenLoading, revealLoading, setRevealLoading,
-    revealOverlay, setRevealOverlay, revealOverlayActive, revealOverlayClosing, revealOverlayCloseMode,
+    startOpenLoading, revealLoading,
+    revealOverlay, revealOverlayActive, revealOverlayClosing, revealOverlayCloseMode,
     inventoryView, pendingOpenBoxesView, revealOverlayOpen,
-    setInventorySnapshot, setPendingOpenSnapshot,
-    ownerRef, connectedWalletRef, suspendedRef, presentationLoadingRef,
-    openSelectedLockRef, openSelectedBoxIdRef, earlyPackRevealGateRef,
-    revealOverlayRef, revealOverlaySessionRef, revealLoadingRequestCounterRef,
-    revealLoadingRequestIdRef, revealSubmissionReconciliationAbortControllerRef,
-    revealDismissLockedUntilRef, revealOverlayClosingRef,
-    queueOverlayAction, clearRevealOverlayCloseTimeout, resetAssetGatedRevealDismissState,
+    beginBoxOpening, beginRevealRequest, beginSelectedBox, finishSelectedBox,
+    revealAfterOpeningConfirmation, resolvePackIdentity, lockRevealDismissal, resolveReveal, beginRevealAttempt,
+    queueOverlayAction,
     updateAssetGatedRevealComplete, updatePonchoDismissReady, updateClearCardDismissReady,
-    abortRevealSubmissionReconciliation, finalizeRevealOverlayDismissal,
-    closeRevealOverlay, dismissRevealOverlay, discardRevealOverlay,
-    canDismissAssetGatedRevealOverlay, startAutoOpening, presentRevealOverlay, presentViewerOverlay,
-    getCurrentOverlay, isClosing,
+    finalizeRevealOverlayDismissal,
+    closeRevealOverlay, dismissRevealOverlay, discardRevealOverlay, dismissRevealWhenReady,
+    canDismissAssetGatedRevealOverlay, prepareRevealOverlay, presentRevealOverlay, presentViewerOverlay,
+    getCurrentOverlay, getSessionGeneration, isClosing, isPresentationLoading, isRevealRequestPending,
   };
 }
