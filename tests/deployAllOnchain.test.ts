@@ -937,6 +937,30 @@ test('deployment cleanup keeps the exit fallback attached to retry a failed lock
   assert.equal(fakeProcess.listenerCount('SIGTERM'), 0);
 });
 
+test('deployment cleanup releases the registry lock and reports a failed isolated-build cleanup before retrying', t => {
+  const fakeProcess = makeDeploymentCleanupRuntime();
+  const warnings: string[] = [];
+  t.mock.method(console, 'warn', message => { warnings.push(String(message)); });
+  let cleanupCalls = 0;
+  let releaseCalls = 0;
+  const cleanup = registerDeploymentCleanup({
+    runtime: fakeProcess.runtime,
+    cleanupResources: () => {
+      cleanupCalls += 1;
+      if (cleanupCalls === 1) throw new Error('isolated workspace is busy');
+    },
+    releaseDeploymentRegistryLock: () => { releaseCalls += 1; return true; },
+  });
+  assert.equal(cleanup.cleanup(), false);
+  assert.equal(releaseCalls, 1);
+  assert.match(warnings[0], /temporary deployment resources: isolated workspace is busy/);
+  assert.equal(fakeProcess.listenerCount('exit'), 1);
+  fakeProcess.emit('exit');
+  assert.equal(cleanupCalls, 2);
+  assert.equal(releaseCalls, 2);
+  assert.equal(fakeProcess.listenerCount('SIGTERM'), 0);
+});
+
 test('deployment cleanup still releases the lock when temp-keypair removal must be retried', (t) => {
   const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-deployment-cleanup-retry-'));
   const tempKeypairPath = path.join(rootDir, 'deployer.json');

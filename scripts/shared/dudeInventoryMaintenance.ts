@@ -106,7 +106,7 @@ export async function readAvailableInventory(query: CommerceAuthorityQuery, drop
   }));
 }
 
-export function requireInventoryConfig(row: Record<string, unknown> | undefined, config: InventoryDropConfig): void {
+export function requireInventoryConfig(row: Record<string, unknown> | undefined, config: InventoryDropConfig): asserts row is Record<string, unknown> {
   if (!row || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(row.generation)) ||
     row.drop_family !== config.dropFamily || row.items_per_box !== config.itemsPerBox || row.max_dude_id !== config.maxDudeId ||
     (row.ready !== 0 && row.ready !== 1)) {

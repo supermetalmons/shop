@@ -3,14 +3,12 @@ import {
   chmodSync,
   closeSync,
   constants as fsConstants,
-  copyFileSync,
   existsSync,
   fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
-  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -24,6 +22,7 @@ import {
   type SpawnOptions,
 } from 'node:child_process';
 import bs58 from 'bs58';
+import { createSolanaBuildWorkspace } from './shared/solanaBuild.ts';
 import {
   clusterApiUrl,
   Connection,
@@ -1835,15 +1834,6 @@ function readSolanaActiveReleaseBinDir(): string | undefined {
   );
 }
 
-function removeStaleAnchorGeneratedArtifacts(onchainDir: string): void {
-  for (const relativePath of ['target/idl', 'target/types']) {
-    const artifactPath = path.join(onchainDir, relativePath);
-    if (!existsSync(artifactPath)) continue;
-    rmSync(artifactPath, { recursive: true, force: true });
-    console.log(`Removed stale Anchor generated artifacts: ${artifactPath}`);
-  }
-}
-
 function writeTempKeypairFile(keypair: Keypair, prefix: string): string {
   const filePath = path.join(
     tmpdir(),
@@ -2278,7 +2268,6 @@ export async function executeUpgrade(args: {
   root: string;
   onchainDir: string;
   registryPath: string;
-  programBinary: string;
   solanaUrl: string;
   toolEnv: ToolEnv;
 }, effects: UpgradePreflightEffects = upgradePreflightEffects): Promise<void> {
@@ -2290,7 +2279,6 @@ export async function executeUpgrade(args: {
     root,
     onchainDir,
     registryPath,
-    programBinary,
     solanaUrl,
     toolEnv,
   } = args;
@@ -2300,26 +2288,22 @@ export async function executeUpgrade(args: {
     Array.from(Keypair.generate().secretKey),
   );
   const cancellation = new CommandCancellationController();
-  let solanaConfigPath: string | undefined;
-  let authorityKeypairPath: string | undefined;
+  const temporaryFiles: string[] = [];
+  const retainTemporaryFile = (filePath: string) => { temporaryFiles.push(filePath); return filePath; };
+  let buildWorkspace: ReturnType<typeof createSolanaBuildWorkspace> | undefined;
   let resumeBufferKeypairPath: string | undefined;
   let resumeBufferKeypairBytes: number | undefined;
   let resumeBufferKeypairSha256: string | undefined;
-  let verifiedProgramBinaryPath: string | undefined;
   let releaseRegistryLock: (() => boolean) | undefined;
   let deployVerificationPending = false;
   let authorityPromptAbort: AbortController | undefined;
   let primaryError: unknown;
   const cleanup = (): Error[] => {
-    const errors = cleanupUpgradeResources({
-      filePaths: [
-        solanaConfigPath,
-        authorityKeypairPath,
-        resumeBufferKeypairPath,
-        verifiedProgramBinaryPath,
-      ],
-      releaseLock: releaseRegistryLock,
-    });
+    const errors: Error[] = [];
+    try { buildWorkspace?.cleanup(); } catch (error) {
+      errors.push(new Error(`Could not clean up the isolated Solana build: ${errorMessage(error)}`));
+    }
+    errors.push(...cleanupUpgradeResources({ filePaths: temporaryFiles, releaseLock: releaseRegistryLock }));
     releaseRegistryLock = undefined;
     return errors;
   };
@@ -2347,7 +2331,7 @@ export async function executeUpgrade(args: {
   process.on('SIGINT', handleSigint);
   process.on('SIGTERM', handleSigterm);
   try {
-    solanaConfigPath = writeTempSolanaConfigFile(solanaUrl);
+    const solanaConfigPath = retainTemporaryFile(writeTempSolanaConfigFile(solanaUrl));
     console.log('--- upgrade box_minter program ---');
     console.log('drop    :', drop.dropId);
     console.log('cluster :', drop.solanaCluster);
@@ -2405,13 +2389,10 @@ export async function executeUpgrade(args: {
         cancellation,
       });
     }
-    if (!opts.skipTests) {
-      await runCommand('cargo', ['test', '--lib', '--locked'], {
-        cwd: onchainDir,
-        env: toolEnv,
-        cancellation,
-      });
-    }
+    buildWorkspace = createSolanaBuildWorkspace({ onchainDirectory: onchainDir, buildFeature: target.buildFeature, env: toolEnv });
+    const runBuildCommand: Parameters<typeof buildWorkspace.build>[0] = (command, commandArgs, options) =>
+      runCommand(command, commandArgs, { ...options, cancellation });
+    if (!opts.skipTests) await buildWorkspace.testHost(runBuildCommand);
 
     releaseRegistryLock = acquireRegistryLock({
       root,
@@ -2437,64 +2418,11 @@ export async function executeUpgrade(args: {
       'before the upgrade build',
     );
 
-    removeStaleAnchorGeneratedArtifacts(onchainDir);
-    const buildFeatures = [
-      'no-idl',
-      'no-log-ix-name',
-      target.buildFeature,
-    ].join(',');
-    await runCommand(
-      'anchor',
-      [
-        'build',
-        '--no-idl',
-        '--arch',
-        'sbf',
-        '--',
-        '--features',
-        buildFeatures,
-        '--',
-        '--locked',
-      ],
-      { cwd: onchainDir, env: toolEnv, cancellation },
-    );
-    if (!existsSync(programBinary)) {
-      throw new Error(`Missing program binary after build: ${programBinary}`);
-    }
-    verifiedProgramBinaryPath = path.join(
-      tmpdir(),
-      `mons-shop-verified-program-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.so`,
-    );
-    copyFileSync(
-      programBinary,
-      verifiedProgramBinaryPath,
-      fsConstants.COPYFILE_EXCL,
-    );
-    chmodSync(verifiedProgramBinaryPath, 0o400);
-    const binaryBytes = statSync(verifiedProgramBinaryPath).size;
+    const artifact = await buildWorkspace.build(runBuildCommand, { test: !opts.skipTests });
+    const verifiedProgramBinaryPath = artifact.path;
+    const binaryBytes = artifact.bytes;
+    const localHash = artifact.sha256;
     const localBinary = readFileSync(verifiedProgramBinaryPath);
-    const localHash = sha256(localBinary);
-    if (!opts.skipTests) {
-      await runCommand(
-        'cargo',
-        [
-          'test',
-          '--locked',
-          '--features',
-          `sbf-tests,${target.buildFeature}`,
-          '--test',
-          'split_payments_sbf',
-        ],
-        {
-          cwd: onchainDir,
-          env: {
-            ...toolEnv,
-            BOX_MINTER_SBF_PATH: verifiedProgramBinaryPath,
-          },
-          cancellation,
-        },
-      );
-    }
     assertImmutableArtifactUnchanged({
       filePath: verifiedProgramBinaryPath,
       expectedBytes: binaryBytes,
@@ -2616,13 +2544,13 @@ export async function executeUpgrade(args: {
       input: authorityInput,
       expectedAuthority: buildBaseline.program.show.authority,
     });
-    authorityKeypairPath = verifiedAuthority.keypairPath;
+    const authorityKeypairPath = retainTemporaryFile(verifiedAuthority.keypairPath);
     const { authorityPubkey } = verifiedAuthority;
     if (resumeBufferSigner) {
-      resumeBufferKeypairPath = writeTempKeypairFile(
+      resumeBufferKeypairPath = retainTemporaryFile(writeTempKeypairFile(
         resumeBufferSigner,
         'mons-shop-resume-buffer',
-      );
+      ));
       chmodSync(resumeBufferKeypairPath, 0o400);
       resumeBufferKeypairBytes = statSync(resumeBufferKeypairPath).size;
       resumeBufferKeypairSha256 = sha256(
@@ -2794,6 +2722,7 @@ export async function executeUpgrade(args: {
         expectedSha256: resumeBufferKeypairSha256,
         stage: 'at the recovered-buffer write boundary',
       });
+      const bufferSignerPath = resumeBufferKeypairPath;
       deployVerificationPending = true;
       try {
         const recovered = await runBufferWriteAttemptWithVerification({
@@ -2803,7 +2732,7 @@ export async function executeUpgrade(args: {
               'solana',
               buildProgramWriteBufferArgs({
                 programBinaryPath: verifiedProgramBinaryPath,
-                bufferSignerPath: resumeBufferKeypairPath,
+                bufferSignerPath,
                 solanaConfigPath,
                 authorityKeypairPath,
                 useRpc: opts.useRpc,
@@ -3022,12 +2951,6 @@ async function main(): Promise<void> {
       root,
       onchainDir,
       registryPath,
-      programBinary: path.join(
-        onchainDir,
-        'target',
-        'deploy',
-        'box_minter.so',
-      ),
       solanaUrl,
       toolEnv,
     });

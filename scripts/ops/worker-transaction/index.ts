@@ -67,7 +67,7 @@ function operationIntent(operation: WorkerTransactionOperation) {
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(operation.id) || !Object.hasOwn(GENESIS, operation.cluster)) throw new Error('Invalid operation ID or cluster.');
   const maxFeeLamports = operation.maxFeeLamports ?? 10_000;
   if (!Number.isSafeInteger(maxFeeLamports) || maxFeeLamports <= 0 || operation.simulationAccounts.length > 20 ||
-    !['preflight', 'validateSimulation', 'verify'].every(key => typeof operation[key] === 'function')) throw new Error('Operation checks, simulation accounts, or fee limit are invalid.');
+    !(['preflight', 'validateSimulation', 'verify'] as const).every(key => typeof operation[key] === 'function')) throw new Error('Operation checks, simulation accounts, or fee limit are invalid.');
   buildTransaction(operation.authority, operation.instructions, '11111111111111111111111111111111');
   return { id: operation.id, cluster: operation.cluster, authority: operation.authority, maxFeeLamports,
     simulationAccounts: operation.simulationAccounts,

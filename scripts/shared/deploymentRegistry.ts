@@ -556,11 +556,11 @@ function assertValidReceiptPoolDeployment(args: {
   value: Record<string, unknown>;
   filePath: string;
 } {
-  const invalid = (reason: string): never => {
+  function invalid(reason: string): never {
     throw new Error(
       `Invalid receipt pool deployment ${args.registryKey}: ${reason}: ${args.filePath}`,
     );
-  };
+  }
   if (!isPlainRecord(args.value)) return invalid('expected an object');
   const row = args.value;
   const allowed = new Set([
@@ -732,11 +732,11 @@ function assertValidCanonicalRegistryRow(args: {
   value: Record<string, unknown>;
   filePath: string;
 } {
-  const invalid = (reason: string): never => {
+  function invalid(reason: string): never {
     throw new Error(
       `Invalid canonical deployment registry row ${args.registryKey}: ${reason}: ${args.filePath}`,
     );
-  };
+  }
   if (!isPlainRecord(args.value)) return invalid('expected an object');
   const row = args.value;
   const unknownKey = Object.keys(row).find(
@@ -1129,11 +1129,11 @@ function normalizeBoxMinterConfigTombstone(args: {
   value: unknown;
   filePath: string;
 }): BoxMinterConfigTombstone {
-  const invalid = (reason: string): never => {
+  function invalid(reason: string): never {
     throw new Error(
       `Invalid BoxMinter config tombstone ${args.registryKey}: ${reason}: ${args.filePath}`,
     );
-  };
+  }
   if (!isPlainRecord(args.value)) invalid('expected an object');
   const row = args.value as Record<string, unknown>;
   const unknownField = Object.keys(row).find(

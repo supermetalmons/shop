@@ -1502,28 +1502,40 @@ test('a stalled presence callback cannot outlive the verifier deadline or author
   assert.equal(f.store.summary().frozen, 0);
 });
 
-test('an unacknowledged verifier cancellation stays bounded and retains the claim until its deadline', async t => {
+test('an unacknowledged verifier cancellation stays bounded and retains the claim until its deadline', { timeout: 5_000 }, async t => {
   const now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const original = globalThis.setTimeout;
-  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
-    original(callback, milliseconds === 20_000 ? 40 : milliseconds === 250 ? 5 : milliseconds, ...args));
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now });
   const f = fixture(t);
   const cancellation = Promise.withResolvers<void>();
+  const cancellationStarted = Promise.withResolvers<void>();
+  const cancellationUnconfirmed = Promise.withResolvers<void>();
   t.mock.method(f.verifier(hash(1)), 'inspect', async () => { throw new Error('Inspection RPC disconnected.'); });
-  t.mock.method(f.verifier(hash(1)), 'cancelInspection', () => cancellation.promise);
+  t.mock.method(f.verifier(hash(1)), 'cancelInspection', () => { cancellationStarted.resolve(); return cancellation.promise; });
   const messages: unknown[] = [];
-  t.mock.method(console, 'error', (message: unknown) => { messages.push(message); });
+  t.mock.method(console, 'error', (message: unknown) => {
+    messages.push(message);
+    if ((message as { event?: string }).event === 'ethereum_reveal_cancellation_unconfirmed') cancellationUnconfirmed.resolve();
+  });
   const result = f.object.revealTransaction(deployment, hash(1), true);
-  await waitFor(() => messages.length > 0);
-  assert.equal(f.store.dispatchState(now).inFlight, 1);
-  assert.equal(value(await completesWithin(result, 500)).status, 'pending');
-  await f.settle();
-  assert.equal(f.object.receipts.size, 0);
-  assert.equal(f.store.dispatchState(now).inFlight, 0);
-  assert.equal(f.store.knownTransaction(hash(1)), true);
-  assert.ok(messages.some(message => (message as { event?: string }).event === 'ethereum_reveal_cancellation_unconfirmed'));
-  cancellation.resolve();
+  try {
+    await cancellationStarted.promise;
+    t.mock.timers.tick(250);
+    await cancellationUnconfirmed.promise;
+    assert.equal(f.store.dispatchState(Date.now()).inFlight, 1);
+    t.mock.timers.tick(1_750);
+    assert.equal(value(await result).status, 'pending');
+    assert.equal(f.store.dispatchState(Date.now()).inFlight, 1);
+    t.mock.timers.tick(18_000);
+    await f.settle();
+    assert.equal(f.object.receipts.size, 0);
+    assert.equal(f.store.dispatchState(Date.now()).inFlight, 0);
+    assert.equal(f.store.knownTransaction(hash(1)), true);
+    assert.ok(messages.some(message => (message as { event?: string }).event === 'ethereum_reveal_cancellation_unconfirmed'));
+  } finally {
+    cancellation.resolve();
+    t.mock.timers.tick(20_000);
+    await f.settle();
+  }
 });
 
 test('verifier throttling pauses dispatch without losing watches or delaying frozen reads and publication', async t => {

@@ -1,22 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumRelicStatus, EthereumStats, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
+import type { EthereumInventoryItem, EthereumPreparedTransaction, EthereumRelicStatus, EthereumStats } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG, type Ethereum111kConfig } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
-import { ETHEREUM_FUNCTIONS, ETHEREUM_MINT_KINDS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_RELICS, ethereumAssetId, ethereumHexQuantity, type EthereumContainerKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MINT_KINDS, ETHEREUM_MAX_RELICS, ethereumAssetId, ethereumHexQuantity, type EthereumContainerKind, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumRevealedArtwork } from '../../shared/ethereum/reveal';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
-import { ethereumApi, EthereumApiError } from './api';
+import { ethereumApi } from './api';
 import { ethereumMintRemaining } from './mint';
-import { ethereumInventoryQueryKey, ethereumInventoryScope, readEthereumExpected, writeEthereumExpected, forgetEthereumRevealJob, isEthereumCrateUnpack, rememberEthereumRevealJob, type EthereumRevealJob } from './state';
+import { ethereumInventoryQueryKey, ethereumInventoryScope, type EthereumRevealJob } from './state';
 import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletError } from './wallet';
-import { readEthereumSubmittedTransaction, ethereumSubmittedNonceConsumed } from './recovery';
 import { EMPTY_ETHEREUM_DISCOUNT_ROOT, ethereumDiscountRemaining, ethereumDiscounts, ethereumMintQuote, type EthereumMintQuote } from './discounts';
 import { useEthereumReveals } from './useEthereumReveals';
 import { useEthereumInventory } from './useEthereumInventory';
 import type { EthereumPendingMint } from './inventory';
-import { hasEthereumConfirmedInventory, readEthereumConfirmedInventory, rememberEthereumConfirmedInventory } from './confirmedInventory';
-import { ETHEREUM_DROP_OPERATION_TTL, definiteEthereumSubmissionRejection, migrateEthereumDropOperation, readEthereumDropBusy, readEthereumDropOperations, runEthereumDropRequest, subscribeEthereumDropOperations, writeEthereumDropOperation, type EthereumDropOperation } from './dropOperations';
+import { abortableEthereumOperation, createEthereumOperationReconciliation } from './operationReconciliation';
+import { definiteEthereumSubmissionRejection, migrateEthereumDropOperation, readEthereumDropBusy, readEthereumDropOperations, runEthereumDropRequest, subscribeEthereumDropOperations, type EthereumDropOperation } from './dropOperations';
 import { ethereumCatalogKey, retainEthereumCatalogConfig, retainEthereumMetadata } from './catalogRevision';
 import { ethereumReadCanRefetch, ethereumReadRefetchInterval, ethereumReadRetryOptions, runEthereumRead } from './readRetry';
 
@@ -47,15 +46,6 @@ function reserveRelics(status: EthereumRelicStatus, operations: readonly Ethereu
     remainingRelics: Math.max(0, status.remainingRelics - ids.length), remainingAllowance: Math.max(0, status.remainingAllowance - ids.length) };
 }
 
-function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
-    signal.addEventListener('abort', abort, { once: true });
-    promise.then(value => { signal.removeEventListener('abort', abort); resolve(value); }, error => { signal.removeEventListener('abort', abort); reject(error); });
-    if (signal.aborted) abort();
-  });
-}
-
 export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContainerKind = 'crate', suspended = false) {
   const client = useQueryClient();
   const pageVisible = useSyncExternalStore(subscribeVisibility, () => document.visibilityState !== 'hidden', () => true);
@@ -69,22 +59,11 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
   const owner = ethereumAddress(wallet.address);
   const scope = ethereumInventoryScope(config, owner);
   const current = useRef({ wallet, scope, catalogIdentity, mounted: false });
-  const initiated = useRef(new Set<string>());
-  const localOperations = useRef(new Map<string, EthereumDropOperation>());
-  const confirmedUnpacks = useRef(new Set<string>());
-  const revealedUnpacks = useRef(new Set<string>());
-  const readPendingOperations = useCallback((capturedScope: string) => [...new Map([
-    ...[...localOperations.current.values()].filter(operation => operation.scope === capturedScope &&
-      operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now() && !confirmedUnpacks.current.has(operation.hash!)),
-    ...readEthereumDropOperations(capturedScope),
-  ].map(operation => [operation.id, operation])).values()], []);
+  const reconciliationRef = useRef<ReturnType<typeof createEthereumOperationReconciliation> | null>(null);
+  if (!reconciliationRef.current) reconciliationRef.current = createEthereumOperationReconciliation();
+  const reconciliation = reconciliationRef.current;
+  const readPendingOperations = reconciliation.readPending;
   const requestLifecycle = useRef<AbortController | null>(null);
-  const reconcilePending = useRef<((operation: EthereumDropOperation, result: EthereumTransactionConfirmResponse) => Promise<void>) | null>(null);
-  const retiredHere = useRef(new Set<string>());
-  const retireOperation = useCallback((operation: EthereumDropOperation) => {
-    retiredHere.current.add(operation.id);
-    writeEthereumDropOperation(operation.scope, operation.id, null);
-  }, []);
   current.current.wallet = wallet;
   current.current.scope = scope;
   current.current.catalogIdentity = catalogIdentity;
@@ -115,16 +94,18 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
   const unpackErrors = outcomes.scope === scope ? outcomes.errors : {};
   const publishUnpack = useCallback((hash: string, items: EthereumInventoryItem[]) => {
     if (!current.current.mounted || current.current.scope !== scope || current.current.catalogIdentity !== catalogIdentity) return;
-    if (localOperations.current.has(hash)) {
-      if (confirmedUnpacks.current.delete(hash)) localOperations.current.delete(hash);
-      else revealedUnpacks.current.add(hash);
-    }
+    reconciliation.revealCompleted(hash);
     setOutcomes(previous => {
       const existing = new Map((previous.scope === scope ? previous.results[hash] ?? [] : []).map(item => [item.id, item]));
       return { scope, results: { ...(previous.scope === scope ? previous.results : {}),
         [hash]: items.map(item => retainEthereumMetadata(existing.get(item.id), item)) }, errors: previous.scope === scope ? previous.errors : {} };
     });
-  }, [scope, catalogIdentity]);
+  }, [scope, catalogIdentity, reconciliation]);
+  const publishUnpackError = useCallback((hash: string, message: string) => {
+    if (!scope || !current.current.mounted || current.current.scope !== scope) return;
+    setOutcomes(previous => ({ scope, results: previous.scope === scope ? previous.results : {},
+      errors: { ...(previous.scope === scope ? previous.errors : {}), [hash]: message } }));
+  }, [scope]);
   useEffect(() => { setError(null); if (scope) migrateEthereumDropOperation(scope); }, [scope]);
   useEffect(() => {
     const provider = wallet.provider;
@@ -174,21 +155,10 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
   }, [owner, config.chainId, config.contractAddress, publishUnpack]);
   const onRevealFailed = useCallback((hash: string, message: string) => {
     if (!scope || !current.current.mounted || current.current.scope !== scope) return;
-    localOperations.current.delete(hash);
-    confirmedUnpacks.current.delete(hash);
-    revealedUnpacks.current.delete(hash);
-    setOutcomes(previous => ({ scope, results: previous.scope === scope ? previous.results : {},
-      errors: { ...(previous.scope === scope ? previous.errors : {}), [hash]: message } }));
-    for (const operation of readEthereumDropOperations(scope)) {
-      if (operation.action === 'unbox' && operation.hash === hash) retireOperation(operation);
-    }
-    void client.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-  }, [scope, client, retireOperation]);
-  const retainLocalReveal = useCallback((job: EthereumRevealJob) => {
-    const operation = localOperations.current.get(job.transactionHash);
-    return Boolean(operation?.scope === scope && operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now() &&
-      !revealedUnpacks.current.has(job.transactionHash) && isEthereumCrateUnpack(operation));
-  }, [scope]);
+    publishUnpackError(hash, message);
+    reconciliation.revealFailed(scope, hash, client);
+  }, [scope, publishUnpackError, reconciliation, client]);
+  const retainLocalReveal = useCallback((job: EthereumRevealJob) => reconciliation.retainReveal(scope, job), [scope, reconciliation]);
   const { applyArtwork, isTracking: isTrackingReveal } = useEthereumReveals(config, scope, rawItems, null, onArtworksRevealed, onRevealFailed, retainLocalReveal);
   const items = useMemo(() => rawItems.map(applyArtwork), [rawItems, applyArtwork]);
   const refresh = useCallback(() => {
@@ -199,152 +169,15 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
   }, [scope, client]);
   useEffect(() => {
     if (!scope || !owner || !config.enabled) return;
-    const controller = new AbortController();
-    let running = false;
-    let sweeping = false;
-    const exists = (operation: EthereumDropOperation) => !controller.signal.aborted && operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL > Date.now() &&
-      (readEthereumDropOperations(scope).some(item => item.id === operation.id && item.hash === operation.hash) ||
-        operation.hash !== undefined && localOperations.current.get(operation.hash)?.id === operation.id);
-    const remove = (operation: EthereumDropOperation, message?: string) => {
-      if (operation.hash) {
-        localOperations.current.delete(operation.hash);
-        confirmedUnpacks.current.delete(operation.hash);
-        revealedUnpacks.current.delete(operation.hash);
-      }
-      retireOperation(operation);
-      if (operation.hash) forgetEthereumRevealJob(scope, operation.hash);
-      if (!message && operation.action === 'unbox' && operation.hash && current.current.mounted && current.current.scope === scope) {
-        setOutcomes(previous => ({ scope, results: previous.scope === scope ? previous.results : {},
-          errors: { ...(previous.scope === scope ? previous.errors : {}), [operation.hash!]: 'Couldn’t confirm this opening. Check your inventory or wallet.' } }));
-      }
-      if (message && current.current.mounted && current.current.scope === scope) {
-        if (operation.action === 'unbox' && operation.hash) setOutcomes(previous => ({ scope,
-          results: previous.scope === scope ? previous.results : {}, errors: { ...(previous.scope === scope ? previous.errors : {}), [operation.hash!]: message } }));
-        if (operation.action !== 'unbox' && initiated.current.has(operation.id)) setError(message);
-      }
-      refresh();
-    };
-    const reconcile = async (operation: EthereumDropOperation, result: EthereumTransactionConfirmResponse) => {
-      if (!exists(operation) || operation.hash && confirmedUnpacks.current.has(operation.hash)) return;
-      await client.cancelQueries({ queryKey: ethereumInventoryQueryKey(scope) });
-      if (!exists(operation) || operation.hash && confirmedUnpacks.current.has(operation.hash)) return;
-      rememberEthereumConfirmedInventory(scope, operation.id, result.items.map(item => item.tokenId), result.burnedTokenIds, operation.submittedAt);
-      const burned = new Set(readEthereumConfirmedInventory(scope).burnedTokenIds);
-      const accepted = result.items.filter(item => !burned.has(item.tokenId));
-      const added = new Set(accepted.map(item => item.tokenId));
-      writeEthereumExpected(scope, [...new Set([...readEthereumExpected(scope).filter(id => !burned.has(id)), ...added])].slice(-ETHEREUM_MAX_EXPECTED_IDS));
-      client.setQueryData<EthereumInventoryResponse>(ethereumInventoryQueryKey(scope, config), previous => ({ nextCursor: null,
-        ...(config.catalogRevision !== undefined || previous?.catalogRevision !== undefined
-          ? { catalogRevision: Math.max(config.catalogRevision ?? 0, previous?.catalogRevision ?? 0) } : {}),
-        ...(config.deploymentId !== undefined && { deploymentId: config.deploymentId }),
-        observedBlock: previous?.observedBlock ?? 0, items: [...accepted.map(item => retainEthereumMetadata(previous?.items.find(value => value.id === item.id), item)), ...(previous?.items ?? []).filter(item => !burned.has(item.tokenId) && !added.has(item.tokenId))] }));
-      if (operation.action === 'unbox') {
-        if (operation.hash && localOperations.current.has(operation.hash)) confirmedUnpacks.current.add(operation.hash);
-        if (!isEthereumCrateUnpack(operation)) publishUnpack(operation.hash!, result.items);
-        else if (operation.hash && revealedUnpacks.current.delete(operation.hash)) {
-          localOperations.current.delete(operation.hash);
-          confirmedUnpacks.current.delete(operation.hash);
-        }
-      } else if (operation.hash) localOperations.current.delete(operation.hash);
-      retireOperation(operation);
-      refresh();
-    };
-    reconcilePending.current = reconcile;
-    const check = async (operation: EthereumDropOperation) => {
-      if (!operation.hash || !exists(operation)) return;
-      if (isEthereumCrateUnpack(operation)) {
-        if (!revealedUnpacks.current.has(operation.hash) && !isTrackingReveal(operation.hash)) rememberEthereumRevealJob(scope, operation.hash, operation.submittedAt, operation);
-        if (confirmedUnpacks.current.has(operation.hash)) return;
-      }
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]);
-      try {
-        const result = await abortable(ethereumApi.confirm(operation.hash, config, owner, signal, operation), signal);
-        if (!exists(operation) || confirmedUnpacks.current.has(operation.hash)) return;
-        if (result.status === 'confirmed' && result.confirmations >= 1) { await reconcile(operation, result); return; }
-        const wallet = current.current.wallet;
-        if (!wallet.provider || ethereumAddress(wallet.address) !== owner || current.current.scope !== scope) return;
-        const background = ethereumOperation(() => current.current.scope === scope ? current.current.wallet : { address: null, provider: null }, config);
-        const backgroundSignal = AbortSignal.any([signal, background.signal]);
-        const provider = { ...wallet.provider, request: (request: Parameters<NonNullable<EthereumWallet['provider']>['request']>[0]) => abortable(wallet.provider!.request(request), backgroundSignal) };
-        try {
-          if (ethereumChainId(await provider.request({ method: 'eth_chainId' })) !== config.chainId || !exists(operation)) return;
-          background.assertCurrent();
-          let observed = operation;
-          if (!operation.transactionSender && operation.intent) {
-            const actual = await readEthereumSubmittedTransaction(provider, operation.hash, config.chainId, owner, operation.intent);
-            background.assertCurrent();
-            if (!exists(operation)) return;
-            if (actual) {
-              observed = { ...operation, ...actual };
-              localOperations.current.set(operation.hash, observed);
-              if (readEthereumDropOperations(scope).some(item => item.id === operation.id && item.hash === operation.hash)) {
-                writeEthereumDropOperation(scope, operation.id, observed);
-              }
-            }
-          }
-          const consumed = await ethereumSubmittedNonceConsumed(provider, observed, config.chainId);
-          background.assertCurrent();
-          if (consumed && ethereumChainId(await provider.request({ method: 'eth_chainId' })) === config.chainId && exists(operation)) remove(operation);
-        } finally { background.dispose(); }
-      } catch (cause) {
-        if (!exists(operation)) return;
-        if (cause instanceof EthereumApiError && (cause.code === 'transaction-reverted' || cause.code === 'operation-failed')) {
-          remove(operation, cause.code === 'transaction-reverted' ? 'The transaction reverted. You can try again.' : cause.message);
-        }
-      }
-    };
-    const tick = async () => {
-      if (controller.signal.aborted || sweeping) return;
-      const records = [...new Map([...[...localOperations.current.values()].filter(operation => operation.scope === scope),
-        ...readEthereumDropOperations(scope, Date.now(), true)].map(operation => [operation.id, operation])).values()];
-      const pending: EthereumDropOperation[] = [];
-      sweeping = true;
-      try {
-        for (const operation of records) {
-          if (operation.submittedAt + ETHEREUM_DROP_OPERATION_TTL <= Date.now()) remove(operation);
-          else {
-            if (operation.hash) localOperations.current.set(operation.hash, operation);
-            pending.push(operation);
-          }
-        }
-      } finally { sweeping = false; }
-      if (running) return;
-      running = true;
-      try {
-        if (document.visibilityState === 'hidden') return;
-        for (let offset = 0; offset < pending.length && !controller.signal.aborted; offset += 4) await Promise.allSettled(pending.slice(offset, offset + 4).map(check));
-      } finally { running = false; }
-    };
-    let observed = new Set(readEthereumDropOperations(scope, Date.now(), true).map(operation => operation.id));
-    const unsubscribe = subscribeEthereumDropOperations(scope, () => {
-      const next = new Set(readEthereumDropOperations(scope, Date.now(), true).map(operation => operation.id));
-      let externallyRetired = false;
-      for (const id of observed) {
-        if (!next.has(id) && !retiredHere.current.delete(id)) {
-          externallyRetired = true;
-          const operation = [...localOperations.current.values()].find(item => item.scope === scope && item.id === id);
-          if (operation?.hash && hasEthereumConfirmedInventory(scope, id)) {
-            if (operation.action !== 'unbox' || isEthereumCrateUnpack(operation) && revealedUnpacks.current.delete(operation.hash)) {
-              localOperations.current.delete(operation.hash);
-              confirmedUnpacks.current.delete(operation.hash);
-            } else if (isEthereumCrateUnpack(operation)) confirmedUnpacks.current.add(operation.hash);
-          }
-        }
-      }
-      observed = next;
-      if (externallyRetired) void client.cancelQueries({ queryKey: ethereumInventoryQueryKey(scope) }).then(() => {
-        if (!controller.signal.aborted && current.current.scope === scope) refresh();
-      });
-      void tick();
+    return reconciliation.watch({
+      client, scope, owner, config,
+      currentWallet: () => current.current.scope === scope ? current.current.wallet : null,
+      isCurrent: () => current.current.mounted && current.current.scope === scope,
+      isTrackingReveal, publishUnpack, publishUnpackError, setError, refresh,
     });
-    void tick();
-    const interval = setInterval(() => { void tick(); }, 4_000);
-    document.addEventListener('visibilitychange', tick);
-    return () => {
-      controller.abort(); clearInterval(interval); unsubscribe(); document.removeEventListener('visibilitychange', tick);
-      if (reconcilePending.current === reconcile) reconcilePending.current = null;
-    };
-  }, [scope, owner, config.enabled, config.chainId, config.contractAddress, config.deploymentId, config.metadataBaseUri, client, publishUnpack, refresh, retireOperation, isTrackingReveal]);
+  }, [scope, owner, config.enabled, config.chainId, config.contractAddress, config.deploymentId, config.metadataBaseUri,
+    client, reconciliation, publishUnpack, publishUnpackError, refresh, isTrackingReveal]);
+
   const run = async <T,>(label: string, action: (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) => Promise<T>): Promise<T | null> => {
     if (!config.enabled || !scope || !owner) { setError(config.enabled ? 'Connect your wallet first.' : 'Minting is unavailable.'); return null; }
     const capturedWallet = wallet;
@@ -355,7 +188,7 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
         if (lifecycle?.aborted || !current.current.mounted || current.current.scope !== scope || current.current.wallet.provider !== capturedWallet.provider || current.current.wallet.address !== capturedWallet.address) throw new Error('Your wallet changed. Please try again.');
         const operation = ethereumOperation(() => !lifecycle?.aborted && current.current.mounted && current.current.scope === scope ? current.current.wallet : { address: null, provider: null }, config);
         const signal = AbortSignal.any([operation.signal, ...(lifecycle ? [lifecycle] : [])]);
-        try { return await abortable(action(operation, scope), signal); } finally { operation.dispose(); }
+        try { return await abortableEthereumOperation(action(operation, scope), signal); } finally { operation.dispose(); }
       });
     } catch (cause) {
       if (current.current.mounted && current.current.scope === scope) setError(ethereumWalletError(cause));
@@ -373,18 +206,14 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
       hash = await walletOperation.send(transaction, () => {
         beforeSend?.();
         operation.submittedAt = Date.now();
-        initiated.current.add(operation.id);
-        writeEthereumDropOperation(capturedScope, operation.id, operation);
+        reconciliation.reserve(operation);
         reserved = true;
       });
     } catch (cause) {
-      if (reserved && definiteEthereumSubmissionRejection(cause)) retireOperation(operation);
+      if (reserved && definiteEthereumSubmissionRejection(cause)) reconciliation.reject(operation);
       throw cause;
     }
-    const submitted = { ...operation, hash };
-    localOperations.current.set(hash, submitted);
-    writeEthereumDropOperation(capturedScope, operation.id, submitted);
-    if (isEthereumCrateUnpack(submitted)) rememberEthereumRevealJob(capturedScope, hash, submitted.submittedAt, submitted);
+    reconciliation.submitted({ ...operation, hash });
     return hash;
   };
   const transaction = (data: string, value = '0x0'): EthereumPreparedTransaction => ({ to: config.contractAddress!, data, value, chainId: config.chainId });
@@ -417,9 +246,9 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
         const signal = AbortSignal.any([operation.signal, AbortSignal.timeout(10_000)]);
         for (let offset = 0; offset < affected.length; offset += 4) {
           await Promise.all(affected.slice(offset, offset + 4).map(async pending => {
-            const result = await abortable(ethereumApi.confirm(pending.hash!, config, operation.address, signal, pending), signal);
+            const result = await abortableEthereumOperation(ethereumApi.confirm(pending.hash!, config, operation.address, signal, pending), signal);
             operation.assertCurrent();
-            if (result.status === 'confirmed' && result.confirmations >= 1) await reconcilePending.current?.(pending, result);
+            if (result.status === 'confirmed' && result.confirmations >= 1) await reconciliation.reconcile(pending, result);
           }));
         }
         terms = await readTerms();

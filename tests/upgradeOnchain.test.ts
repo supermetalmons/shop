@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -1660,7 +1661,6 @@ function upgradePreflightFixture(
     root,
     onchainDir: path.join(root, 'onchain'),
     registryPath: path.join(root, 'deploymentRegistry.ts'),
-    programBinary: path.join(root, 'onchain', 'box_minter.so'),
     solanaUrl: 'http://127.0.0.1:1',
     toolEnv: {},
   };
@@ -1751,6 +1751,95 @@ test('permitted preflights reach preparation without weakening the split mutatio
         (error) => error === fixture.stopped,
       );
       assert.deepEqual(fixture.calls, ['audit', 'npm run typecheck']);
+    });
+  }
+});
+
+test('upgrade dry run preserves gate ordering while building and testing an isolated frozen ELF', async t => {
+  for (const scenario of ['complete', 'cancelled', 'resume-hash-mismatch'] as const) {
+    await t.test(scenario, async t => {
+      const root = mkdtempSync(path.join(tmpdir(), 'mons-upgrade-build-'));
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      t.mock.method(console, 'log', () => undefined);
+      const onchainDir = path.join(root, 'onchain');
+      mkdirSync(path.join(onchainDir, 'programs/box_minter/src'), { recursive: true });
+      mkdirSync(path.join(onchainDir, 'target/deploy'), { recursive: true });
+      const originals = new Map([
+        ['Cargo.lock', 'version = 3\n'],
+        ['Cargo.toml', '[workspace]\n'],
+        ['Anchor.toml', '[programs.devnet]\n'],
+        ['programs/box_minter/src/lib.rs', 'original source'],
+        ['target/deploy/box_minter.so', 'original build output'],
+      ]);
+      for (const [name, content] of originals) writeFileSync(path.join(onchainDir, name), content);
+      const elf = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]);
+      const calls: string[] = [];
+      const configPaths = new Set<string>();
+      let workspace = '';
+      let frozen = '';
+      let locked = false;
+      const beforeSignals = ['SIGINT', 'SIGTERM'].map(signal => process.listenerCount(signal));
+      const effects: Parameters<typeof executeUpgrade>[1] = {
+        captureGateState: async input => {
+          calls.push(input.stage);
+          assert.equal(input.cwd, onchainDir);
+          assert.equal(locked, input.stage !== 'initial preflight');
+          configPaths.add(input.solanaConfigPath);
+          return gateState(1);
+        },
+        acquireRegistryLock: () => {
+          assert.equal(locked, false);
+          locked = true;
+          calls.push('lock');
+          return () => { locked = false; calls.push('unlock'); return true; };
+        },
+        runCommand: async (command, args, options) => {
+          if (command === 'npm') { calls.push('typecheck'); return; }
+          assert.notEqual(options?.cwd, onchainDir);
+          assert.ok(options?.cwd);
+          workspace = options.cwd;
+          assert.ok(options.cancellation);
+          assert.equal(options.env?.CARGO_TARGET_DIR, path.join(workspace, 'target'));
+          assert.ok(args.includes('--locked'));
+          if (command === 'anchor') {
+            calls.push('build');
+            assert.equal(locked, true);
+            assert.ok(args.includes('no-idl,no-log-ix-name,shared-devnet-program-id'));
+            mkdirSync(path.join(workspace, 'target/deploy'), { recursive: true });
+            writeFileSync(path.join(workspace, 'target/deploy/box_minter.so'), elf);
+            if (scenario === 'cancelled') throw new CommandCancelledError('SIGTERM');
+          } else if (command === 'cargo' && args.includes('--lib')) {
+            calls.push('host');
+            assert.equal(locked, false);
+          } else {
+            assert.equal(command, 'cargo');
+            assert.ok(args.includes('split_payments_sbf'));
+            assert.ok(args.includes('sbf-tests,shared-devnet-program-id'));
+            calls.push('exact-ELF');
+            assert.equal(locked, true);
+            assert.ok(options.env?.BOX_MINTER_SBF_PATH);
+            frozen = options.env.BOX_MINTER_SBF_PATH;
+            assert.deepEqual(readFileSync(frozen), elf);
+          }
+        },
+      };
+      const execution = executeUpgrade({
+        opts: { ...parseArgs(['little_swag_hoodies_devnet']), dryRun: true,
+          ...(scenario === 'resume-hash-mismatch' ? { resumeElfSha256: '0'.repeat(64) } : {}) },
+        drop: DEPLOYMENT_DROPS.little_swag_hoodies_devnet,
+        target: UPGRADE_PROGRAM_TARGETS.devnet,
+        root, onchainDir, registryPath: path.join(root, 'registry.ts'), solanaUrl: 'http://127.0.0.1:1', toolEnv: {},
+      }, effects);
+      if (scenario === 'complete') await execution;
+      else await assert.rejects(execution, scenario === 'cancelled' ? /interrupted by SIGTERM/ : /Recovered-buffer ELF hash mismatch/);
+      assert.deepEqual(calls, ['initial preflight', 'typecheck', 'host', 'lock', 'pre-build gate', 'build',
+        ...(scenario !== 'cancelled' ? ['exact-ELF'] : []), ...(scenario === 'complete' ? ['post-build baseline'] : []), 'unlock']);
+      assert.equal(locked, false);
+      assert.equal(existsSync(workspace), false);
+      if (frozen) assert.equal(existsSync(frozen), false);
+      for (const configPath of configPaths) assert.equal(existsSync(configPath), false);
+      for (const [name, content] of originals) assert.equal(readFileSync(path.join(onchainDir, name), 'utf8'), content);
+      assert.deepEqual(['SIGINT', 'SIGTERM'].map(signal => process.listenerCount(signal)), beforeSignals);
     });
   }
 });

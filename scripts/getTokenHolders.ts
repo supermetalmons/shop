@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { PublicKey, type Connection } from '@solana/web3.js';
+import { createScriptHeliusRpc, createScriptSolanaConnection, resolveScriptHeliusRpcUrl } from './shared/solanaRpcEnvironment.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -72,14 +73,6 @@ type FungibleHolderFetchResult = {
   totalHeldRaw: bigint;
   holders: FungibleHolder[];
 };
-
-function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
-  return cluster === 'mainnet-beta'
-    ? 'https://mainnet.helius-rpc.com'
-    : cluster === 'testnet'
-      ? 'https://testnet.helius-rpc.com'
-      : 'https://devnet.helius-rpc.com';
-}
 
 let activeCluster: SolanaCluster | null = null;
 const PAGE_LIMIT = 1000;
@@ -164,80 +157,20 @@ function parseArgs(argv: string[]): Args {
   return { targetId, cluster, rawOwners };
 }
 
-function loadLocalEnv() {
-  const envPaths = [
-    fileURLToPath(new URL('../.env', import.meta.url)),
-    fileURLToPath(new URL('../.env.local', import.meta.url)),
-  ];
-
-  const loadEnvFile = (process as any).loadEnvFile as ((path: string) => void) | undefined;
-
-  for (const envPath of envPaths) {
-    if (!existsSync(envPath)) continue;
-
-    try {
-      if (typeof loadEnvFile === 'function') {
-        loadEnvFile(envPath);
-        continue;
-      }
-    } catch {
-      // Fall back to the manual parser below.
-    }
-
-    const content = readFileSync(envPath, 'utf8');
-    for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const withoutExport = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
-      const eq = withoutExport.indexOf('=');
-      if (eq <= 0) continue;
-      const key = withoutExport.slice(0, eq).trim();
-      let value = withoutExport.slice(eq + 1).trim();
-      if (!key || key in process.env) continue;
-      if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-      if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
-      process.env[key] = value;
-    }
-  }
-}
-
-function heliusApiKey(): string {
-  const raw = (process.env.HELIUS_API_KEY || '').trim();
-  if (!raw) fail('Missing HELIUS_API_KEY');
-  return raw;
-}
-
 function requireActiveCluster(): SolanaCluster {
   if (!activeCluster) fail('Missing active cluster. Pass --cluster <mainnet-beta|testnet|devnet>.');
   return activeCluster;
 }
 
-function heliusRpcUrl(): string {
-  return `${heliusRpcBaseForCluster(requireActiveCluster())}/?api-key=${heliusApiKey()}`;
-}
-
 function createConnection() {
-  return new Connection(heliusRpcUrl(), 'confirmed');
+  const cluster = requireActiveCluster();
+  return createScriptSolanaConnection({ cluster, explicitUrl: resolveScriptHeliusRpcUrl({ cluster }), commitment: 'confirmed' });
 }
 
-async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
-  const res = await fetch(heliusRpcUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: method,
-      method,
-      params,
-    }),
-  });
-
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || (json as any)?.error) {
-    const message = (json as any)?.error?.message || res.statusText || `Helius ${method} failed`;
-    throw new Error(message);
-  }
-  return (json as any).result as T;
+let requestHelius: ReturnType<typeof createScriptHeliusRpc> | undefined;
+function heliusRpc<T>(method: string, params: unknown): Promise<T> {
+  requestHelius ??= createScriptHeliusRpc({ cluster: requireActiveCluster() });
+  return requestHelius<T>(method, params);
 }
 
 function pickString(...values: unknown[]): string | undefined {
@@ -641,7 +574,7 @@ async function fetchFungibleHolderBalances(connection: Connection, mintInfo: Fun
       ...(cursor ? { cursor } : {}),
     });
 
-    const pageAccounts = Array.isArray(result?.token_accounts) ? result.token_accounts : [];
+    const pageAccounts: unknown[] = Array.isArray(result?.token_accounts) ? result.token_accounts : [];
     tokenAccounts += pageAccounts.length;
 
     console.log(`[helius] getTokenAccounts page ${page}: ${pageAccounts.length} accounts`);
@@ -649,7 +582,7 @@ async function fetchFungibleHolderBalances(connection: Connection, mintInfo: Fun
     for (let i = 0; i < pageAccounts.length; i += 100) {
       const batch = pageAccounts.slice(i, i + 100);
       const keys = batch
-        .map((item) => pickString(item?.address))
+        .map((item) => pickString(item && typeof item === 'object' && 'address' in item ? item.address : undefined))
         .filter((address): address is string => Boolean(address))
         .map((address) => new PublicKey(address));
 
@@ -793,7 +726,6 @@ async function writeFungibleTokenCsv(args: Args, asset: DasAsset | null, mintInf
 }
 
 async function main() {
-  loadLocalEnv();
   const args = parseArgs(process.argv.slice(2));
   activeCluster = args.cluster;
 

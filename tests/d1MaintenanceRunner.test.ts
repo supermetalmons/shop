@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
-import { createD1MaintenanceRunner } from '../scripts/shared/d1MaintenanceRunner.ts';
+import { createD1MaintenanceRunner, loadD1Credentials } from '../scripts/shared/d1MaintenanceRunner.ts';
 
 function envelope(results: Record<string, unknown>[][]): string {
   return JSON.stringify(results.map((rows) => ({ success: true, results: rows })));
@@ -17,6 +17,41 @@ const databases = [
   { name: 'ops', label: 'Ops D1', maxBuffer: 32 * 1024 * 1024 },
   { name: 'commerce', label: 'Commerce D1', maxBuffer: 64 * 1024 * 1024 },
 ] as const;
+
+test('claim audit credentials reach Wrangler without importing unrelated dotenv settings', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'd1-credentials-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  writeFileSync(join(directory, '.env'), 'CLOUDFLARE_API_TOKEN=fixture-token\nHELIUS_API_KEY=private\nVITE_API_ORIGIN=wrong\n');
+  const previous = process.env;
+  try {
+    process.env = {};
+    loadD1Credentials(directory);
+    const runner = createD1MaintenanceRunner('commerce', (_file, args, options) => {
+      assert.equal(options.env?.CLOUDFLARE_API_TOKEN, 'fixture-token');
+      assert.equal(options.env?.HELIUS_API_KEY, undefined);
+      assert.equal(options.env?.VITE_API_ORIGIN, undefined);
+      assert.equal(args[args.indexOf('--env-file') + 1], 'cloud/workers/api/release.env');
+      return envelope([[]]);
+    });
+    assert.deepEqual(runner.query('SELECT 1'), []);
+  } finally { process.env = previous; }
+});
+
+test('D1 credentials preserve process precedence, local overrides, legacy auth and OAuth fallback', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'd1-credentials-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const environment: NodeJS.ProcessEnv = {};
+  loadD1Credentials(directory, environment);
+  assert.deepEqual(environment, {});
+  writeFileSync(join(directory, '.env'), 'CLOUDFLARE_API_TOKEN=base\nCLOUDFLARE_EMAIL=base@example.test\nCF_API_KEY=legacy\n');
+  writeFileSync(join(directory, '.env.local'), 'CLOUDFLARE_API_TOKEN=local\nCLOUDFLARE_EMAIL=local@example.test\n');
+  loadD1Credentials(directory, environment);
+  assert.deepEqual(environment, { CLOUDFLARE_API_TOKEN: 'local', CLOUDFLARE_EMAIL: 'local@example.test', CF_API_KEY: 'legacy' });
+  const exported = { CLOUDFLARE_API_TOKEN: 'exported', CLOUDFLARE_EMAIL: 'exported@example.test' };
+  loadD1Credentials(directory, exported);
+  assert.equal(exported.CLOUDFLARE_API_TOKEN, 'exported');
+  assert.equal(exported.CLOUDFLARE_EMAIL, 'exported@example.test');
+});
 
 for (const database of databases) {
   test(`${database.label} preserves Wrangler invocation and process options`, () => {

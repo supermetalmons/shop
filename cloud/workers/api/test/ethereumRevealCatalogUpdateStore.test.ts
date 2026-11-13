@@ -39,8 +39,10 @@ function fixture(t: TestContext, scope = deployment) {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys=ON');
   let failSql: string | undefined;
+  let observed: Array<{ query: string; bindings: number }> | undefined;
   const sql: RevealSql = { exec<T extends Record<string, string | number | null | ArrayBuffer>>(query: string, ...bindings: Array<string | number | null | ArrayBuffer>) {
     if (failSql && query.includes(failSql)) throw new Error('injected failure');
+    observed?.push({ query, bindings: bindings.length });
     const statement = database.prepare(query);
     const parameters = bindings.map(value => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
     const rows = statement.columns().length ? statement.all(...parameters) : (statement.run(...parameters), []);
@@ -57,6 +59,11 @@ function fixture(t: TestContext, scope = deployment) {
   while (!store.initializeChunk()) {}
   t.after(() => database.close());
   return { store, database, sql, transaction, random, fail: (fragment?: string) => { failSql = fragment; },
+    observe: <T>(action: () => T) => {
+      const queries: Array<{ query: string; bindings: number }> = [];
+      observed = queries;
+      try { return { value: action(), queries }; } finally { observed = undefined; }
+    },
     reopen: () => new EthereumRevealStore(sql, transaction, () => 0) };
 }
 
@@ -100,6 +107,50 @@ function conservation(store: EthereumRevealStore, database: DatabaseSync) {
   assert.equal(new Set(store.catalogUpdate.canonicalMetadata(['1', '2', '3']).map(row => `${row.category}:${row.assetId}`)).size,
     store.catalogUpdate.canonicalMetadata(['1', '2', '3']).length);
 }
+
+test('canonical metadata batches reads with bounded parameters and preserves order, duplicates, and publication evidence', t => {
+  const f = fixture(t);
+  for (let eggId = 1; eggId <= 6; eggId++) reserveEgg(f.database, eggId, '111112', eggId - 1);
+  const crates = Array.from({ length: 6 }, (_, index) => ({ crateTokenId: String(111112 + index),
+    tokenIds: Array.from({ length: 20 }, (_, offset) => String(index * 20 + offset + 1)) }));
+  f.store.freeze(deployment, observation, crates, 1000);
+  const published = f.store.catalogUpdate.canonicalMetadata(['1'])[0];
+  f.database.prepare("UPDATE publication SET status='published',metadata_revision=? WHERE token_id='1'").run(published.metadataRevision);
+  const ids = crates.flatMap(crate => crate.tokenIds);
+  const expected = new Map(ids.map(tokenId => [tokenId, f.store.catalogUpdate.canonicalMetadata([tokenId])[0]]));
+  const schema = f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
+  const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
+  const reader = f.reopen().catalogUpdate;
+  const counts: number[] = [];
+  for (const [size, budget] of [[1, 12], [16, 12], [99, 12], [100, 18], [120, 18]]) {
+    const requested = ids.slice(0, size).reverse();
+    const result = f.observe(() => reader.canonicalMetadata(requested));
+    counts.push(result.queries.length);
+    assert.deepEqual(result.value, requested.map(tokenId => expected.get(tokenId)));
+    assert.ok(result.queries.length <= budget, `${size} tokens used ${result.queries.length} queries; budget ${budget}`);
+    assert.ok(result.queries.every(entry => entry.bindings <= 100 && /^(SELECT|WITH)\b/.test(entry.query)), 'reads stay bounded and read-only');
+    assert.equal(result.queries.filter(entry => entry.query === 'SELECT * FROM settings WHERE id=1').length, 1);
+    assert.equal(result.queries.filter(entry => entry.query.includes("name='reveal_enrichment'")).length, 1);
+  }
+  const requested = ['999', '120', '1', '2', '1', '119', '999', '120'];
+  const mixed = f.observe(() => reader.canonicalMetadata(requested));
+  assert.deepEqual(mixed.value, requested.flatMap(tokenId => expected.has(tokenId) ? [expected.get(tokenId)] : []));
+  assert.equal(mixed.value.find(value => value.tokenId === '1')!.allowMissing, false);
+  for (const value of mixed.value) {
+    const persisted = f.database.prepare('SELECT metadata_json,placeholder_json FROM assignments WHERE token_id=?').get(value.tokenId)!;
+    assert.equal(value.metadataJson, persisted.metadata_json);
+    assert.equal(value.targetSha256, createHash('sha256').update(value.metadataJson).digest('hex'));
+    assert.deepEqual(value.expectedJsons, [...new Set([persisted.placeholder_json, persisted.metadata_json])]);
+    assert.equal(value.assignmentRevision, 0);
+    assert.equal(value.metadataRevision, 0);
+    assert.equal(value.migration, false);
+  }
+  assert.ok(f.observe(() => reader.canonicalMetadata(Array(300).fill('1'))).queries.length <= 12);
+  assert.deepEqual(f.observe(() => reader.canonicalMetadata([])), { value: [], queries: [] });
+  assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
+  assert.deepEqual(f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
+  t.diagnostic(`canonical metadata queries for 1/16/99/100/120 tokens: ${counts.join('/')}`);
+});
 
 for (const allocation of ['reserved', 'free'] as const) {
   test(`sparse cutoff preserves reveal of ${allocation} original eggs above the nominal catalog count`, t => {
@@ -154,6 +205,13 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   const ordinaryId = String(f.database.prepare('SELECT token_id FROM owner_hatching_tokens WHERE grail_asset_id IS NULL').get()!.token_id);
   const grailId = ordinaryId === '1' ? '2' : '1';
   owner.hatch(ordinaryId, 5000);
+  const requested = ['3', grailId, '999', ordinaryId, '3', grailId];
+  const ordinary = f.store.catalogUpdate.canonicalMetadata(['3'])[0];
+  const reader = f.reopen().catalogUpdate;
+  const mixed = f.observe(() => reader.canonicalMetadata(requested));
+  assert.deepEqual(mixed.value, [ordinary, owner.canonical(grailId), owner.canonical(ordinaryId), ordinary, owner.canonical(grailId)]);
+  assert.ok(mixed.queries.length <= 12, `mixed owner/ordinary read used ${mixed.queries.length} queries`);
+  assert.equal(mixed.queries.filter(entry => entry.query.includes('FROM owner_hatching_tokens WHERE token_id IN')).length, 1);
   conservation(f.store, f.database);
   assert.deepEqual(f.store.catalogUpdate.eligibleCutoffEggs(76699), [76700]);
   const row = f.database.prepare("SELECT slot FROM reveal_catalog_free WHERE generation=? AND category='egg' AND asset_id=76700")
@@ -202,8 +260,13 @@ test('replacement inspection can read a pre-owner ledger without initializing or
   const before = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
   const store = new EthereumRevealCatalogUpdateStore(f.sql, () => { throw new Error('Read-only inspection attempted a transaction.'); });
   assert.equal(store.ownerHatching.available, false);
-  assert.equal(store.canonicalMetadata(['1'])[0].category, 'egg');
+  const result = f.observe(() => store.canonicalMetadata(['2', '1', '999', '1']));
+  assert.deepEqual(result.value.map(value => value.tokenId), ['2', '1', '1']);
+  assert.equal(result.value[1].category, 'egg');
+  assert.ok(result.queries.length <= 12);
   assert.equal(store.canonicalArtworks(['1'])[0].category, 'egg');
+  f.database.exec('DROP TRIGGER enqueue_reveal_enrichment; DROP TABLE reveal_enrichment');
+  assert.deepEqual(store.canonicalMetadata(['2', '1', '999', '1']), result.value);
   assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, before);
 });
 

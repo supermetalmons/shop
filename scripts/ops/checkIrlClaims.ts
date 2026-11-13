@@ -1,11 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { createScriptHeliusRpc } from '../shared/solanaRpcEnvironment.ts';
+import { loadD1Credentials } from '../shared/d1MaintenanceRunner.ts';
 import { PublicKey } from '@solana/web3.js';
 import {
   queryRemoteCommerceDocuments,
   sqlString,
 } from '../shared/commerceD1Maintenance.ts';
-import { normalizeDropId, requireApiDrop, type SolanaCluster } from '../../cloud/workers/api/src/dropConfig.ts';
+import { normalizeDropId, requireApiDrop } from '../../cloud/workers/api/src/dropConfig.ts';
 import {
   dasAssetBoxId,
   dasAssetDudeId,
@@ -68,14 +68,6 @@ const CHECK_IRL_CLAIMS_DAS_BURN_OPTIONS = {
   missingAssetResult: false,
   nonBooleanFlagIsBurnt: true,
 } as const;
-function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
-  return cluster === 'mainnet-beta'
-    ? 'https://mainnet.helius-rpc.com'
-    : cluster === 'testnet'
-      ? 'https://testnet.helius-rpc.com'
-      : 'https://devnet.helius-rpc.com';
-}
-
 function usage() {
   return [
     'Check IRL claim codes against on-chain state.',
@@ -154,73 +146,10 @@ const dropConfig = requireApiDrop(args.dropId);
 const selectedDropId = dropConfig.dropId;
 const cluster = dropConfig.solanaCluster;
 const collectionMint = dropConfig.collectionMint;
-const HELIUS_RPC_BASE = heliusRpcBaseForCluster(cluster);
-
-function loadLocalEnv() {
-  const envPaths = [
-    fileURLToPath(new URL('../../.env', import.meta.url)),
-    fileURLToPath(new URL('../../.env.local', import.meta.url)),
-  ];
-
-  const loadEnvFile = (process as any).loadEnvFile as ((path: string) => void) | undefined;
-
-  for (const envPath of envPaths) {
-    if (!existsSync(envPath)) continue;
-
-    try {
-      if (typeof loadEnvFile === 'function') {
-        loadEnvFile(envPath);
-        continue;
-      }
-    } catch {
-      // Fall back to the manual parser below.
-    }
-
-    const content = readFileSync(envPath, 'utf8');
-    for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const withoutExport = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
-      const eq = withoutExport.indexOf('=');
-      if (eq <= 0) continue;
-      const key = withoutExport.slice(0, eq).trim();
-      let value = withoutExport.slice(eq + 1).trim();
-      if (!key || key in process.env) continue;
-      if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-      if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
-      process.env[key] = value;
-    }
-  }
-}
-
-function heliusApiKey(): string {
-  const raw = String(process.env.HELIUS_API_KEY || '').trim();
-  if (!raw) fail('Missing HELIUS_API_KEY');
-  return raw;
-}
-
-function heliusRpcUrl(): string {
-  return `${HELIUS_RPC_BASE}/?api-key=${heliusApiKey()}`;
-}
-
-async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
-  const res = await fetch(heliusRpcUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: method,
-      method,
-      params,
-    }),
-  });
-
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || (json as any)?.error) {
-    const message = (json as any)?.error?.message || res.statusText || `Helius ${method} failed`;
-    throw new Error(message);
-  }
-  return (json as any).result as T;
+let requestHelius: ReturnType<typeof createScriptHeliusRpc> | undefined;
+function heliusRpc<T>(method: string, params: unknown): Promise<T> {
+  requestHelius ??= createScriptHeliusRpc({ cluster });
+  return requestHelius<T>(method, params);
 }
 
 function normalizeWallet(wallet: string): string {
@@ -548,7 +477,7 @@ function printText(results: ClaimInspection[], dropId: string) {
 }
 
 async function main() {
-  loadLocalEnv();
+  loadD1Credentials();
   const claims = await loadClaims(args);
 
   if (!claims.length) {

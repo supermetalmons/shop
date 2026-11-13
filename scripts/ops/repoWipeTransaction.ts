@@ -1117,16 +1117,17 @@ function removeRecoveryManifest(
         retirementEntryExists = true;
       }
       if (!retirementEntryExists) {
+        const directoryToRemove = retirementDirectory;
         try {
-          rmdirSync(retirementDirectory);
-          io.syncDirectory(path.dirname(retirementDirectory));
+          rmdirSync(directoryToRemove);
+          io.syncDirectory(path.dirname(directoryToRemove));
           retirementDirectory = undefined;
           retirementPath = undefined;
         } catch {
           addUncertainPath(
             recoveryPaths,
             uncertainPaths,
-            retirementDirectory,
+            directoryToRemove,
           );
         }
       }

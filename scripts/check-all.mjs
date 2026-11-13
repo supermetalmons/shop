@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { withValidationWorkspace } from './shared/validationWorkspace.mjs';
+import { createSolanaBuildWorkspace } from './shared/solanaBuild.ts';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -28,14 +29,12 @@ export async function runEthereumChecks(root = projectRoot, run = runValidationC
 }
 
 export async function runSbfChecks(root = projectRoot, run = runValidationCommand) {
-  await withValidationWorkspace(root, 'sbf', async directory => {
-    const cwd = join(directory, 'onchain');
-    const env = { ...process.env, NO_DNA: '1', CARGO_TARGET_DIR: join(cwd, 'target') };
-    await run('anchor', ['build', '--no-idl', '--arch', 'sbf', '--', '--features',
-      'no-idl,no-log-ix-name,mainnet-program-id', '--', '--locked'], { cwd, env, label: 'Build locked Solana SBF program' });
-    await run('cargo', ['test', '--locked', '--features', 'sbf-tests,mainnet-program-id', '--test', 'split_payments_sbf'],
-      { cwd, env: { ...env, BOX_MINTER_SBF_PATH: join(cwd, 'target/deploy/box_minter.so') }, label: 'Solana SBF integration tests' });
-  });
+  const workspace = createSolanaBuildWorkspace({ onchainDirectory: join(root, 'onchain'), buildFeature: 'mainnet-program-id' });
+  try {
+    await workspace.build(run);
+  } finally {
+    workspace.cleanup();
+  }
 }
 
 export async function runAllChecks(root = projectRoot, run = runValidationCommand) {
@@ -50,7 +49,7 @@ export async function runAllChecks(root = projectRoot, run = runValidationComman
   await run(npm, ['run', 'test:ethereum:e2e'], { cwd: root, label: 'Local Ethereum lifecycle and reveal E2E' });
   await run(npm, ['run', 'test:pre111k:e2e'], { cwd: root, label: 'Local pre111K relic reservation E2E' });
   await runSbfChecks(root, run);
-  await run(npm, ['run', 'test:mi-note-videos'], { cwd: root, label: 'Pinned native renderer tests' });
+  await run(npm, ['run', 'test:renderers:native'], { cwd: root, label: 'Native renderer tests and approved preset verification' });
 }
 
 export async function runEthereumForkChecks(root = projectRoot, run = runValidationCommand, rpcUrl = process.env.ETHEREUM_RPC_URL) {

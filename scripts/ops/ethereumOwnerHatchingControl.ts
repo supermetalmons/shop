@@ -86,7 +86,7 @@ export function parseOwnerHatchingControlArgs(args: string[]): ControlOptions | 
 
 async function readDeployment(deploymentId: string): Promise<EthereumRevealDeployment> {
   const result = await runEthereumRevealControl(['status', '--deployment-id', deploymentId]);
-  if (!('deployments' in result) || result.deployments.length !== 1) throw new Error('Owner hatching deployment was not found.');
+  if (!result.deployments || result.deployments.length !== 1) throw new Error('Owner hatching deployment was not found.');
   return result.deployments[0];
 }
 

@@ -579,7 +579,7 @@ async function runMiNoteDevnetSmokeLocked(options: MiNoteDevnetSmokeOptions, run
     cluster: 'devnet', root: ROOT, explicitUrl: options.rpcUrl || process.env.TWO_CONFIG_DEVNET_RPC_URL,
   });
   const connection = createScriptSolanaConnection({ cluster: 'devnet', root: ROOT, explicitUrl: rpcUrl });
-  let modules: Awaited<ReturnType<typeof loadModules>>;
+  let modules: Awaited<ReturnType<typeof loadModules>> | undefined;
   const derived = deriveMiNoteSmokeBuyer(options.authority, runId);
   const buyer = derived.buyer;
   const authority = options.authority;
@@ -788,6 +788,7 @@ async function runMiNoteDevnetSmokeLocked(options: MiNoteDevnetSmokeOptions, run
     try {
     if (approved) {
       try {
+        if (!modules) throw new Error('Smoke cleanup modules are unavailable.');
         stage('cleanup');
         const cleanupErrors: unknown[] = [];
         for (const address of record.knownAssets) {

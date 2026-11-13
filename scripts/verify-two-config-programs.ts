@@ -86,11 +86,11 @@ function sha256(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
-function accountBytes(account: RpcAccount | null, label: string): Buffer {
+function requireAccount(account: RpcAccount | null | undefined, label: string): RpcAccount {
   if (!account || !(account.data instanceof Uint8Array)) {
     throw new Error(`Missing or invalid account: ${label}`);
   }
-  return Buffer.from(account.data);
+  return account;
 }
 
 async function captureTarget(target: typeof TARGETS[number], fixturesDir?: string, explicitUrl?: string) {
@@ -109,8 +109,8 @@ async function captureTarget(target: typeof TARGETS[number], fixturesDir?: strin
   );
   if (programAccounts.value.length !== programs.length) throw new Error('Incomplete program account response');
   const resolved = programs.map((program, index) => {
-    const account = programAccounts.value[index];
-    const data = accountBytes(account, program.programId);
+    const account = requireAccount(programAccounts.value[index], program.programId);
+    const data = Buffer.from(account.data);
     if (!account.executable) throw new Error(`Program is not executable: ${program.programId}`);
     if (account.owner.toBase58() === UPGRADEABLE_LOADER) {
       if (data.length !== 36 || data.readUInt32LE(0) !== 2) throw new Error(`Invalid upgradeable program: ${program.programId}`);
@@ -131,8 +131,8 @@ async function captureTarget(target: typeof TARGETS[number], fixturesDir?: strin
     let bytes: Buffer;
     let deploymentSlot: number | undefined;
     if (program.programDataAddress) {
-      const account = byAddress.get(program.programDataAddress);
-      const data = accountBytes(account, program.programDataAddress);
+      const account = requireAccount(byAddress.get(program.programDataAddress), program.programDataAddress);
+      const data = Buffer.from(account.data);
       if (account.owner.toBase58() !== UPGRADEABLE_LOADER || account.executable || data.length < 49 || data.readUInt32LE(0) !== 3) {
         throw new Error(`Invalid ProgramData: ${program.programDataAddress}`);
       }
@@ -140,7 +140,7 @@ async function captureTarget(target: typeof TARGETS[number], fixturesDir?: strin
       if (!Number.isSafeInteger(deploymentSlot)) throw new Error('Invalid deployment slot');
       bytes = data.subarray(45);
     } else {
-      bytes = accountBytes(program.account, program.programId);
+      bytes = Buffer.from(program.account.data);
     }
     if (!bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
       throw new Error(`Program is not ELF: ${program.programId}`);
@@ -209,7 +209,7 @@ export async function verifyTwoConfigGateForDeployment(args: {
   const recorded = attestation.targets.find(({ cluster }) => cluster === args.cluster)!;
   for (const program of current.programs) {
     const expected = recorded.programs.find(({ name }) => name === program.name);
-    if (!expected || ['programId', 'loader', 'programDataAddress', 'deploymentSlot', 'sha256', 'bytes'].some(
+    if (!expected || (['programId', 'loader', 'programDataAddress', 'deploymentSlot', 'sha256', 'bytes'] as const).some(
       (field) => program[field] !== expected[field],
     )) throw new Error(`Deployed ${args.cluster} ${program.name} changed since the local test gate`);
   }

@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PublicKey } from '@solana/web3.js';
+import { createScriptHeliusRpc } from './shared/solanaRpcEnvironment.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 type DasAsset = Record<string, any>;
@@ -55,61 +56,6 @@ function fail(message: string): never {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
-  return cluster === 'mainnet-beta'
-    ? 'https://mainnet.helius-rpc.com'
-    : cluster === 'testnet'
-      ? 'https://testnet.helius-rpc.com'
-      : 'https://devnet.helius-rpc.com';
-}
-
-function loadLocalEnv() {
-  const envPaths = [
-    fileURLToPath(new URL('../.env', import.meta.url)),
-    fileURLToPath(new URL('../.env.local', import.meta.url)),
-  ];
-
-  const loadEnvFile = (process as any).loadEnvFile as ((path: string) => void) | undefined;
-
-  for (const envPath of envPaths) {
-    if (!existsSync(envPath)) continue;
-
-    try {
-      if (typeof loadEnvFile === 'function') {
-        loadEnvFile(envPath);
-        continue;
-      }
-    } catch {
-      // Fall back to the manual parser below.
-    }
-
-    const content = readFileSync(envPath, 'utf8');
-    for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const withoutExport = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
-      const eq = withoutExport.indexOf('=');
-      if (eq <= 0) continue;
-      const key = withoutExport.slice(0, eq).trim();
-      let value = withoutExport.slice(eq + 1).trim();
-      if (!key || key in process.env) continue;
-      if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-      if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
-      process.env[key] = value;
-    }
-  }
-}
-
-function heliusApiKey(): string {
-  const raw = (process.env.HELIUS_API_KEY || '').trim();
-  if (!raw) fail('Missing HELIUS_API_KEY');
-  return raw;
-}
-
-function heliusRpcUrl(): string {
-  return `${heliusRpcBaseForCluster(activeCluster)}/?api-key=${heliusApiKey()}`;
 }
 
 function normalizeAddress(rawAddress: string): string {
@@ -170,50 +116,15 @@ async function waitForRateLimit() {
   lastRequestAt = Date.now();
 }
 
-function retryDelayMs(attempt: number) {
-  return 1500 * 2 ** attempt;
-}
-
+let requestHelius: ReturnType<typeof createScriptHeliusRpc> | undefined;
 async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt <= RETRIES; attempt += 1) {
-    await waitForRateLimit();
-
-    try {
-      const res = await fetch(heliusRpcUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: method,
-          method,
-          params,
-        }),
-      });
-
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || (json as any)?.error) {
-        const message = (json as any)?.error?.message || res.statusText || `Helius ${method} failed`;
-        const retryable = res.status === 429 || res.status >= 500;
-        if (!retryable) throw new Error(message);
-        lastError = new Error(message);
-      } else {
-        return (json as any).result as T;
-      }
-    } catch (err) {
-      lastError = err;
-    }
-
-    if (attempt < RETRIES) {
-      const delay = retryDelayMs(attempt);
-      console.warn(`[helius] ${method} failed; retrying in ${delay}ms`);
-      await sleep(delay);
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  requestHelius ??= createScriptHeliusRpc({ cluster: activeCluster }, {
+    attempts: RETRIES + 1, timeoutMs: REQUEST_TIMEOUT_MS,
+    retryableStatus: status => status === 429 || status >= 500,
+    retryDelay: attempt => 1500 * 2 ** attempt,
+    beforeAttempt: waitForRateLimit, retryTransportErrors: true, retryReadErrors: true,
+  });
+  return requestHelius<T>(method, params);
 }
 
 function pickString(...values: unknown[]): string | undefined {
@@ -388,7 +299,6 @@ async function exportCollection(collectionAddress: string, outputDir: string) {
 }
 
 async function main() {
-  loadLocalEnv();
   const args = parseArgs(process.argv.slice(2));
   activeCluster = args.cluster;
   mkdirSync(args.outputDir, { recursive: true });

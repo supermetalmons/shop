@@ -468,6 +468,7 @@ export async function execute111kReplacementCleanup(options: ReplacementCleanupO
     };
     const verified = await verifyReplacement(initial.newDeployment, baseline);
     await verified.verifyMedia();
+    if (!journal) throw new Error('Replacement verification did not initialize its cleanup journal.');
     const verifyStableReplacement = async (deployment: ReplacementDeployment, afterSamples?: () => Promise<void>) => {
       let inspection = await inspectNew(deps, deployment, journal!.replacementBaseline.frozenThroughMs);
       for (;;) {

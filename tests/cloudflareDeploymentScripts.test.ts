@@ -83,7 +83,7 @@ test('release gates retain required validation without fixing command formatting
   ]);
   requiredChecks('check', [
     'types:frontend-worker:check', 'typecheck:frontend-worker', 'test:frontend-worker',
-    'typecheck', 'check:api', 'typecheck:tools', 'check:dead-code', 'test', 'test:onchain',
+    'typecheck', 'check:api', 'typecheck:tools', 'typecheck:tests', 'check:dead-code', 'test:renderers', 'test', 'test:onchain',
     'build', 'validate:browser-bundle',
   ]);
   for (const name of ['check:frontend', 'check']) {

@@ -683,7 +683,10 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
     const committed = await deps.readRegistry(registryPath);
     if (!isDeepStrictEqual(committed.drops[plan.dropId], row)) {
       const actual = committed.drops[plan.dropId];
-      const fields = [...new Set([...Object.keys(row), ...Object.keys(actual || {})])].filter(key => !isDeepStrictEqual(actual?.[key], row[key]));
+      const expectedFields = new Map(Object.entries(row));
+      const actualFields = new Map(Object.entries(actual ?? {}));
+      const fields = [...new Set([...expectedFields.keys(), ...actualFields.keys()])]
+        .filter(key => !isDeepStrictEqual(actualFields.get(key), expectedFields.get(key)));
       throw new Error(`Finalized registry row could not be verified (${fields.join(', ')}); preserve the journal.`);
     }
     journal.finalizedSlot = finalizedSlot; persist();

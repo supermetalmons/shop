@@ -120,6 +120,27 @@ Rehearse upgrades on the corresponding devnet drop first. Reused program drops
 skip program build and deployment during ordinary `deploy-all-onchain`; an
 intentional upgrade must use `upgrade-onchain`.
 
+Fresh deployments, upgrades, and `npm run test:onchain:sbf` share an isolated
+build stage. It copies the current on-chain sources and pinned `Cargo.lock`,
+selects the requested program identity, and runs Anchor with `--locked`.
+Fresh identities are applied only to the temporary source and Anchor config;
+the checkout and its existing build output remain unchanged. Dependency or
+lockfile repairs must be performed separately before retrying a build.
+
+The stage freezes and hashes the resulting ELF, runs SBF integration tests
+against that exact file, and checks its hash before returning it to deployment
+or upgrade orchestration. Temporary source and binary files are cleaned up on
+completion or failure. Existing upgrade audit, dry-run, skip-tests, and recovery
+options retain their policies.
+
+Read-only holder, collection-export, and claim-audit tools share the script RPC
+transport and Helius credential resolution. Credentials prefer the process
+environment, then `.env.local`, then `.env` in the current checkout, with the
+primary checkout as a worktree fallback. DAS calls require Helius credentials.
+Transient HTTP failures use bounded retries; collection export also retains its
+request pacing and transport retries, while permanent RPC/HTTP failures stop
+immediately.
+
 Stripe test Checkout performs a pre-payment availability check but does not
 reserve on-chain supply. If supply sells out before webhook fulfillment, the
 checkout is marked for manual refund review with its Stripe session identifier.

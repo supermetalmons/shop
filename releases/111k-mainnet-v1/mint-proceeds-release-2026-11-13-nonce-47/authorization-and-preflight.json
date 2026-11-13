@@ -1,0 +1,20 @@
+{
+  "authorizedAt": "2026-11-13T17:39:03.792Z",
+  "userInstruction": "call withdraw again",
+  "chainId": 1,
+  "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "method": "releaseAllMint()",
+  "valueWei": "0",
+  "nonce": 47,
+  "gasLimit": 650000,
+  "maxPriorityFeePerGasWei": "1000000000",
+  "maxFeePerGasWei": "2000000000",
+  "maximumGasFeeWei": "1300000000000000",
+  "sourceBlock": 26407591,
+  "sourceBlockHash": "0x9724660aea3539a9f1583d837feebf8006beef91d9b4369276c8f1223e6c648d",
+  "totalMintReceivedWei": "109437000000000000000",
+  "totalMintReleasedWei": "105856786500000000000",
+  "pendingMintProceedsWei": "3580213500000000000",
+  "gasEstimate": "480714"
+}

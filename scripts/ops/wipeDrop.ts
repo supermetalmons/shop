@@ -1308,9 +1308,9 @@ export async function buildRepoPlan(args: {
 
 function extractClaimCodesFromDeliveryOrders(orderData: unknown): string[] {
   if (!orderData || typeof orderData !== 'object') return [];
-  const irlClaims = Array.isArray((orderData as any).irlClaims) ? (orderData as any).irlClaims : [];
+  const irlClaims: unknown[] = 'irlClaims' in orderData && Array.isArray(orderData.irlClaims) ? orderData.irlClaims : [];
   return irlClaims
-    .map((entry) => normalizeClaimCode((entry as any)?.code))
+    .map(entry => normalizeClaimCode(entry && typeof entry === 'object' && 'code' in entry ? entry.code : undefined))
     .filter((code): code is string => Boolean(code));
 }
 

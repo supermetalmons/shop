@@ -55,14 +55,18 @@ contract checks, and gas benchmarks.
 npm run check:frontend
 npm run check:api
 npm run typecheck:tools
+npm run typecheck:tests
 npm run check:dead-code
+npm run test:renderers
 npm run check
 npm run check:all
 ```
 
 `check` is the routine repository gate: generated schema and Worker types,
-frontend and API typechecks, TypeScript unit/runtime tests, Rust host tests,
-dead-code checks, production bundles, and Worker startup validation.
+frontend, API, and strict operational-tool typechecks, TypeScript unit/runtime tests,
+portable renderer tests, Rust host tests, dead-code checks, production bundles,
+and Worker startup validation. Frontend/tool tests retain a separate TypeScript
+configuration while their fixtures are migrated to strict checking.
 `dry-run:frontend` and `dry-run:api` validate deployment bundles without publishing.
 
 `check:all` adds Solidity and gas checks, nested Ethereum TypeScript tests,
@@ -70,11 +74,20 @@ extended contract invariants, the 111K lifecycle and reveal E2E, the pre111K
 relic reservation E2E, Solana SBF, and native renderer tests.
 It requires the pinned root and Ethereum npm dependencies, Cargo, Anchor/Solana
 SBF tooling, Foundry (`forge` and `anvil`), and the
-[native renderer's pinned macOS runtime](scripts/mi-note-video/README.md#prerequisites).
+[native renderer's pinned macOS runtime](scripts/mi-note-video/README.md#prerequisites),
+Blender, Swift/Metal, and FFmpeg for the other native renderer suites.
 Ethereum E2E also requires CDN access or its configured local metadata directory.
 Missing prerequisites fail the command. Fixture-writing and lockfile-sensitive
 checks run in disposable copies of the current source. Public-RPC
 [fork tests](onchain/ethereum/README.md#seaport-trading) remain opt-in.
+
+`test:renderers` runs the portable Node and Python regression suites for canvases,
+eggs, acrylic frames, and knives without Blender or GPU tools. Python 3 and a POSIX
+host are required. `test:renderers:native` runs the remaining native suites, the
+approved A Light canvas reproduction, acrylic preset verification, and pinned
+Mi Note renderer tests; `check:all` includes this tier after the routine gate.
+Set `PYTHON` or `BLENDER_BIN` to select those executables. Neither tier accepts
+skipped Python tests, and unregistered renderer suites fail validation.
 
 After catalog or schema changes, run `npm run generate:db` and
 `npm run check:db-generated`. Keep applied SQL and recorded schema checksums

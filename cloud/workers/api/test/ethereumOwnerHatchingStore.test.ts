@@ -21,6 +21,7 @@ function canonical(tokenId: string, eggId: number): OwnerHatchingCanonical {
 
 function fixture(t: TestContext) {
   const database = new DatabaseSync(':memory:');
+  let observed: Array<{ query: string; bindings: number }> | undefined;
   database.exec('PRAGMA foreign_keys=ON');
   database.exec(`CREATE TABLE original_tokens(token_id TEXT PRIMARY KEY,egg_id INTEGER NOT NULL,canonical_json TEXT NOT NULL);
     CREATE TABLE free_assets(category TEXT NOT NULL,asset_id INTEGER NOT NULL,PRIMARY KEY(category,asset_id));
@@ -31,6 +32,7 @@ function fixture(t: TestContext) {
     .run(String(token), token, JSON.stringify(canonical(String(token), token)));
   const sql: RevealSql = { exec<T extends Record<string, string | number | null | ArrayBuffer>>(query: string,
     ...bindings: Array<string | number | null | ArrayBuffer>) {
+    observed?.push({ query, bindings: bindings.length });
     const statement = database.prepare(query);
     const params = bindings.map(value => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
     const rows = statement.columns().length ? statement.all(...params) : (statement.run(...params), []);
@@ -100,6 +102,11 @@ function fixture(t: TestContext) {
     readyCount: 2, grails: [{ category: 'animated', assetId: 422, attributesJson: '[{"trait_type":"collection block","value":"DROWEE"}]' }],
     freshEggIds: [55_304] };
   return { database, input, get store() { return store; }, reopen,
+    observe: <T>(action: () => T) => {
+      const queries: Array<{ query: string; bindings: number }> = [];
+      observed = queries;
+      try { return { value: action(), queries }; } finally { observed = undefined; }
+    },
     builds: () => buildCount, draws: () => ordinaryCount,
     mintFresh: (tokenId: string, eggId: number, originalPaintingId: number) => {
       database.prepare("DELETE FROM free_assets WHERE category='egg' AND asset_id=?").run(eggId);
@@ -128,6 +135,32 @@ test('preparation is private, deterministic on retry, and consumes no ordinary r
   assert.equal(ready.metadataRevision, 4);
   assert.deepEqual(f.reopen().prepare({ ...f.input, candidateTokenIds: ['4', '3', '2', '1'] }, 2000), result);
   assert.throws(() => f.store.prepare({ ...f.input, sourceSha256: 'b'.repeat(64) }), /replay changed/);
+});
+
+test('bulk owner reads preserve canonical payloads and slot order across bounded pages', t => {
+  const f = fixture(t);
+  f.store.prepare(f.input, 1000);
+  f.store.hatch('4', 2000);
+  const ids = ['4', ...Array.from({ length: 101 }, (_, index) => String(index + 10)), '1', '4'];
+  const expected = new Map([['1', f.store.canonical('1')!], ['4', f.store.canonical('4')!]]);
+  const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
+  const canonical = f.observe(() => f.store.canonicals(ids));
+  assert.deepEqual(canonical.value, expected);
+  assert.equal(canonical.queries.length, 2);
+  assert.ok(canonical.queries.every(entry => entry.bindings <= 100 && entry.query.startsWith('SELECT')));
+  for (const [tokenId, value] of canonical.value) {
+    const row = f.database.prepare('SELECT canonical_json FROM owner_hatching_tokens WHERE token_id=?').get(tokenId)!;
+    assert.deepEqual(value, parseMetadataJson(String(row.canonical_json)));
+  }
+  const origins = Array.from({ length: 51 }, (_, index) => ({ category: 'painting' as const, assetId: index + 1 }));
+  origins.push(origins[0]);
+  const overrides = f.observe(() => f.store.slotOverrides(origins));
+  assert.deepEqual(overrides.value, [{ category: 'egg', assetId: 55_304 }, ...Array(50).fill(null), { category: 'egg', assetId: 55_304 }]);
+  assert.equal(overrides.queries.length, 2);
+  assert.ok(overrides.queries.every(entry => entry.bindings <= 100 && entry.query.startsWith('SELECT')));
+  assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
+  assert.deepEqual(f.observe(() => f.store.canonicals([])), { value: new Map(), queries: [] });
+  assert.deepEqual(f.observe(() => f.store.slotOverrides([])), { value: [], queries: [] });
 });
 
 test('grail hatch retires its egg, preserves frozen identity, and survives repeated requests and restart', t => {
@@ -413,7 +446,9 @@ test('a read-only owner store tolerates a pre-feature ledger without creating ta
   assert.equal(store.available, false);
   assert.equal(store.initialized, false);
   assert.equal(store.canonical('1'), null);
+  assert.deepEqual(store.canonicals(['2', '1', '1']), new Map());
   assert.equal(store.slotOverride({ category: 'egg', assetId: 1 }), null);
+  assert.deepEqual(store.slotOverrides([{ category: 'egg', assetId: 2 }, { category: 'painting', assetId: 1 }]), [null, null]);
   assert.equal(store.batchStatus(), null);
   assert.deepEqual(store.enrichmentSummary(), { pending: 0, failed: 0, completed: 0, errors: {} });
   assert.equal(store.hasProtectedEgg(1), false);
@@ -438,6 +473,7 @@ test('enriched exact numeric traits persist while repeated hatch artwork stays c
     '{"trait_type":"full","value":"' + 'x'.repeat(64 * 1024) + '"}]');
   assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision, enriched), true);
   const saved = f.reopen().canonical('4')!;
+  assert.deepEqual(f.store.canonicals(['4', '1', '4']).get('4'), saved);
   const metadata = parseMetadataJson(saved.metadataJson);
   assert.match(JSON.stringify(metadata), /9007199254740993/);
   assert.match(JSON.stringify(metadata), /"value":1\.00/);

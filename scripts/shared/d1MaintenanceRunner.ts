@@ -1,7 +1,9 @@
 import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseEnv } from 'node:util';
 
 type D1MaintenanceRow = Record<string, unknown>;
 type D1MaintenanceDatabase = 'data' | 'ops' | 'commerce';
@@ -24,6 +26,17 @@ const wranglerBinary = resolve(
 );
 const wranglerCommandInput = fileURLToPath(new URL('./d1CommandInput.cjs', import.meta.url));
 const require = createRequire(import.meta.url);
+
+export function loadD1Credentials(directory = repoRoot, environment: NodeJS.ProcessEnv = process.env): void {
+  for (const name of ['.env.local', '.env']) {
+    const file = resolve(directory, name);
+    if (!existsSync(file)) continue;
+    const values = parseEnv(readFileSync(file, 'utf8'));
+    for (const key of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL', 'CF_API_TOKEN', 'CF_API_KEY', 'CF_EMAIL']) {
+      if (environment[key] === undefined && values[key] !== undefined) environment[key] = values[key];
+    }
+  }
+}
 
 export function createD1MaintenanceRunner(
   database: D1MaintenanceDatabase,

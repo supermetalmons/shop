@@ -236,6 +236,22 @@ export class EthereumOwnerHatchingStore {
     return row ? { category: row.category, assetId: row.asset_id } : null;
   }
 
+  slotOverrides(origins: readonly RevealOriginUnit[]): Array<RevealOriginUnit | null> {
+    if (!origins.length || !this.available) return origins.map(() => null);
+    const values = new Map<string, RevealOriginUnit>();
+    const unique = [...new Map(origins.map(origin => [`${origin.category}:${origin.assetId}`, origin])).values()];
+    for (let offset = 0; offset < unique.length; offset += 50) {
+      const page = unique.slice(offset, offset + 50);
+      const rows = this.sql.exec<{ origin_category: EthereumArtworkCategory; origin_asset_id: number;
+        category: EthereumArtworkCategory; asset_id: number }>(
+        `SELECT * FROM owner_hatching_slot_overrides
+          WHERE (origin_category,origin_asset_id) IN (${page.map(() => '(?,?)').join(',')})`,
+        ...page.flatMap(origin => [origin.category, origin.assetId])).toArray();
+      for (const row of rows) values.set(`${row.origin_category}:${row.origin_asset_id}`, { category: row.category, assetId: row.asset_id });
+    }
+    return origins.map(origin => values.get(`${origin.category}:${origin.assetId}`) ?? null);
+  }
+
   private overrideSlot(origin: RevealOriginUnit, asset: RevealOriginUnit, tokenId: string, now: number): void {
     this.sql.exec(`INSERT INTO owner_hatching_slot_history(token_id,origin_category,origin_asset_id,category,asset_id,created_at_ms)
       VALUES(?,?,?,?,?,?)`, tokenId, origin.category, origin.assetId, asset.category, asset.assetId, now);
@@ -248,6 +264,19 @@ export class EthereumOwnerHatchingStore {
   canonical(tokenId: string): OwnerHatchingCanonical | null {
     const row = this.token(tokenId);
     return row ? parseMetadataJson(row.canonical_json) as OwnerHatchingCanonical : null;
+  }
+
+  canonicals(tokenIds: readonly string[]): Map<string, OwnerHatchingCanonical> {
+    const values = new Map<string, OwnerHatchingCanonical>();
+    if (!tokenIds.length || !this.available) return values;
+    const unique = [...new Set(tokenIds)];
+    for (let offset = 0; offset < unique.length; offset += 100) {
+      const page = unique.slice(offset, offset + 100);
+      const rows = this.sql.exec<Pick<TokenRow, 'token_id' | 'canonical_json'>>(
+        `SELECT token_id,canonical_json FROM owner_hatching_tokens WHERE token_id IN (${page.map(() => '?').join(',')})`, ...page).toArray();
+      for (const row of rows) values.set(row.token_id, parseMetadataJson(row.canonical_json) as OwnerHatchingCanonical);
+    }
+    return values;
   }
 
   readyTokenIds(): string[] {

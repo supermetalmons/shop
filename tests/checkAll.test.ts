@@ -7,6 +7,8 @@ import test, { type TestContext } from 'node:test';
 import { runAllChecks, runEthereumChecks, runEthereumForkChecks, runSbfChecks, runValidationCommand } from '../scripts/check-all.mjs';
 import { withValidationWorkspace } from '../scripts/shared/validationWorkspace.mjs';
 
+const programBinary = Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46]), Buffer.from('built artifact')]);
+
 function project(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'mons-validation-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -79,13 +81,14 @@ test('SBF build and test share an isolated artifact while preserving the source 
       assert.equal(options.env.NO_DNA, '1');
       assert.ok(args.includes('no-idl,no-log-ix-name,mainnet-program-id'));
       mkdirSync(join(workspace, 'target/deploy'), { recursive: true });
-      writeFileSync(join(workspace, 'target/deploy/box_minter.so'), 'built artifact');
-      writeFileSync(join(workspace, 'Cargo.lock'), 'temporary toolchain rewrite');
+      writeFileSync(join(workspace, 'target/deploy/box_minter.so'), programBinary);
     } else {
       assert.equal(command, 'cargo');
       assert.equal(options.cwd, workspace);
       assert.ok(args.includes('sbf-tests,mainnet-program-id'));
-      assert.equal(readFileSync(options.env.BOX_MINTER_SBF_PATH, 'utf8'), 'built artifact');
+      assert.deepEqual(readFileSync(options.env.BOX_MINTER_SBF_PATH), programBinary);
+      assert.notEqual(options.env.BOX_MINTER_SBF_PATH, join(workspace, 'target/deploy/box_minter.so'));
+      assert.equal(readFileSync(join(workspace, 'Cargo.lock'), 'utf8'), 'pinned Rust dependencies');
     }
   });
   assert.equal(existsSync(workspace), false);
@@ -95,11 +98,17 @@ test('SBF build and test share an isolated artifact while preserving the source 
 test('full validation includes extended and native suites without repeating root Ethereum tests or public forks', async t => {
   const { root } = project(t);
   const calls: Array<{ command: string; args: string[]; cwd: string }> = [];
-  await runAllChecks(root, (command, args, options) => { calls.push({ command, args, cwd: options.cwd }); });
+  await runAllChecks(root, (command, args, options) => {
+    calls.push({ command, args, cwd: options.cwd });
+    if (command === 'anchor') {
+      mkdirSync(join(options.cwd, 'target/deploy'), { recursive: true });
+      writeFileSync(join(options.cwd, 'target/deploy/box_minter.so'), programBinary);
+    }
+  });
   assert.deepEqual(calls.map(call => call.args[0] === 'run' ? call.args[1] : call.command === process.execPath
     ? call.args.filter(value => value.endsWith('.test.ts')) : call.command), [
     'check', 'check', ['tests/ethereum/local.test.ts'], 'test:invariants:extended', 'test:ethereum:e2e',
-    'test:pre111k:e2e', 'anchor', 'cargo', 'test:mi-note-videos',
+    'test:pre111k:e2e', 'anchor', 'cargo', 'test:renderers:native',
   ]);
   assert.equal(calls[0].cwd, root);
   assert.notEqual(calls[1].cwd, join(root, 'onchain/ethereum'));

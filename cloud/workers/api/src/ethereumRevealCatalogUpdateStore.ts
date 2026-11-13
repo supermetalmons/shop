@@ -42,8 +42,10 @@ type Mapping = { batch_id: string; egg_id: number; category: EthereumArtworkCate
   attributes_json: string | null; attributes_sha256: string | null; origin_category: EthereumArtworkCategory | null; origin_asset_id: number | null };
 type Assignment = { category: EthereumArtworkCategory; asset_id: number; token_id: string; crate_token_id: string;
   artwork_json: string; metadata_json: string; placeholder_json: string; frozen_at_ms: number; assignment_revision: number };
+type CanonicalMapping = Mapping & { target_revision: number };
 const CATEGORIES = ['egg', 'painting', 'video', '3d', 'animated'] as const;
 const TOTAL = 111_111;
+const CANONICAL_METADATA_PAGE_SIZE = 99;
 const ALLOCATION_BASE_REVISION = `COALESCE((SELECT target_revision FROM reveal_catalog_generations
   WHERE batch_id=(SELECT allocation_base_generation FROM settings WHERE id=1)),0)`;
 const hash = (json: string) => bytesToHex(sha256(json));
@@ -327,13 +329,15 @@ export class EthereumRevealCatalogUpdateStore {
     throw new Error('Invalid allocation unit.');
   }
 
-  private mapping(unit: RevealOriginUnit, candidate?: string): (Mapping & { target_revision: number }) | undefined {
-    unit = this.ownerHatching.available ? this.ownerHatching.slotOverride(unit) ?? unit : unit;
-    if (unit.category !== 'egg') return;
-    return this.sql.exec<Mapping & { target_revision: number }>(`SELECT m.*,g.target_revision FROM reveal_catalog_mappings m
-      JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id WHERE m.egg_id=? AND
-      g.target_revision>${ALLOCATION_BASE_REVISION} AND (g.activated_at_ms IS NOT NULL OR g.batch_id=?) ORDER BY g.target_revision DESC LIMIT 1`,
-      unit.assetId, candidate ?? '').toArray()[0];
+  private canonicalMappings(units: readonly RevealOriginUnit[]): Map<number, CanonicalMapping> {
+    const eggIds = [...new Set(units.filter(unit => unit.category === 'egg').map(unit => unit.assetId))];
+    if (!eggIds.length) return new Map();
+    const rows = this.sql.exec<CanonicalMapping>(`SELECT * FROM (
+      SELECT m.*,g.target_revision,ROW_NUMBER() OVER (PARTITION BY m.egg_id ORDER BY g.target_revision DESC) AS ordinal
+      FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
+      WHERE m.egg_id IN (${eggIds.map(() => '?').join(',')}) AND g.target_revision>${ALLOCATION_BASE_REVISION}
+        AND (g.activated_at_ms IS NOT NULL OR g.batch_id='')) WHERE ordinal=1`, ...eggIds).toArray();
+    return new Map(rows.map(row => [row.egg_id, row]));
   }
 
   resolveUnit(unit: RevealOriginUnit, assignmentRevision = this.settings()?.catalog_revision ?? 0, candidate?: string): RevealEffectiveUnit {
@@ -857,59 +861,69 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   canonicalMetadata(tokenIds: readonly string[]): RevealCanonicalMetadata[] {
-    return tokenIds.flatMap(tokenId => {
-      const owner = this.ownerHatching.canonical(tokenId);
-      return owner ? [owner] : this.canonicalMetadataBase([tokenId]);
-    });
+    const values = this.ownerHatching.canonicals(tokenIds);
+    const remaining = [...new Set(tokenIds)].filter(tokenId => !values.has(tokenId));
+    for (const value of this.canonicalMetadataBase(remaining)) values.set(value.tokenId, value);
+    return tokenIds.flatMap(tokenId => values.has(tokenId) ? [values.get(tokenId)!] : []);
   }
 
   private canonicalMetadataBase(tokenIds: readonly string[]): RevealCanonicalMetadata[] {
+    if (!tokenIds.length) return [];
     const saved = this.settings();
-    if (!saved || !tokenIds.length) return [];
+    if (!saved) return [];
     const deployment = JSON.parse(saved.deployment_json) as EthereumRevealDeployment;
-    const values: RevealCanonicalMetadata[] = [];
+    const values = new Map<string, RevealCanonicalMetadata>();
     let catalog: RevealAssetCatalog | undefined;
     const hasEnrichment = this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
-    for (const tokenId of tokenIds) {
-      const row = this.sql.exec<Assignment>('SELECT * FROM assignments WHERE token_id=?', tokenId).toArray()[0];
-      if (!row) continue;
-      const mapping = this.mapping({ category: row.category, assetId: row.asset_id });
-      const revision = Math.max(row.assignment_revision ?? 0, mapping?.target_revision ?? 0);
-      const publication = this.sql.exec<{ status: string; metadata_revision: number }>('SELECT status,metadata_revision FROM publication WHERE token_id=?', tokenId).toArray()[0];
-      let artwork = JSON.parse(row.artwork_json) as EthereumRevealedArtwork;
-      let metadataJson = row.metadata_json;
-      let metadataRevision = 2 * revision;
-      let category = row.category, assetId = row.asset_id;
-      const effective = this.resolveUnit({ category, assetId }, row.assignment_revision);
-      if (!mapping && (effective.category !== category || effective.assetId !== assetId)) {
-        category = effective.category;
-        assetId = effective.assetId;
-      }
-      if (mapping) {
-        if (mapping.attributes_json === null) throw new Error('Activated artwork attributes are missing.');
-        category = mapping.category;
-        assetId = mapping.asset_id;
-        catalog ??= this.activeCatalog();
-        const built = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: row.crate_token_id,
-          category, assetId, observation: artwork.observation, catalog });
-        metadataJson = applyRevealAttributePayload(built.metadataJson, mapping.attributes_json).metadataJson;
-        artwork = built.artwork;
-        metadataRevision++;
-      } else {
-        const enriched = hasEnrichment ? this.sql.exec<{ target_json: string | null; target_sha256: string | null; assignment_revision?: number }>(
-          'SELECT * FROM reveal_enrichment WHERE token_id=? AND version=?', tokenId, REVEAL_ENRICHMENT_VERSION).toArray()[0] : undefined;
-        if (enriched?.target_json != null && (enriched.assignment_revision ?? 0) === revision && hash(enriched.target_json) === enriched.target_sha256) {
-          metadataJson = enriched.target_json;
+    const unique = [...new Set(tokenIds)];
+    for (let offset = 0; offset < unique.length; offset += CANONICAL_METADATA_PAGE_SIZE) {
+      const ids = unique.slice(offset, offset + CANONICAL_METADATA_PAGE_SIZE);
+      const placeholders = ids.map(() => '?').join(',');
+      const rows = this.sql.exec<Assignment>(`SELECT * FROM assignments WHERE token_id IN (${placeholders})`, ...ids).toArray();
+      if (!rows.length) continue;
+      const overrides = this.ownerHatching.slotOverrides(rows.map(row => ({ category: row.category, assetId: row.asset_id })));
+      const units = rows.map((row, index) => overrides[index] ?? { category: row.category, assetId: row.asset_id });
+      const mappings = this.canonicalMappings(units);
+      const publications = new Map(this.sql.exec<{ token_id: string; status: string }>(
+        `SELECT token_id,status FROM publication WHERE token_id IN (${placeholders})`, ...ids).toArray().map(row => [row.token_id, row]));
+      const enrichments = new Map(hasEnrichment ? this.sql.exec<{ token_id: string; target_json: string | null;
+        target_sha256: string | null; assignment_revision?: number }>(
+        `SELECT * FROM reveal_enrichment WHERE token_id IN (${placeholders}) AND version=?`,
+        ...ids, REVEAL_ENRICHMENT_VERSION).toArray().map(row => [row.token_id, row]) : []);
+      for (const [index, row] of rows.entries()) {
+        const tokenId = row.token_id;
+        const unit = units[index];
+        const mapping = unit.category === 'egg' ? mappings.get(unit.assetId) : undefined;
+        const revision = Math.max(row.assignment_revision ?? 0, mapping?.target_revision ?? 0);
+        let artwork = JSON.parse(row.artwork_json) as EthereumRevealedArtwork;
+        let metadataJson = row.metadata_json;
+        let metadataRevision = 2 * revision;
+        let category = unit.category, assetId = unit.assetId;
+        if (mapping) {
+          if (mapping.attributes_json === null) throw new Error('Activated artwork attributes are missing.');
+          category = mapping.category;
+          assetId = mapping.asset_id;
+          catalog ??= this.activeCatalog();
+          const built = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: row.crate_token_id,
+            category, assetId, observation: artwork.observation, catalog });
+          metadataJson = applyRevealAttributePayload(built.metadataJson, mapping.attributes_json).metadataJson;
+          artwork = built.artwork;
           metadataRevision++;
+        } else {
+          const enriched = enrichments.get(tokenId);
+          if (enriched?.target_json != null && (enriched.assignment_revision ?? 0) === revision && hash(enriched.target_json) === enriched.target_sha256) {
+            metadataJson = enriched.target_json;
+            metadataRevision++;
+          }
         }
+        const metadata = parseMetadataJson(metadataJson) as { attributes?: EthereumRevealedArtwork['attributes'] };
+        artwork = { ...artwork, attributes: metadata.attributes, ...(metadataRevision ? { metadataRevision } : {}) };
+        values.set(tokenId, { tokenId, category, assetId, assignmentRevision: revision, metadataRevision, artwork, metadataJson,
+          targetSha256: hash(metadataJson), expectedJsons: [...new Set([row.placeholder_json, row.metadata_json])],
+          allowMissing: publications.get(tokenId)?.status !== 'published', migration: Boolean(mapping && (row.assignment_revision ?? 0) < mapping.target_revision) });
       }
-      const metadata = parseMetadataJson(metadataJson) as { attributes?: EthereumRevealedArtwork['attributes'] };
-      artwork = { ...artwork, attributes: metadata.attributes, ...(metadataRevision ? { metadataRevision } : {}) };
-      values.push({ tokenId, category, assetId, assignmentRevision: revision, metadataRevision, artwork, metadataJson,
-        targetSha256: hash(metadataJson), expectedJsons: [...new Set([row.placeholder_json, row.metadata_json])],
-        allowMissing: publication?.status !== 'published', migration: Boolean(mapping && (row.assignment_revision ?? 0) < mapping.target_revision) });
     }
-    return values;
+    return tokenIds.flatMap(tokenId => values.has(tokenId) ? [values.get(tokenId)!] : []);
   }
 
   validateMetadataWrite(job: { tokenId: string; metadataRevision: number; metadataJson: string; expectedJsons: string[]; allowMissing: boolean }): boolean {

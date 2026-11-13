@@ -10,6 +10,7 @@ type DeploymentCleanupRuntime = {
 
 export function registerDeploymentCleanup(args: {
   releaseDeploymentRegistryLock: () => boolean;
+  cleanupResources?: () => void;
   runtime?: DeploymentCleanupRuntime;
 }): {
   setTempKeypairPath: (filePath: string) => void;
@@ -67,6 +68,15 @@ export function registerDeploymentCleanup(args: {
   const cleanup = (): boolean => {
     if (complete) return true;
     const tempKeypairRemoved = removeTempKeypair();
+    let resourcesRemoved = false;
+    try {
+      args.cleanupResources?.();
+      resourcesRemoved = true;
+    } catch (err) {
+      try {
+        console.warn(`⚠️  Failed to remove temporary deployment resources: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {}
+    }
     let lockReleased = false;
     try {
       lockReleased = args.releaseDeploymentRegistryLock();
@@ -77,7 +87,7 @@ export function registerDeploymentCleanup(args: {
         // Cleanup warnings must not disrupt the caller.
       }
     }
-    if (tempKeypairRemoved && lockReleased) {
+    if (tempKeypairRemoved && resourcesRemoved && lockReleased) {
       complete = true;
       detach();
     }

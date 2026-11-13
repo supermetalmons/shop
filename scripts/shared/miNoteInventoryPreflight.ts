@@ -27,7 +27,8 @@ function inventoryRoles(drop: DeploymentRegistryDrop | undefined, manifest: MiNo
     operations.maxSupply * operations.itemsPerBox !== manifest.maxFigureId) {
     throw new Error('Mi Note mint and operations roles are invalid.');
   }
-  return { mint, operations, preorder };
+  return { mint: { ...mint, boxMinterConfigPda: mint.boxMinterConfigPda },
+    operations: { ...operations, boxMinterConfigPda: operations.boxMinterConfigPda }, preorder };
 }
 
 export function validateNewMiNoteDropConfigs(
@@ -70,7 +71,7 @@ export async function verifyMiNoteInventoryDrop(
     throw new Error('Inventory verification RPC has the wrong cluster genesis.');
   }
   const roles = [mint, operations];
-  const accounts = await connection.getMultipleAccountsInfoAndContext(roles.map((role) => new PublicKey(role.boxMinterConfigPda!)), {
+  const accounts = await connection.getMultipleAccountsInfoAndContext(roles.map((role) => new PublicKey(role.boxMinterConfigPda)), {
     commitment: 'finalized',
   });
   const configurations = roles.map((_role, index) => {
