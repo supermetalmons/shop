@@ -8,7 +8,7 @@ import { REVEAL_CATEGORY_COUNTS } from './ethereumRevealCatalog.js';
 import type { RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 
-export const MAX_REVEAL_METADATA_BYTES = 256 * 1024;
+export const MAX_REVEAL_METADATA_BYTES = 512 * 1024;
 
 export class InvalidRevealAttributes extends Error {}
 
@@ -91,7 +91,7 @@ export function applyRevealAttributePayload(baseJson: string, attributesJson: st
   const attributes = [block, ...remaining];
   const metadataJson = JSON.stringify({ ...base, attributes }) + '\n';
   const bytes = new TextEncoder().encode(metadataJson);
-  if (bytes.length > MAX_REVEAL_METADATA_BYTES) throw new EnrichedRevealMetadataTooLarge('Enriched metadata exceeds 256 KiB.');
+  if (bytes.length > MAX_REVEAL_METADATA_BYTES) throw new EnrichedRevealMetadataTooLarge('Enriched metadata exceeds 512 KiB.');
   return { metadataJson, metadataSha256: bytesToHex(sha256(bytes)) };
 }
 

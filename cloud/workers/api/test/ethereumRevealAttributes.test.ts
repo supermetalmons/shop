@@ -100,16 +100,16 @@ test('validates source shape, response and final UTF-8 sizes', async () => {
 });
 
 test('large trait collections remain intact within the bounded metadata limit', async () => {
-  const attributes = Array.from({ length: 2792 }, (_, index) => ({ trait_type: `Trait ${index}`, value: 'v'.repeat(20) }));
+  const attributes = Array.from({ length: 5498 }, (_, index) => ({ trait_type: `Trait ${index}`, value: 'v'.repeat(26) }));
   const source = JSON.stringify({ 'collection block': 'backrooms 2', attributes }, null, 2);
-  assert.ok(Buffer.byteLength(source) > 128 * 1024);
+  assert.ok(Buffer.byteLength(source) > 480 * 1024);
   assert.ok(Buffer.byteLength(source) < MAX_REVEAL_METADATA_BYTES);
   const result = await fetchRevealAttributes('painting', 64946, body, signal,
     async () => new Response(source, { headers: { 'Content-Type': 'application/json' } }));
   assert.deepEqual(JSON.parse(result.metadataJson).attributes, [
     { trait_type: 'collection block', value: 'backrooms 2' }, ...base.attributes, ...attributes,
   ]);
-  assert.ok(Buffer.byteLength(result.metadataJson) > 128 * 1024);
+  assert.ok(Buffer.byteLength(result.metadataJson) > 350_000);
   assert.ok(Buffer.byteLength(result.metadataJson) < MAX_REVEAL_METADATA_BYTES);
 });
 

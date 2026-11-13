@@ -10,6 +10,7 @@ import supplement from '../../../../shared/ethereum/ownerHatchingCatalog.json';
 import { parseOwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceRequest } from '../../../../shared/ethereum/ownerHatchingMaintenance.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumOwnerHatchingOperations } from '../src/ethereumOwnerHatchingOperations.ts';
+import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import type { EthereumRevealStore, RevealSql } from '../src/ethereumRevealStore.ts';
 import type { OwnerHatchingBatchInput } from '../src/ethereumOwnerHatchingStore.ts';
 
@@ -110,7 +111,7 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
       const body = state.badObject ? '{}' : metadata(tokenId);
       if (state.r2Gate) await state.r2Gate;
       if (state.revisionChanged) { revisions.set(tokenId, (revisions.get(tokenId) ?? 1) + 1); state.revisionChanged = false; }
-      return { size: state.oversized ? 300_000 : Buffer.byteLength(body),
+      return { size: state.oversized ? MAX_REVEAL_METADATA_BYTES + 1 : Buffer.byteLength(body),
         httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: state.badHeaders ? 'public' : 'no-store' },
         async text() { return body; } };
     } },

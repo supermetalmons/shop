@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip, createGzip } from 'node:zlib';
+import { MAX_REVEAL_METADATA_BYTES } from '../../cloud/workers/api/src/ethereumRevealAttributes.ts';
 import {
   fileSha256, metadataCounts, metadataIdentities, metadataObjects, readMetadataManifest, sha256,
 } from './catalog.ts';
@@ -76,7 +77,7 @@ export async function remoteInventory(storage: MetadataStorage, prefix: string,
       if (/^[a-z0-9][a-z0-9-]{0,63}\//.test(file)) continue;
       if (!files.has(file) || found.has(file) || !Number.isSafeInteger(object.bytes) || object.bytes < 0 ||
         typeof object.md5 !== 'string' || !options.allowInvalidMetadata &&
-        (object.bytes < 1 || object.bytes > 128 * 1024 || !/^[a-f0-9]{32}$/.test(object.md5))) {
+        (object.bytes < 1 || object.bytes > MAX_REVEAL_METADATA_BYTES || !/^[a-f0-9]{32}$/.test(object.md5))) {
         throw new Error(`Unexpected remote metadata key or checksum: ${object.key}`);
       }
       found.set(file, object);
@@ -195,7 +196,7 @@ export async function* snapshotObjects(directory: string, manifest: SnapshotMani
   try {
     for await (const line of lines) {
       const row = JSON.parse(line);
-      if (!files.has(row.file) || seen.has(row.file) || !Number.isSafeInteger(row.bytes) || row.bytes < 1 || row.bytes > 128 * 1024 ||
+      if (!files.has(row.file) || seen.has(row.file) || !Number.isSafeInteger(row.bytes) || row.bytes < 1 || row.bytes > MAX_REVEAL_METADATA_BYTES ||
         !/^[a-f0-9]{32}$/.test(row.md5) || !/^[a-f0-9]{64}$/.test(row.sha256) || typeof row.body !== 'string') {
         throw new Error('Snapshot contains an invalid or duplicate object');
       }
@@ -260,7 +261,7 @@ export async function publishObjects(args: {
   let skipped = 0;
   try {
     await uploadWithConcurrency(args.objects, args.concurrency, async object => {
-      if (!/^[1-9]\d*\.json$/.test(object.file) || object.bytes < 1 || object.bytes > 128 * 1024 ||
+      if (!/^[1-9]\d*\.json$/.test(object.file) || object.bytes < 1 || object.bytes > MAX_REVEAL_METADATA_BYTES ||
         args.restoreFiles && !args.restoreFiles.has(object.file)) throw new Error(`Invalid local object: ${object.file}`);
       const body = 'body' in object ? object.body : await object.readBody();
       if (body.length !== object.bytes || metadataMd5(body) !== object.md5 || sha256(body) !== object.sha256) {
@@ -331,7 +332,7 @@ export async function selectedInventory(storage: MetadataStorage, network: Metad
     const file = `${tokenId}.json`;
     const key = metadataPrefix(network, prefix) + file;
     const body = await storage.get(key);
-    if (!body.length || body.length > 128 * 1024) throw new Error(`Invalid remote metadata size: ${key}`);
+    if (!body.length || body.length > MAX_REVEAL_METADATA_BYTES) throw new Error(`Invalid remote metadata size: ${key}`);
     inventory.set(file, { key, bytes: body.length, md5: metadataMd5(body) });
   });
   return inventory;
@@ -377,7 +378,7 @@ async function bootstrapState(path: string, identity: MainnetBootstrapIdentity, 
   const originals = new Map<string, RemoteObject>();
   for (const row of state.originals) {
     if (!row || !files.has(row.file) || originals.has(row.file) || !Number.isSafeInteger(row.bytes) ||
-      row.bytes < 1 || row.bytes > 128 * 1024 || !/^[a-f0-9]{32}$/.test(row.md5)) {
+      row.bytes < 1 || row.bytes > MAX_REVEAL_METADATA_BYTES || !/^[a-f0-9]{32}$/.test(row.md5)) {
       throw new Error('Invalid bootstrap original inventory');
     }
     originals.set(row.file, { key: `111k/${row.file}`, bytes: row.bytes, md5: row.md5 });

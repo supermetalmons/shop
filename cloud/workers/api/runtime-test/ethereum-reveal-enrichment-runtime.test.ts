@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { build } from 'esbuild';
 import { Miniflare, type MiniflareOptions } from 'miniflare';
+import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 
 type Snapshot = {
   bootId: string;
@@ -14,10 +15,12 @@ type Snapshot = {
   assignment: { category: string; asset_id: number; metadata_json: string; artwork_json: string; assignment_revision: number };
   enrichment: { status: string; attempts: number; next_check_ms: number; last_error: string | null; claim_id: string | null };
   metadata: { image: string; attributes: Array<{ trait_type: string; value: string }> };
+  metadataBytes: number;
+  stagedTargetMatchesBody: boolean;
   errors: Array<[{ event: string; reason: string }]>;
 };
 
-test('native mainnet enrichment preserves the initial block and retries source failures across restart using durable alarms',
+test('native mainnet enrichment retries across restart and preserves large trait collections through SQLite and R2',
   { timeout: 60_000 }, async () => {
     const contractAddress = `0x${'ab'.repeat(20)}`;
     const deployment = { deploymentId: 'mainnet-enrichment-runtime', dropId: '111k', chainId: 1, contractAddress,
@@ -51,6 +54,9 @@ test('native mainnet enrichment preserves the initial block and retries source f
           if (sourceMode === 'forbidden') return new Response('private source response', { status: 403 });
           if (sourceMode === 'missing') return new Response('private source response', { status: 404 });
           if (sourceMode === 'malformed') return new Response('private source response', { headers: { 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({ 'collection block': revealTraitFixtureBlock(url),
+            attributes: Array.from({ length: 5498 }, (_, index) => ({ trait_type: 'Trait ' + index, value: 'v'.repeat(26) })) }, null, 2),
+            { headers: { 'Content-Type': 'application/json' } });
         }
         return Response.json({ 'collection block': revealTraitFixtureBlock(url),
           attributes: [{ trait_type: 'source trait', value: 'recovered' }] });
@@ -83,10 +89,13 @@ test('native mainnet enrichment preserves the initial block and retries source f
           this.configure(deployment);
           const sql = this.ctx.storage.sql;
           const object = await this.env.ETHEREUM_REVEAL_METADATA.get('111k/1.json');
+          const body = object ? await object.text() : null;
+          const target = sql.exec("SELECT target_json FROM reveal_enrichment WHERE token_id='1'").toArray()[0]?.target_json;
           return { bootId, alarmCalls, alarmAt: await this.ctx.storage.getAlarm(), now: Date.now(), sourceRequests, errors,
             assignment: sql.exec("SELECT category,asset_id,metadata_json,artwork_json,assignment_revision FROM assignments WHERE token_id='1'").toArray()[0],
             enrichment: sql.exec("SELECT status,attempts,next_check_ms,last_error,claim_id FROM reveal_enrichment WHERE token_id='1'").toArray()[0],
-            metadata: object ? await object.json() : null };
+            metadata: body ? JSON.parse(body) : null, metadataBytes: object?.size ?? 0,
+            stagedTargetMatchesBody: target != null && target === body };
         }
       }
       export default { async fetch(request, env) {
@@ -162,8 +171,11 @@ test('native mainnet enrichment preserves the initial block and retries source f
       assert.deepEqual(recovered.assignment, initial.assignment);
       assert.equal(recovered.metadata.image, initial.metadata.image);
       assert.deepEqual(recovered.metadata.attributes, [
-        ...initial.metadata.attributes, { trait_type: 'source trait', value: 'recovered' },
+        ...initial.metadata.attributes,
+        ...Array.from({ length: 5498 }, (_, index) => ({ trait_type: `Trait ${index}`, value: 'v'.repeat(26) })),
       ]);
+      assert.ok(recovered.metadataBytes > 350_000 && recovered.metadataBytes < MAX_REVEAL_METADATA_BYTES);
+      assert.equal(recovered.stagedTargetMatchesBody, true);
       assert.equal(recovered.metadata.attributes.filter(row => row.trait_type === 'collection block').length, 1);
     } finally { await runtime.dispose(); }
   });

@@ -26,34 +26,41 @@ function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, f
   const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');
   const jobRevision = hasJobs ? assignmentRevision(sql, 'reveal_enrichment', 'e') : '0';
-  type AuditRow = { token_id: string; metadata_json: string; eligible: number; job_status: NonNullable<EthereumRevealAttributeAuditToken['enrichment']>['status'] | null;
-    last_error: string | null; attempts: number; assignment_revision: number; target_json: string | null; target_sha256: string | null };
+  type AuditRow = { token_id: string; eligible: number; job_status: NonNullable<EthereumRevealAttributeAuditToken['enrichment']>['status'] | null;
+    last_error: string | null; attempts: number; assignment_revision: number; target_sha256: string | null };
   const rows = sql.exec<AuditRow>(`WITH page AS MATERIALIZED (
       SELECT p.token_id FROM publication p JOIN assignments a ON a.token_id=p.token_id
       WHERE p.token_id>? AND p.status='published' AND a.frozen_at_ms<=? ORDER BY p.token_id LIMIT ?
-    ) SELECT page.token_id,a.metadata_json,(a.category!='egg' ${ownerOverrideGuard(sql)}) AS eligible,
-      ${hasJobs ? `e.status AS job_status,e.last_error,e.attempts,${jobRevision} AS assignment_revision,e.target_json,e.target_sha256`
-        : 'NULL AS job_status,NULL AS last_error,0 AS attempts,0 AS assignment_revision,NULL AS target_json,NULL AS target_sha256'}
+    ) SELECT page.token_id,(a.category!='egg' ${ownerOverrideGuard(sql)}) AS eligible,
+      ${hasJobs ? `e.status AS job_status,e.last_error,e.attempts,${jobRevision} AS assignment_revision,e.target_sha256`
+        : 'NULL AS job_status,NULL AS last_error,0 AS attempts,0 AS assignment_revision,NULL AS target_sha256'}
     FROM page JOIN assignments a ON a.token_id=page.token_id
     ${hasJobs ? `LEFT JOIN reveal_enrichment e ON e.token_id=page.token_id AND e.version=? AND ${jobRevision}=${actualRevision}` : ''}
     ORDER BY page.token_id`, afterTokenId ?? '', frozenThroughMs, PAGE_SIZE, ...(hasJobs ? [REVEAL_ENRICHMENT_VERSION] : [])).toArray();
   const catalogs = new EthereumRevealCatalogUpdateStore(sql, action => action());
-  const canonical = new Map(catalogs.canonicalMetadata(rows.map(row => row.token_id)).map(value => [value.tokenId, value]));
   const blocks = revealCollectionBlocks(catalogs.effectiveCatalog());
   const tokens = rows.map(row => {
-    const current = canonical.get(row.token_id);
+    const current = catalogs.canonicalMetadata([row.token_id])[0];
     if (!current) throw new Error('Published artwork is missing canonical metadata.');
+    const frozen = sql.exec<{ metadata_json: string }>('SELECT metadata_json FROM assignments WHERE token_id=?', row.token_id).toArray()[0];
+    if (!frozen) throw new Error('Published artwork is missing frozen metadata.');
     const { attributes: _attributes, ...metadata } = parseMetadataJson(current.metadataJson) as Record<string, unknown>;
+    let enrichment: EthereumRevealAttributeAuditToken['enrichment'] = null;
+    if (row.eligible && row.job_status !== null && row.assignment_revision === current.assignmentRevision) {
+      const target = sql.exec<{ target_json: string | null }>('SELECT target_json FROM reveal_enrichment WHERE token_id=? AND version=?',
+        row.token_id, REVEAL_ENRICHMENT_VERSION).toArray()[0];
+      if (!target) throw new Error('Published artwork enrichment changed during audit.');
+      enrichment = { status: row.job_status, assignmentRevision: row.assignment_revision,
+        attempts: row.attempts, lastError: row.last_error, targetSha256: row.target_sha256,
+        checksumValid: target.target_json === null && row.target_sha256 === null ? null : matchesEnrichmentChecksum(target.target_json, row.target_sha256,
+          acknowledgedEnrichmentHash(sql, row.token_id, REVEAL_ENRICHMENT_VERSION, row.assignment_revision)) };
+    }
     return { tokenId: row.token_id, category: current.category, assetId: current.assetId,
       assignmentRevision: current.assignmentRevision, metadataRevision: current.metadataRevision,
-      metadataSha256: current.targetSha256, frozenMetadataSha256: hash(row.metadata_json), nonAttributeSha256: hash(JSON.stringify(metadata)),
+      metadataSha256: current.targetSha256, frozenMetadataSha256: hash(frozen.metadata_json), nonAttributeSha256: hash(JSON.stringify(metadata)),
       collectionBlock: getOwnerHatchingGrail(current.category, current.assetId)?.collectionBlock
         ?? lookupRevealCollectionBlock(blocks, current.category, current.assetId),
-      enrichment: !row.eligible || row.job_status === null || row.assignment_revision !== current.assignmentRevision ? null
-        : { status: row.job_status, assignmentRevision: row.assignment_revision,
-        attempts: row.attempts, lastError: row.last_error, targetSha256: row.target_sha256,
-        checksumValid: row.target_json === null && row.target_sha256 === null ? null : matchesEnrichmentChecksum(row.target_json, row.target_sha256,
-          acknowledgedEnrichmentHash(sql, row.token_id, REVEAL_ENRICHMENT_VERSION, row.assignment_revision)) } };
+      enrichment };
   });
   const eligible = rows.filter(row => row.eligible);
   return { nextCursor: rows.length === PAGE_SIZE ? rows[rows.length - 1].token_id : null, eligible: eligible.length,

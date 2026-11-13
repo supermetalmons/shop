@@ -396,7 +396,7 @@ test('oversized merged metadata is rejected before activation while the original
   assert.ok(Buffer.byteLength(payload) < MAX_REVEAL_METADATA_BYTES);
   const [row] = f.store.catalogUpdate.metadataPreparationPage(update.batchId);
   assert.throws(() => f.store.catalogUpdate.metadataStage(update.batchId, [{ ...row, attributesJson: payload,
-    sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 256 KiB/);
+    sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 512 KiB/);
   assert.equal(f.store.catalogUpdate.status(update.batchId)!.metadataStaged, 0);
   assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
   f.store.reserve(['111112']);

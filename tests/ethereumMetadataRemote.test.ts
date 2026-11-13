@@ -11,6 +11,7 @@ import { Writable } from 'node:stream';
 import test, { type TestContext } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { S3Client } from '@aws-sdk/client-s3';
+import { MAX_REVEAL_METADATA_BYTES } from '../cloud/workers/api/src/ethereumRevealAttributes.ts';
 import { metadataIdentities, sha256 } from '../scripts/ethereum-metadata/catalog.ts';
 import { publishObjects, remoteInventory, restoreMetadata, selectedInventory, snapshotMetadata, snapshotObjects } from '../scripts/ethereum-metadata/remote.ts';
 import {
@@ -93,6 +94,40 @@ async function collect<T>(items: AsyncIterable<T>): Promise<T[]> {
 
 const files = () => new Set(['1.json', '2.json', '3.json']);
 
+test('S3 metadata reads retain a complete 355 KiB artwork and reject the shared bound before reading', async () => {
+  let body = Buffer.from(JSON.stringify({ attributes: [{ trait_type: 'collection block', value: 'large artwork' },
+    { trait_type: 'text', value: 'x'.repeat(355 * 1024) }] }));
+  let contentLength = body.length;
+  let reads = 0;
+  const client = { send: async () => ({ ContentLength: contentLength, Body: {
+    transformToByteArray: async () => { reads++; return body; },
+  } }), destroy() {} } as unknown as S3Client;
+  const storage = new S3MetadataStorage({ endpoint: 'https://example.invalid', bucket: 'cdn-mons-shop' }, client);
+  assert.deepEqual(await storage.get(prefix + '1.json'), body);
+  body = Buffer.alloc(MAX_REVEAL_METADATA_BYTES, 'x');
+  contentLength = body.length;
+  assert.deepEqual(await storage.get(prefix + '1.json'), body);
+  contentLength++;
+  await assert.rejects(storage.get(prefix + '1.json'), /Invalid R2 metadata response/);
+  assert.equal(reads, 2);
+});
+
+test('enriched artworks above 256 KiB survive selected inventory and a byte-exact snapshot round trip', async t => {
+  const directory = await temporaryDirectory(t);
+  const body = JSON.stringify({ name: '1', attributes: [{ trait_type: 'collection block', value: 'large artwork' },
+    { trait_type: 'text', value: 'x'.repeat(355 * 1024) }] });
+  const storage = new MemoryStorage({ '1.json': body });
+  const inventory = await remoteInventory(storage, prefix, new Set(['1.json']));
+  const selected = await selectedInventory(storage, 'sepolia', new Set(['1']), 1);
+  assert.deepEqual(selected, inventory);
+  const manifest = await snapshotMetadata(storage, 'sepolia', directory, inventory, publicationManifestSha256);
+  const restored = await collect(snapshotObjects(directory, manifest, new Set(['1.json'])));
+  assert.equal(restored.length, 1);
+  assert.deepEqual(restored[0].body, Buffer.from(body));
+  assert.equal(restored[0].sha256, sha256(body));
+  assert.equal(storage.writes.length, 0);
+});
+
 test('restore inventory permits damaged and missing objects but retains key validation', async () => {
   const storage = new MemoryStorage({ '2.json': 'old two', '3.json': 'old three' });
   const restoreOptions = { allowMissing: true, allowInvalidMetadata: true };
@@ -127,7 +162,7 @@ test('remote inventory requires complete unique collection keys and valid checks
     [{ ...rows[0], key: '111k/1.json' }, ...rows.slice(1)],
     [{ ...rows[0], key: `${prefix}../1.json` }, ...rows.slice(1)],
     [{ ...rows[0], bytes: 0 }, ...rows.slice(1)],
-    [{ ...rows[0], bytes: 128 * 1024 + 1 }, ...rows.slice(1)],
+    [{ ...rows[0], bytes: MAX_REVEAL_METADATA_BYTES + 1 }, ...rows.slice(1)],
     [{ ...rows[0], md5: 'invalid' }, ...rows.slice(1)],
     [{ ...rows[0], md5: `${rows[0].md5}-2` }, ...rows.slice(1)],
   ]) {
@@ -305,7 +340,7 @@ test('S3 listing represents damaged objects while rejecting malformed sizes and 
   const md5 = metadataMd5(Buffer.from('x'));
   const rows = [
     { Key: prefix + '1.json', Size: 0, ETag: `"${md5}"` },
-    { Key: prefix + '2.json', Size: 128 * 1024 + 1, ETag: `"${md5}"` },
+    { Key: prefix + '2.json', Size: MAX_REVEAL_METADATA_BYTES + 1, ETag: `"${md5}"` },
     { Key: prefix + '3.json', Size: 1, ETag: `"${md5}-2"` },
   ];
   let contents: unknown[] = rows;
@@ -382,7 +417,7 @@ test('selected inventory rejects invalid IDs before any remote access', async ()
 
 test('selected inventory rejects empty and oversized remote bodies', async () => {
   const storage = new MemoryStorage();
-  for (const body of [Buffer.alloc(0), Buffer.alloc(128 * 1024 + 1)]) {
+  for (const body of [Buffer.alloc(0), Buffer.alloc(MAX_REVEAL_METADATA_BYTES + 1)]) {
     storage.values.set(prefix + '1.json', body);
     await assert.rejects(selectedInventory(storage, 'sepolia', new Set(['1']), 1), /Invalid remote metadata size/);
   }
@@ -441,7 +476,7 @@ test('snapshot cache fallback verifies canonical checksums and skips oversized c
   await writeFile(join(priorDirectory, '1.json'), 'bad one');
   await writeFile(join(priorDirectory, 'sepolia', '2.json'), 'bad two');
   await writeFile(join(priorDirectory, '2.json'), 'old two');
-  await writeFile(join(priorDirectory, '3.json'), Buffer.alloc(128 * 1024 + 1));
+  await writeFile(join(priorDirectory, '3.json'), Buffer.alloc(MAX_REVEAL_METADATA_BYTES + 1));
   const inventory = await remoteInventory(storage, prefix, files());
   const snapshotDirectory = join(directory, 'snapshot');
   const manifest = await snapshotMetadata(storage, 'sepolia', snapshotDirectory, inventory, publicationManifestSha256, { priorCacheRoot: priorDirectory });
@@ -615,7 +650,7 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
     damaged.set(prefix + '117186.json', null);
     for (const [index, bytes, md5] of [
       [0, 0, metadataMd5(Buffer.alloc(0))],
-      [10_000, 128 * 1024 + 1, metadataMd5(Buffer.alloc(128 * 1024 + 1))],
+      [10_000, MAX_REVEAL_METADATA_BYTES + 1, metadataMd5(Buffer.alloc(MAX_REVEAL_METADATA_BYTES + 1))],
       [20_000, 1, `${digest.md5}-2`],
     ] as const) {
       damaged.set(keys[index], { key: keys[index], bytes, md5 });
@@ -810,7 +845,7 @@ test('publication rejects checksum failures and unsafe filenames before writing'
     { ...valid, md5: '0'.repeat(32) },
     { ...valid, sha256: '0'.repeat(64) },
     { ...valid, file: '../1.json' },
-    sourceObject('1.json', 'x'.repeat(128 * 1024 + 1)),
+    sourceObject('1.json', 'x'.repeat(MAX_REVEAL_METADATA_BYTES + 1)),
   ].entries()) {
     await assert.rejects(publishObjects({ storage, network: 'sepolia', objects: objectStream([object]), inventory,
       journal: join(directory, `${index}.jsonl`), sourceHash, concurrency: 1, total: 1 }), /checksum mismatch|Invalid local object/);

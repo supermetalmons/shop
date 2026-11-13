@@ -340,10 +340,15 @@ test('attribute audit is query-only, bounded, frozen, and resolves owner metadat
       VALUES(?,?,?,?,?,?,?,?,?)`).run(category, id, '111112', id - 1, tokenId, JSON.stringify(built.artwork), built.metadataJson, built.placeholderJson, id === 260 ? 2001 : 1000);
     db.prepare('INSERT INTO publication(token_id,status) VALUES(?,?)').run(tokenId, id === 259 ? 'pending' : 'published');
   }
-  const target = JSON.stringify({ ...JSON.parse(values.get('1')!.metadataJson), attributes: [{ trait_type: 'collection block', value: 'plane of existence' }] }) + '\n';
+  const largeAttributes = [{ trait_type: 'collection block', value: 'plane of existence' }, { trait_type: 'large', value: 'x'.repeat(512 * 1024 - 1024) }];
+  const target = JSON.stringify({ ...JSON.parse(values.get('1')!.metadataJson), attributes: largeAttributes }) + '\n';
   const targetSha256 = createHash('sha256').update(target).digest('hex');
   db.prepare(`INSERT INTO reveal_enrichment(token_id,version,status,target_json,target_sha256,attempts) VALUES('1','v0','published',?,?,2)`)
     .run(target, targetSha256);
+  const thirdTarget = JSON.stringify({ ...JSON.parse(values.get('3')!.metadataJson), attributes: largeAttributes }) + '\n';
+  const thirdSha256 = createHash('sha256').update(thirdTarget).digest('hex');
+  db.prepare(`INSERT INTO reveal_enrichment(token_id,version,status,target_json,target_sha256,attempts) VALUES('3','v0','published',?,?,2)`)
+    .run(thirdTarget, thirdSha256);
   db.exec("INSERT INTO reveal_enrichment(token_id,version,status,last_error,attempts) VALUES('2','v0','invalid','invalid',1)");
   const owner = buildRevealedArtwork({ category: 'painting', assetId: 41171, tokenId: '14', crateTokenId: '111112', templateJson, observation, catalog });
   const ownerHash = createHash('sha256').update(owner.metadataJson).digest('hex');
@@ -360,10 +365,17 @@ test('attribute audit is query-only, bounded, frozen, and resolves owner metadat
       VALUES('14','v0','invalid','obsolete-owner-job'),('15','v0','invalid','obsolete-replaced-slot');`);
   const before = db.prepare('SELECT * FROM reveal_enrichment ORDER BY token_id').all();
   db.exec('PRAGMA query_only=ON');
-  const first = backfillRevealAttributePage(sql, { afterTokenId: null, write: false, audit: true, frozenThroughMs: 2000 });
+  const auditSql: RevealSql = { exec<T extends Record<string, string | number | null | ArrayBuffer>>(query: string,
+    ...args: Array<string | number | null | ArrayBuffer>) {
+    const records = sql.exec<T>(query, ...args).toArray();
+    if (records.length > 1) assert.ok(records.reduce((bytes, row) => bytes + JSON.stringify(row).length, 0) < 128 * 1024,
+      'Audit must not materialize large metadata bodies for a full page');
+    return { toArray: () => records };
+  } };
+  const first = backfillRevealAttributePage(auditSql, { afterTokenId: null, write: false, audit: true, frozenThroughMs: 2000 });
   assert.equal(first.tokens!.length, 256);
   assert.ok(first.nextCursor);
-  const second = backfillRevealAttributePage(sql, { afterTokenId: first.nextCursor, write: false, audit: true, frozenThroughMs: 2000 });
+  const second = backfillRevealAttributePage(auditSql, { afterTokenId: first.nextCursor, write: false, audit: true, frozenThroughMs: 2000 });
   assert.equal(second.nextCursor, null);
   const tokens = [...first.tokens!, ...second.tokens!];
   assert.equal(tokens.length, 258);
@@ -376,6 +388,7 @@ test('attribute audit is query-only, bounded, frozen, and resolves owner metadat
   assert.deepEqual(enriched.enrichment, { status: 'published', assignmentRevision: 0, attempts: 2,
     lastError: null, targetSha256, checksumValid: true });
   assert.equal(tokens.find(row => row.tokenId === '2')!.enrichment!.status, 'invalid');
+  assert.equal(tokens.find(row => row.tokenId === '3')!.metadataSha256, thirdSha256);
   assert.equal(tokens.find(row => row.tokenId === '13')!.collectionBlock, null);
   const hatched = tokens.find(row => row.tokenId === '14')!;
   assert.equal(hatched.category, 'painting');
