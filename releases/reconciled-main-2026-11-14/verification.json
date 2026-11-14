@@ -1,0 +1,620 @@
+{
+  "version": 1,
+  "complete": true,
+  "completedAt": "2026-11-14T12:19:24.637190+00:00",
+  "codeCommit": "50cbcdee0fbad8eed1f79ff3dd4de49cb21c8fb8",
+  "mergeCommit": "998b7f486e07fbc97be00a7630c742f364c00eb2",
+  "mainBeforeMerge": "028c1bd2b2fbde1ed8e7f30b8cf5297bf1495595",
+  "deployments": {
+    "api": {
+      "worker": "mons-shop-api",
+      "deploymentId": "dcec33cd-374a-4390-aba3-61d044ea869a",
+      "versionId": "9a878d01-3ff9-453d-b24c-c226ea56282b",
+      "createdAt": "2026-11-14T12:03:10.125251Z"
+    },
+    "frontend": {
+      "worker": "mons-shop",
+      "deploymentId": "64f960d7-3059-4c5a-9214-f669465f6b00",
+      "versionId": "871b60fb-235f-4045-8f9d-b14763a38046",
+      "createdAt": "2026-11-14T12:05:22.343203Z"
+    }
+  },
+  "resourceBindingsPreserved": true,
+  "storefrontConfigurationPreserved": true,
+  "deployedSource": {
+    "checkedAt": "2026-11-14T12:03:45.408Z",
+    "versionId": "9a878d01-3ff9-453d-b24c-c226ea56282b",
+    "moduleExactMatch": true,
+    "entrypointBytes": 13712349,
+    "uploadBundleSha256": "87379cdbc39c78e2711d56cd41cf901865a403050362379c2c13e99c6c11ee4e",
+    "localModuleSha256": "3b6faede670752f4367788467dc7c76657b35aef5c8ef3bd5dc5948721fab56d",
+    "deployedModuleSha256": "3b6faede670752f4367788467dc7c76657b35aef5c8ef3bd5dc5948721fab56d"
+  },
+  "validation": {
+    "releaseCommands": [
+      {
+        "command": "npm run deploy:api",
+        "exitCode": 0,
+        "versionId": "9a878d01-3ff9-453d-b24c-c226ea56282b",
+        "suites": [
+          {
+            "suite": "test:api",
+            "tests": 3747,
+            "passed": 3747,
+            "failed": 0
+          },
+          {
+            "suite": "test:api:runtime",
+            "tests": 90,
+            "passed": 90,
+            "failed": 0
+          }
+        ],
+        "logSha256": "238f0095c7b2bc615effa4e78c3201987eae17fc0ecb229dc3f9f742cc2f19cc"
+      },
+      {
+        "command": "npm run deploy",
+        "exitCode": 0,
+        "versionId": "871b60fb-235f-4045-8f9d-b14763a38046",
+        "suites": [
+          {
+            "suite": "test:frontend-worker",
+            "tests": 4,
+            "passed": 4,
+            "failed": 0
+          },
+          {
+            "suite": "test:shop-api",
+            "tests": 29,
+            "passed": 29,
+            "failed": 0
+          },
+          {
+            "suite": "test:card-nft-2-common-ids",
+            "tests": 1,
+            "passed": 1,
+            "failed": 0
+          },
+          {
+            "suite": "test",
+            "tests": 5406,
+            "passed": 5406,
+            "failed": 0
+          }
+        ],
+        "logSha256": "eec0dc40b21adeeb4f54f5a2921c2ebb003c720564aacc5705fd240ae561f362"
+      }
+    ],
+    "fullProjectCheck": {
+      "command": "npm run check",
+      "exitCode": 0,
+      "commitBeforeMemoryFix": "998b7f486e07fbc97be00a7630c742f364c00eb2",
+      "logSha256": "05444635c1254fdc019634d64713623f8f3fcf7dbe373425c3cefb52c3c1c98d",
+      "counts": [
+        {
+          "section": "test:frontend-worker",
+          "result": "\u2139 tests 4"
+        },
+        {
+          "section": "test:frontend-worker",
+          "result": "\u2139 pass 4"
+        },
+        {
+          "section": "test:frontend-worker",
+          "result": "\u2139 fail 0"
+        },
+        {
+          "section": "test:frontend-worker",
+          "result": "\u2139 duration_ms 109.34025"
+        },
+        {
+          "section": "test:api",
+          "result": "\u2139 tests 3746"
+        },
+        {
+          "section": "test:api",
+          "result": "\u2139 pass 3746"
+        },
+        {
+          "section": "test:api",
+          "result": "\u2139 fail 0"
+        },
+        {
+          "section": "test:api",
+          "result": "\u2139 duration_ms 255393.031583"
+        },
+        {
+          "section": "test:api:runtime",
+          "result": "\u2139 tests 89"
+        },
+        {
+          "section": "test:api:runtime",
+          "result": "\u2139 pass 89"
+        },
+        {
+          "section": "test:api:runtime",
+          "result": "\u2139 fail 0"
+        },
+        {
+          "section": "test:api:runtime",
+          "result": "\u2139 duration_ms 90312.779875"
+        },
+        {
+          "section": "test:renderers",
+          "result": "\u2139 tests 24"
+        },
+        {
+          "section": "test:renderers",
+          "result": "\u2139 pass 24"
+        },
+        {
+          "section": "test:renderers",
+          "result": "\u2139 fail 0"
+        },
+        {
+          "section": "test:renderers",
+          "result": "\u2139 duration_ms 3829.631458"
+        },
+        {
+          "section": "test",
+          "result": "\u2139 tests 5406"
+        },
+        {
+          "section": "test",
+          "result": "\u2139 pass 5406"
+        },
+        {
+          "section": "test",
+          "result": "\u2139 fail 0"
+        },
+        {
+          "section": "test",
+          "result": "\u2139 duration_ms 90471.768833"
+        },
+        {
+          "section": "test:onchain",
+          "result": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        },
+        {
+          "section": "test:onchain",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    "sbf": {
+      "startedAt": "2026-11-14T11:18:21.646Z",
+      "completedAt": "2026-11-14T11:19:27.196Z",
+      "command": "NO_DNA=1 npm run test:onchain:sbf",
+      "exitCode": 0,
+      "sourceCargoLockUnchanged": true,
+      "lockBeforeSha256": "a6b08d7542ed200fb574debebb37f9101a9994fd89c0062a7a37fd0c2d9f12e6",
+      "lockAfterSha256": "a6b08d7542ed200fb574debebb37f9101a9994fd89c0062a7a37fd0c2d9f12e6",
+      "logSha256": "ef1ac50b986c8f66566509bc0ed15701a8ea85ebf3c797f07f7715caefd29d9e"
+    },
+    "memoryRegression": {
+      "nativeRuntimeCases": 2,
+      "ownerRowsPerCase": 100,
+      "v8OldSpaceLimitMiB": 128,
+      "boundedPayloadQueryBytes": 1048576,
+      "metadataHashesMatchLegacy": true
+    }
+  },
+  "metadata": {
+    "scope": {
+      "deploymentId": "mainnet-v1",
+      "chainId": 1,
+      "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "metadataBaseUri": "https://cdn.mons.shop/111k/",
+      "effectiveCatalogVersion": "111k-v9",
+      "effectiveCatalogSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1",
+      "catalogRevision": 1,
+      "revision": 9
+    },
+    "before": {
+      "total": 32260,
+      "artworks": 23276,
+      "eggs": 8984,
+      "blockPresent": 23276,
+      "canonicalMatch": 32260,
+      "missingBlock": 0,
+      "wrongBlock": 0,
+      "duplicateBlock": 0,
+      "nonAttributeMismatch": 0,
+      "headerMismatch": 0,
+      "immutableMismatch": 0,
+      "priorObjectsUnchanged": 32080,
+      "ownerTransitions": 0,
+      "enrichmentAdvances": 0,
+      "unexplainedChanges": 0,
+      "repairedVerified": 585,
+      "largeVerified": 5,
+      "readErrors": 0
+    },
+    "after": {
+      "total": 32320,
+      "artworks": 23319,
+      "eggs": 9001,
+      "blockPresent": 23319,
+      "canonicalMatch": 32320,
+      "missingBlock": 0,
+      "wrongBlock": 0,
+      "duplicateBlock": 0,
+      "nonAttributeMismatch": 0,
+      "headerMismatch": 0,
+      "immutableMismatch": 0,
+      "priorObjectsUnchanged": 32260,
+      "ownerTransitions": 0,
+      "enrichmentAdvances": 0,
+      "unexplainedChanges": 0,
+      "repairedVerified": 585,
+      "largeVerified": 5,
+      "readErrors": 0
+    },
+    "beforeCutoff": 1794656086838,
+    "afterCutoff": 1794658092829,
+    "repairWritesIssued": false,
+    "largeArtworks": [
+      {
+        "tokenId": "11352",
+        "assetId": 66047,
+        "sha256": "e3f6cc834ec1aadff4dc71aa8490092e6dcf1d345b578a5d080e059adfc7829c",
+        "bytes": 303420,
+        "attributeCount": 4990
+      },
+      {
+        "tokenId": "17257",
+        "assetId": 64999,
+        "sha256": "465feaffe98c86793ce0181bbfb301a242aa2b037fad180592ce91257a32444f",
+        "bytes": 354969,
+        "attributeCount": 5500
+      },
+      {
+        "tokenId": "19193",
+        "assetId": 65426,
+        "sha256": "f246f9e06162eb9918de0745e32d19f880dc4df846c6513a0d3f54f1ea399ca6",
+        "bytes": 208850,
+        "attributeCount": 3266
+      },
+      {
+        "tokenId": "23751",
+        "assetId": 65224,
+        "sha256": "3d835404b10ada7c61721be52a1e96c373b5659c1dd111779b239453d2c78b75",
+        "bytes": 206516,
+        "attributeCount": 3239
+      },
+      {
+        "tokenId": "3195",
+        "assetId": 65509,
+        "sha256": "42ed11b31757839d58b3cc223e1db6eecd79a1cde85711034761e3c8976ea2d0",
+        "bytes": 219185,
+        "attributeCount": 3438
+      }
+    ]
+  },
+  "publicChecks": {
+    "repairedTokens": 585,
+    "allRepairBytesMatchPlanned": true,
+    "knownRevealSamples": 13,
+    "assignmentsAndProvenanceUnchanged": true,
+    "apiProxies": [
+      {
+        "domain": "mons.shop",
+        "matchesPreviousStorefront": true,
+        "deploymentId": "v17",
+        "chainId": 11155111
+      },
+      {
+        "domain": "www.mons.shop",
+        "matchesPreviousStorefront": true,
+        "deploymentId": "v17",
+        "chainId": 11155111
+      }
+    ],
+    "onchainIdentity": {
+      "readOnly": true,
+      "checkedAt": "2026-11-14T12:17:21.715Z",
+      "chainId": 1,
+      "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "blockNumber": 26413169,
+      "baseURI": "https://cdn.mons.shop/111k/",
+      "metadataBaseUriMatches": true
+    }
+  },
+  "frontend": {
+    "domains": [
+      "mons.shop",
+      "www.mons.shop"
+    ],
+    "assetAndHtmlComparisons": 138,
+    "matched": 138,
+    "liveBrowserSmoke": {
+      "readOnly": true,
+      "checkedAt": "2026-11-14T12:18:34.862727+00:00",
+      "status": "partial",
+      "browser": "Google Chrome through native CUA",
+      "frontendVersion": "871b60fb-235f-4045-8f9d-b14763a38046",
+      "apiVersion": "9a878d01-3ff9-453d-b24c-c226ea56282b",
+      "requestedUrls": [
+        "https://mons.shop/111k_devnet",
+        "https://www.mons.shop/111k_devnet"
+      ],
+      "checks": [
+        {
+          "check": "mons.shop storefront renders",
+          "status": "passed",
+          "observed": "111K crate image, inventory section, wallet control and mint controls rendered."
+        },
+        {
+          "check": "crate availability and price",
+          "status": "passed",
+          "quantity": 1,
+          "priceEth": "0.0001",
+          "remainingCrates": 4257,
+          "totalCrates": 5555
+        },
+        {
+          "check": "warehouse selection",
+          "status": "passed",
+          "observed": "Selecting Warehouse changed the preview, quantity label, price and availability.",
+          "quantity": 1,
+          "priceEth": "0.0011",
+          "remainingWarehouses": 387,
+          "totalWarehouses": 505
+        },
+        {
+          "check": "relic view selection",
+          "status": "passed",
+          "observed": "Selecting Relic showed 18 relic choices and the Claim control.",
+          "relicChoices": 18
+        },
+        {
+          "check": "www storefront navigation",
+          "status": "passed",
+          "observed": "Navigation to https://www.mons.shop/111k_devnet rendered the storefront and loaded crate availability."
+        },
+        {
+          "check": "wallet-picker cancellation",
+          "status": "not-verified",
+          "observed": "Native input became unreliable. The wallet menu did not open reliably, so the cancellation flow could not be verified."
+        },
+        {
+          "check": "relic live availability",
+          "status": "not-verified",
+          "observed": "The relic choices rendered, but the availability indicator was still loading in the observed state."
+        }
+      ],
+      "limitations": [
+        "No DOM browser connector was available; native CUA reported noWindowsAvailable, elementHasNoFrame and user-changed state guards.",
+        "Browser console/network instrumentation was unavailable through the native interface; static resources and public endpoints were checked separately."
+      ],
+      "providerConnectionStarted": false,
+      "signatureRequested": false,
+      "transactionBroadcast": false,
+      "supportingEvidence": [
+        "frontend-assets.json",
+        "public-after.json",
+        "public-smoke-after.json"
+      ]
+    }
+  },
+  "observation": {
+    "adoptedAt": "2026-11-14T12:08:10.126Z",
+    "metrics": {
+      "from": "2026-11-14T12:08:10.126Z",
+      "to": "2026-11-14T12:13:27.082Z",
+      "rows": [
+        {
+          "dimensions": {
+            "eventType": "fetch",
+            "status": "success"
+          },
+          "sum": {
+            "errors": 0,
+            "requests": 157,
+            "subrequests": 1067
+          }
+        },
+        {
+          "dimensions": {
+            "eventType": "rpc",
+            "status": "clientDisconnected"
+          },
+          "sum": {
+            "errors": 0,
+            "requests": 56,
+            "subrequests": 55
+          }
+        },
+        {
+          "dimensions": {
+            "eventType": "cron",
+            "status": "success"
+          },
+          "sum": {
+            "errors": 0,
+            "requests": 1,
+            "subrequests": 7
+          }
+        }
+      ]
+    },
+    "successfulCrons": 1,
+    "invocationErrors": 0,
+    "mainnetHealth": {
+      "observedAt": "2026-11-14T12:13:42.814Z",
+      "timestamp": 1794658422582,
+      "outcome": "ok",
+      "workerVersion": "9a878d01-3ff9-453d-b24c-c226ea56282b",
+      "data": {
+        "event": "ethereum_reveal_recovery_health",
+        "deploymentId": "mainnet-v1",
+        "ready": true,
+        "seeded": 111111,
+        "available": 78791,
+        "reserved": 0,
+        "frozen": 32320,
+        "publication": {
+          "published": 32320
+        },
+        "recovery": {
+          "migrationReady": true,
+          "migration": {
+            "phase": "ready",
+            "cursor": "",
+            "rowKey": null,
+            "offset": 0
+          },
+          "opaque": 0,
+          "opaqueCapacity": {
+            "used": 0,
+            "limit": 10000,
+            "available": 10000
+          },
+          "crates": {
+            "observed": 1616
+          },
+          "due": {
+            "active": {
+              "receiptJobs": 0,
+              "scanJobs": 0,
+              "oldestDueAgeMs": 0
+            },
+            "background": {
+              "receiptJobs": 0,
+              "scanJobs": 0,
+              "oldestDueAgeMs": 0
+            }
+          },
+          "dispatch": {
+            "limit": 64,
+            "inFlight": 0,
+            "active": 0,
+            "background": 0,
+            "pauseUntilMs": 0,
+            "nextRecoveryMs": null,
+            "earliestLeaseUntilMs": null
+          }
+        },
+        "enrichment": {
+          "published": 23319
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 0,
+          "errors": {}
+        }
+      }
+    }
+  },
+  "evidence": {
+    "release-state.json": {
+      "bytes": 3222,
+      "sha256": "2cb18314798988f08821c18c533af808308762e96a6400ae7e730a18a4cba21b"
+    },
+    "deployment-before.json": {
+      "bytes": 3123,
+      "sha256": "ced1ffe323dccdc94cef4aa934440f5ebfd5be07ed2ca3cdc6bf0118f9131320"
+    },
+    "deployment-final.json": {
+      "bytes": 3903,
+      "sha256": "dfd28d777405da8fee38e95a78d57113bbd19a24c5bd9d32d2e39779b5c0da7b"
+    },
+    "deployed-source-final-verification.json": {
+      "bytes": 437,
+      "sha256": "435d0026db7ee491bca0acb94b37366b3d3bad34de320d2981252321c3df8511"
+    },
+    "registry-before.json": {
+      "bytes": 1159,
+      "sha256": "7d0bf67132cb7f50c2b54d3a6953a06257665e9cb483eca98ad41328db2c3214"
+    },
+    "registry-after.json": {
+      "bytes": 1159,
+      "sha256": "baef0c99e9fc3e4fea6bad8385affbf91817d396cbab917418e9aacff5c8d810"
+    },
+    "deploy-checks.json": {
+      "bytes": 1332,
+      "sha256": "bdf9d14cfb7dd4cc4356e3eeeef7056f25549bba8b91eb242a0642d380c51e13"
+    },
+    "project-check.json": {
+      "bytes": 2215,
+      "sha256": "10756fbc7d1b76c43d89195fecc160a7171150a7ae420362bcd22780b18e9e0a"
+    },
+    "check.log": {
+      "bytes": 1072305,
+      "sha256": "05444635c1254fdc019634d64713623f8f3fcf7dbe373425c3cefb52c3c1c98d"
+    },
+    "sbf-result.json": {
+      "bytes": 456,
+      "sha256": "1de98c9a955b051cee54d9660a3f8b1c52be14ca1abcc8e0888ae04ec264edd9"
+    },
+    "sbf-check.log": {
+      "bytes": 20941,
+      "sha256": "ef1ac50b986c8f66566509bc0ed15701a8ea85ebf3c797f07f7715caefd29d9e"
+    },
+    "before/audit.json": {
+      "bytes": 21840752,
+      "sha256": "571f5e4737adfa67de2e98d095868602c10103a6377745af70538088db6b2060"
+    },
+    "before/verification.json": {
+      "bytes": 2501,
+      "sha256": "63e75be4b9b1139f5ed9fdcf83afee88031afcf8ae5809029831df33882de4d5"
+    },
+    "before/objects.jsonl": {
+      "bytes": 17010920,
+      "sha256": "5d9da1a2e24d6ff055f3ecfa56fb7db118ad1a9762202194339d59a37a11f2b8"
+    },
+    "after/audit.json": {
+      "bytes": 21881288,
+      "sha256": "46a3cb8f4277f18e9c5c51f447e0a9c561014dc4d55ec86f521f01516ff046fc"
+    },
+    "after/verification.json": {
+      "bytes": 2489,
+      "sha256": "a819af132677e58ce57ea55c85ec837f05da49423ef35fb260df601d15e1ec59"
+    },
+    "after/objects.jsonl": {
+      "bytes": 17042528,
+      "sha256": "bc298701684fa272c22aaccf6ad61f77aabc578e739796cd79c647d7e804a8a8"
+    },
+    "after/capture-complete.json": {
+      "bytes": 180,
+      "sha256": "05c6cab21c110d1683d342144618a71714d0db11cd4af6ecfd9a92d28c8a5a0c"
+    },
+    "post-adoption-gate.json": {
+      "bytes": 151,
+      "sha256": "282164662cd27dd7508796b384d1caf10272a714def3fdd8cd5349a8e8ef1ff8"
+    },
+    "public-after.json": {
+      "bytes": 129601,
+      "sha256": "7a9be635330a021d927ae613a56f52ffd4c71bd233bc3764b9966139c45c23ae"
+    },
+    "public-smoke-after.json": {
+      "bytes": 9798,
+      "sha256": "1f36937d35174519ed23edb88d20b1efc33d2ab52b9da9a480b409cbc2d53a6c"
+    },
+    "onchain-identity-after.json": {
+      "bytes": 254,
+      "sha256": "d8b73da6c6e8b0540688ef6e63bf7b723534edad80c877fc8639150cc380f92f"
+    },
+    "frontend-assets.json": {
+      "bytes": 64691,
+      "sha256": "54e1b4b5dab2d72e6b6a17f5ed9cb7ead4140059bafd0a8eccfc7bb1c16ace75"
+    },
+    "health.jsonl": {
+      "bytes": 6234,
+      "sha256": "745ae597508c2827060979403e9bf3accdcc7b46e87109b7a3ae81f312750a59"
+    },
+    "deploy-api.log": {
+      "bytes": 475291,
+      "sha256": "238f0095c7b2bc615effa4e78c3201987eae17fc0ecb229dc3f9f742cc2f19cc"
+    },
+    "deploy-frontend.log": {
+      "bytes": 583924,
+      "sha256": "eec0dc40b21adeeb4f54f5a2921c2ebb003c720564aacc5705fd240ae561f362"
+    },
+    "browser-smoke.json": {
+      "bytes": 2413,
+      "sha256": "34bee70d1dd902c75df54ab501c0e66df657a3aacc919fd1e6db782ce5557a47"
+    }
+  }
+}
