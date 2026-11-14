@@ -272,9 +272,18 @@ export class EthereumOwnerHatchingStore {
     const unique = [...new Set(tokenIds)];
     for (let offset = 0; offset < unique.length; offset += 100) {
       const page = unique.slice(offset, offset + 100);
-      const rows = this.sql.exec<Pick<TokenRow, 'token_id' | 'canonical_json'>>(
-        `SELECT token_id,canonical_json FROM owner_hatching_tokens WHERE token_id IN (${page.map(() => '?').join(',')})`, ...page).toArray();
-      for (const row of rows) values.set(row.token_id, parseMetadataJson(row.canonical_json) as OwnerHatchingCanonical);
+      const sizes = this.sql.exec<{ token_id: string; bytes: number }>(
+        `SELECT token_id,length(CAST(canonical_json AS BLOB)) AS bytes FROM owner_hatching_tokens
+          WHERE token_id IN (${page.map(() => '?').join(',')})`, ...page).toArray();
+      for (let start = 0; start < sizes.length;) {
+        let end = start + 1, bytes = sizes[start].bytes;
+        while (end < sizes.length && bytes + sizes[end].bytes <= 1024 * 1024) bytes += sizes[end++].bytes;
+        const ids = sizes.slice(start, end).map(row => row.token_id);
+        const rows = this.sql.exec<Pick<TokenRow, 'token_id' | 'canonical_json'>>(
+          `SELECT token_id,canonical_json FROM owner_hatching_tokens WHERE token_id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray();
+        for (const row of rows) values.set(row.token_id, parseMetadataJson(row.canonical_json) as OwnerHatchingCanonical);
+        start = end;
+      }
     }
     return values;
   }

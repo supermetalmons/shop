@@ -7,6 +7,8 @@ import { EthereumOwnerHatchingStore, type OwnerHatchingBatchInput, type OwnerHat
   type OwnerHatchingEnrichmentError, type OwnerHatchingHooks } from '../src/ethereumOwnerHatchingStore.ts';
 import type { RevealSql } from '../src/ethereumRevealStore.ts';
 import { parseMetadataJson } from '../src/ethereumMetadataJson.ts';
+import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
+import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 
 const digest = (value: string) => bytesToHex(sha256(value));
 const observation = { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 123 };
@@ -146,7 +148,7 @@ test('bulk owner reads preserve canonical payloads and slot order across bounded
   const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
   const canonical = f.observe(() => f.store.canonicals(ids));
   assert.deepEqual(canonical.value, expected);
-  assert.equal(canonical.queries.length, 2);
+  assert.equal(canonical.queries.length, 4);
   assert.ok(canonical.queries.every(entry => entry.bindings <= 100 && entry.query.startsWith('SELECT')));
   for (const [tokenId, value] of canonical.value) {
     const row = f.database.prepare('SELECT canonical_json FROM owner_hatching_tokens WHERE token_id=?').get(tokenId)!;
@@ -161,6 +163,42 @@ test('bulk owner reads preserve canonical payloads and slot order across bounded
   assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
   assert.deepEqual(f.observe(() => f.store.canonicals([])), { value: new Map(), queries: [] });
   assert.deepEqual(f.observe(() => f.store.slotOverrides([])), { value: [], queries: [] });
+});
+
+test('owner payload queries respect the byte budget while preserving large Unicode metadata and duplicate requests', t => {
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  database.exec('CREATE TABLE owner_hatching_tokens(token_id TEXT PRIMARY KEY,canonical_json TEXT NOT NULL)');
+  const expected = new Map<string, OwnerHatchingCanonical>();
+  for (let id = 1; id <= 4; id++) {
+    const value = canonical(String(id), id);
+    value.category = 'painting';
+    value.artwork = { ...value.artwork, category: 'painting' };
+    value.metadataJson = JSON.stringify({ name: String(id), category: 'painting', attributes: [
+      { trait_type: 'collection block', value: 'plane of existence' },
+      { trait_type: 'text', value: id === 1 ? 'small' : '☀' + '"'.repeat(id === 4 ? 261_950 : 260_000) },
+    ] });
+    assert.ok(Buffer.byteLength(value.metadataJson) <= MAX_REVEAL_METADATA_BYTES);
+    value.targetSha256 = digest(value.metadataJson);
+    expected.set(String(id), value);
+    database.prepare('INSERT INTO owner_hatching_tokens VALUES(?,?)').run(String(id), JSON.stringify(value));
+  }
+  const payloads: Array<{ count: number; bytes: number }> = [];
+  const sql: RevealSql = { exec<T>(query: string, ...bindings: Array<string | number | null | ArrayBuffer>) {
+    const rows = database.prepare(query).all(...bindings.map(value => value instanceof ArrayBuffer ? new Uint8Array(value) : value));
+    if (query.startsWith('SELECT token_id,canonical_json')) payloads.push({ count: rows.length,
+      bytes: rows.reduce((sum, row) => sum + Buffer.byteLength(String(row.canonical_json)), 0) });
+    return { toArray: () => rows as T[] };
+  } };
+  const store = new EthereumRevealCatalogUpdateStore(sql, () => { throw new Error('Canonical reads must not write.'); });
+  const ids = ['4', '2', '1', '3', '2', '999'];
+  assert.deepEqual(store.canonicalMetadata(ids), ids.flatMap(id => expected.has(id) ? [expected.get(id)] : []));
+  assert.ok(payloads.length > 1);
+  assert.ok(payloads.every(page => page.bytes <= 1024 * 1024 || page.count === 1));
+  assert.ok(payloads.some(page => page.bytes > 1024 * 1024 && page.count === 1));
+  const count = payloads.length;
+  assert.deepEqual(store.ownerHatching.canonicals(['998', '999']), new Map());
+  assert.equal(payloads.length, count);
 });
 
 test('grail hatch retires its egg, preserves frozen identity, and survives repeated requests and restart', t => {

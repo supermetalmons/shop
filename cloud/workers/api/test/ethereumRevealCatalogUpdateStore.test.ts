@@ -327,7 +327,7 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   const mixed = f.observe(() => reader.canonicalMetadata(requested));
   assert.deepEqual(mixed.value, [ordinary, owner.canonical(grailId), owner.canonical(ordinaryId), ordinary, owner.canonical(grailId)]);
   assert.ok(mixed.queries.length <= 12, `mixed owner/ordinary read used ${mixed.queries.length} queries`);
-  assert.equal(mixed.queries.filter(entry => entry.query.includes('FROM owner_hatching_tokens WHERE token_id IN')).length, 1);
+  assert.equal(mixed.queries.filter(entry => /FROM owner_hatching_tokens\s+WHERE token_id IN/.test(entry.query)).length, 2);
   conservation(f.store, f.database);
   assert.deepEqual(f.store.catalogUpdate.eligibleCutoffEggs(76699), [76700]);
   const row = f.database.prepare("SELECT slot FROM reveal_catalog_free WHERE generation=? AND category='egg' AND asset_id=76700")
