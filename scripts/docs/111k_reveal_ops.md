@@ -196,6 +196,11 @@ reads/reveals continue. Activation atomically installs the mapping and advances 
 catalog revision; concurrent reveals resolve the same artwork. The coordinator is
 authoritative immediately while its registry mirror catches up.
 
+Resumed unactivated bundles revalidate saved traits in bounded pages before
+cutover without refetching them. If saved traits fail validation, correct the
+source, cancel the unactivated attempt, and prepare a new attempt from the
+cancelled bundle. Activated history stays unchanged.
+
 Metadata publishes at unchanged URLs with conditional writes and revisions blocking
 stale eggs. API artwork can precede CDN/marketplace updates. Follow publication,
 verification, a five-minute scheduler observation, re-verification, and obsolete
@@ -497,7 +502,7 @@ Use `--audit` to enumerate every published artwork token, including unhatched eg
 npm run --silent ethereum-reveal-control -- backfill-attributes --manifest "$target_manifest" --audit > attribute-audit.json
 ```
 
-The audit fixes one `frozenThroughMs` cutoff across bounded pages. Reuse it with `--frozen-through-ms <timestamp>` for a comparable verification after repair. Each record includes the effective category and asset ID, catalog or grail collection block, canonical metadata revision and SHA-256, original frozen metadata SHA-256, a SHA-256 of canonical JSON with `attributes` removed, and the matching enrichment job's state and checksum validity. Canonical metadata includes online catalog mappings and owner hatching overrides. Verify the CDN bytes against the canonical hash and label for every record; compare non-attribute hashes across repair and keep egg bytes unchanged. A later audit with a new cutoff covers reveals admitted during maintenance. Audit cannot be combined with `--write`, `--retry-blocked`, or `--recheck-token`.
+The audit fixes one `frozenThroughMs` cutoff across bounded pages. Pages follow the immutable frozen-token cohort and reject missing, pending or conflicted current publications within the cutoff. Owner-hatching publication supersedes the original publication and must match its current metadata revision. Finish publication and rerun the audit if this check fails. Reuse the cutoff with `--frozen-through-ms <timestamp>` for a comparable verification after repair. Each record includes the effective category and asset ID, catalog or grail collection block, canonical metadata revision and SHA-256, original frozen metadata SHA-256, a SHA-256 of canonical JSON with `attributes` removed, and the matching enrichment job's state and checksum validity. Canonical metadata includes online catalog mappings and owner hatching overrides. Verify the CDN bytes against the canonical hash and label for every record; compare non-attribute hashes across repair and keep egg bytes unchanged. A later audit with a new cutoff covers reveals admitted during maintenance. Audit cannot be combined with `--write`, `--retry-blocked`, or `--recheck-token`.
 
 ## Pausing and replacement
 

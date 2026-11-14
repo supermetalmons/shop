@@ -6,9 +6,10 @@ import { backfillRevealAttributePage } from '../src/ethereumRevealAttributeBackf
 import { acknowledgedEnrichmentHash, EthereumRevealEnrichmentStore, REVEAL_ENRICHMENT_SCHEMA } from '../src/ethereumRevealEnrichmentStore.ts';
 import { parseRevealAttributeBackfillRequest } from '../src/ethereumRevealMaintenanceSupport.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
-import { buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
+import { buildNewRevealedArtwork, buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import { EthereumOwnerHatchingStore, type OwnerHatchingCanonical } from '../src/ethereumOwnerHatchingStore.ts';
 
 function revealSql(db: DatabaseSync): RevealSql {
   return { exec<T>(query: string, ...args: Array<string | number | null | ArrayBuffer>) {
@@ -337,7 +338,7 @@ test('attribute audit is query-only, bounded, frozen, and resolves owner metadat
       tokenId, crateTokenId: '111112', templateJson, observation, catalog, allocatedEgg: id === 15 });
     values.set(tokenId, built);
     db.prepare(`INSERT INTO assignments(category,asset_id,crate_token_id,slot,token_id,artwork_json,metadata_json,placeholder_json,frozen_at_ms)
-      VALUES(?,?,?,?,?,?,?,?,?)`).run(category, id, '111112', id - 1, tokenId, JSON.stringify(built.artwork), built.metadataJson, built.placeholderJson, id === 260 ? 2001 : 1000);
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(category, id, '111112', id - 1, tokenId, JSON.stringify(built.artwork), built.metadataJson, built.placeholderJson, id >= 259 ? 2001 : 1000);
     db.prepare('INSERT INTO publication(token_id,status) VALUES(?,?)').run(tokenId, id === 259 ? 'pending' : 'published');
   }
   const largeAttributes = [{ trait_type: 'collection block', value: 'plane of existence' }, { trait_type: 'large', value: 'x'.repeat(512 * 1024 - 1024) }];
@@ -359,6 +360,7 @@ test('attribute audit is query-only, bounded, frozen, and resolves owner metadat
     VALUES('owner-audit',?,?,1,0,1,1000)`).run('a'.repeat(64), 'b'.repeat(64));
   db.prepare(`INSERT INTO owner_hatching_tokens(token_id,batch_id,egg_id,original_json,status,canonical_json,metadata_revision,hatched_at_ms)
     VALUES('14','owner-audit',14,?,'hatched',?,4,1001)`).run(JSON.stringify(canonical), JSON.stringify(canonical));
+  db.exec("INSERT INTO owner_hatching_publication(token_id,metadata_revision,status) VALUES('14',4,'published')");
   db.exec(`INSERT INTO owner_hatching_slot_overrides(origin_category,origin_asset_id,category,asset_id,token_id)
     VALUES('painting',15,'egg',70000,'14');
     INSERT INTO reveal_enrichment(token_id,version,status,last_error)
@@ -401,4 +403,115 @@ test('attribute audit is query-only, bounded, frozen, and resolves owner metadat
   assert.equal(tokens.find(row => row.tokenId === '15')!.enrichment, null);
   assert.equal(first.invalid + second.invalid, 1);
   assert.deepEqual(db.prepare('SELECT * FROM reveal_enrichment ORDER BY token_id').all(), before);
+});
+
+test('audit rejects unsettled pre-cutoff publications on every page instead of silently skipping them', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const sql = revealSql(db);
+  db.exec(`CREATE TABLE settings(id INTEGER,deployment_json TEXT);
+    CREATE TABLE assignments(token_id TEXT PRIMARY KEY,category TEXT,asset_id INTEGER,crate_token_id TEXT,
+      artwork_json TEXT,metadata_json TEXT,placeholder_json TEXT,frozen_at_ms INTEGER,assignment_revision INTEGER);
+    CREATE TABLE publication(token_id TEXT PRIMARY KEY,status TEXT,metadata_revision INTEGER);`);
+  db.prepare('INSERT INTO settings VALUES(1,?)').run(JSON.stringify({ catalogVersion: '111k-v9' }));
+  for (const statement of REVEAL_ENRICHMENT_SCHEMA) db.exec(statement);
+  for (let id = 1; id <= 259; id++) {
+    const base = JSON.stringify({ name: String(id), category: 'painting', attributes: [] });
+    const target = JSON.stringify({ name: String(id), category: 'painting', attributes: [{ trait_type: 'collection block', value: 'plane of existence' }] });
+    db.prepare('INSERT INTO assignments VALUES(?,?,?,?,?,?,?,?,0)').run(String(id), 'painting', id, '111112', base, base, 'placeholder', id === 259 ? 2001 : 1000);
+    db.prepare('INSERT INTO publication VALUES(?,?,0)').run(String(id), id === 100 || id === 259 ? 'pending' : 'published');
+    if (id !== 100 && id !== 259) db.prepare(`INSERT INTO reveal_enrichment(token_id,version,status,target_json,target_sha256)
+      VALUES(?,'v0','published',?,?)`).run(String(id), target, createHash('sha256').update(target).digest('hex'));
+  }
+  const audit = (afterTokenId: string | null = null) => backfillRevealAttributePage(sql,
+    { audit: true, write: false, frozenThroughMs: 2000, afterTokenId });
+  for (const status of ['pending', 'conflict', null]) {
+    db.exec('PRAGMA query_only=OFF');
+    if (status === null) db.exec("DELETE FROM publication WHERE token_id='100'");
+    else db.prepare("UPDATE publication SET status=? WHERE token_id='100'").run(status);
+    db.exec('PRAGMA query_only=ON');
+    assert.throws(() => audit(), /complete metadata publication/);
+    assert.throws(() => audit('200'), /complete metadata publication/);
+  }
+  db.exec(`PRAGMA query_only=OFF;
+    INSERT INTO publication VALUES('100','published',0);
+    INSERT INTO reveal_enrichment(token_id,version,status,last_error) VALUES('100','v0','invalid','invalid');
+    PRAGMA query_only=ON;`);
+  const first = audit();
+  assert.equal(first.tokens!.length, 256);
+  assert.ok(first.nextCursor);
+  assert.equal(first.tokens!.find(row => row.tokenId === '100')!.enrichment!.status, 'invalid');
+  db.exec("PRAGMA query_only=OFF;UPDATE publication SET status='pending' WHERE token_id='1';PRAGMA query_only=ON;");
+  assert.throws(() => audit(first.nextCursor), /complete metadata publication/);
+  db.exec("PRAGMA query_only=OFF;UPDATE publication SET status='published' WHERE token_id='1';PRAGMA query_only=ON;");
+  const second = audit(first.nextCursor);
+  assert.equal(second.nextCursor, null);
+  const tokens = [...first.tokens!, ...second.tokens!];
+  assert.equal(tokens.length, 258);
+  assert.equal(new Set(tokens.map(row => row.tokenId)).size, 258);
+  assert.equal(tokens.some(row => row.tokenId === '259'), false);
+  assert.equal(first.invalid + second.invalid, 1);
+  assert.equal(first.missing + second.missing, 0);
+});
+
+test('audit follows owner publication through takeover and ignores superseded initial publication state', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  const sql = revealSql(db);
+  db.exec(`CREATE TABLE settings(id INTEGER,deployment_json TEXT);
+    CREATE TABLE assignments(token_id TEXT PRIMARY KEY,category TEXT,asset_id INTEGER,crate_token_id TEXT,
+      artwork_json TEXT,metadata_json TEXT,placeholder_json TEXT,frozen_at_ms INTEGER,assignment_revision INTEGER);
+    CREATE TABLE publication(token_id TEXT PRIMARY KEY,status TEXT,metadata_revision INTEGER);`);
+  db.prepare('INSERT INTO settings VALUES(1,?)').run(JSON.stringify({ catalogVersion: '111k-v9' }));
+  const templateJson = JSON.stringify({ name: '{{tokenId}}', image: 'https://cdn.lil.org/nft/111k/placeholder.png', attributes: [] });
+  const observation = { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 };
+  const catalog = getRevealCatalog('111k-v9')!;
+  const base = buildRevealedArtwork({ templateJson, tokenId: '1', crateTokenId: '111112', category: 'egg', assetId: 1, observation, catalog });
+  db.prepare('INSERT INTO assignments VALUES(?,?,?,?,?,?,?,?,0)').run('1', 'egg', 1, '111112', JSON.stringify(base.artwork),
+    base.metadataJson, base.placeholderJson, 1000);
+  db.exec("INSERT INTO publication VALUES('1','pending',0)");
+  const original: OwnerHatchingCanonical = { tokenId: '1', category: 'egg', assetId: 1, assignmentRevision: 0, metadataRevision: 0,
+    artwork: base.artwork, metadataJson: base.metadataJson, targetSha256: createHash('sha256').update(base.metadataJson).digest('hex'),
+    expectedJsons: [base.placeholderJson, base.metadataJson], allowMissing: true, migration: false };
+  const owners = new EthereumOwnerHatchingStore(sql, action => action(), {
+    canonical: tokenId => tokenId === '1' ? original : null,
+    originForToken: () => ({ category: 'egg', assetId: 1 }),
+    build: (tokenId, asset) => buildNewRevealedArtwork({ templateJson, tokenId, crateTokenId: '111112',
+      category: asset.category, assetId: asset.assetId, observation, catalog, ownerHatching: true }),
+    takeOrdinary: () => ({ origin: { category: 'painting', assetId: 41171 }, effective: { category: 'painting', assetId: 41171 } }),
+    transitionSlot: () => {}, releaseReplacement: () => {}, freshEggAvailable: eggId => eggId === 70000, eligibleEgg: () => true,
+  }, () => 0);
+  owners.initialize();
+  owners.prepare({ batchId: 'owner-audit-takeover', sourceSha256: 'a'.repeat(64), candidateTokenIds: ['1'], readyCount: 1,
+    grails: [], freshEggIds: [70000] }, 1500);
+  assert.equal(owners.hatch('1', 2000).kind, 'hatched');
+  const audit = (afterTokenId: string | null = null) => backfillRevealAttributePage(sql,
+    { audit: true, write: false, frozenThroughMs: 2500, afterTokenId });
+  const mutate = (statement: string) => db.exec(`PRAGMA query_only=OFF;${statement};PRAGMA query_only=ON;`);
+  db.exec('PRAGMA query_only=ON');
+  assert.throws(() => audit(), /complete metadata publication/);
+  mutate("UPDATE publication SET status='published' WHERE token_id='1'");
+  assert.throws(() => audit(), /complete metadata publication/);
+  db.exec("PRAGMA query_only=OFF;UPDATE publication SET status='pending' WHERE token_id='1';");
+  const jobs = owners.claimPublications(2001);
+  assert.equal(owners.completePublications(jobs.map(job => ({ job, status: 'published' as const })), 2002).length, 1);
+  db.exec('PRAGMA query_only=ON');
+  for (const initialState of ['pending', 'conflict', null, 'published']) {
+    mutate(initialState === null ? "DELETE FROM publication WHERE token_id='1'"
+      : `INSERT INTO publication VALUES('1','${initialState}',0) ON CONFLICT(token_id) DO UPDATE SET status=excluded.status`);
+    const page = audit();
+    assert.equal(page.tokens!.length, 1);
+    assert.equal(page.tokens![0].category, 'painting');
+    assert.equal(page.tokens![0].assetId, 41171);
+    assert.equal(page.tokens![0].metadataSha256, owners.canonical('1')!.targetSha256);
+    assert.equal(page.tokens![0].collectionBlock, 'little swag');
+  }
+  for (const ownerState of ['pending', 'conflict', null]) {
+    mutate(ownerState === null ? "DELETE FROM owner_hatching_publication WHERE token_id='1'"
+      : `UPDATE owner_hatching_publication SET status='${ownerState}' WHERE token_id='1'`);
+    assert.throws(() => audit(), /complete metadata publication/);
+    assert.throws(() => audit('2'), /complete metadata publication/);
+  }
+  mutate("INSERT INTO owner_hatching_publication(token_id,metadata_revision,status) VALUES('1',999,'published')");
+  assert.throws(() => audit(), /complete metadata publication/);
 });

@@ -62,6 +62,8 @@ const SCHEMA = [
     started_at_ms INTEGER NOT NULL,activated_at_ms INTEGER,seeded INTEGER NOT NULL DEFAULT 0,frozen_count INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS reveal_catalog_mappings (batch_id TEXT NOT NULL REFERENCES reveal_catalog_generations(batch_id),
     egg_id INTEGER NOT NULL,category TEXT NOT NULL,asset_id INTEGER NOT NULL,attributes_json TEXT,attributes_sha256 TEXT,
+    collection_block_validated INTEGER NOT NULL DEFAULT 0 CHECK(collection_block_validated IN (0,1)
+      AND (collection_block_validated=0 OR attributes_json IS NOT NULL)),
     PRIMARY KEY(batch_id,egg_id),UNIQUE(batch_id,category,asset_id),CHECK((attributes_json IS NULL)=(attributes_sha256 IS NULL)))`,
   `CREATE INDEX IF NOT EXISTS reveal_catalog_origin ON reveal_catalog_mappings(egg_id,batch_id)`,
   `CREATE TABLE IF NOT EXISTS reveal_catalog_egg_claims (batch_id TEXT NOT NULL REFERENCES reveal_catalog_generations(batch_id),
@@ -183,6 +185,7 @@ export class EthereumRevealCatalogUpdateStore {
         ['reveal_catalog_generations', 'egg_cutoff', 'INTEGER'],
         ['reveal_catalog_mappings', 'origin_category', 'TEXT'],
         ['reveal_catalog_mappings', 'origin_asset_id', 'INTEGER'],
+        ['reveal_catalog_mappings', 'collection_block_validated', 'INTEGER NOT NULL DEFAULT 0 CHECK(collection_block_validated IN (0,1) AND (collection_block_validated=0 OR attributes_json IS NOT NULL))'],
       ]) {
         if (!this.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().some(row => row.name === name)) {
           this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
@@ -190,6 +193,8 @@ export class EthereumRevealCatalogUpdateStore {
       }
       this.sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS reveal_catalog_mapping_origin_unit ON reveal_catalog_mappings
         (batch_id,COALESCE(origin_category,'egg'),COALESCE(origin_asset_id,egg_id))`);
+      this.sql.exec(`CREATE INDEX IF NOT EXISTS reveal_catalog_metadata_validation ON reveal_catalog_mappings
+        (batch_id,collection_block_validated,egg_id)`);
       this.sql.exec(`CREATE TRIGGER IF NOT EXISTS reveal_catalog_explicit_identity BEFORE UPDATE ON reveal_catalog_generations
         WHEN NEW.batch_version IS NOT OLD.batch_version OR NEW.egg_cutoff IS NOT OLD.egg_cutoff
         BEGIN SELECT RAISE(ABORT,'Catalog generation identity is immutable'); END`);
@@ -763,18 +768,32 @@ export class EthereumRevealCatalogUpdateStore {
     return this.status(batchId)!;
   }
 
-  metadataPreparationPage(batchId: string, pageSize = 8): RevealOriginUnit[] {
+  private unvalidatedMetadataCondition(): string {
+    return this.sql.exec("SELECT name FROM pragma_table_info('reveal_catalog_mappings') WHERE name='collection_block_validated'").toArray().length
+      ? 'collection_block_validated=0' : '1';
+  }
+
+  private requireValidatedMetadata(batchId: string): void {
+    if (this.sql.exec(`SELECT 1 FROM reveal_catalog_mappings WHERE batch_id=?
+        AND ${this.unvalidatedMetadataCondition()} LIMIT 1`, batchId).toArray().length) {
+      throw new Error('Stage every new artwork and validate its collection block before proceeding.');
+    }
+  }
+
+  metadataPreparationPage(batchId: string, pageSize = 8): Array<RevealOriginUnit | RevealCatalogMetadataStage> {
     limit(pageSize);
-    this.operation(batchId);
-    return this.sql.exec<Mapping>('SELECT category,asset_id FROM reveal_catalog_mappings WHERE batch_id=? AND attributes_json IS NULL ORDER BY egg_id LIMIT ?', batchId, pageSize)
-      .toArray().map(row => ({ category: row.category, assetId: row.asset_id }));
+    if (this.operation(batchId).activated_at_ms !== null) return [];
+    return this.sql.exec<Mapping>(`SELECT category,asset_id,attributes_json,attributes_sha256 FROM reveal_catalog_mappings
+      WHERE batch_id=? AND ${this.unvalidatedMetadataCondition()} ORDER BY egg_id LIMIT ?`, batchId, pageSize)
+      .toArray().map(row => ({ category: row.category, assetId: row.asset_id,
+        ...(row.attributes_json !== null ? { attributesJson: row.attributes_json, sha256: row.attributes_sha256! } : {}) }));
   }
 
   metadataStage(batchId: string, rows: RevealCatalogMetadataStage[]): RevealCatalogUpdateStatus {
     limit(rows.length);
     this.transaction(() => {
       const operation = this.operation(batchId);
-      if (operation.phase !== 'staging') throw new Error('Catalog metadata is not staging.');
+      if (!['staging', 'ready'].includes(operation.phase)) throw new Error('Catalog metadata is not staging.');
       const deployment = JSON.parse(this.settings()!.deployment_json) as EthereumRevealDeployment;
       const catalog = JSON.parse(operation.target_manifest_json) as RevealAssetCatalog;
       for (const row of rows) {
@@ -786,14 +805,16 @@ export class EthereumRevealCatalogUpdateStore {
           throw new Error('Invalid staged artwork attributes.');
         }
         const previous = this.sql.exec<Mapping>('SELECT * FROM reveal_catalog_mappings WHERE batch_id=? AND category=? AND asset_id=?', batchId, row.category, row.assetId).toArray()[0];
-        if (!previous || previous.attributes_json !== null && (previous.attributes_json !== row.attributesJson || previous.attributes_sha256 !== row.sha256)) {
+        if (!previous || operation.phase === 'ready' && previous.attributes_json === null ||
+          previous.attributes_json !== null && (previous.attributes_json !== row.attributesJson || previous.attributes_sha256 !== row.sha256)) {
           throw new Error('Staged artwork attributes cannot change.');
         }
-        const largestMetadata = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId: '111111', crateTokenId: '116666',
+        const metadataInput = { templateJson: deployment.templateJson, tokenId: '111111', crateTokenId: '116666',
           category: row.category, assetId: row.assetId, catalog,
-          observation: { transactionHash: `0x${'0'.repeat(64)}`, blockHash: `0x${'0'.repeat(64)}`, blockNumber: 0 } });
-        applyRevealAttributePayload(largestMetadata.metadataJson, row.attributesJson);
-        this.sql.exec('UPDATE reveal_catalog_mappings SET attributes_json=?,attributes_sha256=? WHERE batch_id=? AND category=? AND asset_id=?',
+          observation: { transactionHash: `0x${'0'.repeat(64)}`, blockHash: `0x${'0'.repeat(64)}`, blockNumber: 0 } };
+        applyRevealAttributePayload(buildRevealedArtwork(metadataInput).metadataJson, row.attributesJson);
+        applyRevealAttributePayload(buildNewRevealedArtwork(metadataInput).metadataJson, row.attributesJson);
+        this.sql.exec('UPDATE reveal_catalog_mappings SET attributes_json=?,attributes_sha256=?,collection_block_validated=1 WHERE batch_id=? AND category=? AND asset_id=?',
           row.attributesJson, row.sha256, batchId, row.category, row.assetId);
       }
     });
@@ -806,9 +827,7 @@ export class EthereumRevealCatalogUpdateStore {
       const operation = this.operation(batchId);
       if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild staging.');
       if (operation.phase !== 'staging') throw new Error('Catalog generation is not staging.');
-      if (this.sql.exec('SELECT 1 FROM reveal_catalog_mappings WHERE batch_id=? AND attributes_json IS NULL LIMIT 1', batchId).toArray().length) {
-        throw new Error('Stage every new artwork before building the candidate pool.');
-      }
+      this.requireValidatedMetadata(batchId);
       const last = Math.min(TOTAL, operation.seeded + pageSize);
       for (let index = operation.seeded + 1; index <= last; index++) {
         const unit = this.unitAt(index);
@@ -827,8 +846,9 @@ export class EthereumRevealCatalogUpdateStore {
   seal(batchId: string): RevealCatalogUpdateStatus {
     const operation = this.operation(batchId);
     if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild sealing.');
+    if (!['staging', 'ready'].includes(operation.phase) || operation.seeded !== TOTAL) throw new Error('Catalog generation is incomplete.');
+    this.requireValidatedMetadata(batchId);
     if (operation.phase === 'ready') return this.status(batchId)!;
-    if (operation.phase !== 'staging' || operation.seeded !== TOTAL) throw new Error('Catalog generation is incomplete.');
     this.verifyCutoffClaims(batchId);
     this.verifyGeneration(batchId);
     this.sql.exec("UPDATE reveal_catalog_generations SET phase='ready' WHERE batch_id=?", batchId);
@@ -844,6 +864,7 @@ export class EthereumRevealCatalogUpdateStore {
       if (operation.phase !== 'ready' || saved.candidate_catalog_generation !== batchId || saved.catalog_revision !== operation.source_revision) {
         throw new Error('Catalog generation cannot activate.');
       }
+      this.requireValidatedMetadata(batchId);
       this.verifyCutoffClaims(batchId);
       const frozen = this.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments a JOIN reveal_catalog_mappings m
         ON a.category=COALESCE(m.origin_category,'egg') AND a.asset_id=COALESCE(m.origin_asset_id,m.egg_id)
@@ -1078,8 +1099,9 @@ export class EthereumRevealCatalogUpdateStore {
     const row = batchId ? this.sql.exec<Operation>('SELECT * FROM reveal_catalog_generations WHERE batch_id=?', batchId).toArray()[0]
       : this.sql.exec<Operation>('SELECT * FROM reveal_catalog_generations ORDER BY rowid DESC LIMIT 1').toArray()[0];
     if (!row) return null;
+    const staged = row.activated_at_ms === null ? `NOT (${this.unvalidatedMetadataCondition()})` : 'attributes_json IS NOT NULL';
     const progress = this.sql.exec<{ mapped: number; staged: number }>(`SELECT COUNT(*) AS mapped,
-      COALESCE(SUM(attributes_json IS NOT NULL),0) AS staged FROM reveal_catalog_mappings WHERE batch_id=?`, row.batch_id).toArray()[0];
+      COALESCE(SUM(${staged}),0) AS staged FROM reveal_catalog_mappings WHERE batch_id=?`, row.batch_id).toArray()[0];
     const publications = this.sql.exec<{ published: number; retrying: number; conflicts: number }>(`SELECT COALESCE(SUM(published),0) AS published,
       COALESCE(SUM(published=0 AND last_error='retry'),0) AS retrying,COALESCE(SUM(published=0 AND last_error='conflict'),0) AS conflicts
       FROM reveal_catalog_publications WHERE batch_id=?`, row.batch_id).toArray()[0];

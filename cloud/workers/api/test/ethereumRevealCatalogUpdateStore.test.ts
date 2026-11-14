@@ -7,7 +7,8 @@ import { computeRevealCatalogDescriptor, type RevealAssetCatalog } from '../../.
 import { revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
-import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
+import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
+import { buildNewRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
 import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
 import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
@@ -102,6 +103,119 @@ function conservation(store: EthereumRevealStore, database: DatabaseSync) {
   assert.equal(new Set(store.catalogUpdate.canonicalMetadata(['1', '2', '3']).map(row => `${row.category}:${row.assetId}`)).size,
     store.catalogUpdate.canonicalMetadata(['1', '2', '3']).length);
 }
+
+test('catalog staging rejects conflicting collection blocks before activation and corrected traits publish fresh mapped tokens', t => {
+  const f = fixture(t);
+  const update = batch(source, 1);
+  const mapping = update.mappings[0];
+  reserveEgg(f.database, mapping.eggId, '111112', 0);
+  const operation = f.store.catalogUpdate;
+  operation.begin(update, 2000);
+  operation.stageMappings(update.batchId, update.mappings);
+  operation.sealMappings(update.batchId);
+  for (const attributes of [
+    [{ trait_type: 'collection block', value: 'wrong source label' }],
+    [{ trait_type: 'collection block', value: 'new artworks' }, { trait_type: 'collection block', value: 'wrong duplicate' }],
+  ]) {
+    const payload = JSON.stringify(attributes);
+    assert.throws(() => operation.metadataStage(update.batchId, [{ ...mapping, attributesJson: payload,
+      sha256: createHash('sha256').update(payload).digest('hex') }]), /collection-block-mismatch/);
+    assert.equal(operation.status(update.batchId)!.metadataStaged, 0);
+    assert.equal(f.database.prepare('SELECT attributes_json FROM reveal_catalog_mappings WHERE batch_id=?').get(update.batchId)!.attributes_json, null);
+    assert.throws(() => operation.generationStage(update.batchId), /Stage every new artwork/);
+    assert.throws(() => operation.activate(update.batchId), /cannot activate/);
+    assert.equal(operation.effectiveCatalog()!.catalogRevision, 0);
+  }
+  operation.metadataStage(update.batchId, [{ ...mapping, attributesJson, sha256: attributesSha256 }]);
+  stageGeneration(f.store, update);
+  operation.activate(update.batchId, 3000);
+  f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 3001);
+  const jobs = f.store.claimPublications(4000, 8);
+  assert.equal(jobs.length, 8);
+  const first = jobs.find(job => job.token_id === '1')!;
+  const metadata = JSON.parse(first.metadata_json);
+  assert.deepEqual(metadata.attributes[0], { trait_type: 'collection block', value: 'new artworks' });
+  assert.equal(metadata.attributes.filter((attribute: { trait_type: string }) => attribute.trait_type === 'collection block').length, 1);
+  assert.equal(metadata.category, 'video');
+  assert.match(first.metadata_json, /9007199254740993/);
+  assert.equal(f.store.completePublications(jobs.map(job => ({ job, status: 'published' as const })), 4001).length, 8);
+  assert.equal(f.database.prepare("SELECT status FROM publication WHERE token_id='1'").get()!.status, 'published');
+});
+
+test('legacy metadata validation is query-only before migration and resumes in bounded pages across restarts', t => {
+  const f = fixture(t);
+  const update = batch();
+  stageMetadata(f.store, update);
+  const saved = f.database.prepare('SELECT attributes_json,attributes_sha256 FROM reveal_catalog_mappings ORDER BY egg_id').all();
+  const reader = new EthereumRevealCatalogUpdateStore(f.sql, () => { throw new Error('Read-only status attempted a write.'); });
+  assert.equal(reader.status(update.batchId)!.metadataStaged, 3);
+  f.database.exec('DROP INDEX reveal_catalog_metadata_validation; ALTER TABLE reveal_catalog_mappings DROP COLUMN collection_block_validated; PRAGMA query_only=ON;');
+  const changes = f.database.prepare('SELECT total_changes() AS count').get()!.count;
+  assert.equal(reader.status(update.batchId)!.metadataStaged, 0);
+  assert.equal(reader.metadataPreparationPage(update.batchId, 1).length, 1);
+  assert.equal(f.database.prepare('SELECT total_changes() AS count').get()!.count, changes);
+  f.database.exec('PRAGMA query_only=OFF');
+  let store = f.reopen();
+  assert.equal(reader.status(update.batchId)!.metadataStaged, 0);
+  assert.throws(() => store.catalogUpdate.generationStage(update.batchId), /validate its collection block/);
+  for (let validated = 1; validated <= 3; validated++) {
+    const [row] = store.catalogUpdate.metadataPreparationPage(update.batchId, 1);
+    assert.ok('attributesJson' in row);
+    store.catalogUpdate.metadataStage(update.batchId, [row]);
+    store = f.reopen();
+    assert.equal(reader.status(update.batchId)!.metadataStaged, validated);
+  }
+  assert.deepEqual(reader.metadataPreparationPage(update.batchId), []);
+  assert.deepEqual(f.database.prepare('SELECT attributes_json,attributes_sha256 FROM reveal_catalog_mappings ORDER BY egg_id').all(), saved);
+  for (const query of [
+    'SELECT COUNT(*),SUM(NOT(collection_block_validated=0)) FROM reveal_catalog_mappings WHERE batch_id=?',
+    'SELECT 1 FROM reveal_catalog_mappings WHERE batch_id=? AND collection_block_validated=0 LIMIT 1',
+  ]) {
+    const plan = f.database.prepare(`EXPLAIN QUERY PLAN ${query}`).all(update.batchId);
+    assert.ok(plan.some(row => String(row.detail).includes('COVERING INDEX reveal_catalog_metadata_validation')));
+  }
+});
+
+test('new and migrated validation markers cannot certify a missing payload', t => {
+  for (const legacy of [false, true]) {
+    const f = fixture(t);
+    const update = batch(source, 1);
+    f.store.catalogUpdate.begin(update, 2000);
+    f.store.catalogUpdate.stageMappings(update.batchId, update.mappings);
+    if (legacy) {
+      f.database.exec('DROP INDEX reveal_catalog_metadata_validation; ALTER TABLE reveal_catalog_mappings DROP COLUMN collection_block_validated');
+      f.reopen();
+    }
+    assert.throws(() => f.database.prepare('UPDATE reveal_catalog_mappings SET collection_block_validated=1 WHERE batch_id=?').run(update.batchId), /CHECK constraint failed/);
+  }
+});
+
+for (const phase of ['staging', 'ready'] as const) test(`legacy ${phase} candidates cannot advance with invalid frozen attributes`, t => {
+  for (const failure of ['label', 'duplicate', 'checksum']) {
+    const f = fixture(t);
+    const update = batch(source, 1);
+    const operation = f.store.catalogUpdate;
+    operation.begin(update, 2000);
+    operation.stageMappings(update.batchId, update.mappings);
+    operation.sealMappings(update.batchId);
+    const block = { trait_type: 'collection block', value: failure === 'label' ? 'wrong' : 'new artworks' };
+    const payload = JSON.stringify([block, ...(failure === 'duplicate' ? [{ ...block, value: 'wrong' }] : [])]);
+    const checksum = failure === 'checksum' ? '0'.repeat(64) : createHash('sha256').update(payload).digest('hex');
+    f.database.prepare('UPDATE reveal_catalog_mappings SET attributes_json=?,attributes_sha256=? WHERE batch_id=?')
+      .run(payload, checksum, update.batchId);
+    if (phase === 'ready') f.database.prepare("UPDATE reveal_catalog_generations SET phase='ready',seeded=111111 WHERE batch_id=?").run(update.batchId);
+    const resumed = f.reopen().catalogUpdate;
+    const [row] = resumed.metadataPreparationPage(update.batchId);
+    assert.ok('attributesJson' in row);
+    assert.throws(() => resumed.metadataStage(update.batchId, [row]), /collection-block-mismatch|Invalid staged artwork attributes/);
+    assert.equal(resumed.status(update.batchId)!.metadataStaged, 0);
+    assert.equal(resumed.status(update.batchId)!.activatedAtMs, null);
+    assert.throws(() => phase === 'ready' ? resumed.seal(update.batchId) : resumed.generationStage(update.batchId), /validate its collection block/);
+    assert.throws(() => resumed.activate(update.batchId), /validate its collection block|cannot activate/);
+    assert.deepEqual({ ...f.database.prepare('SELECT attributes_json,attributes_sha256,collection_block_validated FROM reveal_catalog_mappings WHERE batch_id=?').get(update.batchId) },
+      { attributes_json: payload, attributes_sha256: checksum, collection_block_validated: 0 });
+  }
+});
 
 for (const allocation of ['reserved', 'free'] as const) {
   test(`sparse cutoff preserves reveal of ${allocation} original eggs above the nominal catalog count`, t => {
@@ -368,7 +482,7 @@ test('500 reveal projections stay compact while canonical inventory metadata kee
   f.store.catalogUpdate.begin(update, 2000);
   for (let offset = 0; offset < update.mappings.length; offset += 256) f.store.catalogUpdate.stageMappings(update.batchId, update.mappings.slice(offset, offset + 256));
   f.store.catalogUpdate.sealMappings(update.batchId);
-  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'heavy' }, { trait_type: 'large', value: 'x'.repeat(64 * 1024) }]);
+  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'new artworks' }, { trait_type: 'large', value: 'x'.repeat(64 * 1024) }]);
   const sha256 = createHash('sha256').update(payload).digest('hex');
   for (;;) {
     const page = f.store.catalogUpdate.metadataPreparationPage(update.batchId, 8);
@@ -392,7 +506,7 @@ test('oversized merged metadata is rejected before activation while the original
   f.store.catalogUpdate.begin(update, 2000);
   f.store.catalogUpdate.stageMappings(update.batchId, update.mappings);
   f.store.catalogUpdate.sealMappings(update.batchId);
-  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'large' }, { trait_type: 'data', value: 'x'.repeat(MAX_REVEAL_METADATA_BYTES - 200) }]);
+  const payload = JSON.stringify([{ trait_type: 'collection block', value: 'new artworks' }, { trait_type: 'data', value: 'x'.repeat(MAX_REVEAL_METADATA_BYTES - 200) }]);
   assert.ok(Buffer.byteLength(payload) < MAX_REVEAL_METADATA_BYTES);
   const [row] = f.store.catalogUpdate.metadataPreparationPage(update.batchId);
   assert.throws(() => f.store.catalogUpdate.metadataStage(update.batchId, [{ ...row, attributesJson: payload,
@@ -400,6 +514,26 @@ test('oversized merged metadata is rejected before activation while the original
   assert.equal(f.store.catalogUpdate.status(update.batchId)!.metadataStaged, 0);
   assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
   f.store.reserve(['111112']);
+});
+
+test('staging preserves the legacy size bound when fresh metadata would deduplicate repeated collection blocks', t => {
+  const f = fixture(t);
+  const update = batch(source, 1);
+  const operation = f.store.catalogUpdate;
+  operation.begin(update, 2000);
+  operation.stageMappings(update.batchId, update.mappings);
+  operation.sealMappings(update.batchId);
+  const [row] = operation.metadataPreparationPage(update.batchId);
+  const block = { trait_type: 'collection block', value: 'new artworks' };
+  const payload = JSON.stringify(Array(Math.floor((MAX_REVEAL_METADATA_BYTES - 200) / (JSON.stringify(block).length + 1))).fill(block));
+  const fresh = buildNewRevealedArtwork({ templateJson, tokenId: '111111', crateTokenId: '116666', category: row.category,
+    assetId: row.assetId, catalog: update.target.manifest, observation });
+  assert.ok(Buffer.byteLength(payload) < MAX_REVEAL_METADATA_BYTES);
+  assert.ok(Buffer.byteLength(applyRevealAttributePayload(fresh.metadataJson, payload).metadataJson) < MAX_REVEAL_METADATA_BYTES);
+  assert.throws(() => operation.metadataStage(update.batchId, [{ ...row, attributesJson: payload,
+    sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 512 KiB/);
+  assert.equal(operation.status(update.batchId)!.metadataStaged, 0);
+  assert.equal(f.database.prepare('SELECT attributes_json FROM reveal_catalog_mappings WHERE batch_id=?').get(update.batchId)!.attributes_json, null);
 });
 
 for (const amount of [9358, source.categories.eggs.count]) test(`online generation stages ${amount} replacements and reaches its exact cutoff`, { timeout: 120_000 }, t => {

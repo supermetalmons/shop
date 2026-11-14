@@ -7,6 +7,9 @@ import { computeRevealCatalogDescriptor, type RevealAssetCatalog } from '../../.
 import { revealCatalogAdditions, revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
+import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.ts';
+import { revealCollectionBlocks } from '../src/ethereumRevealCollectionBlocks.ts';
+import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
 const predecessor = getRevealCatalog('111k-v8')!;
 const target = getRevealCatalog('111k-v9')!;
@@ -14,6 +17,7 @@ const operationId = 'empty-mainnet-test-v9';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 
 function makeBatch(before = predecessor, after = target) {
+  registerRevealCollectionBlocksFixture(after, 'future');
   const body: RevealCatalogUpdateBody = { version: 1, nonce: '00000000-0000-4000-8000-000000000009',
     predecessor: { manifest: before, descriptor: computeRevealCatalogDescriptor(before) },
     target: { manifest: after, descriptor: computeRevealCatalogDescriptor(after) },
@@ -77,11 +81,16 @@ function stageOnline(store: EthereumRevealStore, update: RevealCatalogUpdateBatc
     updates.stageMappings(update.batchId, update.mappings.slice(offset, offset + 256));
   }
   updates.sealMappings(update.batchId);
-  const attributesJson = JSON.stringify([{ trait_type: 'collection block', value: 'future' }]);
+  const blocks = revealCollectionBlocks(update.target.descriptor);
   for (;;) {
     const page = updates.metadataPreparationPage(update.batchId, 256);
     if (!page.length) break;
-    updates.metadataStage(update.batchId, page.map(row => ({ ...row, attributesJson, sha256: digest(attributesJson) })));
+    updates.metadataStage(update.batchId, page.map(row => {
+      const block = lookupRevealCollectionBlock(blocks, row.category, row.assetId);
+      assert.ok(block);
+      const attributesJson = JSON.stringify([{ trait_type: 'collection block', value: block }]);
+      return { ...row, attributesJson, sha256: digest(attributesJson) };
+    }));
   }
   while (updates.status(update.batchId)!.generationSeeded < 111111) updates.generationStage(update.batchId);
   updates.seal(update.batchId);

@@ -23,14 +23,22 @@ function ownerOverrideGuard(sql: RevealSql): string {
 }
 
 function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, frozenThroughMs: number): EthereumRevealAttributeBackfillPage {
+  const hasOwners = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_tokens'").toArray().length > 0;
+  const ownerPublication = hasOwners ? `LEFT JOIN owner_hatching_tokens o ON o.token_id=a.token_id
+    LEFT JOIN owner_hatching_publication op ON op.token_id=o.token_id` : '';
+  const publicationStatus = hasOwners
+    ? "CASE WHEN o.token_id IS NULL THEN p.status WHEN op.metadata_revision=o.metadata_revision THEN op.status END" : 'p.status';
+  if (sql.exec(`SELECT a.token_id FROM assignments a LEFT JOIN publication p ON p.token_id=a.token_id
+      ${ownerPublication} WHERE a.token_id IS NOT NULL AND a.frozen_at_ms<=? AND ${publicationStatus} IS NOT 'published' LIMIT 1`, frozenThroughMs).toArray().length) {
+    throw new Error('Attribute audit requires complete metadata publication for every artwork frozen through the cutoff.');
+  }
   const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');
   const jobRevision = hasJobs ? assignmentRevision(sql, 'reveal_enrichment', 'e') : '0';
   type AuditRow = { token_id: string; eligible: number; job_status: NonNullable<EthereumRevealAttributeAuditToken['enrichment']>['status'] | null;
     last_error: string | null; attempts: number; assignment_revision: number; target_sha256: string | null };
   const rows = sql.exec<AuditRow>(`WITH page AS MATERIALIZED (
-      SELECT p.token_id FROM publication p JOIN assignments a ON a.token_id=p.token_id
-      WHERE p.token_id>? AND p.status='published' AND a.frozen_at_ms<=? ORDER BY p.token_id LIMIT ?
+      SELECT token_id FROM assignments WHERE token_id>? AND frozen_at_ms<=? ORDER BY token_id LIMIT ?
     ) SELECT page.token_id,(a.category!='egg' ${ownerOverrideGuard(sql)}) AS eligible,
       ${hasJobs ? `e.status AS job_status,e.last_error,e.attempts,${jobRevision} AS assignment_revision,e.target_sha256`
         : 'NULL AS job_status,NULL AS last_error,0 AS attempts,0 AS assignment_revision,NULL AS target_sha256'}
