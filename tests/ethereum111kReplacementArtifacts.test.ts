@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -94,7 +95,7 @@ test('interrupted per-file deletion resumes from checksum-proven remaining files
   const planned = await f.run();
   const original = fs.unlinkSync;
   let removed = 0;
-  const mocked = t.mock.method(fs, 'unlinkSync', filename => {
+  const mocked = mockMethod(t, fs, 'unlinkSync', filename => {
     if (String(filename).includes('releases/111k-sepolia-v16')) {
       if (++removed === 2) throw new Error('Fixture interrupted deletion');
     }
@@ -303,7 +304,7 @@ test('bound custom private releases are removed without a broad home scan', asyn
   const plan = await f.run();
   assert.equal(plan.targets, 4);
   const unlink = fs.unlinkSync;
-  const interruption = t.mock.method(fs, 'unlinkSync', filename => {
+  const interruption = mockMethod(t, fs, 'unlinkSync', filename => {
     if (String(filename) === oldJournal) throw new Error('Interrupted custom release cleanup');
     return unlink(filename);
   });

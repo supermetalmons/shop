@@ -98,7 +98,8 @@ test('suspended preorder viewing reports failure and keeps selection until prese
     assert.equal(result.current.openImageViewer(item), false);
     result.current.viewItem(item);
   });
-  assert.equal(result.current.revealOverlay, null);
+  const suspendedOverlay = result.current.revealOverlay;
+  assert.equal(suspendedOverlay, null);
   assert.equal(calls.cleared, 0);
   assert.deepEqual(calls.toasts, []);
   rerender(options);

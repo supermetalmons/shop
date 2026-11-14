@@ -33,7 +33,9 @@ test('conversion requires the matching frozen public drop and permanently exclud
   for (const changed of [{ dropId: 'another-drop' }, { dropFamily: 'card_nft_2' as const }, { solanaCluster: 'mainnet-beta' as const },
     { collectionMint: 'another-collection' }, { inventoryManifest: undefined }, { operationsConfig: undefined },
     { figureNamePrefix: ' card' }, { metadataPathFormat: undefined }]) {
-    assert.equal(preorderCardMetadata({ config, publicDrop: { ...publicDrop, ...changed }, id: 1 }), null);
+    const changedDrop = { ...publicDrop };
+    Object.assign(changedDrop, changed);
+    assert.equal(preorderCardMetadata({ config, publicDrop: changedDrop, id: 1 }), null);
   }
   assert.equal(preorderCardMetadata({ config, publicDrop, id: publicDrop.inventoryManifest!.cardIds[0] }), null);
   assert.equal(preorderCardMetadata({ config, publicDrop, id: 1431 }), null);

@@ -88,7 +88,7 @@ test('aborted Draco loads block workers that resume after decoder initialization
     assert.equal(load.dracoLoader, null);
   } finally {
     if (previousWorker) runtime.Worker = previousWorker;
-    else delete runtime.Worker;
+    else Reflect.deleteProperty(runtime, 'Worker');
   }
 });
 
@@ -126,7 +126,7 @@ test('aborted Draco loads reject tasks acquired before callback registration', a
     assert.equal(load.dracoLoader, null);
   } finally {
     if (previousWorker) runtime.Worker = previousWorker;
-    else delete runtime.Worker;
+    else Reflect.deleteProperty(runtime, 'Worker');
   }
 });
 
@@ -184,7 +184,7 @@ test('aborted Draco loads reject active decode tasks before terminating workers'
     assert.equal(load.dracoLoader, null);
   } finally {
     if (previousWorker) runtime.Worker = previousWorker;
-    else delete runtime.Worker;
+    else Reflect.deleteProperty(runtime, 'Worker');
   }
 });
 

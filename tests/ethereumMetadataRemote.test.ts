@@ -657,10 +657,10 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
     }
     headers = { contentType: 'application/octet-stream', cacheControl: 'public, max-age=31536000' };
     writes.clear();
-    const manifest = { version, network: 'sepolia', prefix, destination, objectCount: allFiles.length, totalBytes: allFiles.length,
+    const manifest: Awaited<ReturnType<typeof snapshotMetadata>> = { network: 'sepolia', prefix, destination, objectCount: allFiles.length, totalBytes: allFiles.length,
       archive: 'objects.jsonl.gz', archiveSha256: sha256(archive), createdAt: new Date(0).toISOString(),
-      ...(version === 2 ? { publicationManifestSha256 } : {}) };
-    const manifestBody = `${JSON.stringify(manifest)}\n`;
+      ...(version === 2 ? { version, publicationManifestSha256 } : { version }) };
+    const manifestBody: string = `${JSON.stringify(manifest)}\n`;
     await writeFile(join(directory, 'manifest.json'), manifestBody);
     const [report] = await restoreMetadata(root, 'sepolia', { storage });
     assert.equal(report.complete, true);

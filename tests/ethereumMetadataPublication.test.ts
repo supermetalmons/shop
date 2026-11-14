@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -121,7 +122,7 @@ test('both deployment networks require the complete seven-kind publication befor
         },
         close() {},
       };
-      t.mock.method(globalThis, 'fetch', async input => {
+      mockMethod(t, globalThis, 'fetch', async input => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         assert.equal(url.origin, 'https://cdn.mons.shop');
         const body = await storage.get(url.pathname.slice(1));
@@ -147,6 +148,7 @@ test('both deployment networks require the complete seven-kind publication befor
         query: sql => database.prepare(sql).all(),
         verifyPublication: async (directory, selectedNetwork, options) => {
           assert.equal(selectedNetwork, network);
+          assert.ok(options);
           assert.equal(options.prefix, prefix);
           assert.equal(options.tokenIds, undefined);
           return verified = await verifyMetadata(directory, selectedNetwork, { ...options, storage });
@@ -176,7 +178,7 @@ test('both deployment networks require the complete seven-kind publication befor
       await assert.rejects(verifyMetadata(publication.directory, network, { storage, prefix }), /Remote metadata checksum mismatch: .*117186\.json/);
       corrupted = undefined;
       const registered = await register();
-      assert.equal('deployment' in registered && 'state' in registered.deployment && registered.deployment.state, 'provisioning');
+      assert.equal(registered.deployment && 'state' in registered.deployment && registered.deployment.state, 'provisioning');
       assert.equal(chainChecks, 1);
       assert.equal(verified![0].complete, true);
       assert.equal(verified![0].objectCount, 344984);

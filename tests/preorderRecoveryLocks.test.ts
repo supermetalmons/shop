@@ -81,6 +81,7 @@ for (const previouslyOwned of [false, true]) test(`current ${previouslyOwned ? '
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: f.first.listPreorderRecoveries,
     resolvePreorders: f.first.resolvePreorderInventoryAssets,
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       assert.deepEqual(options.expectedAssetIds, { 'mainnet-beta': [f.address] });
       assert.deepEqual(options.preorderMinContextSlots, { [f.address]: 250 });
       options.onPreorderAssetResolutions?.([{ id: f.address, slot: 250, owned: true, kind: 'dude', visible: true }]);
@@ -157,6 +158,7 @@ test('an inventory request aborted while waiting for its proof lock cannot publi
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: f.first.listPreorderRecoveries,
     resolvePreorders: f.first.resolvePreorderInventoryAssets,
     fetchInventory: async (_buyer, options) => {
+        assert.ok(options);
       options.onPreorderAssetResolutions?.([{ id: f.address, slot: 250, owned: true }]);
       return [{ id: f.address, kind: 'preorder', name: 'Preorder #1', dropId: f.order.preorderId, preorderId: 1 }];
     },

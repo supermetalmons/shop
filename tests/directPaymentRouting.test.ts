@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { testPre111kConfig } from './helpers/pre111k.ts';
 import { registerHooks } from 'node:module';
@@ -33,7 +34,7 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
   const access = t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
-  const confirmation = t.mock.method(pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({
+  const confirmation = mockMethod(t, pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({
     status: 'pending', confirmations: 0, transactionHash, reservationNonce: null,
   }));
   document.body.innerHTML = '<div id="root"></div>';
@@ -74,9 +75,9 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
   let prepareGate: ReturnType<typeof deferred<Pre111kPrepareResponse>> | null = null;
   let prepareCalls = 0;
-  const status = t.mock.method(pre111kApi, 'status', async (network, wallet) => ({ config: config(network), wallet,
+  const status = mockMethod(t, pre111kApi, 'status', async (network, wallet) => ({ config: config(network), wallet,
     totalReserved: 0, reservedRelics: wallet ? 0 : null, remainingRelics: 17, observedBlock: 1, blockHash: `0x${'aa'.repeat(32)}` }));
-  t.mock.method(pre111kApi, 'prepare', async (network, wallet) => { prepareCalls++; return prepareGate ? prepareGate.promise : prepared(network, wallet); });
+  mockMethod(t, pre111kApi, 'prepare', async (network, wallet) => { prepareCalls++; return prepareGate ? prepareGate.promise : prepared(network, wallet); });
   let resolveDestination!: () => void;
   const bridge = { ready: new Promise<void>(resolve => { resolveDestination = resolve; }), loads: 0 };
   Object.defineProperty(globalThis, '__directPaymentRoutingTest', { configurable: true, value: bridge });

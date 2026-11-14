@@ -133,7 +133,7 @@ test('converted preorder recovery follows devnet visibility and ignores stale ca
     seenKinds.push(queries.inventory.map(item => item.kind));
     return queries;
   }, { initialProps: false, wrapper });
-  assert.deepEqual(result.current.inventory, []);
+  assert.equal(result.current.inventory.length, 0);
   assert.equal(requests.length, 0);
   rerender(true);
   await waitFor(() => assert.equal(result.current.inventory[0]?.kind, 'dude'));
@@ -141,7 +141,7 @@ test('converted preorder recovery follows devnet visibility and ignores stale ca
   await waitFor(() => assert.equal(result.current.inventory[0]?.kind, 'dude'));
   assert.ok(requests.length >= 2);
   rerender(false);
-  assert.deepEqual(result.current.inventory, []);
+  assert.equal(result.current.inventory.length, 0);
   assert.ok(seenKinds.every(kinds => !kinds.includes('preorder')));
   assert.deepEqual(listPreorderRecoveries(owner)[0].convertedAssetIds, [asset]);
   assert.deepEqual(listPreorderRecoveries(owner)[0].ownedResolvedAssetIds, [asset]);
@@ -299,7 +299,8 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     act(() => result.current.state.replaceSelection(['mi-pack']));
     const panel = render(createElement(ShopSelectionBar, props()));
     assert.equal(panel.queryByRole('button', { name: 'View' }), null);
-    assert.equal(result.current.selection.selectedViewableItem, null);
+    const initialViewableItem = result.current.selection.selectedViewableItem;
+    assert.equal(initialViewableItem, null);
     act(() => result.current.state.replaceSelection(['mi-card']));
     panel.rerender(createElement(ShopSelectionBar, props()));
     fireEvent.click(panel.getByRole('button', { name: 'View' }));
@@ -444,7 +445,7 @@ test('reloading a completed unpack never shows its saved pending tile and clears
   }, { initialProps: { options } });
   assert.deepEqual(result.current.source.localPendingReveals.map(entry => entry.id), [saved.id]);
   assert.deepEqual(loadPendingReveals('wallet-a').map(entry => entry.id), [saved.id]);
-  assert.deepEqual(result.current.view.inventoryItems, []);
+  assert.equal(result.current.view.inventoryItems.length, 0);
 
   rerender({ options: { ...options, pendingOpenBoxesSuccess: true } });
 
@@ -464,7 +465,7 @@ test('a failed pending read preserves saved pack metadata for a later verified r
   const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options } });
   assert.deepEqual(result.current.source.localPendingReveals, [saved]);
   assert.deepEqual(loadPendingReveals('wallet-a'), [saved]);
-  assert.deepEqual(result.current.view.inventoryItems, []);
+  assert.equal(result.current.view.inventoryItems.length, 0);
 
   const pending: PendingOpenBox = {
     dropId: saved.dropId, pendingPda: 'pending', boxAssetId: saved.id, dudeAssetIds: ['left', 'right'],
@@ -493,7 +494,7 @@ test('an opening started in this session keeps its pending tile while the chain 
   rerender({ options: { ...options, owner: 'wallet-b', connectedWallet: 'wallet-b', localAccountWallet: 'wallet-b' } });
   rerender({ options });
 
-  assert.deepEqual(result.current.view.inventoryItems, []);
+  assert.equal(result.current.view.inventoryItems.length, 0);
   assert.deepEqual(loadPendingReveals('wallet-a'), []);
 });
 
@@ -975,7 +976,7 @@ test('a restored disconnected owner retires finalized absence without consuming 
   await act(async () => { response.resolve(Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [assetAddress],
     preorderAssetResolutions: [{ id: assetAddress, slot: 250, owned: false }] })); });
   await waitFor(() => assert.equal(result.current.inventoryFetching, false));
-  assert.deepEqual(result.current.inventory, []);
+  assert.equal(result.current.inventory.length, 0);
   const recovery = listPreorderRecoveries(owner)[0];
   assert.deepEqual(recovery.resolvedAssetIds, [assetAddress]);
   assert.deepEqual(recovery.ownedResolvedAssetIds, []);
@@ -1037,7 +1038,7 @@ test('preorder proofs follow restored owners while ordinary hints require their 
   rerender({ owner: owners[0], isViewerMode: true });
   await act(async () => { await result.current.refetchInventory(); });
   assert.deepEqual(bodies.at(-1), { owner: owners[0] });
-  assert.deepEqual(result.current.inventory, []);
+  assert.equal(result.current.inventory.length, 0);
   connectedKey = null;
   rerender({ owner: owners[1], isViewerMode: false });
   await act(async () => { await result.current.refetchInventory(); });

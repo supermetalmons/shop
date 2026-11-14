@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
@@ -313,7 +314,7 @@ test('Ethereum inventory reads all live and rollback IDs in two parallel bounded
   const rollbackIds = Array.from({ length: 100 }, (_, index) => String(index + 1001));
   const controller = new AbortController();
   const requests: Array<{ url: URL; signal: AbortSignal; resolve: (response: Response) => void }> = [];
-  t.mock.method(globalThis, 'fetch', (input, init) => new Promise<Response>(resolve => {
+  mockMethod(t, globalThis, 'fetch', (input, init) => new Promise<Response>(resolve => {
     requests.push({ url: new URL(String(input)), signal: init!.signal!, resolve });
   }));
   const response = ethereumApi.inventory(config, owner, null, controller.signal,
@@ -342,7 +343,7 @@ test('a relic opening recovers all 111 crates across the inventory request bound
     ...item(String(111112 + index), 'crate'), displayId: index + 1, name: `Crate #${index + 1}`,
   }));
   const requested: string[][] = [];
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     const url = new URL(String(input));
     const ids = url.searchParams.get('expectedTokenIds')!.split(',');
     requested.push(ids);
@@ -357,7 +358,7 @@ test('a relic opening recovers all 111 crates across the inventory request bound
 
 test('Ethereum inventory cursor pages use one request without repeating expected IDs', async t => {
   const requests: URL[] = [];
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     requests.push(new URL(String(input)));
     return Response.json({ items: [item('151')], nextCursor: null, observedBlock: 22 });
   });
@@ -375,7 +376,7 @@ test('Ethereum inventory reads one thousand expected IDs with at most two reques
   const chunks: string[][] = [];
   let active = 0;
   let maximum = 0;
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     const chunk = new URL(String(input)).searchParams.get('expectedTokenIds')!.split(',');
     chunks.push(chunk);
     maximum = Math.max(maximum, ++active);
@@ -395,7 +396,7 @@ test('Ethereum inventory reads one thousand expected IDs with at most two reques
 test('aborting expected-ID inventory stops before another chunk starts', async t => {
   const controller = new AbortController();
   let requests = 0;
-  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+  mockMethod(t, globalThis, 'fetch', async (_input, init) => {
     requests++;
     return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }));
   });
@@ -409,7 +410,7 @@ test('aborting expected-ID inventory stops before another chunk starts', async t
 
 test('Ethereum inventory validates supplemental ownership and rejects excess IDs without truncation', async t => {
   const ids = Array.from({ length: 1001 }, (_, index) => String(index + 1));
-  const fetch = t.mock.method(globalThis, 'fetch', async input => {
+  const fetch = mockMethod(t, globalThis, 'fetch', async input => {
     const expected = new URL(String(input)).searchParams.get('expectedTokenIds')!.split(',');
     return Response.json({ items: [{ ...item(expected[0]), owner: expected[0] === '101' ? other : owner }],
       nextCursor: null, observedBlock: 20 });
@@ -547,7 +548,7 @@ test('relic availability validates scope, lifetime usage and the complete claime
     remainingRelics: 10, claimedMask: (1 << 17) | 1, relicLimit: 0, relicsUsed: 2, remainingAllowance: 0 };
   let value = valid;
   const requests: string[] = [];
-  t.mock.method(globalThis, 'fetch', async input => { requests.push(String(input)); return Response.json(value); });
+  mockMethod(t, globalThis, 'fetch', async input => { requests.push(String(input)); return Response.json(value); });
   assert.deepEqual(await ethereumApi.relics(config, owner), { ...valid, publicRelicsMinted: 0, publicSale: null });
   assert.ok(requests[0].endsWith(`/ethereum/111k/relics?chainId=${config.chainId}&contractAddress=${contract}&owner=${owner}`));
   for (const patch of [
@@ -599,7 +600,7 @@ test('relic metadata requests stay bounded and preserve ID order across out-of-o
   let active = 0;
   let maximum = 0;
   const requested: number[] = [];
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     const url = new URL(String(input));
     assert.equal(url.pathname, '/ethereum/111k/metadata');
     assert.equal(url.searchParams.get('kind'), 'relic');

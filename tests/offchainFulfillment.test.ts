@@ -1492,9 +1492,13 @@ test('createOrGetStripeOffchainDeliveryOrder batches reads for the maximum check
   assert.deepEqual(orderCreate.data.items, metadataIds.map((refId) => ({ kind: 'box', refId, variantKey: 'XL' })));
   assert.equal(orderCreate.data.receiptsMinted, metadataIds.length);
   assert.equal('stripeReceiptClaims' in orderCreate.data, false);
+  assert.ok(orderCreate.data.stripeReceiptClaimsByBoxId);
+  assert.equal(typeof orderCreate.data.stripeReceiptClaimsByBoxId, 'object');
   assert.deepEqual(Object.keys(orderCreate.data.stripeReceiptClaimsByBoxId).sort(), boxKeys);
   assert.equal(markerCreate.data.quantity, metadataIds.length);
   assert.deepEqual(markerCreate.data.metadataIds, metadataIds);
+  assert.ok(markerCreate.data.stripeReceiptClaimCodesByBoxId);
+  assert.equal(typeof markerCreate.data.stripeReceiptClaimCodesByBoxId, 'object');
   assert.deepEqual(Object.keys(markerCreate.data.stripeReceiptClaimCodesByBoxId).sort(), boxKeys);
   assert.equal('stripeReceiptClaims' in markerCreate.data, false);
   assert.equal(checkout?.version, 2);
@@ -1579,7 +1583,8 @@ test('createOrGetStripeOffchainDeliveryOrder retries allocation collisions after
       assert.equal(markers.length, 1);
       assert.equal(claims.length, collisionKind === 'claim_code' ? 3 : 2);
       assert.equal(markers[0].data.deliveryId, result.deliveryId);
-      const allocatedClaims = claims.filter((claim) => claim.path !== collisionKey.path);
+      const collidedPath = collisionKey.path;
+      const allocatedClaims = claims.filter((claim) => claim.path !== collidedPath);
       assert.deepEqual(allocatedClaims.map((claim) => claim.data.boxId).sort(), [16, 17]);
       assert.ok(allocatedClaims.every((claim) => claim.data.deliveryId === result.deliveryId));
       const checkout = await repository.get(checkoutKey);

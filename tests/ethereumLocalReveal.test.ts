@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import type { EthereumRevealDeployment } from '../shared/ethereum/revealDeployment.ts';
 import { d1Database } from '../cloud/workers/api/test/commerceD1Harness.ts';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from '../scripts/shared/ethereum111kLocalReveal.ts';
 
@@ -9,9 +10,9 @@ const contract = `0x${'33'.repeat(20)}`;
 const input = { contractAddress: contract, metadataBaseUri: 'https://cdn.mons.shop/111k/local-reveal-test/', deploymentBlock: 12 };
 
 test('local reveal bindings override remote storage with a separate local bucket and same-worker SQLite object', () => {
-  const config = { durable_objects: { bindings: [{ name: 'ETHEREUM_REVEAL', script_name: 'production', class_name: 'WrongObject' }] },
-    r2_buckets: [{ binding: 'ETHEREUM_REVEAL_METADATA', bucket_name: 'cdn-mons-shop', remote: true }],
-    ...localEthereumRevealBindings() };
+  const remote = { durable_objects: { bindings: [{ name: 'ETHEREUM_REVEAL', script_name: 'production', class_name: 'WrongObject' }] },
+    r2_buckets: [{ binding: 'ETHEREUM_REVEAL_METADATA', bucket_name: 'cdn-mons-shop', remote: true }] };
+  const config = { ...remote, ...localEthereumRevealBindings() };
   assert.deepEqual(config.durable_objects.bindings, [
     { name: 'ETHEREUM_REVEAL', class_name: 'EthereumRevealObject' },
     { name: 'ETHEREUM_REVEAL_VERIFIER', class_name: 'EthereumRevealVerifierObject' },
@@ -52,7 +53,7 @@ test('local initialization registers, completely provisions and activates its im
       ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', OPS_DB: d1Database(db),
       ETHEREUM_REVEAL: { getByName(name: string) {
         assert.equal(name, `31337:${contract}`);
-        return { async initialize(deployment) {
+        return { async initialize(deployment: EthereumRevealDeployment) {
           assert.equal(deployment.state, 'provisioning');
           assert.equal(deployment.chainId, 31337);
           calls++;

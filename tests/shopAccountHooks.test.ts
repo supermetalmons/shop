@@ -28,6 +28,15 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function fixtureState<T extends object>(state: Partial<T>): T {
+  return new Proxy(state, {
+    get(target, property) {
+      assert.ok(Object.hasOwn(target, property), `Unconfigured fixture property: ${String(property)}`);
+      return Reflect.get(target, property);
+    },
+  }) as T;
+}
+
 test('admin viewing uses its own cache and returning to the owner restores the authenticated profile', async () => {
   const admin = [...ADMIN_WALLETS][0];
   assert.ok(admin);
@@ -168,24 +177,34 @@ test('mainnet-only admin-shipper shipment views hide devnet rows from every load
   const orders = ['card_nft_2', 'card_nft_binder_devnet', '111k_devnet'].map((dropId) => ({
     dropId, deliveryId: 7, status: 'ready_to_ship', items: [],
   }));
-  const options = {
-    account: {
+  type Options = Parameters<typeof useShopShipments>[0];
+  const options: Options = {
+    account: fixtureState<Options['account']>({
       canReadOwnProfile: true, isViewerMode: false, canUseAdminViewer: false, mainnetOnlyStaff: true,
       viewedProfile: { wallet: owner }, viewedProfileLoading: false, viewedProfileError: null,
       viewedProfileNextCursor: null, viewedProfileUpdatedAt: 1,
-    },
-    auth: {
+    }),
+    auth: fixtureState<Options['auth']>({
       authSubject: wallet, sessionWallet: wallet, shipments: orders, shipmentsReady: true, shipmentsError: null, loading: false,
       shipmentsNextCursor: null, shipmentsRevision: 1,
-    },
-    stripeRecovery: { profileRecoveryPending: false, anonymousHistory: { orders: [], visible: false } },
-    source: { figureMetadataByKey: {} },
-    view: { inventoryInitialResponseReady: true, receiptItems: [], inventoryEmptyStateVisibility: 'visible' },
-    signIn: { authReady: true, walletIdleReady: true },
+    }),
+    stripeRecovery: fixtureState<Options['stripeRecovery']>({
+      profileRecoveryPending: false,
+      anonymousHistory: {
+        orders: [], visible: false, initialLoading: false, waitingForFulfillment: false,
+        error: null, nextCursor: null, updatedAt: 0,
+      },
+    }),
+    source: fixtureState<Options['source']>({ figureMetadataByKey: {} }),
+    view: fixtureState<Options['view']>({ inventoryInitialResponseReady: true, receiptItems: [], inventoryEmptyStateVisibility: 'visible' }),
+    signIn: fixtureState<Options['signIn']>({ authReady: true, walletIdleReady: true }),
     connectedWallet: wallet,
     getDropContent: resolveDropContent,
-  } as Parameters<typeof useShopShipments>[0];
-  const { result, rerender } = renderHook(useShopShipments, { initialProps: options, wrapper });
+  };
+  const { result, rerender } = renderHook(({ mainnetOnlyStaff }) => useShopShipments({
+    ...options,
+    account: fixtureState<Options['account']>({ ...options.account, mainnetOnlyStaff }),
+  }), { initialProps: { mainnetOnlyStaff: true }, wrapper });
   await act(async () => undefined);
   assert.deepEqual(result.current.deliveryOrders.map((order) => order.dropId), ['card_nft_2']);
   const key = ['shipmentHistory', JSON.stringify([wallet, wallet, 'wallet', owner])];
@@ -202,7 +221,7 @@ test('mainnet-only admin-shipper shipment views hide devnet rows from every load
     });
   });
   await waitFor(() => assert.deepEqual(result.current.deliveryOrders.map((order) => order.dropId), ['card_nft_2', 'mi_note_cards']));
-  rerender({ ...options, account: { ...options.account, mainnetOnlyStaff: false } });
+  rerender({ mainnetOnlyStaff: false });
   assert.equal(result.current.deliveryOrders.length, 5);
 });
 

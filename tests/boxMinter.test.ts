@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -249,7 +250,7 @@ test('two-config drops fetch mint statistics from A and build initial openings w
   const mintData = data(704, 0);
   const operationsData = data(715, 2);
   const connection = new Connection('https://rpc.example.com');
-  const read = t.mock.method(connection, 'getAccountInfo', async (address) => ({
+  const read = mockMethod(t, connection, 'getAccountInfo', async (address) => ({
     data: address.equals(mintPda) ? mintData : operationsData,
     owner: programId, executable: false, lamports: 1, rentEpoch: 0,
   }));
@@ -395,7 +396,7 @@ test('deployment payment routing must exactly match the on-chain route', () => {
     pubkey(99),
     encodeSplitPaymentsConfig(recipients),
   );
-  const paymentRouting: PaymentRoutingConfig = {
+  const paymentRouting = {
     mintProceeds: [
       {
         address: recipients[0].address.toBase58(),
@@ -411,7 +412,7 @@ test('deployment payment routing must exactly match the on-chain route', () => {
       },
     ],
     deliveryPaymentReceiver: pubkey(2).toBase58(),
-  };
+  } satisfies PaymentRoutingConfig;
 
   assert.doesNotThrow(() =>
     assertBoxMinterConfigMatchesDropConfig(decoded, {

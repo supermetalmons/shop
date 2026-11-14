@@ -33,7 +33,7 @@ test('relic preview matching leaves unrelated, malformed, and out-of-range image
     `${root}../1.png`, `${root}%31.png`, `${root}1.png/`, `${root}1.jpg`,
     'https://cdn.lil.org/nft/111k/placeholder.png', 'https://cdn.lil.org/nft/111k/paintings/1.png',
     'https://wip.lil.org/111k/relics/1.webp', 'https://elsewhere.example/relics/1.png']) {
-    assert.equal(relicDisplayMedia(image), undefined, image);
+    assert.equal(relicDisplayMedia(image), undefined, String(image));
   }
 });
 

@@ -75,6 +75,7 @@ test('SBF build and test share an isolated artifact while preserving the source 
   let workspace = '';
   await runSbfChecks(root, (command, args, options) => {
     assert.ok(args.includes('--locked'));
+    assert.ok(options.env);
     assert.equal(options.env.CARGO_TARGET_DIR, join(options.cwd, 'target'));
     if (command === 'anchor') {
       workspace = options.cwd;
@@ -86,6 +87,7 @@ test('SBF build and test share an isolated artifact while preserving the source 
       assert.equal(command, 'cargo');
       assert.equal(options.cwd, workspace);
       assert.ok(args.includes('sbf-tests,mainnet-program-id'));
+      assert.ok(options.env.BOX_MINTER_SBF_PATH);
       assert.deepEqual(readFileSync(options.env.BOX_MINTER_SBF_PATH), programBinary);
       assert.notEqual(options.env.BOX_MINTER_SBF_PATH, join(workspace, 'target/deploy/box_minter.so'));
       assert.equal(readFileSync(join(workspace, 'Cargo.lock'), 'utf8'), 'pinned Rust dependencies');

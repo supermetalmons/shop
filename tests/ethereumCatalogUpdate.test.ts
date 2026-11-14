@@ -52,8 +52,7 @@ test('partial, absent and sparse alternatives preserve full variant output and r
   assert.deepEqual(partial.categories.paintings.variants!.alt.assetIds, [1]);
   const sparse = catalog({ ...nextSource(), 'paintings/alt/3.webp': [4, 3] }, '111k-v6');
   assert.deepEqual(sparse.categories.paintings.variants!.alt.assetIds, [1, 3]);
-  const absent = nextSource();
-  delete absent['paintings/alt/1.webp'];
+  const { 'paintings/alt/1.webp': _alt, ...absent } = nextSource();
   assert.equal(catalog(absent, '111k-v6').categories.paintings.variants, undefined);
   assert.throws(() => catalog({ ...sample(), 'paintings/alt/2.webp': [1, 1] }, '111k-v6'), /alternate IDs/);
   const malformed = structuredClone(sparse);
@@ -149,8 +148,7 @@ test('updates reject deletions, old media changes and nonincreasing catalog vers
   assert.throws(() => buildRevealCatalogUpdateBatch(old, catalog(sample(), '111k-v6')), /egg cutoff/);
   assert.throws(() => buildRevealCatalogUpdateBatch(old, catalog(nextSource(), '111k-v5')), /identity/);
   assert.throws(() => buildRevealCatalogUpdateBatch(old, catalog({ ...nextSource(), 'paintings/1.png': [2, 1] }, '111k-v6')), /media changed/);
-  const removedAlt = nextSource();
-  delete removedAlt['paintings/alt/1.webp'];
+  const { 'paintings/alt/1.webp': _alt, ...removedAlt } = nextSource();
   assert.throws(() => buildRevealCatalogUpdateBatch(old, catalog(removedAlt, '111k-v6')), /alternate changed/);
 });
 

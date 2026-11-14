@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
@@ -91,13 +92,13 @@ beforeEach(context => {
   server = snapshot(); submissions = []; sends = [];
   t.mock.method(checkoutApi, 'status', async () => server);
   t.mock.method(checkoutApi, 'refresh', async () => server);
-  t.mock.method(ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'aaaaaaaaaaaaaaaaaaaa' } }));
+  mockMethod(t, ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'aaaaaaaaaaaaaaaaaaaa' } }));
   t.mock.method(checkoutApi, 'prepare', async () => {
     const prepared = prepare();
     server = snapshot({ status: 'prepared', wallet: owner, orderId: 42, quoteExpiresAtMs: prepared.expiresAtMs });
     return prepared;
   });
-  t.mock.method(checkoutApi, 'submission', async body => {
+  mockMethod(t, checkoutApi, 'submission', async body => {
     submissions.push(body);
     if (body.action === 'start') {
       assert.equal(body.quoteDeadline, Math.floor(server.quoteExpiresAtMs! / 1000));
@@ -190,7 +191,7 @@ for (const failure of ['initial', 'final network check'] as const) test(`a reser
   const currentWallet = wallet();
   const request = currentWallet.provider!.request;
   let finalNetworkReads = 0;
-  t.mock.method(currentWallet.provider!, 'request', async args => {
+  mockMethod(t, currentWallet.provider!, 'request', async args => {
     if (failure === 'final network check' && args.method === 'eth_chainId' && server.status === 'submitting' && ++finalNetworkReads === 2) {
       for (const key of Object.keys(window.localStorage)) if (key.startsWith(prefix)) window.localStorage.removeItem(key);
       failing = true;
@@ -245,7 +246,7 @@ test('a later rejection in another tab releases an older acknowledgement after a
   };
   t.mock.method(checkoutApi, 'status', read);
   t.mock.method(checkoutApi, 'refresh', read);
-  t.mock.method(checkoutApi, 'submission', async (body, session) => {
+  mockMethod(t, checkoutApi, 'submission', async (body, session) => {
     const response = await submission(body, session);
     if (body.action === 'reject' && submissions.filter(row => row.action === 'reject').length === 1) {
       readUnavailable = true;
@@ -287,7 +288,7 @@ test('a later rejection in another tab releases an older acknowledgement after a
 test('a rejection report that never commits keeps the server submission blocked', async t => {
   authenticate();
   const submission = checkoutApi.submission;
-  t.mock.method(checkoutApi, 'submission', (body, session) => {
+  mockMethod(t, checkoutApi, 'submission', (body, session) => {
     if (body.action === 'reject') throw new Error('Rejection report was not delivered');
     return submission(body, session);
   });
@@ -331,7 +332,7 @@ test('an existing server submission never opens another wallet transaction', asy
   authenticate();
   const query = client();
   const currentWallet = wallet();
-  t.mock.method(checkoutApi, 'submission', async body => {
+  mockMethod(t, checkoutApi, 'submission', async body => {
     submissions.push(body);
     server = snapshot({ status: 'submitting', wallet: owner, orderId: 42,
       attempt: { attemptId: body.attemptId, status: 'started', transactionHash: null } });
@@ -392,7 +393,7 @@ test('switching wallets during address saving discards stale work before prepari
   let finish!: () => void;
   const saved = new Promise<void>(resolve => { finish = resolve; });
   let saving = false;
-  t.mock.method(ethereumApi, 'saveAddress', async body => { saving = true; await saved; return { address: { ...body, id: 'aaaaaaaaaaaaaaaaaaaa' } }; });
+  mockMethod(t, ethereumApi, 'saveAddress', async body => { saving = true; await saved; return { address: { ...body, id: 'aaaaaaaaaaaaaaaaaaaa' } }; });
   const prepared = t.mock.method(checkoutApi, 'prepare', async () => prepare());
   const query = client();
   const view = renderHook(({ currentWallet }) => useEthereumCheckout({ checkoutId, search: '' }, currentWallet), {
@@ -413,7 +414,7 @@ test('switching wallets during address saving discards stale work before prepari
 test('explicit wallet rejection releases its marker and resumes the saved address without saving again', async t => {
   authenticate();
   let attempts = 0;
-  const saveAddress = t.mock.method(ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'aaaaaaaaaaaaaaaaaaaa' } }));
+  const saveAddress = mockMethod(t, ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'aaaaaaaaaaaaaaaaaaaa' } }));
   const currentWallet = wallet(owner, async () => {
     if (++attempts === 1) throw Object.assign(new Error('Rejected'), { code: 4001 });
     return transactionHash;
@@ -443,7 +444,7 @@ test('a fresh rejected retry clears older reservations retained during storage f
   });
   const submission = checkoutApi.submission;
   let firstAttempt: string | null = null;
-  t.mock.method(checkoutApi, 'submission', async (body, session) => {
+  mockMethod(t, checkoutApi, 'submission', async (body, session) => {
     if (body.action === 'reject' && firstAttempt === null) {
       firstAttempt = body.attemptId;
       failing = true;
@@ -488,7 +489,7 @@ test('a quote that expires during the final wallet network check is rejected bef
   authenticate();
   const currentWallet = wallet();
   const request = currentWallet.provider!.request;
-  t.mock.method(currentWallet.provider!, 'request', async args => {
+  mockMethod(t, currentWallet.provider!, 'request', async args => {
     const started = submissions.find(value => value.action === 'start');
     if (args.method === 'eth_chainId' && started?.action === 'start') now = started.quoteDeadline * 1000;
     return request(args);

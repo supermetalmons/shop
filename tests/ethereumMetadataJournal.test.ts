@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -44,7 +45,7 @@ test('failed initial journal writes leave no canonical header and perform no PUT
   const { directory, args, header, publish, puts } = await fixture(t);
   const originalOpen = fs.open;
   const failure = Object.assign(new Error('interrupted header write'), { code: 'ENOSPC' });
-  t.mock.method(fs, 'open', async (path, flags, mode) => {
+  mockMethod(t, fs, 'open', async (path, flags, mode) => {
     const handle = await originalOpen(path, flags, mode);
     if (String(path).startsWith(`${args.journal}.`)) {
       t.mock.method(handle, 'writeFile', async () => {
@@ -122,7 +123,7 @@ test('atomic journal commit never replaces a canonical journal created during in
   const { directory, args, header, publish, puts } = await fixture(t);
   const originalLink = fs.link;
   const content = `${JSON.stringify({ ...JSON.parse(header), sourceHash: sha256('concurrent source') })}\n`;
-  t.mock.method(fs, 'link', async (existing, path) => {
+  mockMethod(t, fs, 'link', async (existing, path) => {
     await writeFile(path, content, { flag: 'wx' });
     return originalLink(existing, path);
   });
@@ -141,7 +142,7 @@ test('incomplete journal tails are truncated by byte length without rewriting th
   await writeFile(args.journal, `${complete}{"file":"2.json"`);
   const originalTruncate = fs.truncate;
   const truncated: Array<{ path: string; length: number | undefined }> = [];
-  t.mock.method(fs, 'truncate', async (path, length) => {
+  mockMethod(t, fs, 'truncate', async (path, length) => {
     truncated.push({ path: String(path), length });
     return originalTruncate(path, length);
   });
@@ -165,12 +166,12 @@ test('completion records remain whole when a single write would append only part
     inventory.set(key.slice('111k-sepolia/'.length), { key, bytes: body.length, md5: metadataMd5(body) });
   } };
   const originalOpen = fs.open;
-  t.mock.method(fs, 'open', async (path, flags, mode) => {
+  mockMethod(t, fs, 'open', async (path, flags, mode) => {
     const handle = await originalOpen(path, flags, mode);
     if (path === args.journal && flags === 'a') {
       const originalWrite = handle.write.bind(handle);
       let firstWrite = true;
-      t.mock.method(handle, 'write', async data => {
+      mockMethod(t, handle, 'write', async data => {
         const record = String(data);
         if (!firstWrite) return originalWrite(record);
         firstWrite = false;

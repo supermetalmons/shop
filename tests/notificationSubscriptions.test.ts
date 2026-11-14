@@ -18,7 +18,7 @@ test('every storefront notification family has its own configured Resend segment
   ].map(drop => drop.dropFamily).filter(family => family !== 'default'));
   const assignedIds = new Set<string>();
   for (const family of families) {
-    const id = segments[family];
+    const id: string = segments[family];
     assert.match(id ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
       `${family} must have a Resend segment UUID`);
     assert.equal(assignedIds.has(id), false, `${family} must have a distinct Resend segment`);

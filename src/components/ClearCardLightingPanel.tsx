@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import './ClearCardLightingPanel.css';
 import {
   CLEAR_CARD_LIGHTING_PRESETS,
   DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,

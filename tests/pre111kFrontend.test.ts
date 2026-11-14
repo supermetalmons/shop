@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { testPre111kConfig } from './helpers/pre111k.ts';
 import test from 'node:test';
@@ -76,7 +77,7 @@ test('reservation checks bind wallet, nonce, exact price, network and calldata b
 });
 
 test('access verification posts only the code with CSRF and no-cache request conventions', async t => {
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
+  mockMethod(t, globalThis, 'fetch', async (url, options) => {
     assert.match(String(url), /\/ethereum\/pre111k\/access$/);
     assert.equal(options?.method, 'POST');
     assert.equal(options?.cache, 'no-store');
@@ -109,7 +110,7 @@ test('access rejection and service outages retain distinct structured API errors
 
 test('each reservation preparation includes the saved code alongside its network and wallet', async t => {
   let expectedNetwork: Pre111kNetwork = 'mainnet';
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
+  mockMethod(t, globalThis, 'fetch', async (url, options) => {
     assert.match(String(url), /\/ethereum\/pre111k\/prepare$/);
     assert.deepEqual(JSON.parse(String(options?.body)), { network: expectedNetwork, wallet, code: 'TESTPASS' });
     return Response.json(prepared(expectedNetwork));
@@ -125,7 +126,7 @@ test('each reservation preparation includes the saved code alongside its network
 test('transaction confirmation posts its network, wallet and hash and accepts pending or terminal results', async t => {
   let expectedNetwork: Pre111kNetwork = 'mainnet';
   let response = { status: 'pending', confirmations: 0, transactionHash: hash, reservationNonce: null as number | null };
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
+  mockMethod(t, globalThis, 'fetch', async (url, options) => {
     assert.match(String(url), /\/ethereum\/pre111k\/confirm$/);
     assert.equal(options?.method, 'POST');
     assert.equal(options?.cache, 'no-store');

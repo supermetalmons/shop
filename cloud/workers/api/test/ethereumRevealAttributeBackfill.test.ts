@@ -1,9 +1,10 @@
+import { REVEAL_ENRICHMENT_SCHEMA } from '../src/ethereumRevealSchema/enrichment.ts';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { backfillRevealAttributePage } from '../src/ethereumRevealAttributeBackfill.ts';
-import { acknowledgedEnrichmentHash, EthereumRevealEnrichmentStore, REVEAL_ENRICHMENT_SCHEMA } from '../src/ethereumRevealEnrichmentStore.ts';
+import { acknowledgedEnrichmentHash, EthereumRevealEnrichmentStore } from '../src/ethereumRevealEnrichmentStore.ts';
 import { parseRevealAttributeBackfillRequest } from '../src/ethereumRevealMaintenanceSupport.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 import { buildNewRevealedArtwork, buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';

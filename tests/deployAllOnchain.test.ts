@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -940,7 +941,7 @@ test('deployment cleanup keeps the exit fallback attached to retry a failed lock
 test('deployment cleanup releases the registry lock and reports a failed isolated-build cleanup before retrying', t => {
   const fakeProcess = makeDeploymentCleanupRuntime();
   const warnings: string[] = [];
-  t.mock.method(console, 'warn', message => { warnings.push(String(message)); });
+  mockMethod(t, console, 'warn', message => { warnings.push(String(message)); });
   let cleanupCalls = 0;
   let releaseCalls = 0;
   const cleanup = registerDeploymentCleanup({

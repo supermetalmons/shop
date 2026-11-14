@@ -650,7 +650,7 @@ test('Poncho viewer suspends card controls and dismissal while preserving closin
 });
 
 test('Clear Card lighting uses native backdrop blur instead of Firefox live capture', () => {
-  const styles = source('../src/clearCardWip.css');
+  const styles = source('../src/components/ClearCardLightingPanel.css');
   const globalStyles = source('../src/styles.css');
 
   assert.match(

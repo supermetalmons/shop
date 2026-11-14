@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
@@ -83,7 +84,7 @@ function transactionResponse(status: EthereumRevealTransactionResponse['status']
 }
 function mockPending(t: TestContext) {
   const transaction = t.mock.method(ethereumRevealApi, 'transaction', async () => transactionResponse());
-  const tokens = t.mock.method(ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ ...responseScope,
+  const tokens = mockMethod(t, ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ ...responseScope,
     artworks: [], unresolved: tokenIds.map(tokenId => ({ tokenId, status: 'recovering' as const })), retryAfterMs: 2000 }));
   return { transaction, tokens };
 }
@@ -106,7 +107,7 @@ function harness(initial: Partial<{ config: typeof config; scope: string | null;
 
 test('artwork requests carry deployment identity and CSRF without requesting a wallet signature', async t => {
   const requests: Array<{ path: string; body: unknown }> = [];
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  mockMethod(t, globalThis, 'fetch', async (input, init) => {
     const path = new URL(String(input)).pathname;
     const body = JSON.parse(String(init?.body));
     requests.push({ path, body });
@@ -127,7 +128,7 @@ test('artwork requests carry deployment identity and CSRF without requesting a w
 
 test('both reveal clients preserve collection blocks and accept legacy or unknown values', async t => {
   let asset: EthereumRevealedArtwork = artwork();
-  t.mock.method(globalThis, 'fetch', async input => Response.json(String(input).endsWith('/transaction')
+  mockMethod(t, globalThis, 'fetch', async input => Response.json(String(input).endsWith('/transaction')
     ? transactionResponse('revealed', [asset]) : { ...responseScope, artworks: [asset], unresolved: [], retryAfterMs: 0 }));
   for (const fields of [{}, { collectionBlock: null }, { collectionBlock: ' Poets, Gamblers, Fools ' }]) {
     asset = { ...artwork(), ...fields };
@@ -138,7 +139,7 @@ test('both reveal clients preserve collection blocks and accept legacy or unknow
 
 test('both reveal clients reject malformed collection blocks', async t => {
   let collectionBlock: unknown;
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     const artworks = [{ ...artwork(), collectionBlock }];
     return Response.json(String(input).endsWith('/transaction')
       ? { ...transactionResponse('revealed'), artworks } : { ...responseScope, artworks, unresolved: [], retryAfterMs: 0 });
@@ -292,7 +293,7 @@ test('a generation adopted from another tab cancels the earlier in-flight reques
   mockPending(t);
   const late = Promise.withResolvers<EthereumRevealTransactionResponse>();
   const signals: AbortSignal[] = [];
-  const requests = t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
+  const requests = mockMethod(t, ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
     signals.push(signal!);
     return signals.length === 1 ? late.promise : Promise.resolve(transactionResponse());
   });
@@ -317,7 +318,7 @@ test('explicit cancellation discards a locally retained successful generation', 
   mockPending(t);
   const late = Promise.withResolvers<EthereumRevealTransactionResponse>();
   const signals: AbortSignal[] = [];
-  const requests = t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
+  const requests = mockMethod(t, ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
     signals.push(signal!);
     return late.promise;
   });
@@ -344,7 +345,7 @@ test('a new generation invalidates the earlier locally retained response', async
   const older = Promise.withResolvers<EthereumRevealTransactionResponse>();
   const newer = Promise.withResolvers<EthereumRevealTransactionResponse>();
   const signals: AbortSignal[] = [];
-  const requests = t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
+  const requests = mockMethod(t, ethereumRevealApi, 'transaction', (_config, _hash, signal) => {
     signals.push(signal!);
     return signals.length === 1 ? older.promise : newer.promise;
   });
@@ -503,7 +504,7 @@ test('a legacy reveal can finish while its pending-intent restoration is waiting
 
 test('tokens heal without a transaction hash and revealed media stays fixed after stale responses', async t => {
   const mocks = mockPending(t);
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids) => ({ ...responseScope,
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, ids) => ({ ...responseScope,
     artworks: ids.map(id => artwork(id, 'egg')), unresolved: [], retryAfterMs: 2000 }));
   const original = item();
   const view = harness({ items: [original, { ...item('2000001'), kind: 'crate_receipt' }] });
@@ -518,7 +519,7 @@ test('token healing covers every batch with at most two concurrent requests', as
   mockPending(t);
   let running = 0, maximum = 0;
   const seen: string[] = [];
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids) => {
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, ids) => {
     running++;
     maximum = Math.max(maximum, running);
     assert.ok(ids.length <= ETHEREUM_REVEAL_MAX_TOKEN_IDS);
@@ -540,7 +541,7 @@ for (const change of ['remount', 'gain', 'lose'] as const) {
     let now = Date.now(), ready = false;
     const deadline = now + (retryAfterMs ?? 60_000);
     t.mock.method(Date, 'now', () => now);
-    const calls = t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids) => {
+    const calls = mockMethod(t, ethereumRevealApi, 'tokens', async (_config, ids) => {
       if (!ready) throw new EthereumRevealApiError(429, 'Try again later.', retryAfterMs);
       return { ...responseScope, artworks: ids.map(id => artwork(id)), unresolved: [], retryAfterMs: 0 };
     });
@@ -578,7 +579,7 @@ test('a token rate limit immediately blocks other hooks and later batches while 
   t.mock.method(Date, 'now', () => now);
   const sibling = Promise.withResolvers<void>();
   const requests: string[][] = [];
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids) => {
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, ids) => {
     requests.push([...ids]);
     if (!ready && ids[0] === '1') throw new EthereumRevealApiError(429, 'Try again later.', 60_000);
     if (!ready && ids[0] === '501') await sibling.promise;
@@ -613,7 +614,7 @@ test('a sibling settling after the token cooldown expires cannot restart its ful
   t.mock.method(Date, 'now', () => now);
   const sibling = Promise.withResolvers<void>();
   const requests: string[][] = [];
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids) => {
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, ids) => {
     requests.push([...ids]);
     if (!ready && ids[0] === '1') throw new EthereumRevealApiError(429, 'Try again later.', 60_000);
     if (!ready) await sibling.promise;
@@ -690,7 +691,7 @@ test('hiding the page preserves an in-flight reveal and processes its confirmed 
   mockPending(t);
   const response = Promise.withResolvers<EthereumRevealTransactionResponse>();
   let signal: AbortSignal | undefined;
-  const calls = t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, requestSignal) => {
+  const calls = mockMethod(t, ethereumRevealApi, 'transaction', (_config, _hash, requestSignal) => {
     signal = requestSignal;
     return response.promise;
   });
@@ -789,7 +790,7 @@ test('pending saved hashes do not starve later reveal jobs', async t => {
   const hashes = Array.from({ length: 5 }, (_, index) => `0x${String(index + 1).padStart(64, '0')}`);
   const seen: string[] = [];
   hashes.forEach((transactionHash, index) => rememberEthereumRevealJob(scope, transactionHash, submissionTime + index + 1));
-  t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash) => {
+  mockMethod(t, ethereumRevealApi, 'transaction', async (_config, transactionHash) => {
     seen.push(transactionHash);
     return transactionHash === hashes[4] ? transactionResponse('revealed', [artwork()]) : transactionResponse();
   });
@@ -808,7 +809,7 @@ test('saved hash scheduling keeps in-flight work and prioritizes the current unp
   const seen: string[] = [];
   let running = 0, maximum = 0;
   hashes.forEach((transactionHash, index) => rememberEthereumRevealJob(scope, transactionHash, submissionTime + index + 1));
-  t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash, signal) => {
+  mockMethod(t, ethereumRevealApi, 'transaction', async (_config, transactionHash, signal) => {
     seen.push(transactionHash);
     signals.push(signal!);
     running++;
@@ -855,7 +856,7 @@ test('successful healing batches render immediately and remain cached when anoth
   let fail = true, running = 0, maximum = 0;
   let failedSignal: AbortSignal | undefined;
   const requests: string[][] = [];
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids, signal) => {
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, ids, signal) => {
     requests.push([...ids]);
     running++;
     maximum = Math.max(maximum, running);
@@ -959,7 +960,7 @@ test('a catalog revision replaces a cached egg and ignores a delayed old reveal'
   let finish!: (value: EthereumRevealTransactionResponse) => void;
   let started = false;
   let pendingSignal: AbortSignal | undefined;
-  const request = t.mock.method(ethereumRevealApi, 'transaction', async (requested, _hash, signal) => {
+  const request = mockMethod(t, ethereumRevealApi, 'transaction', async (requested, _hash, signal) => {
     if (requested.catalogRevision === 1) return { ...transactionResponse('revealed', [artwork()]), catalogRevision: 1 };
     started = true;
     pendingSignal = signal;
@@ -982,7 +983,7 @@ test('a catalog revision replaces a cached egg and ignores a delayed old reveal'
 
 test('token batches accept newer artwork while refreshing the catalog signal', async t => {
   const items = Array.from({ length: ETHEREUM_REVEAL_MAX_TOKEN_IDS + 1 }, (_, index) => item(String(index + 1)));
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, ids) => ({ ...responseScope,
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, ids) => ({ ...responseScope,
     catalogRevision: ids.includes('1') ? 0 : 1,
     artworks: ids.map(id => ({ ...artwork(id), metadataRevision: ids.includes('1') ? 0 : 2 })), unresolved: [], retryAfterMs: 0 }));
   const view = harness({ items });

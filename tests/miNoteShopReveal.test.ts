@@ -60,8 +60,8 @@ function fixture(dropId: string) {
     connectedWallet: owner.toBase58(), publicKey: owner, owner: owner.toBase58(), localAccountWallet: owner.toBase58(),
     isViewerMode: false, suspended: false, walletModalVisible: false, receiptTransferOpen: false,
     routeDrop: getFrontendDrop(dropId)!, inventory: [pack], pendingOpenBoxes: [], figureMetadataByKey: {},
-    getDropConfig: getFrontendDrop, getDropContent: resolveDropContent,
-    requireKnownDropConfig: id => { const drop = getFrontendDrop(id); assert.ok(drop); return drop; },
+    getDropConfig: id => id ? getFrontendDrop(id) : undefined, getDropContent: resolveDropContent,
+    requireKnownDropConfig: id => { assert.ok(id); const drop = getFrontendDrop(id); assert.ok(drop); return drop; },
     getDropConnection: () => new Connection('https://rpc.invalid'),
     boxLabelForDropId: () => 'pack', figureLabelForDropId: () => 'cards', figureReferenceForDropId: (_id, ref) => `Card ${ref}`,
     openGerundForDropId: () => 'Opening', canOpenBoxesForDropId: () => true,
@@ -142,7 +142,9 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     await act(async () => { await result.current.openPendingReveal({ ...f.pack, boxId: undefined }, new DOMRect(0, 0, 100, 140)); });
     await waitFor(() => assert.equal(result.current.revealOverlay?.packMediaId, 9));
     assert.equal(read.mock.callCount(), 1);
-    assert.equal(read.mock.calls[0].arguments[0].toBase58(), assetId);
+    const [requestedAsset] = read.mock.calls[0].arguments;
+    assert.ok(requestedAsset);
+    assert.equal(requestedAsset.toBase58(), assetId);
     assert.equal(result.current.revealOverlay?.image, 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/9.webp');
     await act(async () => { await result.current.handlePonchoOverlayRequestReveal(); });
     assert.deepEqual(revealCalls, [{ owner: owner.toBase58(), assetId, dropId }]);

@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { createElement } from 'react';
@@ -66,7 +67,7 @@ test('an unknown drop renders no order or actions', () => {
 
 test('Ethereum relic fulfillment shows the matching relic without contents or code actions', async (t) => {
   const urls: string[] = [];
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     const url = String(input);
     urls.push(url);
     return Response.json({ image: 'https://cdn.lil.org/nft/111k/placeholder.png' });

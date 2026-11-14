@@ -130,7 +130,7 @@ test('discount persistence removes stale versions only within the same wallet sc
 
 test('post-action inventory polling never cancels an in-flight refresh', () => {
   const calls: Array<{ cancelRefetch: false }> = [];
-  let scheduled: (() => void) | null = null;
+  const interval: { run?: () => void } = {};
   let delay = 0;
   let cleared: unknown;
   const stop = startPostActionInventoryPolling(
@@ -139,7 +139,7 @@ test('post-action inventory polling never cancels an in-flight refresh', () => {
     },
     {
       setInterval: (run, delayMs) => {
-        scheduled = run;
+        interval.run = run;
         delay = delayMs;
         return 'poll';
       },
@@ -151,13 +151,15 @@ test('post-action inventory polling never cancels an in-flight refresh', () => {
 
   assert.deepEqual(calls, [{ cancelRefetch: false }]);
   assert.equal(delay, POST_ACTION_INVENTORY_POLL_INTERVAL_MS);
-  scheduled?.();
+  assert.ok(interval.run);
+  interval.run();
   assert.deepEqual(calls, [
     { cancelRefetch: false },
     { cancelRefetch: false },
   ]);
   stop();
-  scheduled?.();
+  assert.ok(interval.run);
+  interval.run();
   assert.equal(calls.length, 2);
   assert.equal(cleared, 'poll');
 });

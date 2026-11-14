@@ -8,7 +8,7 @@ import {
 import { listRecentPreorderInventoryAssets, PreorderStore } from '../cloud/workers/api/src/preorderStore.ts';
 import { getPreorderConfig, PREORDER_CONFIGS } from '../shared/preorders.ts';
 import {
-  createCommerceD1Harness, seedCommerceDocuments, seedPackStatusOutbox,
+  createCommerceD1Harness, seedCommerceDocuments, seedPackStatusOutbox, type CommerceDocumentSeed,
 } from '../cloud/workers/api/test/commerceD1Harness.ts';
 import { readCommerceMigrations, replayCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
 import { checkCurrentCommerceSchema } from '../scripts/shared/currentCommerceSchema.ts';
@@ -68,7 +68,7 @@ test('obsolete index cleanup preserves populated commerce and indexed reconcilia
   const database = harness.database;
   context.after(() => database.close());
   const owner = '123456789ABCDEFG123456789ABCDEFG';
-  seedCommerceDocuments(harness, Array.from({ length: 30 }, (_, index) => [
+  seedCommerceDocuments(harness, Array.from({ length: 30 }, (_, index): CommerceDocumentSeed[] => [
     { key: commerceKeys.deliveryOrder('drop', String(index + 1)), data: { owner, status: 'ready_to_ship', source: 'wallet' } },
     {
       key: commerceKeys.stripeCheckout('drop', `cs_live_${index}`),

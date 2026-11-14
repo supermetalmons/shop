@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
+import test, { after, afterEach, beforeEach } from 'node:test';
 import { createElement, useLayoutEffect } from 'react';
 import type { EthereumInventoryItem } from '../shared/ethereum/protocol.ts';
 import type { CrateSceneProps } from '../src/ethereum/crate/CrateScene.tsx';
@@ -70,7 +70,8 @@ const { useEthereumInventoryPresentation } = await import('../src/ethereum/useEt
 const { EthereumInventoryOverlays } = await import('../src/ethereum/EthereumInventoryOverlays.tsx');
 
 const sources: HTMLCanvasElement[] = [];
-beforeEach((t: TestContext) => {
+beforeEach(t => {
+  assert.ok('mock' in t);
   sceneProps = null;
   warehouseProps = null;
   warehousePreparations = 0;
@@ -229,7 +230,7 @@ test('rejected warehouse submission resets queued hits before a fresh attempt', 
   await waitFor(() => assert.equal(warehouseProps?.hits.length, 3));
   await act(async () => first.resolve(null));
   assert.equal(view.presentation.overlay?.attempted, false);
-  assert.deepEqual(warehouseProps!.hits, []);
+  assert.equal(warehouseProps!.hits.length, 0);
   act(() => { fireEvent.click(button); });
   await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
   assert.deepEqual(warehouseProps!.hits.map(hit => hit.id), [1]);
@@ -248,7 +249,8 @@ test('rejected crate submission keeps retry hit IDs fresh for the retained scene
   assert.ok(scene);
   await act(async () => first.resolve(null));
   assert.equal(view.presentation.overlay?.attempted, false);
-  assert.equal(sceneProps!.hit, null);
+  const rejectedHit = sceneProps!.hit;
+  assert.equal(rejectedHit, null);
   fireEvent.click(button);
   await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
   assert.equal(document.querySelector('[data-crate-scene]'), scene);

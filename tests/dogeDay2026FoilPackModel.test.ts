@@ -473,7 +473,7 @@ for (const count of [1, 2, 3] as const) {
       previousY = front.matrixWorld.elements[13];
       if (bounds.max.y < bottom) cleared = true;
       if (!cleared) {
-        const basis = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 14].map(index => front.matrixWorld.elements[index]);
+        const basis: number[] = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 14].map(index => front.matrixWorld.elements[index]);
         if (initialBasis.length === 0) initialBasis.push(...basis);
         assert.deepEqual(basis, initialBasis, `Sleeve rotates, shrinks, or moves sideways before clearing at ${elapsed} ms`);
         assert.equal(front.material.transparent, false);

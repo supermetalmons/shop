@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
+import test, { after, afterEach, beforeEach } from 'node:test';
 import { createElement } from 'react';
 import type { createDogeFoilScene } from '../src/dogeDay2026/foilPackScene.ts';
 import { getDogeDay2026StarterCard } from '../src/dogeDay2026/starterCards.ts';
@@ -80,7 +80,8 @@ const { default: DogeDay2026WipApp } = await import('../src/dogeDay2026/DogeDay2
 const { DogeDay2026RevealOverlay } = await import('../src/dogeDay2026/DogeDay2026RevealOverlay.tsx');
 imports.deregister();
 
-beforeEach((t: TestContext) => {
+beforeEach(t => {
+  assert.ok('mock' in t);
   scenes = [];
   sceneConstructionError = null;
   development = false;

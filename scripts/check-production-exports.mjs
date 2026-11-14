@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import productionExportBaseline from './lib/productionExportsBaseline.mjs';
+import { productionExportReasons, updateProductionExportExceptions, validateProductionExportExceptions } from './lib/productionExportExceptions.ts';
 
 const issueKinds = [
   'exports',
@@ -95,16 +96,21 @@ function formatBaseline(tuples) {
 }
 
 const actual = runKnip();
+const readEvidence = path => readFileSync(resolve(projectDirectory, path), 'utf8');
 if (process.argv.includes('--update')) {
-  writeFileSync(baselinePath, formatBaseline(actual));
-  console.log(`Updated production export baseline with ${actual.length} issues.`);
+  const retained = updateProductionExportExceptions(actual, productionExportBaseline, readEvidence);
+  writeFileSync(baselinePath, formatBaseline(retained));
+  console.log(`Retained ${retained.length} reviewed production export exceptions; removed ${productionExportBaseline.length - retained.length} resolved entries.`);
   process.exit(0);
 }
 
-const added = difference(actual, productionExportBaseline);
-const removed = difference(productionExportBaseline, actual);
+const reviewed = validateProductionExportExceptions(productionExportBaseline, readEvidence);
+const expected = reviewed.map(entry => entry.slice(0, 3));
+const added = difference(actual, expected);
+const removed = difference(expected, actual);
 if (added.length === 0 && removed.length === 0) {
-  console.log(`Production export baseline matched ${actual.length} issues.`);
+  const counts = Object.keys(productionExportReasons).map(reason => `${reviewed.filter(entry => entry[3] === reason).length} ${reason}`).join(', ');
+  console.log(`Production export baseline matched ${actual.length} reviewed exceptions (${counts}).`);
   process.exit(0);
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
+import test, { after, afterEach, beforeEach } from 'node:test';
 import { createElement } from 'react';
 import { getInteractiveCardPackCardByFigureId } from '../src/lib/interactiveCardPackReveal.ts';
 import { createMiNoteCard } from '../src/lib/miNoteCards.ts';
@@ -30,7 +30,8 @@ const timers = new Map<number, () => void>();
 let time = 0;
 let nextId = 0;
 
-beforeEach((t: TestContext) => {
+beforeEach(t => {
+  assert.ok('mock' in t);
   time = 0;
   nextId = 0;
   frames.clear();

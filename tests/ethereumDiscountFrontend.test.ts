@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import dataset from '../src/ethereum/discounts/111k.json';
@@ -49,7 +50,7 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
   };
   let value: unknown = valid;
   const urls: string[] = [];
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     urls.push(String(input));
     return Response.json(value);
   });

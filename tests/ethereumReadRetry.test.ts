@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { QueryClient, QueryObserver, type QueryFunctionContext } from '@tanstack/react-query';
@@ -260,7 +261,7 @@ test('network fetch errors are marked while caller aborts and malformed successe
 });
 
 test('preparation and transaction confirmation POSTs remain single-attempt on transient failures', async t => {
-  const provider = t.mock.method(globalThis, 'fetch', async (_input, init) => {
+  const provider = mockMethod(t, globalThis, 'fetch', async (_input, init) => {
     assert.equal(init?.method, 'POST');
     return Response.json({ error: { code: 'unavailable', message: 'Busy' } }, { status: 503, headers: { 'Retry-After': '1' } });
   });

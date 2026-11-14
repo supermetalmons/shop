@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
@@ -43,19 +44,19 @@ beforeEach(context => {
   confirmations = new Map();
   reveals = new Map();
   t.mock.method(ethereumApi, 'config', async () => config);
-  t.mock.method(ethereumApi, 'stats', async (_config, address) => ({ ...statistics, owner: address }));
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => ({ ...relicStatus, owner: address }));
+  mockMethod(t, ethereumApi, 'stats', async (_config, address) => ({ ...statistics, owner: address }));
+  mockMethod(t, ethereumApi, 'relics', async (_config, address) => ({ ...relicStatus, owner: address }));
   t.mock.method(ethereumApi, 'relicMetadata', async () => []);
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [], nextCursor: null, observedBlock: 1 }));
-  t.mock.method(ethereumApi, 'confirm', async transactionHash => {
+  mockMethod(t, ethereumApi, 'confirm', async transactionHash => {
     const result = confirmations.get(transactionHash);
     if (result instanceof Error) throw result;
     return result ?? { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] };
   });
-  t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash) => reveals.get(transactionHash) ?? {
+  mockMethod(t, ethereumRevealApi, 'transaction', async (_config, transactionHash) => reveals.get(transactionHash) ?? {
     chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test', status: 'pending', artworks: [], retryAfterMs: 2_000,
   });
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ chainId: config.chainId, contractAddress: contract,
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ chainId: config.chainId, contractAddress: contract,
     dropId: config.dropId, deploymentId: 'test', artworks: [], retryAfterMs: 2_000,
     unresolved: tokenIds.map(tokenId => ({ tokenId, status: 'recovering' as const })) }));
   const schedule = globalThis.setInterval;
@@ -123,7 +124,7 @@ test('config and wallet statistics recover on the third read without waiting for
     if (++configAttempts < 3) throw new EthereumApiError(503, 'Busy', 'unavailable');
     return config;
   });
-  const statsRequest = t.mock.method(ethereumApi, 'stats', async (_config, address) => {
+  const statsRequest = mockMethod(t, ethereumApi, 'stats', async (_config, address) => {
     if (++statsAttempts < 3) throw new EthereumApiError(502, 'Temporary gateway failure');
     return { ...statistics, owner: address };
   });
@@ -164,7 +165,7 @@ test('wallet changes cancel a statistics retry before its delayed attempt can ru
   t.after(() => delayed.forEach(value => clearTimeout(value.timer)));
   let oldSignal: AbortSignal | undefined;
   const addresses: Array<string | null> = [];
-  t.mock.method(ethereumApi, 'stats', async (_config, address, signal) => {
+  mockMethod(t, ethereumApi, 'stats', async (_config, address, signal) => {
     addresses.push(address);
     if (address === owner) { oldSignal = signal; throw new EthereumApiError(503, 'Busy', 'unavailable'); }
     return { ...statistics, owner: address };
@@ -182,7 +183,7 @@ test('statistics cooldown survives focus, reconnect and remount until its origin
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
   let busy = true;
-  const requests = t.mock.method(ethereumApi, 'stats', async (_config, address) => {
+  const requests = mockMethod(t, ethereumApi, 'stats', async (_config, address) => {
     if (busy) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
     return { ...statistics, owner: address };
   });
@@ -337,7 +338,7 @@ for (const transition of ['visibility', 'suspension'] as const) {
 
 test('a relic cooldown stays with its original wallet scope', async t => {
   const requests: Array<string | null> = [];
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => {
+  mockMethod(t, ethereumApi, 'relics', async (_config, address) => {
     requests.push(address);
     if (address === owner) throw new EthereumApiError(503, 'Busy', 'unavailable', null, 60_000);
     return { ...relicStatus, owner: address };
@@ -484,7 +485,7 @@ async function foreignCompletedCrateReveal(t: TestContext, confirmed = true) {
     items: [token('1', owner, 'artwork')], burnedTokenIds: [source.tokenId] });
   const gate = Promise.withResolvers<EthereumRevealTransactionResponse>();
   const signals: AbortSignal[] = [];
-  const request = t.mock.method(ethereumRevealApi, 'transaction', async (_config, transactionHash, signal) => {
+  const request = mockMethod(t, ethereumRevealApi, 'transaction', async (_config, transactionHash, signal) => {
     assert.equal(transactionHash, hash);
     signals.push(signal!);
     return signals.length === 1 ? gate.promise : response;
@@ -504,7 +505,7 @@ async function foreignCompletedCrateReveal(t: TestContext, confirmed = true) {
 
 test('inventory loads without Solana or a wallet interaction, and late old-owner inventory cannot replace the new owner', async t => {
   let finish!: (result: { items: EthereumInventoryItem[]; nextCursor: null; observedBlock: number }) => void;
-  t.mock.method(ethereumApi, 'inventory', async (_config, address) => address === owner ? new Promise(resolve => { finish = resolve; }) : { items: [token('111113', other)], nextCursor: null, observedBlock: 1 });
+  mockMethod(t, ethereumApi, 'inventory', async (_config, address) => address === owner ? new Promise(resolve => { finish = resolve; }) : { items: [token('111113', other)], nextCursor: null, observedBlock: 1 });
   const first = wallet();
   const view = harness(first);
   await waitFor(() => assert.ok(finish));
@@ -555,7 +556,7 @@ test('the wallet request guard rejects duplicate calls only until broadcast', as
   const connected = wallet();
   let release!: () => void;
   const original = connected.provider!.request;
-  t.mock.method(connected.provider!, 'request', async request => {
+  mockMethod(t, connected.provider!, 'request', async request => {
     if (request.method === 'eth_sendTransaction' && !release) await new Promise<void>(resolve => { release = resolve; });
     return original(request);
   });
@@ -576,7 +577,7 @@ test('rejected approval removes its hint while an uncertain send remains locally
   const connected = wallet();
   let ambiguous = false;
   const original = connected.provider!.request;
-  const request = t.mock.method(connected.provider!, 'request', async value => {
+  const request = mockMethod(t, connected.provider!, 'request', async value => {
     if (value.method === 'eth_sendTransaction') throw ambiguous ? new Error('Connection lost') : Object.assign(new Error('Rejected'), { code: 4001 });
     return original(value);
   });
@@ -646,7 +647,7 @@ test('a migrated legacy reveal preserves its delayed receipt and inventory hints
   writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt }]);
   const receipt = Promise.withResolvers<EthereumTransactionConfirmResponse>();
   t.mock.method(ethereumApi, 'confirm', async () => receipt.promise);
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
     items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
   }));
   const artwork = { tokenId: minted.tokenId, crateTokenId: source.tokenId, name: 'Painting', description: '', image: 'https://cdn.mons.shop/111k/paintings/1.png', category: 'painting' as const,
@@ -702,7 +703,7 @@ test('a consumed observed nonce retires only a missing-receipt hint and refreshe
   let count = '0x0';
   let receipt: unknown = { status: '0x1' };
   const original = connected.provider!.request;
-  t.mock.method(connected.provider!, 'request', async request => request.method === 'eth_getTransactionCount' ? count : request.method === 'eth_getTransactionReceipt' ? receipt : original(request));
+  mockMethod(t, connected.provider!, 'request', async request => request.method === 'eth_getTransactionCount' ? count : request.method === 'eth_getTransactionReceipt' ? receipt : original(request));
   const view = harness(connected);
   await ready(view);
   await mint(view);
@@ -863,7 +864,7 @@ test('a just-confirmed mint is reconciled before its supply reservation rejects 
   t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, remainingCrates, remainingWarehouses: 0 }));
   const background = Promise.withResolvers<EthereumTransactionConfirmResponse>();
   let firstMintChecks = 0;
-  t.mock.method(ethereumApi, 'confirm', async hash => {
+  mockMethod(t, ethereumApi, 'confirm', async hash => {
     if (hash !== hashFor(1)) return { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] };
     if (++firstMintChecks === 1) return background.promise;
     return { status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] };
@@ -970,7 +971,7 @@ test('bounded receipt polling checks every operation with at most four concurren
   const gates = Array.from({ length: 9 }, () => Promise.withResolvers<void>());
   const seen: string[] = [];
   let concurrent = 0, maximum = 0;
-  t.mock.method(ethereumApi, 'confirm', async hash => {
+  mockMethod(t, ethereumApi, 'confirm', async hash => {
     seen.push(hash);
     concurrent++;
     maximum = Math.max(maximum, concurrent);
@@ -995,7 +996,7 @@ test('account changes release a hung wallet request and preserve a late broadcas
   const gate = Promise.withResolvers<void>();
   let waiting = false;
   const original = connected.provider!.request;
-  t.mock.method(connected.provider!, 'request', async request => {
+  mockMethod(t, connected.provider!, 'request', async request => {
     if (request.method === 'eth_sendTransaction' && !waiting) { waiting = true; await gate.promise; }
     return original(request);
   });
@@ -1018,10 +1019,10 @@ test('account changes release a hung wallet request and preserve a late broadcas
 
 test('a hung confirmation cannot starve later operations or prevent lease cleanup', async t => {
   const timeout = AbortSignal.timeout;
-  t.mock.method(AbortSignal, 'timeout', milliseconds => timeout(milliseconds === 10_000 ? 40 : milliseconds));
+  mockMethod(t, AbortSignal, 'timeout', milliseconds => timeout(milliseconds === 10_000 ? 40 : milliseconds));
   for (let index = 0; index < 5; index++) writeEthereumDropOperation(scope, `pending-${index}`, { ...savedOperation(hashFor(index + 1)), id: `pending-${index}` });
   const seen = new Set<string>();
-  t.mock.method(ethereumApi, 'confirm', async hash => {
+  mockMethod(t, ethereumApi, 'confirm', async hash => {
     seen.add(hash);
     if (hash === hashFor(1)) return new Promise<EthereumTransactionConfirmResponse>(() => {});
     return { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] };
@@ -1043,7 +1044,7 @@ test('an account network change during a nonce read cannot retire a hint using a
   let requested = false;
   let switched = false;
   const original = connected.provider!.request;
-  t.mock.method(connected.provider!, 'request', async request => {
+  mockMethod(t, connected.provider!, 'request', async request => {
     if (request.method === 'eth_getTransactionCount') {
       if (!switched) { requested = true; return gate.promise; }
       return '0x0';
@@ -1091,7 +1092,7 @@ test('a delayed older mint confirmation cannot resurrect a container burned by a
     loaded = true;
     return { items: [minted], nextCursor: null, observedBlock: 1 };
   });
-  t.mock.method(ethereumApi, 'confirm', async hash => hash === first.hash ? gate.promise : { status: 'confirmed', confirmations: 1, items: [artwork], burnedTokenIds: [minted.tokenId] });
+  mockMethod(t, ethereumApi, 'confirm', async hash => hash === first.hash ? gate.promise : { status: 'confirmed', confirmations: 1, items: [artwork], burnedTokenIds: [minted.tokenId] });
   const view = harness();
   await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), ['1']));
   await act(async () => { gate.resolve({ status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [] }); });
@@ -1125,7 +1126,7 @@ test('a just-mined discounted mint is reconciled before another public-price req
 test('two completed fifteen-crate unpacks retain all 600 artworks while ownership indexing lags', async t => {
   const artworks = Array.from({ length: 600 }, (_, index) => token(String(index + 1), owner, 'artwork'));
   const indexed = new Map(artworks.map(item => [item.tokenId, item]));
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expectedIds) => ({
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expectedIds) => ({
     items: (expectedIds ?? []).flatMap(id => indexed.has(id) ? [indexed.get(id)!] : []), nextCursor: null, observedBlock: 10,
   }));
   for (let index = 0; index < 2; index++) {
@@ -1150,7 +1151,7 @@ test('a canceled pre-send read cannot resume after the original deployment scope
   let waiting = false;
   let completedRead = false;
   const original = connected.provider!.request;
-  t.mock.method(connected.provider!, 'request', async request => {
+  mockMethod(t, connected.provider!, 'request', async request => {
     if (request.method === 'eth_accounts') {
       waiting = true;
       await gate.promise;
@@ -1189,7 +1190,7 @@ for (const [label, update, expectedError] of [
     let latest = { ...relicStatus };
     t.mock.method(ethereumApi, 'relics', async () => latest);
     const original = connected.provider!.request;
-    t.mock.method(connected.provider!, 'request', async request => {
+    mockMethod(t, connected.provider!, 'request', async request => {
       if (request.method === 'eth_accounts') { waiting = true; await gate.promise; }
       return original(request);
     });
@@ -1212,7 +1213,7 @@ test('another observer confirming a mint refreshes this observer before its olde
   const minted = token();
   const reads: string[][] = [];
   let confirmationCalls = 0;
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => {
     reads.push([...(expected ?? [])]);
     return { items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1 };
   });
@@ -1237,7 +1238,7 @@ test('another observer confirming a mint refreshes this observer before its olde
 
 test('local confirmation performs one inventory refresh and foreign-scope ledger changes do not refresh it', async t => {
   let reads = 0;
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => {
     reads++;
     return { items: expected?.includes('111112') ? [token()] : [], nextCursor: null, observedBlock: 1 };
   });
@@ -1265,7 +1266,7 @@ test('a hashless discounted mint cannot charge public price while chain allowanc
   const connected = wallet();
   let first = true;
   const original = connected.provider!.request;
-  t.mock.method(connected.provider!, 'request', async request => {
+  mockMethod(t, connected.provider!, 'request', async request => {
     if (request.method === 'eth_sendTransaction' && first) {
       first = false;
       await original(request);
@@ -1297,7 +1298,7 @@ test('foreign confirmation replaces an in-flight initial inventory read with con
   writeEthereumDropOperation(scope, operation.id, operation);
   const initial = Promise.withResolvers<{ items: EthereumInventoryItem[]; nextCursor: null; observedBlock: number }>();
   const reads: { signal: AbortSignal | undefined; expected: string[] }[] = [];
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal, expected) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, signal, expected) => {
     reads.push({ signal, expected: [...expected ?? []] });
     if (reads.length === 1) return initial.promise;
     return { items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 2 };
@@ -1326,11 +1327,11 @@ test('a stale discounted preflight cannot cancel the foreign confirmation invent
   const background = Promise.withResolvers<EthereumTransactionConfirmResponse>();
   const preflight = Promise.withResolvers<EthereumTransactionConfirmResponse>();
   let oldChecks = 0;
-  t.mock.method(ethereumApi, 'confirm', async hash => hash === operation.hash ? (++oldChecks === 1 ? background.promise : preflight.promise) :
+  mockMethod(t, ethereumApi, 'confirm', async hash => hash === operation.hash ? (++oldChecks === 1 ? background.promise : preflight.promise) :
     { status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] });
   const inventory = Promise.withResolvers<{ items: EthereumInventoryItem[]; nextCursor: null; observedBlock: number }>();
   const signals: AbortSignal[] = [];
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, signal) => {
     signals.push(signal!);
     return signals.length === 1 ? { items: [], nextCursor: null, observedBlock: 1 } : inventory.promise;
   });
@@ -1359,7 +1360,7 @@ test('a stale discounted preflight cannot cancel the foreign confirmation invent
 
 test('a submitted mint still populates inventory when storage is cleared before confirmation', async t => {
   const minted = token();
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
     items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
   }));
   const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
@@ -1379,7 +1380,7 @@ test('a submitted mint still populates inventory when storage is cleared before 
 test('a restored mint still populates inventory when storage is cleared during confirmation', async t => {
   const minted = token();
   writeEthereumDropOperation(scope, 'restored', savedOperation());
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
     items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
   }));
   const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
@@ -1402,12 +1403,12 @@ test('restored mints queued behind the receipt batch survive storage loss', asyn
   for (let index = 0; index < minted.length; index++) {
     writeEthereumDropOperation(scope, `queued-${index}`, { ...savedOperation(hashFor(index + 1)), id: `queued-${index}` });
   }
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
     items: minted.filter(item => expected?.includes(item.tokenId)), nextCursor: null, observedBlock: 1,
   }));
   const gate = Promise.withResolvers<void>();
   const seen = new Set<string>();
-  t.mock.method(ethereumApi, 'confirm', async hash => {
+  mockMethod(t, ethereumApi, 'confirm', async hash => {
     seen.add(hash);
     await gate.promise;
     const index = minted.findIndex((_item, index) => hashFor(index + 1) === hash);
@@ -1426,7 +1427,7 @@ test('restored mints queued behind the receipt batch survive storage loss', asyn
 test('an early crate reveal keeps its source guarded and reconciles after storage loss', async t => {
   const source = token();
   const minted = token('1', owner, 'artwork');
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected) => ({
     items: expected?.includes(minted.tokenId) ? [minted] : [], nextCursor: null, observedBlock: 1,
   }));
   const gate = Promise.withResolvers<EthereumTransactionConfirmResponse>();
@@ -1521,7 +1522,7 @@ test('wallet chain cancellation restores relic reads without replaying the abort
   await ready(view);
   await waitFor(() => assert.equal(view.result.current.relics.isSuccess, true));
   let requested = false;
-  const requests = t.mock.method(ethereumApi, 'relics', async (_config, address, signal) => {
+  const requests = mockMethod(t, ethereumApi, 'relics', async (_config, address, signal) => {
     if (!requested) {
       requested = true;
       return await new Promise<typeof relicStatus>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));

@@ -1,10 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction, type Connection } from '@solana/web3.js';
 import type { SolanaCluster } from '../../shared/deploymentCore.ts';
+import { writeDurableJsonJournal } from './durableJsonJournal.ts';
 
 const START_MINT = createHash('sha256').update('global:start_mint').digest().subarray(0, 8);
 const STATUSES = ['signed', 'finalized', 'failed', 'expired', 'state-verified'] as const;
@@ -138,23 +138,11 @@ export function readMintActivationJournal(
 }
 
 export function writeMintActivationJournal(filePath: string, journal: ActivationJournal, expectedSource?: string): string {
-  const source = `${JSON.stringify(journal, null, 2)}\n`;
-  const directory = path.dirname(filePath);
-  mkdirSync(directory, { recursive: true });
-  if (expectedSource !== undefined && (!existsSync(filePath) || readFileSync(filePath, 'utf8') !== expectedSource)) {
-    throw new Error('Activation journal changed during use; preserve it and retry after review.');
-  }
-  const temporary = `${filePath}.${randomUUID()}.tmp`;
-  const descriptor = openSync(temporary, 'wx', 0o600);
-  try { writeFileSync(descriptor, source, 'utf8'); fsyncSync(descriptor); } finally { closeSync(descriptor); }
-  try {
-    if (expectedSource === undefined) linkSync(temporary, filePath);
-    else renameSync(temporary, filePath);
-    const parent = openSync(directory, 'r');
-    try { fsyncSync(parent); } finally { closeSync(parent); }
-  } finally { rmSync(temporary, { force: true }); }
-  if (readFileSync(filePath, 'utf8') !== source) throw new Error('Activation journal persistence could not be verified.');
-  return source;
+  return writeDurableJsonJournal({
+    filePath, value: journal, expectedSource,
+    changedMessage: 'Activation journal changed during use; preserve it and retry after review.',
+    verificationMessage: 'Activation journal persistence could not be verified.',
+  });
 }
 
 export async function inspectMintActivationAttempt(

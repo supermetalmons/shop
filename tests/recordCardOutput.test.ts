@@ -104,7 +104,7 @@ test('recording encoder reports MP4-only and general support failures', async ()
 });
 
 test('buffer recording output is delivered as a correctly typed blob', async () => {
-  let savedBlob: Blob | null = null;
+  const output: { blob?: Blob } = {};
   let savedName = '';
   let downloaded = false;
   await deliverRecordingBuffer(
@@ -112,7 +112,7 @@ test('buffer recording output is delivered as a correctly typed blob', async () 
     'video/mp4',
     'card.mp4',
     (blob, name) => {
-      savedBlob = blob;
+      output.blob = blob;
       savedName = name;
     },
     () => {
@@ -120,8 +120,9 @@ test('buffer recording output is delivered as a correctly typed blob', async () 
     },
   );
 
-  assert.equal(savedBlob?.type, 'video/mp4');
-  assert.equal(savedBlob?.size, 3);
+  assert.ok(output.blob);
+  assert.equal(output.blob.type, 'video/mp4');
+  assert.equal(output.blob.size, 3);
   assert.equal(savedName, 'card.mp4');
   assert.equal(downloaded, false);
 });

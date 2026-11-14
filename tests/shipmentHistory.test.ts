@@ -51,7 +51,7 @@ function harness(initialPage: ShipmentHistoryPage | null = page([100], 100), rea
 test('StrictMode history seeds the first page, serializes continuation requests and deduplicates deliveries', async () => {
   const h = harness(page([100], 100), true);
   await act(async () => {});
-  assert.deepEqual(h.calls, []);
+  assert.equal(h.calls.length, 0);
   assert.deepEqual(h.result.current.orders.map((order) => order.deliveryId), [100]);
   let next!: Promise<void>;
   act(() => { next = h.result.current.fetchMore(); void h.result.current.fetchMore(); });
@@ -65,7 +65,7 @@ for (const firstPagePending of [false, true]) {
   test(`a delayed initial seed displays immediately ${firstPagePending ? 'despite a pending first-page fetch' : 'without another fetch'}`, async () => {
     const h = harness(null);
     await act(async () => {});
-    assert.deepEqual(h.result.current.orders, []);
+    assert.equal(h.result.current.orders.length, 0);
     assert.equal(h.calls.length, 0);
     let retry: Promise<void> | undefined;
     if (firstPagePending) {
@@ -258,7 +258,7 @@ test('identity changes clear prior pages and ignore stale responses', async () =
   await waitFor(() => assert.deepEqual(h.result.current.orders.map((order) => order.deliveryId), [200]));
   assert.equal(h.client.getQueryCache().findAll({ queryKey: ['shipmentHistory'] }).length, 1);
   h.rerender({ ...h.options, identity: null, initialPage: undefined });
-  assert.deepEqual(h.result.current.orders, []);
+  assert.equal(h.result.current.orders.length, 0);
 });
 
 test('empty filtered pages remain pageable and repeated cursors stop loading', async () => {

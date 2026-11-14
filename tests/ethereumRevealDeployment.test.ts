@@ -1,3 +1,5 @@
+import { required } from './helpers/required.ts';
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -196,10 +198,10 @@ test('a retained v5 registration remains active-compatible while fresh registrat
   database.exec("UPDATE ethereum_reveal_deployments SET state='paused', provisioned_at_ms=1, revision=3");
   const manifest = await controlManifest(t, registrationIdentity(legacy));
   const status = await runEthereumRevealControl(['status', '--manifest', manifest], { query });
-  assert.ok('deployments' in status);
+  assert.ok(status.deployments);
   assert.equal(status.deployments[0].catalogVersion, '111k-v5');
   const active = await runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '3', '--write'], { query });
-  assert.ok('deployment' in active && 'state' in active.deployment);
+  assert.ok(active.deployment && 'state' in active.deployment);
   assert.equal(active.deployment.state, 'active');
   assert.equal(active.deployment.catalogVersion, '111k-v5');
   const fresh = await controlManifest(t, { ...registrationIdentity(legacy), deploymentId: 'new-ancestor',
@@ -216,16 +218,16 @@ for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3', '111k-v4']) test(
     publicationDirectory: './missing-publication', templateFile: './missing-template.json' });
   const before = query('SELECT * FROM ethereum_reveal_deployments')[0];
   const status = await runEthereumRevealControl(['status', '--manifest', manifest], { query });
-  assert.ok('deployments' in status);
+  assert.ok(status.deployments);
   assert.equal(status.deployments[0].catalogVersion, catalogVersion);
   assert.deepEqual(query('SELECT * FROM ethereum_reveal_deployments')[0], before);
   const { catalogVersion: _catalogVersion, ...identity } = registrationIdentity(legacy);
   const withoutVersion = await controlManifest(t, identity);
   const defaultStatus = await runEthereumRevealControl(['status', '--manifest', withoutVersion], { query });
-  assert.ok('deployments' in defaultStatus);
+  assert.ok(defaultStatus.deployments);
   assert.equal(defaultStatus.deployments[0].catalogVersion, catalogVersion);
   const paused = await runEthereumRevealControl(['pause', '--manifest', withoutVersion, '--expected-revision', '3', '--write'], { query });
-  assert.ok('deployment' in paused && 'state' in paused.deployment);
+  assert.ok(paused.deployment && 'state' in paused.deployment);
   assert.equal(paused.deployment.state, 'paused');
   assert.equal(paused.deployment.catalogVersion, catalogVersion);
   await assert.rejects(runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '4', '--write'], { query }), /Retired reveal catalogs/);
@@ -365,7 +367,7 @@ test('one manifest targets status and transitions without loading registration r
     verifyDeployment: async () => assert.fail('Targeting must not verify the chain') };
   t.mock.method(globalThis, 'fetch', async () => assert.fail('Targeting must not make network requests'));
   const status = await runEthereumRevealControl(['status', '--manifest', manifest], overrides);
-  assert.ok('deployments' in status);
+  assert.ok(status.deployments);
   assert.deepEqual(status.deployments.map(value => [value.deploymentId, value.state, value.revision]), [['v9', 'ready', 3]]);
   const preview = await runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '3'], overrides);
   assert.ok('dryRun' in preview && preview.dryRun);
@@ -373,17 +375,17 @@ test('one manifest targets status and transitions without loading registration r
   assert.equal(query("SELECT state FROM ethereum_reveal_deployments WHERE deployment_id = 'v9'")[0].state, 'ready');
   for (const [command, revision, expectedState] of [['activate', 3, 'active'], ['pause', 4, 'paused'], ['activate', 5, 'active']] as const) {
     const result = await runEthereumRevealControl([command, '--manifest', manifest, '--expected-revision', String(revision), '--write'], overrides);
-    assert.ok('deployment' in result && 'state' in result.deployment && 'revision' in result.deployment);
+    assert.ok(result.deployment && 'state' in result.deployment && 'revision' in result.deployment);
     assert.equal(result.deployment.deploymentId, 'v9');
     assert.equal(result.deployment.state, expectedState);
     assert.equal(result.deployment.revision, revision + 1);
     assert.deepEqual(query("SELECT * FROM ethereum_reveal_deployments WHERE deployment_id = 'v8'")[0], oldRow);
   }
   const oldStatus = await runEthereumRevealControl(['status', '--deployment-id', 'v8'], overrides);
-  assert.ok('deployments' in oldStatus);
+  assert.ok(oldStatus.deployments);
   assert.deepEqual(oldStatus.deployments.map(value => value.deploymentId), ['v8']);
   const allStatus = await runEthereumRevealControl(['status'], overrides);
-  assert.ok('deployments' in allStatus);
+  assert.ok(allStatus.deployments);
   assert.deepEqual(allStatus.deployments.map(value => value.deploymentId).sort(), ['v8', 'v9']);
   assert.equal(query('SELECT COUNT(*) AS count FROM ethereum_metadata_publication_leases')[0].count, 0);
 });
@@ -445,11 +447,11 @@ test('manifest targeting accepts checksum addresses, default catalog versions an
     const { catalogVersion: _catalog, ...identity } = registrationIdentity(value);
     const manifest = await controlManifest(t, { ...identity, contractAddress: checksumEthereumAddress(scope.contractAddress) });
     const status = await runEthereumRevealControl(['status', '--manifest', manifest], { query });
-    assert.ok('deployments' in status);
+    assert.ok(status.deployments);
     assert.equal(status.deployments[0].contractAddress, scope.contractAddress);
     assert.equal(status.deployments[0].catalogVersion, registration.catalogVersion);
     const active = await runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '2', '--write'], { query });
-    assert.ok('deployment' in active && 'state' in active.deployment);
+    assert.ok(active.deployment && 'state' in active.deployment);
     assert.equal(active.deployment.deploymentId, deploymentId);
     assert.equal(active.deployment.state, 'active');
   }
@@ -557,7 +559,7 @@ for (const write of [false, true]) {
       let calls = 0;
       const blockHash = (number: number) => `0x${number.toString(16).padStart(64, '0')}`;
       const head = registration.deploymentBlock + 1;
-      t.mock.method(globalThis, 'fetch', async (url, init) => {
+      mockMethod(t, globalThis, 'fetch', async (url, init) => {
         calls++;
         assert.equal(String(url), 'https://eth-sepolia.g.alchemy.com/v2/registration-test-key');
         if (failure === 'RPC failure') throw new Error(`Transport failed at ${url}`);
@@ -598,7 +600,7 @@ test('registration verifies the creation block before claiming permanent ownersh
     if (previous === undefined) delete process.env.ALCHEMY_MI_NOTE_API_KEY;
     else process.env.ALCHEMY_MI_NOTE_API_KEY = previous;
   });
-  t.mock.method(globalThis, 'fetch', async (url, init) => {
+  mockMethod(t, globalThis, 'fetch', async (url, init) => {
     assert.equal(String(url), 'https://eth-sepolia.g.alchemy.com/v2/registration-test-key');
     const { method, params } = JSON.parse(String(init?.body));
     const number = method === 'eth_getBlockByNumber' ? params[0] === 'latest' ? 500 : Number(BigInt(params[0])) : 0;
@@ -621,8 +623,8 @@ test('registration verifies the creation block before claiming permanent ownersh
     }
   }
   await writeFile(manifest, JSON.stringify({ ...registration, deploymentBlock: 100, publicationDirectory: './publication' }));
-  assert.equal((await register(false)).deployment.deploymentBlock, 100);
-  assert.equal((await register(true)).deployment.deploymentBlock, 100);
+  assert.equal(required((await register(false)).deployment).deploymentBlock, 100);
+  assert.equal(required((await register(true)).deployment).deploymentBlock, 100);
   assert.equal(query('SELECT state FROM ethereum_reveal_deployments')[0].state, 'provisioning');
 });
 
@@ -661,6 +663,7 @@ test('registration verifies the entire publication under its lease and atomicall
     return query(sql);
   },
     verifyPublication: async (path, network, options) => {
+      assert.ok(options);
       assert.equal(path, join(directory, 'publication'));
       assert.equal(network, 'sepolia');
       assert.equal(options.prefix, '111k-sepolia/sepolia-test-2/');
@@ -676,7 +679,7 @@ test('registration verifies the entire publication under its lease and atomicall
       order.push('chain');
     } });
   assert.deepEqual(order, ['publication', 'chain', 'retire', 'register']);
-  assert.equal('deployment' in result && 'state' in result.deployment && result.deployment.state, 'provisioning');
+  assert.equal(result.deployment && 'state' in result.deployment && result.deployment.state, 'provisioning');
   assert.equal(query('SELECT COUNT(*) AS count FROM ethereum_metadata_publication_leases')[0].count, 0);
 });
 

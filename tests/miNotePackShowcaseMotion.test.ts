@@ -39,7 +39,7 @@ test('the loop repeats blue, green, and yellow with a brief hold and negative-ya
   assert.deepEqual(MI_NOTE_PACK_SHOWCASE_COLORS, ['cobalt-blue', 'emerald', 'marigold']);
   assert.equal(CYCLE, 2.65);
   for (let cycle = 0; cycle < MI_NOTE_PACK_SHOWCASE_COLORS.length * 2; cycle++) {
-    const index = cycle % MI_NOTE_PACK_SHOWCASE_COLORS.length;
+    const index: number = cycle % MI_NOTE_PACK_SHOWCASE_COLORS.length;
     const hold = sampleMiNotePackShowcase(cycle * CYCLE + 0.225);
     assert.equal(hold.variantId, MI_NOTE_PACK_SHOWCASE_COLORS[index]);
     assert.equal(hold.nextVariantId, MI_NOTE_PACK_SHOWCASE_COLORS[(index + 1) % MI_NOTE_PACK_SHOWCASE_COLORS.length]);

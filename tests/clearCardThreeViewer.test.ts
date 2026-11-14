@@ -134,7 +134,7 @@ function props(overrides: Partial<Props> = {}): Props {
     ready: true,
     cardModelUrl: '/card.glb',
     packModelUrl: '/pack.glb',
-    lightingConfig: createClearCardLightingPreset('final_v3'),
+    lightingConfig: createClearCardLightingPreset(),
     unrestrictedMovement: false,
     axisLockedOrbit: false,
     initiallyRevealed: false,

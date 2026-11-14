@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
@@ -75,7 +76,7 @@ test('all inventory cursor pages load sequentially, deduplicate tokens and send 
     { items: [], nextCursor: 'third', observedBlock: 11 },
     { items: [{ ...token('2'), name: 'Updated artwork' }, token('3')], nextCursor: null, observedBlock: 12 },
   ];
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, cursor, _signal, expected = []) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, cursor, _signal, expected = []) => {
     assert.equal(active++, 0);
     calls.push({ cursor, expected });
     await Promise.resolve();
@@ -123,7 +124,7 @@ test('a catalog revision refresh keeps visible inventory and lets an in-flight r
   const after = { ...before, catalogRevision: 1 };
   let staleSignal!: AbortSignal;
   let calls = 0;
-  t.mock.method(ethereumApi, 'inventory', async (requested, _owner, _cursor, signal) => {
+  mockMethod(t, ethereumApi, 'inventory', async (requested, _owner, _cursor, signal) => {
     if (requested.catalogRevision === 1) return { items: [{ ...token('2'), metadataRevision: 2 }], nextCursor: null, observedBlock: 2,
       deploymentId: 'v17', catalogRevision: 1 };
     if (++calls === 1) return { items: [token('1')], nextCursor: null, observedBlock: 1, deploymentId: 'v17', catalogRevision: 0 };
@@ -186,7 +187,7 @@ for (const change of ['owner', 'deployment'] as const) test(`inventory ${change}
   const nextToken = { ...token('3'), owner: nextOwner, contractAddress: nextConfig.contractAddress!,
     id: ethereumAssetId(nextConfig.chainId, nextConfig.contractAddress!, '3') };
   const expected: string[][] = [];
-  t.mock.method(ethereumApi, 'inventory', async (requestedConfig, requestedOwner, cursor, signal, expectedIds = []) => {
+  mockMethod(t, ethereumApi, 'inventory', async (requestedConfig, requestedOwner, cursor, signal, expectedIds = []) => {
     if (requestedConfig.contractAddress === config.contractAddress && requestedOwner === owner) {
       if (cursor === null) return { items: [token('1')], nextCursor: 'more', observedBlock: 1 };
       staleSignal = signal!;
@@ -215,7 +216,7 @@ for (const change of ['owner', 'deployment'] as const) test(`inventory ${change}
 
 test('a failed later page preserves the last complete inventory snapshot', async t => {
   let fail = false;
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, cursor) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, cursor) => {
     if (!fail) return { items: [token('1')], nextCursor: null, observedBlock: 1 };
     if (cursor) throw new Error('Connection lost');
     return { items: [token('2')], nextCursor: 'more', observedBlock: 2 };
@@ -244,7 +245,7 @@ for (const count of [600, 611]) test(`${count} confirmed unpack outputs survive 
   let transferred = false;
   let active = 0;
   let maximum = 0;
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     const url = new URL(String(input));
     const expected = url.searchParams.get('expectedTokenIds')?.split(',') ?? [];
     requested.push(expected);
@@ -274,7 +275,7 @@ test('confirmed hints over the API limit use capped batches without repeating hi
   const ids = Array.from({ length: 1505 }, (_, index) => String(index + 1));
   const requests: Array<{ cursor: string | null; expected: string[] }> = [];
   let active = 0;
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, cursor, _signal, expected = []) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, cursor, _signal, expected = []) => {
     assert.equal(active++, 0);
     requests.push({ cursor, expected });
     assert.ok(expected.length <= 1000);
@@ -295,7 +296,7 @@ test('confirmed source burns prune old hints while authoritative ownership can r
   rememberEthereumConfirmedInventory(scope, 'unpack', ['1', '2'], ['111112'], submittedAt);
   writeEthereumExpected(scope, ['111112']);
   const requested: string[][] = [];
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => {
     requested.push(expected);
     return { items: [token('111112', 'crate')], nextCursor: null, observedBlock: 43 };
   });

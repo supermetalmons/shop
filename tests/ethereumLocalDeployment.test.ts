@@ -31,7 +31,7 @@ test('the local deployment launcher validates canonical collection namespaces be
       base.replace('cdn.mons.shop', 'cdn.mons.shop.evil.example'), base.replace('cdn.mons.shop', 'user@cdn.mons.shop'),
       base.replace('cdn.mons.shop', 'cdn.mons.shop:443'),
     ]) {
-      assert.throws(() => ethereumMetadataBaseUri(uri, 31337), undefined, uri);
+      assert.throws(() => ethereumMetadataBaseUri(uri, 31337), uri);
       const result = start(uri);
       assert.ifError(result.error);
       assert.equal(result.status, 1);

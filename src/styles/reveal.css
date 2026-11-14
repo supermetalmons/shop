@@ -1204,8 +1204,7 @@ button.wip-reset-btn {
     visibility 0s linear;
 }
 
-.wip-controls > .clear-card-wip__model-pickers,
-.wip-controls > .lighting-lab {
+.wip-controls > .clear-card-wip__model-pickers {
   transition:
     opacity 160ms ease,
     visibility 0s linear;

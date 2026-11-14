@@ -278,6 +278,7 @@ test('inventory query reads registered hints synchronously and reconciles a succ
       fetchInventory: async (owner, options) => {
         events.push('fetch');
         assert.equal(owner, OWNER_A);
+        assert.ok(options);
         assert.deepEqual(options.expectedAssetIds, { 'mainnet-beta': [expectedId] });
         return [{ id: expectedId, dropId: 'card_nft_2', name: 'pack 1', kind: 'box' }];
       },
@@ -306,6 +307,7 @@ test('inventory query preserves the selected hint batch when its request fails',
         prepare: (owner, includeDevnet) =>
           prepareRecentExpectedInventoryAssets(owner, includeDevnet, { storage, now }),
         fetchInventory: async (_owner, options) => {
+          assert.ok(options);
           assert.deepEqual(options.expectedAssetIds, { 'mainnet-beta': expectedIds.slice(0, 15) });
           throw new Error('injected inventory failure');
         },
@@ -402,6 +404,7 @@ test('viewer-mode inventory loading neither reads nor reconciles owner hint stor
         };
       },
       fetchInventory: async (_owner, options) => {
+        assert.ok(options);
         assert.equal(options.expectedAssetIds, undefined);
         return [];
       },

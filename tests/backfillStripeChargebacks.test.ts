@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { required } from './helpers/required.ts';
 import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,6 +36,7 @@ function fixture(responses: Array<Response | Error>) {
   const key = (mode: string, write: boolean) => `${mode}:${write}`;
   const dependencies: Dependencies = {
     fetch: async (url, init) => {
+      assert.ok(init);
       calls.push({ url: String(url), init });
       const response = responses.shift();
       if (response instanceof Error) throw response;
@@ -119,8 +121,8 @@ test('chargeback runner stops after five transient attempts without losing the c
   const args = parseStripeChargebackBackfillArgs(['--mode', 'live']);
   await assert.rejects(runStripeChargebackBackfill(args, TOKEN, f.dependencies), /after five attempts/);
   assert.equal(f.calls.length, 6);
-  assert.equal(f.checkpoints.get('live:false').cursor, 'du_resume');
-  assert.equal(f.checkpoints.get('live:false').complete, false);
+  assert.equal(required(f.checkpoints.get('live:false')).cursor, 'du_resume');
+  assert.equal(required(f.checkpoints.get('live:false')).complete, false);
   assert.equal(f.logs.some((message) => message.includes('full history complete')), false);
   f.responses.push(batch({ scanned: 2, matchedOrders: 2 }));
   const result = await runStripeChargebackBackfill(args, TOKEN, f.dependencies);
@@ -165,7 +167,7 @@ test('chargeback runner rejects redirects, permanent HTTP errors and malformed s
       (error: Error) => !error.message.includes(TOKEN),
     );
     assert.equal(f.calls.length, 1);
-    assert.equal(f.checkpoints.get('live:false').complete, false);
+    assert.equal(required(f.checkpoints.get('live:false')).complete, false);
   }
 });
 
@@ -176,10 +178,10 @@ test('chargeback runner preserves failing page details and retries it without sk
   ]);
   const args = parseStripeChargebackBackfillArgs(['--mode', 'live', '--write']);
   await assert.rejects(runStripeChargebackBackfill(args, TOKEN, f.dependencies), /backfill incomplete/);
-  const checkpoint = f.checkpoints.get('live:true');
+  const checkpoint = required(f.checkpoints.get('live:true'));
   assert.equal(checkpoint.cursor, 'du_good');
   assert.equal(checkpoint.totals.scanned, 1);
-  assert.equal(checkpoint.failedBatch.failures[0].disputeId, 'du_bad');
+  assert.equal(required(checkpoint.failedBatch).failures[0].disputeId, 'du_bad');
   assert.ok(f.logs.some((message) => message.includes('du_bad')));
   f.responses.push(batch({ write: true, scanned: 2, matchedOrders: 2, inserted: 1, existing: 1 }));
   const [result] = await runStripeChargebackBackfill(args, TOKEN, f.dependencies);
@@ -219,11 +221,11 @@ test('chargeback runner preserves the failing page and details after five transi
   );
   assert.equal(f.calls.length, 6);
   assert.equal(f.delays.length, 4);
-  const checkpoint = f.checkpoints.get('live:false');
+  const checkpoint = required(f.checkpoints.get('live:false'));
   assert.equal(checkpoint.complete, false);
   assert.equal(checkpoint.cursor, 'du_saved');
   assert.equal(checkpoint.totals.scanned, 1);
-  assert.equal(checkpoint.failedBatch.failures[0].disputeId, 'du_retry');
+  assert.equal(required(checkpoint.failedBatch).failures[0].disputeId, 'du_retry');
   assert.ok(f.calls.slice(1).every((call) => body(call).cursor === 'du_saved'));
   assert.equal(f.logs.some((message) => message.includes('full history complete')), false);
 });
@@ -243,22 +245,22 @@ test('chargeback runner stops immediately when a page has permanent or credentia
     );
     assert.equal(f.calls.length, 1);
     assert.equal(f.delays.length, 0);
-    assert.equal(f.checkpoints.get('live:false').failedBatch.failures[1].code, code);
+    assert.equal(required(required(f.checkpoints.get('live:false')).failedBatch).failures[1].code, code);
   }
 });
 
 test('chargeback runner reports malformed provider disputes with the sanitized unknown identity', async () => {
   const f = fixture([batch({ failures: [{ disputeId: 'unknown', code: 'invalid-dispute' }] })]);
   await assert.rejects(runStripeChargebackBackfill(parseStripeChargebackBackfillArgs(['--mode', 'live']), TOKEN, f.dependencies), /backfill incomplete/);
-  assert.equal(f.checkpoints.get('live:false').failedBatch.failures[0].code, 'invalid-dispute');
+  assert.equal(required(required(f.checkpoints.get('live:false')).failedBatch).failures[0].code, 'invalid-dispute');
   assert.ok(f.logs.some((message) => message.includes('dispute=unknown failure=invalid-dispute')));
 });
 
 test('chargeback runner rejects repeated pagination cursors', async () => {
   const f = fixture([batch({ nextCursor: 'dp_loop' }), batch({ nextCursor: 'dp_loop' })]);
   await assert.rejects(runStripeChargebackBackfill(parseStripeChargebackBackfillArgs(['--mode', 'live']), TOKEN, f.dependencies), /repeated a cursor/);
-  assert.equal(f.checkpoints.get('live:false').cursor, 'dp_loop');
-  assert.equal(f.checkpoints.get('live:false').totals.scanned, 1);
+  assert.equal(required(f.checkpoints.get('live:false')).cursor, 'dp_loop');
+  assert.equal(required(f.checkpoints.get('live:false')).totals.scanned, 1);
 });
 
 test('chargeback runner separates dry and write progress, and reruns completed histories from the start', async () => {
@@ -271,7 +273,7 @@ test('chargeback runner separates dry and write progress, and reruns completed h
   await assert.rejects(runStripeChargebackBackfill(parseStripeChargebackBackfillArgs(['--mode', 'live']), TOKEN, f.dependencies));
   await runStripeChargebackBackfill(parseStripeChargebackBackfillArgs(['--mode', 'live', '--write']), TOKEN, f.dependencies);
   assert.equal(body(f.calls[2]).cursor, undefined);
-  assert.equal(f.checkpoints.get('live:false').cursor, 'du_dry');
+  assert.equal(required(f.checkpoints.get('live:false')).cursor, 'du_dry');
   await runStripeChargebackBackfill(parseStripeChargebackBackfillArgs(['--mode', 'live', '--restart']), TOKEN, f.dependencies);
   assert.equal(body(f.calls[3]).cursor, undefined);
   await runStripeChargebackBackfill(parseStripeChargebackBackfillArgs(['--mode', 'live']), TOKEN, f.dependencies);
@@ -332,7 +334,7 @@ test('Cloudflare backfill uses private RPC without a staff token and shares retr
     batch(),
   ];
   f.dependencies.maintenance = {
-    backfill: async (request) => { requests.push(request); return responses.shift(); },
+    backfill: async (request) => { requests.push(request); return required(responses.shift()); },
     configureWebhooks: async () => { throw new Error('Unexpected webhook call'); },
   };
   const args = parseStripeChargebackBackfillArgs(['--cloudflare', '--mode', 'live']);

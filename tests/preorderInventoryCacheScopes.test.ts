@@ -71,7 +71,8 @@ function inventoryConsumer(client: InstanceType<typeof QueryClient>, includeDevn
       state, owner, connectedWallet: owner, inventoryView: queries.inventory,
       inventoryIndex: new Map(queries.inventory.map(item => [item.id, item])),
       pendingRevealIds: emptyIds, pendingDeliveryItemIds: emptyIds, isSignedInWallet: true,
-      deliveryCountryCode: 'US', dismissalBlocked: false, getDropConfig: getFrontendDrop,
+      deliveryCountryCode: 'US', dismissalBlocked: false,
+      getDropConfig: dropId => dropId === undefined ? undefined : getFrontendDrop(dropId),
       canOpenBoxesForDropId: () => false, usesClearCard3dRevealForDropId: () => false,
       usesInteractiveCardPackRevealForDropId: () => false,
     });

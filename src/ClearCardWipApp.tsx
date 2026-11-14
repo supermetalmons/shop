@@ -15,7 +15,6 @@ import {
   clearCardModelUrl,
 } from './lib/clearCardModels';
 import { CLEAR_CARDS_BREAK_SOUND_URL, CLEAR_CARDS_HIT_SOUND_URLS } from './config/dropMediaDefaults';
-import ClearCardLightingPanel from './components/ClearCardLightingPanel';
 import {
   createClearCardLightingPreset,
   DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
@@ -33,6 +32,7 @@ import { useDarkColorScheme } from './hooks/useDarkColorScheme';
 import './clearCardWip.css';
 
 const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
+const ClearCardLightingPanel = import.meta.env?.DEV ? lazy(() => import('./components/ClearCardLightingPanel')) : null;
 
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
@@ -290,20 +290,22 @@ export default function ClearCardWipApp() {
             ))}
           </select>
         </div>
-        <ClearCardLightingPanel
-          config={lightingConfig}
-          presetId={lightingPresetId}
-          unrestrictedMovement={unrestrictedMovement}
-          axisLockedOrbit={axisLockedOrbit}
-          upcomingDropPreview={upcomingDropPreview}
-          snapshotDisabled={!ready || displayStage === 'breaking'}
-          onChange={handleLightingChange}
-          onPresetChange={handleLightingPresetChange}
-          onUnrestrictedMovementChange={handleUnrestrictedMovementChange}
-          onAxisLockedOrbitChange={handleAxisLockedOrbitChange}
-          onUpcomingDropPreviewChange={handleUpcomingDropPreviewChange}
-          onSnapshot={handleSnapshot}
-        />
+        {ClearCardLightingPanel ? <Suspense fallback={null}>
+          <ClearCardLightingPanel
+            config={lightingConfig}
+            presetId={lightingPresetId}
+            unrestrictedMovement={unrestrictedMovement}
+            axisLockedOrbit={axisLockedOrbit}
+            upcomingDropPreview={upcomingDropPreview}
+            snapshotDisabled={!ready || displayStage === 'breaking'}
+            onChange={handleLightingChange}
+            onPresetChange={handleLightingPresetChange}
+            onUnrestrictedMovementChange={handleUnrestrictedMovementChange}
+            onAxisLockedOrbitChange={handleAxisLockedOrbitChange}
+            onUpcomingDropPreviewChange={handleUpcomingDropPreviewChange}
+            onSnapshot={handleSnapshot}
+          />
+        </Suspense> : null}
         <button
           type="button"
           className="wip-close-btn"

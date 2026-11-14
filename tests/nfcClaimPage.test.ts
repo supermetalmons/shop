@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach, mock, type TestContext } from 'node:test';
 import { createElement } from 'react';
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, type Transaction, type VersionedTransaction } from '@solana/web3.js';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -44,8 +44,8 @@ function walletState(publicKey: PublicKey | null = null) {
     connect: mock.fn(async () => undefined),
     disconnect: mock.fn(async () => undefined),
     sendTransaction: mock.fn(async () => ''),
-    signTransaction: mock.fn(async (transaction) => transaction),
-    signAllTransactions: mock.fn(async (transactions) => transactions),
+    signTransaction: mock.fn(async <T extends Transaction | VersionedTransaction>(transaction: T) => transaction),
+    signAllTransactions: mock.fn(async <T extends Transaction | VersionedTransaction>(transactions: T[]) => transactions),
     signMessage: mock.fn(async () => new Uint8Array()),
     signIn: undefined,
   } satisfies WalletContextState;

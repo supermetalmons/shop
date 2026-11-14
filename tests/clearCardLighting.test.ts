@@ -1,83 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   createClearCardLightingPreset,
   DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
+  parseClearCardLightingConfigJson,
+  serializeClearCardLightingConfig,
 } from '../src/clearCardLighting.ts';
 
-test('light storefront preset keeps the supplied white-background lighting values', () => {
-  const config = createClearCardLightingPreset('dgpm-light-upcoming-white-bg');
+const approved = JSON.parse(readFileSync(new URL('./fixtures/clearCardLighting.json', import.meta.url), 'utf8'));
 
-  assert.equal(config.renderer.toneMapping, 'aces');
-  assert.equal(config.renderer.exposure, 1.25);
-  assert.equal(config.environment.mode, 'room');
-  assert.equal(config.environment.rotation, 121);
-  assert.deepEqual(config.point.position, { x: -6.5, y: 1.2, z: 3 });
-  assert.equal(config.point.intensity, 17);
-  assert.equal(config.point.decay, 0.4);
-  assert.equal(config.spot.intensity, 110);
-  assert.equal(config.transmission.cardAlpha, 0.3);
-  assert.equal(config.transmission.packAlpha, 0.13);
+test('storefront lighting exactly preserves the approved light and dark configurations', () => {
+  assert.deepEqual(createClearCardLightingPreset(), approved.light);
+  assert.deepEqual(createClearCardLightingPreset(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, { darkMode: true }), approved.dark);
 });
 
-test('final candidate duplicates the light storefront preset', () => {
-  const source = createClearCardLightingPreset('dgpm-light-upcoming-white-bg');
-  const candidate = createClearCardLightingPreset('final_candidate');
+test('editing a lighting configuration never changes subsequent viewer configurations', () => {
+  const edited = createClearCardLightingPreset();
+  edited.environment.sky.keyIntensity = 0;
+  edited.point.position.x = 0;
+  edited.transmission.packAlpha = 0;
 
-  assert.deepEqual(candidate, source);
+  assert.deepEqual(createClearCardLightingPreset(), approved.light);
+  assert.deepEqual(createClearCardLightingPreset(undefined, { darkMode: true }), approved.dark);
 });
 
-test('final v1 uses the updated unpacking lighting', () => {
-  const expected = createClearCardLightingPreset('dgpm-light-upcoming-white-bg');
-  expected.renderer.exposure = 1;
-  expected.environment.intensity = 1.8;
-  expected.spot.intensity = 109;
-  expected.transmission.packAlpha = 0.76;
-
-  const finalV1 = createClearCardLightingPreset('final_v1');
-
-  assert.deepEqual(finalV1, expected);
+test('lighting editor exports round-trip both approved configurations', () => {
+  for (const config of [approved.light, approved.dark]) {
+    assert.deepEqual(parseClearCardLightingConfigJson(JSON.stringify(config)), config);
+    assert.deepEqual(parseClearCardLightingConfigJson(serializeClearCardLightingConfig(config)), config);
+  }
 });
 
-test('final v2 duplicates final v1 with lower pack alpha', () => {
-  const expected = createClearCardLightingPreset('final_v1');
-  expected.transmission.packAlpha = 0.55;
-
-  const finalV2 = createClearCardLightingPreset('final_v2');
-
-  assert.deepEqual(finalV2, expected);
+test('partial raw and version-one lighting imports preserve their original defaults', () => {
+  const defaults = approved.importDefaults;
+  for (const [partial, expected] of [
+    [{}, defaults],
+    [{ renderer: { exposure: 1.5 } }, { ...defaults, renderer: { ...defaults.renderer, exposure: 1.5 } }],
+    [{ ambient: { enabled: false }, point: { position: { x: -4 } }, transmission: { packAlpha: 0 } }, {
+      ...defaults,
+      ambient: { ...defaults.ambient, enabled: false },
+      point: { ...defaults.point, position: { ...defaults.point.position, x: -4 } },
+      transmission: { ...defaults.transmission, packAlpha: 0 },
+    }],
+  ]) {
+    assert.deepEqual(parseClearCardLightingConfigJson(JSON.stringify(partial)), expected);
+    assert.deepEqual(parseClearCardLightingConfigJson(JSON.stringify({ version: 1, config: partial })), expected);
+  }
 });
 
-test('final v3 adapts pack alpha to the color scheme', () => {
-  const expectedLight = createClearCardLightingPreset('final_v1');
-  expectedLight.transmission.packAlpha = 0.55;
-  const expectedDark = createClearCardLightingPreset('final_v1');
-  expectedDark.transmission.packAlpha = 0.76;
-
-  const light = createClearCardLightingPreset('final_v3');
-  const dark = createClearCardLightingPreset('final_v3', { darkMode: true });
-
-  assert.deepEqual(light, expectedLight);
-  assert.deepEqual(dark, expectedDark);
-});
-
-test('final v4 duplicates final v3 with four physical lights disabled and is the default', () => {
-  const expectedLight = createClearCardLightingPreset('final_v3');
-  expectedLight.hemisphere.enabled = false;
-  expectedLight.area.enabled = false;
-  expectedLight.point.enabled = false;
-  expectedLight.spot.enabled = false;
-  const expectedDark = createClearCardLightingPreset('final_v3', { darkMode: true });
-  expectedDark.hemisphere.enabled = false;
-  expectedDark.area.enabled = false;
-  expectedDark.point.enabled = false;
-  expectedDark.spot.enabled = false;
-
-  const light = createClearCardLightingPreset('final_v4');
-  const dark = createClearCardLightingPreset('final_v4', { darkMode: true });
-
-  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v4');
-  assert.deepEqual(light, expectedLight);
-  assert.deepEqual(dark, expectedDark);
-  assert.deepEqual(createClearCardLightingPreset(), light);
+test('lighting imports reject unsupported values', () => {
+  assert.throws(() => parseClearCardLightingConfigJson('{'), /valid JSON/);
+  assert.throws(() => parseClearCardLightingConfigJson('{"version":2,"config":{}}'), /version/);
+  assert.throws(() => parseClearCardLightingConfigJson('{"renderer":{"toneMapping":"invalid"}}'), /unsupported/);
+  assert.throws(() => parseClearCardLightingConfigJson('{"transmission":{"packAlpha":2}}'), /between/);
 });

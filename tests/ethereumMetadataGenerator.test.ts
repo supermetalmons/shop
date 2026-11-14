@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -274,18 +275,18 @@ test('generation writes complete ledger batches when filesystem writes are short
   const failure = new Error('Stop after the first ledger batch');
   let ledgerFd = -1;
   let shortWrites = 0;
-  t.mock.method(fs, 'open', async (path, flags, mode) => {
+  mockMethod(t, fs, 'open', async (path, flags, mode) => {
     const handle = await originalOpen(path, flags, mode);
     if (path === join(directory, 'objects.jsonl.tmp')) ledgerFd = handle.fd;
     return handle;
   });
-  t.mock.method(fs, 'writeFile', (path, data, options) => path === join(directory, '65.json')
+  mockMethod(t, fs, 'writeFile', (path, data, options) => path === join(directory, '65.json')
     ? Promise.reject(failure) : originalWrite(path, data, options));
-  t.mock.method(binding, 'writeBuffer', (...args) => {
+  mockMethod(t, binding, 'writeBuffer', (...args) => {
     if (args[0] === ledgerFd && args[3] > 97) { args[3] = 97; shortWrites++; }
     return writeBuffer(...args);
   });
-  t.mock.method(binding, 'writeString', (...args) => {
+  mockMethod(t, binding, 'writeString', (...args) => {
     if (args[0] === ledgerFd && args[1].length > 97) { args[1] = args[1].slice(0, 97); shortWrites++; }
     return writeString(...args);
   });
@@ -319,9 +320,9 @@ test('generation drains pending object writes before releasing its lock after a 
   const writes: Array<Promise<void>> = [];
   let closed = false;
   let settled = false;
-  t.mock.method(fs, 'readFile', (async (path, options) => String(path).endsWith('/scripts/ethereum-metadata/templates/artwork.json')
-    ? source : originalRead(path, options)) as typeof fs.readFile);
-  t.mock.method(fs, 'writeFile', (path, data, options) => {
+  mockMethod(t, fs, 'readFile', async (path, options) => String(path).endsWith('/scripts/ethereum-metadata/templates/artwork.json')
+    ? source : originalRead(path, options));
+  mockMethod(t, fs, 'writeFile', (path, data, options) => {
     if (String(path).startsWith(`${directory}/`) && /\/\d+\.json$/.test(String(path))) {
       if (writes.length === 9) return Promise.reject(new Error('Unexpected object beyond the regression fixture'));
       const write = release.promise.then(() => originalWrite(path, data, options));
@@ -331,7 +332,7 @@ test('generation drains pending object writes before releasing its lock after a 
     }
     return originalWrite(path, data, options);
   });
-  t.mock.method(fs, 'open', async (path, flags, mode) => {
+  mockMethod(t, fs, 'open', async (path, flags, mode) => {
     const handle = await originalOpen(path, flags, mode);
     const close = handle.close.bind(handle);
     t.mock.method(handle, 'close', () => { closed = true; return close(); });
@@ -370,7 +371,7 @@ test('generation drains sibling template writes and preserves the first failure 
   const writes: Array<Promise<void>> = [];
   let releasing = false;
   let settled = false;
-  t.mock.method(fs, 'writeFile', (path, data, options) => {
+  mockMethod(t, fs, 'writeFile', (path, data, options) => {
     if (path === join(directory, 'templates', 'artwork.json')) return Promise.reject(failure);
     if (path === join(directory, 'templates', 'crate.json')) {
       const write = release.promise.then(() => originalWrite(path, data, options));
@@ -380,7 +381,7 @@ test('generation drains sibling template writes and preserves the first failure 
     }
     return originalWrite(path, data, options);
   });
-  t.mock.method(fs, 'rm', (path, options) => {
+  mockMethod(t, fs, 'rm', (path, options) => {
     if (String(path).startsWith(`${lock}/`)) releasing = true;
     return originalRemove(path, options);
   });

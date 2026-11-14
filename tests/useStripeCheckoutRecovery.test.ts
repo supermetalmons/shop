@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, mock } from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -30,7 +31,7 @@ beforeEach(() => {
   dom.window.localStorage.clear();
   dom.window.history.replaceState(null, '', '/');
   presentSessionIds = [];
-  mock.method(globalThis, 'fetch', async (input, init) => {
+  mockMethod({ mock }, globalThis, 'fetch', async (input, init) => {
     if (String(input) === '/api/auth/anonymous/session') {
       return Response.json({ subject: SUBJECT, refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000 });
     }
@@ -208,7 +209,7 @@ test('presence failures keep checkout markers unresolved and retry without assum
   t.mock.method(console, 'warn', () => undefined);
   checkout('cs_unknown');
   let presenceCalls = 0;
-  t.mock.method(globalThis, 'fetch', async (input) => {
+  mockMethod(t, globalThis, 'fetch', async (input) => {
     if (String(input) === '/api/auth/anonymous/session') {
       return Response.json({ subject: SUBJECT, refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000 });
     }
@@ -238,7 +239,7 @@ test('late presence from a previous wallet cannot clear markers for the current 
   checkout('cs_old_owner');
   const pending = deferred<Response>();
   let presenceCalls = 0;
-  t.mock.method(globalThis, 'fetch', async (input) => {
+  mockMethod(t, globalThis, 'fetch', async (input) => {
     if (String(input) === '/api/auth/anonymous/session') {
       return Response.json({ subject: SUBJECT, refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000 });
     }
@@ -263,7 +264,7 @@ test('a changed server wallet cannot retire checkout markers for the expected wa
   t.mock.method(console, 'error', () => undefined);
   checkout('cs_rebound');
   let presenceCalls = 0;
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  mockMethod(t, globalThis, 'fetch', async (input, init) => {
     if (String(input) === '/api/auth/anonymous/session' || String(input) === '/api/auth/anonymous/refresh') {
       return Response.json({ subject: SUBJECT, refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000 });
     }
@@ -321,7 +322,7 @@ test('anonymous recovery stops polling for a present session outside the first h
   let historyCalls = 0;
   let presenceCalls = 0;
   const nextCursor = { version: 1, owner: SUBJECT, sortAtMs: 1_700_000_000_000, documentPath: 'drops/test-drop/deliveryOrders/50' };
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  mockMethod(t, globalThis, 'fetch', async (input, init) => {
     const path = String(input);
     if (path === '/api/auth/anonymous/session') {
       return Response.json({ subject: SUBJECT, refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000 });
@@ -355,7 +356,7 @@ test('anonymous recovery loads its history snapshot after presence confirms fulf
   const presence = deferred<Response>();
   let historyCalls = 0;
   let fulfilled = false;
-  t.mock.method(globalThis, 'fetch', async (input) => {
+  mockMethod(t, globalThis, 'fetch', async (input) => {
     const path = String(input);
     if (path === '/api/auth/anonymous/session') {
       return Response.json({ subject: SUBJECT, refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000 });
@@ -385,7 +386,7 @@ test('anonymous fallback waits for auth resolution and hides when a wallet conne
   checkout('cs_anonymous');
   const historyResponse = deferred<Response>();
   const requests: string[] = [];
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  mockMethod(t, globalThis, 'fetch', async (input, init) => {
     const path = String(input);
     requests.push(path);
     if (path === '/api/auth/anonymous/session') {

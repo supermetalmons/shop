@@ -7,7 +7,7 @@ import bs58 from 'bs58';
 import test, { type TestContext } from 'node:test';
 import {
   AddressLookupTableProgram, ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram,
-  TransactionMessage, VersionedTransaction, type AccountInfo,
+  TransactionMessage, VersionedTransaction, type AccountInfo, type TransactionConfirmationStrategy,
 } from '@solana/web3.js';
 import { parseStartMintArgs, resolveDeploymentConfig, runStartMint, type StartMintDependencies } from '../scripts/startMint.ts';
 import { getPreorderConfig, PREORDER_PAYMENT_RECIPIENTS } from '../shared/preorders.ts';
@@ -16,6 +16,7 @@ import { resolveDropConfigRole } from '../shared/dropConfigRoles.ts';
 import { parseMiNoteDropManifest, MI_NOTE_CLUSTER_GENESIS } from '../scripts/shared/miNoteDropManifest.ts';
 import { validateNewMiNoteDropConfigs } from '../scripts/shared/miNoteInventoryPreflight.ts';
 import { miNoteDropFixture } from './helpers/miNoteDropFixture.ts';
+import { mockMethod } from './helpers/mockMethod.ts';
 import { verifyMiNoteMintResources } from '../scripts/shared/miNoteMintResources.ts';
 import { preparePreorderCollectionConfig } from '../scripts/shared/preorderCollectionConfig.ts';
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards_devnet.ts';
@@ -95,25 +96,25 @@ async function fixture(t: TestContext, dual = true) {
   const mintAccount = (started = state.started) => account(configuration(drop, payer.publicKey, 'mint', started, state.minted));
   const operationsAccount = () => account(configuration(drop, payer.publicKey, 'operations', state.operationsStarted, state.operationsMinted));
   const connection = new Connection('https://fixture.example.com/?api-key=never-log-this-token');
-  t.mock.method(connection, 'getGenesisHash', async () => MI_NOTE_CLUSTER_GENESIS.devnet);
-  t.mock.method(connection, 'getMultipleAccountsInfoAndContext', async (keys: PublicKey[]) => ({ context: { slot: state.slot },
+  mockMethod(t, connection, 'getGenesisHash', async () => MI_NOTE_CLUSTER_GENESIS.devnet);
+  mockMethod(t, connection, 'getMultipleAccountsInfoAndContext', async (keys: PublicKey[]) => ({ context: { slot: state.slot },
     value: keys.map((key) => key.toBase58() === drop.boxMinterConfigPda ? mintAccount() : operationsAccount()) }));
-  t.mock.method(connection, 'getLatestBlockhash', async (options) => {
+  mockMethod(t, connection, 'getLatestBlockhash', async (options) => {
     assert.deepEqual(options, { commitment: 'finalized', minContextSlot: state.slot });
     const blockhash = new PublicKey(new Uint8Array(32).fill(state.nextHash++)).toBase58();
     const lastValidBlockHeight = state.height + 100; blockhashes.set(blockhash, lastValidBlockHeight);
     return { blockhash, lastValidBlockHeight };
   });
-  t.mock.method(connection, 'getLatestBlockhashAndContext', async options => ({
+  mockMethod(t, connection, 'getLatestBlockhashAndContext', async options => ({
     context: { slot: state.slot }, value: await connection.getLatestBlockhash(options),
   }));
-  t.mock.method(connection, 'getBlockHeight', async () => state.height);
-  t.mock.method(connection, 'getEpochInfo', async () => ({ epoch: 1, slotIndex: 1, slotsInEpoch: 1000, absoluteSlot: state.slot, blockHeight: state.height }));
-  t.mock.method(connection, 'isBlockhashValid', async (hash) => ({ context: { slot: state.slot }, value: state.height <= (blockhashes.get(hash) ?? 0) }));
-  t.mock.method(connection, 'getSignatureStatuses', async (signatures) => ({ context: { slot: state.slot },
+  mockMethod(t, connection, 'getBlockHeight', async () => state.height);
+  mockMethod(t, connection, 'getEpochInfo', async () => ({ epoch: 1, slotIndex: 1, slotsInEpoch: 1000, absoluteSlot: state.slot, blockHeight: state.height }));
+  mockMethod(t, connection, 'isBlockhashValid', async (hash) => ({ context: { slot: state.slot }, value: state.height <= (blockhashes.get(hash) ?? 0) }));
+  mockMethod(t, connection, 'getSignatureStatuses', async (signatures) => ({ context: { slot: state.slot },
     value: signatures.map((signature) => statuses.has(signature) ? { ...statuses.get(signature)!, confirmations: null } : null) }));
-  t.mock.method(connection, 'getFeeForMessage', async () => ({ context: { slot: state.slot }, value: 5000 }));
-  t.mock.method(connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
+  mockMethod(t, connection, 'getFeeForMessage', async () => ({ context: { slot: state.slot }, value: 5000 }));
+  mockMethod(t, connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
     state.simulations += 1;
     state.simulatedBlockhashes.push(transaction.message.recentBlockhash);
     const instructions = TransactionMessage.decompile(transaction.message).instructions;
@@ -126,9 +127,9 @@ async function fixture(t: TestContext, dual = true) {
         return { ...value, owner: value.owner.toBase58(), data: [value.data.toString('base64'), 'base64'] };
       }) } };
   });
-  t.mock.method(connection, 'sendRawTransaction', async (bytes) => {
+  mockMethod(t, connection, 'sendRawTransaction', async (bytes) => {
     const encoded = Buffer.from(bytes).toString('base64');
-    const transaction = VersionedTransaction.deserialize(bytes);
+    const transaction = VersionedTransaction.deserialize(Buffer.from(bytes));
     const signature = bs58.encode(transaction.signatures[0]);
     if (dual) {
       const journal = JSON.parse(readFileSync(activationPath, 'utf8'));
@@ -145,7 +146,7 @@ async function fixture(t: TestContext, dual = true) {
     if (failure === 'after') throw new Error('lost after landing');
     return signature;
   });
-  t.mock.method(connection, 'confirmTransaction', async (strategy) => {
+  mockMethod(t, connection, 'confirmTransaction', async (strategy: string | TransactionConfirmationStrategy) => {
     const status = statuses.get(typeof strategy === 'string' ? strategy : strategy.signature)!;
     return { context: { slot: status.slot }, value: { err: status.err } };
   });
@@ -221,7 +222,7 @@ function resourceFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>,
   ]);
   const resources = { accounts, collection, tree, treeConfig, lookup, treeConfigKey, slot: undefined as number | undefined, reads: 0 };
   const read = f.connection.getMultipleAccountsInfoAndContext.bind(f.connection);
-  t.mock.method(f.connection, 'getMultipleAccountsInfoAndContext', async (keys: PublicKey[], options) => {
+  mockMethod(t, f.connection, 'getMultipleAccountsInfoAndContext', async (keys: PublicKey[], options) => {
     if (keys[0]?.toBase58() !== drop.collectionMint) return read(keys, options);
     assert.deepEqual(options, { commitment: 'finalized', minContextSlot: f.state.slot });
     resources.reads += 1;
@@ -273,11 +274,11 @@ test('activation simulation waits for the blockhash context when it is newer tha
   const f = await fixture(t);
   const latest = f.connection.getLatestBlockhashAndContext.bind(f.connection);
   const simulate = f.connection.simulateTransaction.bind(f.connection);
-  t.mock.method(f.connection, 'getLatestBlockhashAndContext', async options => {
+  mockMethod(t, f.connection, 'getLatestBlockhashAndContext', async options => {
     const result = await latest(options);
     return { ...result, context: { slot: f.state.slot + 2 } };
   });
-  t.mock.method(f.connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
+  mockMethod(t, f.connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
     assert.equal(options?.minContextSlot, f.state.slot + 2);
     const result = await simulate(transaction, options);
     return { ...result, context: { slot: f.state.slot + 2 } };
@@ -423,14 +424,14 @@ test('a reused blockhash cannot duplicate activation history and a fresh retry s
   const original = readFileSync(f.activationPath, 'utf8');
   const first = JSON.parse(original).attempts[0];
   const freshBlockhash = f.connection.getLatestBlockhash.bind(f.connection);
-  t.mock.method(f.connection, 'getLatestBlockhash', async (options) => {
+  mockMethod(t, f.connection, 'getLatestBlockhash', async (options) => {
     assert.deepEqual(options, { commitment: 'finalized', minContextSlot: f.state.slot });
     return { blockhash: first.blockhash, lastValidBlockHeight: first.lastValidBlockHeight };
   });
   await assert.rejects(f.run(), /reused a previous activation blockhash/);
   assert.equal(readFileSync(f.activationPath, 'utf8'), original);
   assert.equal(f.state.sends.length, 1);
-  t.mock.method(f.connection, 'getLatestBlockhash', freshBlockhash);
+  mockMethod(t, f.connection, 'getLatestBlockhash', freshBlockhash);
   assert.equal((await f.run()).active, true);
   const attempts = JSON.parse(readFileSync(f.activationPath, 'utf8')).attempts;
   assert.equal(attempts.length, 2);

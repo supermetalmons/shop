@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fulfillmentOrderFromRecord } from '../shared/fulfillmentReadModel.ts';
@@ -79,7 +80,7 @@ test('fulfillment previews deduplicate only pending reads within the same scope 
   const held = new Promise<void>(resolve => { release = resolve; });
   let image = 'data:image/svg+xml;base64,Zmlyc3Q=';
   const requests: RequestInit[] = [];
-  const fetch = t.mock.method(globalThis, 'fetch', async (_input, init) => {
+  const fetch = mockMethod(t, globalThis, 'fetch', async (_input, init) => {
     requests.push(init ?? {});
     await held;
     return Response.json({ image });

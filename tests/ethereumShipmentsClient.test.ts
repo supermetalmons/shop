@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ETHEREUM_SESSION_HEADER, type EthereumSession } from '../shared/ethereum/api.ts';
@@ -15,7 +16,7 @@ const cursor: ShipmentHistoryCursor = {
 test('shipment client retains the existing call shape and sends optional pagination with the session and signal', async t => {
   const calls: Array<{ url: URL; init: RequestInit | undefined }> = [];
   let value: unknown = { orders: [] };
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  mockMethod(t, globalThis, 'fetch', async (input, init) => {
     calls.push({ url: new URL(String(input), 'https://mons.shop'), init });
     return Response.json(value);
   });

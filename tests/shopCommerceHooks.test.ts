@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { useRef } from 'react';
@@ -482,7 +483,7 @@ for (const finish of ['present', 'wallet-change', 'unmount'] as const) {
     const connectedWalletRef = { current: walletA as string | null };
     const ownerRef = { current: walletA as string | undefined };
     const delivery = { dropId: drop.dropId, deliveryId: 77 };
-    context.mock.method(globalThis, 'fetch', async (input, init) => {
+    mockMethod(context, globalThis, 'fetch', async (input, init) => {
       if (String(input) === '/api/auth/anonymous/session') {
         return Response.json({
           subject: 'anon:00000000-0000-4000-8000-000000000001',
@@ -540,7 +541,7 @@ for (const failure of ['incomplete', 'rejected'] as const) {
     const connectedWalletRef = { current: walletA as string | null };
     const ownerRef = { current: walletA as string | undefined };
     const delivery = { dropId: drop.dropId, deliveryId: 77 };
-    context.mock.method(globalThis, 'fetch', async (input, init) => {
+    mockMethod(context, globalThis, 'fetch', async (input, init) => {
       if (String(input) === '/api/auth/anonymous/session') {
         return Response.json({
           subject: 'anon:00000000-0000-4000-8000-000000000001',

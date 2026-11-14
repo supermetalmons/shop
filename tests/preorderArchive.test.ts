@@ -24,13 +24,15 @@ function fixture(slots = [100, 101, 103, 104]) {
   }]));
   const calls: Array<[number, number]> = [];
   const fetched: number[] = [];
-  const connection = {
-    getBlocks: async (start: number, end: number, commitment: string) => {
+  const connection: Pick<Connection, 'getBlocks' | 'getBlockSignatures'> = {
+    getBlocks: async (start, end, commitment) => {
       assert.equal(commitment, 'finalized');
+      assert.notEqual(end, undefined);
+      assert.ok(typeof end === 'number');
       calls.push([start, end]);
       return slots.filter((slot) => slot >= start && slot <= end);
     },
-    getBlockSignatures: async (slot: number, commitment: string) => {
+    getBlockSignatures: async (slot, commitment) => {
       assert.equal(commitment, 'finalized');
       fetched.push(slot);
       return blocks.get(slot)!;
@@ -137,7 +139,8 @@ test('the installed Solana SDK retains blockHeight in signature-only archive res
     } else {
       assert.equal(request.method, 'getBlock');
       assert.deepEqual(request.params[1], { commitment: 'finalized', transactionDetails: 'signatures', rewards: false });
-      result = await h.connection.getBlockSignatures(request.params[0], request.params[1].commitment);
+      assert.equal(request.params[1].commitment, 'finalized');
+      result = await h.connection.getBlockSignatures(request.params[0], 'finalized');
     }
     return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }));
   } });

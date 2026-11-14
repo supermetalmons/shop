@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import { testPre111kConfig } from './helpers/pre111k.ts';
 import { registerHooks } from 'node:module';
@@ -32,12 +33,12 @@ beforeEach(context => {
   prepareCalls = 0;
   window.localStorage.setItem('mons.shop.pre111k.access-code', 'TESTPASS');
   t.mock.method(pre111kApi, 'verifyAccess', async () => ({ ok: true }));
-  t.mock.method(pre111kApi, 'status', async (network, wallet) => ({ config: testPre111kConfig(network, { contractAddress: CONTRACT, enabled: true }), wallet,
+  mockMethod(t, pre111kApi, 'status', async (network, wallet) => ({ config: testPre111kConfig(network, { contractAddress: CONTRACT, enabled: true }), wallet,
     totalReserved: 0, reservedRelics: wallet ? 0 : null, remainingRelics: 17, observedBlock: 1, blockHash: HASH }));
-  t.mock.method(pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({
+  mockMethod(t, pre111kApi, 'confirm', async (_network, _wallet, transactionHash) => ({
     status: 'pending', confirmations: 0, transactionHash, reservationNonce: null,
   }));
-  t.mock.method(pre111kApi, 'prepare', async (network, wallet) => {
+  mockMethod(t, pre111kApi, 'prepare', async (network, wallet) => {
     prepareCalls++;
     const config = testPre111kConfig(network, { contractAddress: CONTRACT, enabled: true });
     const deadline = Math.floor(Date.now() / 1000) + 600;

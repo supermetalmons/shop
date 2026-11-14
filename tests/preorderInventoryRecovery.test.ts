@@ -51,6 +51,7 @@ test('durable preorder hints rotate beyond fifteen assets and retire only explic
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: () => records,
     resolvePreorders: (_owner, ids) => { resolved.push([...ids]); },
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       batches.push(options.expectedAssetIds?.['mainnet-beta'] ?? []);
       options.onPreorderAssetResolutions?.([]);
       return [item(1)];
@@ -60,12 +61,13 @@ test('durable preorder hints rotate beyond fifteen assets and retire only explic
   await load();
   assert.equal(batches[0].length, 15);
   assert.equal(new Set(batches.flat()).size, 18);
-  assert.deepEqual(resolved, []);
+  assert.deepEqual([...resolved], []);
   records = [record(1, 'succeeded')];
   await loadInventoryQuery(owner, { includeDevnet: false, useRecentExpectedAssets: true }, {
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: () => records,
     resolvePreorders: (_owner, ids) => { resolved.push([...ids]); },
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       options.onPreorderAssetResolutions?.([proof(1, false)]);
       return [];
     },
@@ -78,6 +80,7 @@ test('durable devnet preorder hints preserve public inventory scope', async () =
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: () => [record(2, 'submitted', 'mi_note_cards_devnet')],
     resolvePreorders() {},
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       assert.equal(options.includeDevnet, false);
       assert.deepEqual(options.expectedAssetIds, { devnet: [address(2)] });
       assert.equal(typeof options.onPreorderAssetResolutions, 'function');
@@ -102,7 +105,8 @@ test('inventory query rechecks failed orders after waiting for an unrelated rece
   const items = await loadInventoryQuery(owner, { includeDevnet: false, useRecentExpectedAssets: true }, {
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: () => records,
     resolvePreorders: async () => { await Promise.resolve(); records = [record(1, 'failed'), record(2, 'succeeded')]; },
-    fetchInventory: async (_owner, options) => { options.onPreorderAssetResolutions?.([proof(2, true)]); return [item(1), item(2)]; },
+    fetchInventory: async (_owner, options) => {
+      assert.ok(options); options.onPreorderAssetResolutions?.([proof(2, true)]); return [item(1), item(2)]; },
   });
   assert.deepEqual(items, [item(2)]);
 });
@@ -151,7 +155,8 @@ test('preorder backlog shares hints with ordinary mints without skipping unsent 
     await loadInventoryQuery(owner, { includeDevnet: false, useRecentExpectedAssets: true }, {
       prepare: (buyer, includeDevnet, options) => prepareRecentExpectedInventoryAssets(buyer, includeDevnet, { ...options, storage, now }),
       reconcile() {}, listPreorders: () => records, resolvePreorders() {},
-      fetchInventory: async (_owner, options) => { batches.push(options.expectedAssetIds?.['mainnet-beta'] ?? []); return []; },
+      fetchInventory: async (_owner, options) => {
+        assert.ok(options); batches.push(options.expectedAssetIds?.['mainnet-beta'] ?? []); return []; },
     });
   }
   assert.ok(batches.every((batch) => batch.length === 15 && batch.some((id) => ordinary.includes(id)) && batch.some((id) => !ordinary.includes(id))));
@@ -171,6 +176,7 @@ test('aborted inventory responses neither retire recoveries nor commit stale ite
     reconcile: () => assert.fail('Aborted response reconciled hints'), listPreorders: () => [record(1, 'succeeded')],
     resolvePreorders: () => assert.fail('Aborted response retired recovery'),
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       options.onPreorderAssetResolutions?.([proof(1, false)]);
       controller.abort();
       return [item(1)];
@@ -216,6 +222,7 @@ test('a cache missing a globally resolved owned asset requests fresh proof and r
   }, {
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       assert.deepEqual(options.expectedAssetIds, { 'mainnet-beta': [address(1)] });
       options.onPreorderAssetResolutions?.([proof(1, false)]);
       return [];
@@ -248,6 +255,7 @@ test('late positive receipts cannot undo newer negative evidence from another qu
       }, {
         prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
         fetchInventory: async (_owner, options) => {
+            assert.ok(options);
           const slot = ++proofSlot;
           if (wait) { started.resolve(); await finishOld.promise; }
           options.onPreorderAssetResolutions?.([proof(1, positive, slot)]);
@@ -284,6 +292,7 @@ test('aborted positive readmission retains the prior negative proof', async () =
   }, {
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       options.onPreorderAssetResolutions?.([proof(1, true)]);
       controller.abort();
       return [item(1)];
@@ -363,6 +372,7 @@ test('late negative receipts cannot undo newer positive evidence from another qu
       }, {
         prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
         fetchInventory: async (_owner, options) => {
+            assert.ok(options);
           const slot = ++proofSlot;
           if (wait) { started.resolve(); await finishOld.promise; }
           options.onPreorderAssetResolutions?.([proof(1, positive, slot)]);
@@ -402,6 +412,7 @@ for (const initiallyOwned of [false, true]) test(`sequential ${initiallyOwned ? 
     }, {
       prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
       fetchInventory: async (_owner, options) => {
+          assert.ok(options);
         assert.equal(options.onResolvedPreorderAssetIds, undefined);
         sentFloors.push(options.preorderMinContextSlots);
         options.onPreorderAssetResolutions?.([proof(1, owned, slot)]);
@@ -429,8 +440,10 @@ test('new inventory recovery ignores slotless legacy receipts without losing exi
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries,
     resolvePreorders: () => assert.fail('A legacy receipt cannot update proof state'),
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
+      const legacyReceipt = options.onResolvedPreorderAssetIds;
       assert.equal(options.onResolvedPreorderAssetIds, undefined);
-      options.onResolvedPreorderAssetIds?.([address(1)]);
+      legacyReceipt?.([address(1)]);
       return [item(1)];
     },
   });
@@ -535,6 +548,7 @@ test('slot floors are bounded to the actual selected hint batch', async () => {
     await loadInventoryQuery(owner, { includeDevnet: false, useRecentExpectedAssets: true }, {
       prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: () => records, resolvePreorders() {},
       fetchInventory: async (_owner, options) => {
+          assert.ok(options);
         const expected = options.expectedAssetIds?.['mainnet-beta'] ?? [];
         assert.equal(expected.length, 15);
         assert.deepEqual(new Set(Object.keys(options.preorderMinContextSlots!)), new Set(expected));
@@ -579,7 +593,7 @@ test('normal refreshes recheck old absences and stale Preorder rows beyond the r
   const visited = new Set<string>();
   const acknowledgedCards = new Set<string>();
   let converted = false;
-  const dependencies = {
+  const dependencies: Parameters<typeof loadInventoryQuery>[2] = {
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: () => records,
     resolvePreorders: (_owner: string, ids: readonly string[]) => {
       if (converted) {
@@ -588,7 +602,8 @@ test('normal refreshes recheck old absences and stale Preorder rows beyond the r
           ? { ...record, convertedAssetIds: [record.order.assets[0].address], ownedResolvedAssetIds: [record.order.assets[0].address] } : record);
       }
     },
-    fetchInventory: async (_owner: string, options: import('../src/lib/shopApi.ts').InventoryFetchOptions) => {
+    fetchInventory: async (_owner, options) => {
+      assert.ok(options);
       const selected = options.expectedAssetIds?.['mainnet-beta'] ?? [];
       assert.ok(selected.length > 0 && selected.length <= 15);
       for (const id of selected) visited.add(id);

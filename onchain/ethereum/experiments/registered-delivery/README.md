@@ -57,4 +57,4 @@ npm --prefix onchain/ethereum run check
 npm --prefix onchain/ethereum run gas:delivery
 ```
 
-The experimental tests have been integrated into the canonical contract suite, including constructor configuration 1. The historical runner uses frozen references and writes a separate reproduction report. The active delivery benchmark uses the canonical registered contract, including its constructor-initialized configuration.
+The experimental tests have been integrated into the canonical contract suite, including constructor configuration 1. `check` validates the current contract source and gas snapshots. Both delivery comparison commands reproduce historical studies: `gas:delivery:history` uses the frozen reference contracts, while `gas:delivery` checks out the pinned constructor-seeded implementation in a disposable workspace. Each writes a separate reproduction report without rewriting the original evidence.

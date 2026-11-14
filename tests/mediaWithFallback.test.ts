@@ -156,7 +156,7 @@ test('editing fallback sources preserves unchanged readiness and resets changed 
 
 test('cached completed images skip failed sources without waiting for load events', () => {
   mock.getter(dom.window.HTMLImageElement.prototype, 'complete', () => true);
-  mock.getter(dom.window.HTMLImageElement.prototype, 'naturalWidth', function () {
+  mock.getter(dom.window.HTMLImageElement.prototype, 'naturalWidth', function (this: HTMLImageElement) {
     return this.getAttribute('src') === '/failed.webp' ? 0 : 100;
   });
   const view = render(createElement(MediaWithFallback, props({

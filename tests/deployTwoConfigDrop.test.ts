@@ -17,6 +17,7 @@ import { preparePreorderCollectionConfig } from '../scripts/shared/preorderColle
 import { parseMiNoteDropManifest, MI_NOTE_CLUSTER_GENESIS } from '../scripts/shared/miNoteDropManifest.ts';
 import { resolveMiNoteCollectionDelegates } from '../scripts/shared/miNoteMintResources.ts';
 import { readDeploymentDropRegistry } from '../scripts/shared/deploymentRegistry.ts';
+import { mockMethod } from './helpers/mockMethod.ts';
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards.ts';
 import { NEW_PREORDER_COLLECTION as DEVNET_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards_devnet.ts';
 import { decodeMplCoreCollectionUpdateDelegates } from '../scripts/shared/mplCoreCollection.ts';
@@ -170,17 +171,17 @@ async function fixture(t: TestContext, mainnet = false) {
     slot: selectedManifest.chain.slot + 1, height: 100, failSend: '' as '' | 'before' | 'after', approval: true,
     afterConfirmation: undefined as (() => void) | undefined };
   const connection = new Connection('https://fixture.example.com');
-  t.mock.method(connection, 'getGenesisHash', async () => MI_NOTE_CLUSTER_GENESIS[plan.cluster]);
-  t.mock.method(connection, 'getAccountInfo', async key => accounts.get(key.toBase58()) || null);
-  t.mock.method(connection, 'getMultipleAccountsInfoAndContext', async keys => ({ context: { slot: state.slot }, value: keys.map(key => accounts.get(key.toBase58()) || null) }));
-  t.mock.method(connection, 'getMinimumBalanceForRentExemption', async () => 1_000_000);
-  t.mock.method(connection, 'getSlot', async () => state.slot);
-  t.mock.method(connection, 'getBlockHeight', async () => state.height);
-  t.mock.method(connection, 'getLatestBlockhash', async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: state.height + 100 }));
-  t.mock.method(connection, 'getFeeForMessage', async () => ({ context: { slot: state.slot }, value: 5000 }));
-  t.mock.method(connection, 'getSignatureStatuses', async values => ({ context: { slot: state.slot }, value: values.map(signature => signatures.has(signature)
+  mockMethod(t, connection, 'getGenesisHash', async () => MI_NOTE_CLUSTER_GENESIS[plan.cluster]);
+  mockMethod(t, connection, 'getAccountInfo', async key => accounts.get(key.toBase58()) || null);
+  mockMethod(t, connection, 'getMultipleAccountsInfoAndContext', async keys => ({ context: { slot: state.slot }, value: keys.map(key => accounts.get(key.toBase58()) || null) }));
+  mockMethod(t, connection, 'getMinimumBalanceForRentExemption', async () => 1_000_000);
+  mockMethod(t, connection, 'getSlot', async () => state.slot);
+  mockMethod(t, connection, 'getBlockHeight', async () => state.height);
+  mockMethod(t, connection, 'getLatestBlockhash', async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: state.height + 100 }));
+  mockMethod(t, connection, 'getFeeForMessage', async () => ({ context: { slot: state.slot }, value: 5000 }));
+  mockMethod(t, connection, 'getSignatureStatuses', async values => ({ context: { slot: state.slot }, value: values.map(signature => signatures.has(signature)
     ? { slot: signatures.get(signature)!, confirmations: null, err: null, confirmationStatus: 'finalized' as const } : null) }));
-  t.mock.method(connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
+  mockMethod(t, connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
     state.simulations += 1;
     const effects = new Map<string, AccountInfo<Buffer>>();
     const instructions = TransactionMessage.decompile(transaction.message).instructions.filter(instruction => !instruction.programId.equals(ComputeBudgetProgram.programId));
@@ -207,8 +208,8 @@ async function fixture(t: TestContext, mainnet = false) {
         return { ...effect, owner: effect.owner.toBase58(), data: [effect.data.toString('base64'), 'base64'] };
       }) } };
   });
-  t.mock.method(connection, 'sendRawTransaction', async raw => {
-    const transaction = VersionedTransaction.deserialize(raw);
+  mockMethod(t, connection, 'sendRawTransaction', async raw => {
+    const transaction = VersionedTransaction.deserialize(Buffer.from(raw));
     const signature = bs58.encode(transaction.signatures[0]);
     const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
     const entry = journal.transactions.find((entry: TwoConfigJournalTransaction) => entry.signature === signature);
@@ -223,7 +224,7 @@ async function fixture(t: TestContext, mainnet = false) {
     if (failure === 'after') throw new Error('transport lost after landing');
     return signature;
   });
-  t.mock.method(connection, 'confirmTransaction', async () => ({ context: { slot: state.slot }, value: { err: null } }));
+  mockMethod(t, connection, 'confirmTransaction', async () => ({ context: { slot: state.slot }, value: { err: null } }));
   const dependencies: Partial<TwoConfigDeploymentDependencies> = {
     createConnection: () => connection,
     loadConfig: async () => ({ config: structuredClone(config), configPath: 'fixture', knownDropIds: [plan.dropId] }),
@@ -326,7 +327,7 @@ test('a finalized-delegates-only journal safely resumes after correcting the ext
   const f = await fixture(t);
   const simulate = f.connection.simulateTransaction.bind(f.connection);
   let failMint = true;
-  t.mock.method(f.connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
+  mockMethod(t, f.connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
     const instructions = TransactionMessage.decompile(transaction.message).instructions;
     if (failMint && instructions.some(instruction => instruction.programId.toBase58() === f.plan.programId)) {
       failMint = false;
@@ -389,6 +390,7 @@ test('mainnet deploys the approved price and receivers into both stopped roles a
     assert.equal(config.priceLamports, 500_000_000n);
     assert.equal(config.discountPriceLamports, 500_000_000n);
     assert.equal(config.uriBase, 'https://cdn.lil.org/nft/mi_note_cards/json');
+    assert.ok(config.paymentRouting);
     assert.equal(new PublicKey(config.paymentRouting.deliveryPaymentReceiver).toBase58(), PREORDER_PAYMENT_RECIPIENTS[1]);
     assert.deepEqual(config.paymentRouting.mintProceeds.map(recipient => ({
       address: new PublicKey(recipient.address).toBase58(), percentage: recipient.percentage,
@@ -452,7 +454,7 @@ for (const finalitySource of ['finalized', 'state-verified', 'journal'] as const
     interruptPublication = false;
     let stale = true;
     const requestedFloors: number[] = [];
-    t.mock.method(f.connection, 'getMultipleAccountsInfoAndContext', async (keys, options) => {
+    mockMethod(t, f.connection, 'getMultipleAccountsInfoAndContext', async (keys, options) => {
       requestedFloors.push(typeof options === 'object' ? options.minContextSlot ?? 0 : 0);
       return { context: { slot: stale ? knownFinalizedSlot - 1 : f.state.slot },
         value: keys.map(key => stale && key.toBase58() === lookupAddress ? null : f.accounts.get(key.toBase58()) || null) };
@@ -571,7 +573,7 @@ test('manifest changes during masked signer entry block automatic approval befor
 
 test('simulation failure or a changed binary gate cannot reach signing or broadcasting', async t => {
   const f = await fixture(t);
-  t.mock.method(f.connection, 'simulateTransaction', async () => ({ context: { slot: f.state.slot }, value: { err: { Custom: 1 }, logs: [] } }));
+  mockMethod(t, f.connection, 'simulateTransaction', async () => ({ context: { slot: f.state.slot }, value: { err: { Custom: 1 }, logs: [] } }));
   await assert.rejects(f.run(), /simulation failed/);
   assert.equal(f.state.prompts, 0); assert.deepEqual(f.state.sends, []);
   f.dependencies.verifyGate = async () => { throw new Error('binary gate changed'); };
@@ -627,13 +629,13 @@ test('journal inspection distinguishes pending, failed, finalized, and definitiv
   assert.ok(validateTwoConfigJournalTransaction(entry, payer.publicKey.toBase58()));
   assert.throws(() => validateTwoConfigJournalTransaction({ ...entry, signature: bs58.encode(new Uint8Array(64)) }, payer.publicKey.toBase58()));
   const connection = new Connection('https://fixture.example.com');
-  t.mock.method(connection, 'getBlockHeight', async () => 101);
-  t.mock.method(connection, 'getSignatureStatuses', async () => ({ context: { slot: 1 }, value: [null] }));
+  mockMethod(t, connection, 'getBlockHeight', async () => 101);
+  mockMethod(t, connection, 'getSignatureStatuses', async () => ({ context: { slot: 1 }, value: [null] }));
   assert.deepEqual(await inspectTwoConfigJournalTransaction(connection, entry), { status: 'expired' });
   for (const [confirmationStatus, err, expected] of [
     ['confirmed', null, 'pending'], ['finalized', null, 'finalized'], ['finalized', { InstructionError: [0, 'Custom'] }, 'failed'],
   ] as const) {
-    t.mock.method(connection, 'getSignatureStatuses', async () => ({ context: { slot: 1 }, value: [{ slot: 1, confirmations: null, confirmationStatus, err }] }));
+    mockMethod(t, connection, 'getSignatureStatuses', async () => ({ context: { slot: 1 }, value: [{ slot: 1, confirmations: null, confirmationStatus, err }] }));
     assert.equal((await inspectTwoConfigJournalTransaction(connection, entry)).status, expected);
   }
 });

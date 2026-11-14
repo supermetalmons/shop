@@ -72,7 +72,9 @@ function transactionFixture(authority = Keypair.fromSeed(new Uint8Array(32).fill
       assert.equal(record.transactions[0].signature, bs58.encode(decoded.signatures[0]));
       return record.transactions[0].signature;
     },
-    getSignatureStatuses: async () => { events.push('confirm'); return { value: [{ err: null, confirmationStatus: 'finalized' }] }; },
+    getSignatureStatuses: async (): Promise<{ value: Array<{ err: null; confirmationStatus: string } | null> }> => {
+      events.push('confirm'); return { value: [{ err: null, confirmationStatus: 'finalized' }] };
+    },
     getBlockHeight: async () => 50,
   };
   return {

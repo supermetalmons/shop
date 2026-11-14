@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, useCallback, useRef, useState } from 'react';
@@ -67,13 +68,13 @@ beforeEach(context => {
   window.history.replaceState(null, '', '/111k_devnet');
   t.mock.method(ethereumApi, 'config', async () => config);
   t.mock.method(ethereumApi, 'stats', async () => stats());
-  t.mock.method(ethereumApi, 'relics', async (_config, address) => relicStatus(address));
+  mockMethod(t, ethereumApi, 'relics', async (_config, address) => relicStatus(address));
   t.mock.method(ethereumApi, 'relicMetadata', async () => Array.from({ length: 18 }, (_, i) => ({ name: `Relic #${i + 1}`, image })));
   t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [item()], nextCursor: null, observedBlock: 10 }));
   t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
     dropId: config.dropId, deploymentId: 'test', status: 'pending', artworks: [], retryAfterMs: 2_000 }));
-  t.mock.method(ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ chainId: config.chainId, contractAddress: contract,
+  mockMethod(t, ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ chainId: config.chainId, contractAddress: contract,
     dropId: config.dropId, deploymentId: 'test', artworks: [], retryAfterMs: 2_000,
     unresolved: tokenIds.map(tokenId => ({ tokenId, status: 'recovering' as const })) }));
 });
@@ -491,7 +492,7 @@ test('wallet connection errors toast once per occurrence and can repeat after cl
   const disconnected: EthereumWallet = { ...wallet, address: null, provider: null, status: 'disconnected' };
   const error = 'Wallet connection was cancelled. Try again when you’re ready.';
   const view = page({ wallet: disconnected, showToast: message => messages.push(message) });
-  assert.deepEqual(messages, []);
+  assert.equal(messages.length, 0);
   view.rerenderPage({ wallet: { ...disconnected, error } });
   assert.deepEqual(messages, [error]);
   view.rerenderPage({ wallet: { ...disconnected, error }, showToast: message => messages.push(message) });
@@ -804,14 +805,14 @@ for (const [label, result, canClaim] of [
   assert.equal(view.queryByText('Loading…'), null);
   fireEvent.click(button);
   assert.equal(view.container.querySelectorAll('.ethereum111k__relic-attention').length, 18);
-  assert.deepEqual(transactions, []);
+  assert.equal(transactions.length, 0);
   fireEvent.click(relic);
   assert.equal(relic.checked, true);
   assert.equal(view.container.querySelectorAll('.ethereum111k__relic-attention').length, 0);
-  assert.deepEqual(transactions, []);
+  assert.equal(transactions.length, 0);
   fireEvent.click(button);
   assert.equal(button.disabled, true);
-  assert.deepEqual(transactions, []);
+  assert.equal(transactions.length, 0);
   assert.deepEqual(readEthereumDropOperations(ethereumInventoryScope(config, owner)!), []);
 
   await act(async () => availability.resolve(relicStatus(owner, result)));
@@ -822,7 +823,7 @@ for (const [label, result, canClaim] of [
   } else {
     await waitFor(() => assert.ok(view.getByRole('button', { name: 'Claim' })));
     assert.equal(button.disabled, true);
-    assert.deepEqual(transactions, []);
+    assert.equal(transactions.length, 0);
     assert.deepEqual(readEthereumDropOperations(ethereumInventoryScope(config, owner)!), []);
   }
 });
@@ -840,11 +841,11 @@ test('an early relic selection and Claim survive the first configuration respons
   fireEvent.click(relic);
   fireEvent.click(button);
   assert.equal(relic.checked, true);
-  assert.deepEqual(view.transactions, []);
+  assert.equal(view.transactions.length, 0);
   await act(async () => { view.configuration.resolve(config); view.availability.resolve(stats()); });
   await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'config'])?.status, 'success'));
   assert.equal(relic.checked, true);
-  assert.deepEqual(view.transactions, []);
+  assert.equal(view.transactions.length, 0);
   await act(async () => availability.resolve(relicStatus()));
   await waitFor(() => assert.equal(view.transactions.length, 1));
   assert.equal(view.transactions[0].to, contract);
@@ -855,7 +856,7 @@ test('an early relic selection and Claim survive the first configuration respons
 test('a known deployment change clears a pending relic selection instead of continuing its Claim', async t => {
   const availability = deferred<EthereumRelicStatus>();
   const replacementContract = '0x4444444444444444444444444444444444444444';
-  t.mock.method(ethereumApi, 'relics', async target => target.contractAddress === contract
+  mockMethod(t, ethereumApi, 'relics', async target => target.contractAddress === contract
     ? availability.promise : relicStatus(owner, { contractAddress: replacementContract }));
   const view = await delayedMintPage(t);
   await act(async () => { view.configuration.resolve(config); view.availability.resolve(stats()); });
@@ -863,12 +864,12 @@ test('a known deployment change clears a pending relic selection instead of cont
   fireEvent.click(view.getByRole('radio', { name: 'Relic' }));
   fireEvent.click(view.getByRole('radio', { name: 'Relic #18' }));
   fireEvent.click(view.getByRole('button', { name: 'Claim' }));
-  assert.deepEqual(view.transactions, []);
+  assert.equal(view.transactions.length, 0);
   act(() => view.client.setQueryData(['ethereum111k', 'config'], { ...config, contractAddress: replacementContract }));
   await waitFor(() => assert.equal((view.getByRole('radio', { name: 'Relic #18' }) as HTMLInputElement).checked, false));
   await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'relics', config.chainId, replacementContract, owner])?.status, 'success'));
   await act(async () => availability.resolve(relicStatus()));
-  assert.deepEqual(view.transactions, []);
+  assert.equal(view.transactions.length, 0);
   assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
 });
 
@@ -927,12 +928,12 @@ test('guest Claim preserves the chosen ID through connection and submits it once
   assert.equal(claimButton.disabled, false);
   fireEvent.click(claimButton);
   assert.equal(connects, 0);
-  assert.deepEqual(transactions, []);
+  assert.equal(transactions.length, 0);
   assert.equal(view.container.querySelectorAll('.ethereum111k__relic-attention').length, 18);
   fireEvent.click(view.getByRole('radio', { name: 'Relic #18' }));
   assert.equal(view.container.querySelectorAll('.ethereum111k__relic-attention').length, 0);
   assert.equal(connects, 0);
-  assert.deepEqual(transactions, []);
+  assert.equal(transactions.length, 0);
   fireEvent.click(claimButton);
   assert.equal(connects, 1);
   await act(async () => view.rerenderPage({ wallet: { ...wallet, provider } }));
@@ -973,7 +974,7 @@ test('the combined inventory automatically loads every page and groups Ethereum 
   const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
   const relic = { ...item('117172', 'relic'), name: 'Relic #1' };
   const cursors: Array<string | null> = [];
-  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, cursor) => {
+  mockMethod(t, ethereumApi, 'inventory', async (_config, _owner, cursor) => {
     cursors.push(cursor);
     return cursor ? { items: [relic, item()], nextCursor: null, observedBlock: 10 }
       : { items: [artwork, item(), warehouse], nextCursor: 'next', observedBlock: 10 };

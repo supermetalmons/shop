@@ -22,7 +22,7 @@ test('checkout entry rejects unsupported drops, duplicate query parameters and m
     '?drop=111k_devnet&ids=1,1', '?drop=111k_devnet&ids=01', '?drop=111k_devnet&ids=0x1',
     '?drop=111k_devnet&ids=0', '?drop=111k_devnet&ids=-1', '?drop=111k_devnet&ids=1,,2',
     '?drop=111k_devnet&ids=1&state=%00', `?drop=111k_devnet&ids=1&state=${'a'.repeat(513)}`]) {
-    assert.throws(() => parseCheckoutEntry(search, origin), undefined, search);
+    assert.throws(() => parseCheckoutEntry(search, origin), search);
   }
   assert.throws(() => normalizeCheckoutTokenIds(Array.from({ length: 51 }, (_, index) => String(index + 1))));
   assert.throws(() => normalizeCheckoutTokenIds([(1n << 256n).toString()]));
@@ -52,7 +52,7 @@ test('checkout callbacks allow every path on both VVV origins and explicit Mons 
     'https://vvv.so/111k?', 'https://www.vvv.so/111k#', '//vvv.so/111k',
     '//evil.example', '/111k_devnet?next=evil', 'javascript:alert(1)', 'data:text/html,test',
     'https://mons.shop/other', 'https://localhost/111k_devnet', ' https://vvv.so/callback']) {
-    assert.throws(() => normalizeCheckoutCallback(callback, origin), undefined, callback);
+    assert.throws(() => normalizeCheckoutCallback(callback, origin), callback);
   }
   assert.throws(() => normalizeCheckoutCallback('/111k_devnet', 'https://evil.example'));
 });

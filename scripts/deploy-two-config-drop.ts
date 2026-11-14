@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -51,6 +51,7 @@ import {
   type TwoConfigDeploymentPlan, type TwoConfigJournalTransaction,
 } from './shared/twoConfigDeployment.ts';
 import { resolveMiNoteCollectionDelegates } from './shared/miNoteMintResources.ts';
+import { writeDurableJsonJournal } from './shared/durableJsonJournal.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const USAGE = 'npm run deploy-two-config-drop -- <dropId> --manifest <inventory.json> [--write] [--yes] [--allow-mainnet]';
@@ -205,23 +206,11 @@ type DeploymentJournal = {
 };
 
 function writeDurableJson(filePath: string, value: unknown, expectedContent?: string): string {
-  const content = `${JSON.stringify(value, null, 2)}\n`;
-  const directory = path.dirname(filePath);
-  mkdirSync(directory, { recursive: true });
-  if (expectedContent !== undefined && (!existsSync(filePath) || readFileSync(filePath, 'utf8') !== expectedContent)) {
-    throw new Error(`Public deployment file changed while in use: ${filePath}`);
-  }
-  const temporary = `${filePath}.${randomUUID()}.tmp`;
-  const descriptor = openSync(temporary, 'wx', 0o600);
-  try { writeFileSync(descriptor, content, 'utf8'); fsyncSync(descriptor); } finally { closeSync(descriptor); }
-  try {
-    if (expectedContent === undefined) linkSync(temporary, filePath);
-    else renameSync(temporary, filePath);
-    const parent = openSync(directory, 'r');
-    try { fsyncSync(parent); } finally { closeSync(parent); }
-  } finally { rmSync(temporary, { force: true }); }
-  if (readFileSync(filePath, 'utf8') !== content) throw new Error(`Public deployment file verification failed: ${filePath}`);
-  return content;
+  return writeDurableJsonJournal({
+    filePath, value, expectedSource: expectedContent,
+    changedMessage: `Public deployment file changed while in use: ${filePath}`,
+    verificationMessage: `Public deployment file verification failed: ${filePath}`,
+  });
 }
 
 type DeploymentContext = {

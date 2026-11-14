@@ -392,7 +392,7 @@ for (const scenario of [
     if (scenario.outcome === 'recover') {
       assert.deepEqual(await api.claimStripeReceipt(REQUEST), RESULT);
       assert.deepEqual(trace, ['auth:200', 'start:202', 'status:401', `auth:${scenario.response().status}`, 'status:401', 'auth:200', 'status:200']);
-      assert.equal(now, 2_000 + ('retryAfterMs' in scenario ? scenario.retryAfterMs : 2_000));
+      assert.equal(now, 2_000 + ('retryAfterMs' in scenario ? scenario.retryAfterMs ?? 2_000 : 2_000));
     } else {
       await assert.rejects(() => api.claimStripeReceipt(REQUEST), (error) => {
         assert.ok(error instanceof Error);

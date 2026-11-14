@@ -112,7 +112,7 @@ for (const [label, wallet] of [
       mintStatsReady: false,
       packStatusDropId: null,
       packStatusBreakdown: undefined,
-      packStatusDisplayLabels: undefined,
+      packStatusDisplayLabels: null,
       effectiveMintStats: { minted: 0, total: 627, remaining: 627, maxPerTx: 15, priceLamports: 500_000_000 },
       connectedWallet: wallet,
       publicKey: wallet ? new PublicKey(wallet) : null,

@@ -44,8 +44,8 @@ function headerRig({ session = walletA.toBase58(), connected = true }: { session
   const messages: string[] = [];
   const disconnectingChanges: boolean[] = [];
   const runtime = {
-    signOut: async () => undefined,
-    disconnect: async () => undefined,
+    signOut: async (): Promise<void> => {},
+    disconnect: async (): Promise<void> => {},
     signIn: async (_request?: { signal?: AbortSignal }) => true,
     refreshProfileState: async () => true,
   };
@@ -656,7 +656,7 @@ test('running mutations block disconnect while popup remains accessible, overlay
 
 test('balance uses a mainnet account slice, stays lazy, and refreshes on reopening', async () => {
   const requests: Array<{ endpoint: string; wallet: string; config: unknown }> = [];
-  mock.method(Connection.prototype, 'getAccountInfo', async function (key: PublicKey, config: unknown) {
+  mock.method(Connection.prototype, 'getAccountInfo', async function (this: Connection, key: PublicKey, config: unknown) {
     requests.push({ endpoint: this.rpcEndpoint, wallet: key.toBase58(), config });
     return { lamports: 1_234_500_000 };
   });

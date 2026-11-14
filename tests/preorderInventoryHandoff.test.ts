@@ -92,6 +92,7 @@ test('eighteen finalized preorders remain visible until collection search catche
   const load = () => loadInventoryQuery(owner, { includeDevnet: false, useRecentExpectedAssets: true }, {
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
     fetchInventory: async (_owner, options) => {
+        assert.ok(options);
       expectedBatches.push(options.expectedAssetIds?.['mainnet-beta'] ?? []);
       const response = await handleRequest(request('/inventory', { owner, includePreorderResolutions: true, includePreorderResolutionSlots: true, supportsConvertedPreorders: true,
         ...(options.preorderMinContextSlots ? { preorderMinContextSlots: options.preorderMinContextSlots } : {}),
@@ -180,6 +181,7 @@ test('older finalized negative proofs reject stale indexing until a new account 
     }, {
       prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
       fetchInventory: async (_owner, options) => {
+          assert.ok(options);
         expectedIds = options.expectedAssetIds?.['mainnet-beta'] ?? [];
         assert.ok(expectedIds.length <= 15);
         for (const id of expectedIds) selectedIds.add(id);

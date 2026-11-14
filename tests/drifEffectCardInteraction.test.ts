@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
+import test, { after, afterEach, beforeEach } from 'node:test';
 import { createElement } from 'react';
 import { DRIF_GLITTER_URL, DRIF_GRAIN_URL, type DrifCardConfig } from '../src/drifCards.ts';
 import { normalizeFigureDisplayImage } from '../src/lib/dropContent.ts';
@@ -29,7 +29,8 @@ const timers = new Map<number, () => void>();
 let time = 0;
 let nextId = 0;
 
-beforeEach((t: TestContext) => {
+beforeEach(t => {
+  assert.ok('mock' in t);
   time = 0;
   nextId = 0;
   frames.clear();
@@ -140,11 +141,12 @@ test('disabling interaction cancels pending animation and resets the pose withou
   assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
 });
 
-for (const wrapper of [
+const interactionWrappers: Array<{ className: string; 'data-card-interaction-surface'?: boolean }> = [
   { className: 'wip-reveal__card-item' },
   { className: 'reveal-overlay__media-item' },
   { className: 'doge-day-2026-wip-reveal__card-item', 'data-card-interaction-surface': true },
-]) {
+];
+for (const wrapper of interactionWrappers) {
   test(`${wrapper.className} preserves hover wake through its interaction wrapper`, t => {
     setMediaQueryMatches('(any-hover: hover) and (any-pointer: fine)', true);
     const renderCard = (interactive: boolean) => createElement('div', wrapper,

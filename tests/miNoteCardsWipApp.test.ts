@@ -111,7 +111,9 @@ function openPack(view: ReturnType<typeof render>) {
 }
 
 function renderedMiNoteCards() {
-  const cards = viewer().props.cards.map(({ imageSrc, foilSrc, textureSrc, effect }) => {
+  const displayedCards = viewer().props.cards;
+  assert.ok(displayedCards);
+  const cards = displayedCards.map(({ imageSrc, foilSrc, textureSrc, effect }) => {
     const id = imageSrc.match(/\/mi_note_cards\/fronts\/(\d+)\.webp$/)?.[1];
     assert.ok(id);
     assert.ok(Number(id) >= 1 && Number(id) <= 1430);
@@ -296,11 +298,19 @@ test('accessible folder actions select either GPU card and wait for its return a
     assert.equal(viewer().props.state.cardStage, 'pocket');
   }
   assert.deepEqual(viewer().calls.filter(call => call.startsWith('select:') || call === 'return'), ['select:0', 'return', 'select:1', 'return']);
-  act(() => viewer().props.onBackgroundTap());
+  act(() => {
+    const onBackgroundTap = viewer().props.onBackgroundTap;
+    assert.ok(onBackgroundTap);
+    onBackgroundTap();
+  });
   assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards preview' }), null);
   assert.equal(view.queryByRole('spinbutton', { name: 'Left card ID' }), null);
   assert.ok(view.getByRole('button', { name: 'View left card' }));
-  act(() => viewer().props.onBackgroundTap());
+  act(() => {
+    const onBackgroundTap = viewer().props.onBackgroundTap;
+    assert.ok(onBackgroundTap);
+    onBackgroundTap();
+  });
   assert.ok(view.getByRole('spinbutton', { name: 'Left card ID' }));
   fireEvent.click(view.getByRole('button', { name: 'Close Mi Note Cards folder' }));
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
@@ -479,8 +489,10 @@ test('card ID inputs update either card without resetting the open folder or ins
   fireEvent.change(right, { target: { value: '2' } });
   assert.equal(viewer(), initial);
   assert.equal(viewer().props.state, inspecting);
-  assert.equal(viewer().props.cards[0].imageSrc, 'https://cdn.lil.org/nft/mi_note_cards/fronts/2.webp');
-  assert.deepEqual(viewer().props.cards[0], viewer().props.cards[1]);
+  const cards = viewer().props.cards;
+  assert.ok(cards);
+  assert.equal(cards[0].imageSrc, 'https://cdn.lil.org/nft/mi_note_cards/fronts/2.webp');
+  assert.deepEqual(cards[0], cards[1]);
   assert.deepEqual([left.value, right.value], ['2', '2']);
 });
 

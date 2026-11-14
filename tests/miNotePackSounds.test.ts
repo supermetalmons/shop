@@ -61,7 +61,7 @@ test('Mi Note sounds use the eight supplied clips and preload without unlocking 
 
 test('the first interaction unlocks immediately and plays after its preload at the shared volume', async () => {
   const pending = Promise.withResolvers<void>();
-  const unlock = mock.method(player, 'initializeOnUserInteraction', async force => {
+  const unlock = mock.method(player, 'initializeOnUserInteraction', async (force: boolean) => {
     assert.equal(force, true);
     await pending.promise;
     player.isInitialized = true;
@@ -82,7 +82,7 @@ test('overlapping preload and playback serialize the initial fetch and audio dec
   const decoded = Promise.withResolvers<void>();
   let tapPreloads = 0;
   let activeTapPreloads = 0;
-  mock.method(player, 'preloadSound', async url => {
+  mock.method(player, 'preloadSound', async (url: string) => {
     if (url !== MI_NOTE_PACK_SOUND_URLS.folderTap) return;
     assert.equal(++activeTapPreloads, 1);
     await (++tapPreloads === 1 ? raw.promise : decoded.promise);
@@ -170,7 +170,7 @@ test('preload, unlock, and playback failures remain nonblocking and can retry', 
 for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
   test(`${dropId} inventory preloads its eight sounds instead of generic reveal clips`, async () => {
     const preload = mock.method(player, 'preloadSound');
-    const { result } = renderHook(() => useRevealAssets({ getDropConfig: getFrontendDrop, getDropContent: resolveDropContent }));
+    const { result } = renderHook(() => useRevealAssets({ getDropConfig: id => id ? getFrontendDrop(id) : undefined, getDropContent: resolveDropContent }));
     await act(async () => { result.current.preloadRevealAssetsForPackMedia(dropId, 9); });
     assert.deepEqual(preload.mock.calls.map(call => call.arguments[0]), Object.values(MI_NOTE_PACK_SOUND_URLS));
   });

@@ -68,18 +68,18 @@ beforeEach(() => {
   mock.method(dom.window.HTMLElement.prototype, 'getBoundingClientRect', () =>
     new dom.window.DOMRect(geometry.left, 0, geometry.width, geometry.height),
   );
-  mock.method(dom.window.HTMLMediaElement.prototype, 'play', function () {
+  mock.method(dom.window.HTMLMediaElement.prototype, 'play', function (this: HTMLMediaElement) {
     const state = mediaState(this);
     state.paused = false;
     state.plays += 1;
     return Promise.resolve();
   });
-  mock.method(dom.window.HTMLMediaElement.prototype, 'pause', function () {
+  mock.method(dom.window.HTMLMediaElement.prototype, 'pause', function (this: HTMLMediaElement) {
     const state = mediaState(this);
     state.paused = true;
     state.pauses += 1;
   });
-  mock.method(dom.window.HTMLMediaElement.prototype, 'load', function () {
+  mock.method(dom.window.HTMLMediaElement.prototype, 'load', function (this: HTMLMediaElement) {
     const state = mediaState(this);
     state.readyState = 0;
     state.error = null;

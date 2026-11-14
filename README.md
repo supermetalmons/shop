@@ -65,8 +65,8 @@ npm run check:all
 `check` is the routine repository gate: generated schema and Worker types,
 frontend, API, and strict operational-tool typechecks, TypeScript unit/runtime tests,
 portable renderer tests, Rust host tests, dead-code checks, production bundles,
-and Worker startup validation. Frontend/tool tests retain a separate TypeScript
-configuration while their fixtures are migrated to strict checking.
+and Worker startup validation. Frontend/tool tests use a separate TypeScript
+configuration that inherits the same strict checking as repository tools.
 `dry-run:frontend` and `dry-run:api` validate deployment bundles without publishing.
 
 `check:all` adds Solidity and gas checks, nested Ethereum TypeScript tests,
@@ -93,6 +93,12 @@ After catalog or schema changes, run `npm run generate:db` and
 `npm run check:db-generated`. Keep applied SQL and recorded schema checksums
 immutable. Knip discovers supported commands from `package.json`; dynamic
 configuration entry points are declared in `knip.ts`.
+
+Production export exceptions in `scripts/lib/productionExportsBaseline.mjs` record
+their reason and a current test, tool, Worker configuration, or compatibility guide.
+The check verifies that evidence still exists and references the export where
+applicable. `node scripts/check-production-exports.mjs --update` removes resolved
+entries; new exceptions require an explicit reason and evidence before updating.
 
 ## Current product state
 

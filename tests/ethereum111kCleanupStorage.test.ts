@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -25,7 +26,7 @@ test('replacement verification reads complete 355 KiB metadata and retains the s
   let contentLength = body.length;
   let reads = 0;
   t.mock.method(globalThis, 'fetch', async () => Response.json({ success: true, result: { id: 'a'.repeat(32), status: 'active' } }));
-  t.mock.method(S3Client.prototype, 'send', async command => {
+  mockMethod(t, S3Client.prototype, 'send', async command => {
     assert.ok(command instanceof GetObjectCommand);
     return { ContentLength: contentLength, Body: { transformToByteArray: async () => { reads++; return body; } } };
   });

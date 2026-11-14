@@ -59,7 +59,7 @@ function runtime() {
     status: async () => ({ order: null }),
     recoveries: async () => emptyPage(),
   };
-  const options = { config, buyer, signedIn: true, authenticatedBuyer: buyer,
+  const options: Parameters<typeof usePreorderRecovery>[0] = { config, buyer, signedIn: true, authenticatedBuyer: buyer,
     onSettled: (value: PreorderOrder) => { settled.push(value); } };
   return { api, options, cancelled, settled };
 }
@@ -577,7 +577,8 @@ test('an unknown possible submission cannot be replaced by a different active or
   await act(async () => {});
   assert.equal(calls, 2);
   assert.equal(result.current.recoveryReady, true);
-  assert.equal(result.current.order, null);
+  const unresolved = result.current;
+  assert.equal(unresolved.order, null);
   assert.deepEqual(result.current.pending, saved);
   assert.match(result.current.error!, /being checked/);
   await act(async () => { t.mock.timers.tick(3_000); });

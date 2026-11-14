@@ -272,6 +272,7 @@ test('default transaction confirmation accepts a proxy response slower than two 
   });
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     const request = JSON.parse(String(init.body));
     requestStarted();
     return new Promise<Response>((resolve, reject) => {
@@ -286,10 +287,10 @@ test('default transaction confirmation accepts a proxy response slower than two 
       const abort = () => {
         requestAborted = true;
         clearTimeout(responseTimer);
-        reject(init.signal?.reason);
+        reject(signal?.reason);
       };
-      init.signal.addEventListener('abort', abort, { once: true });
-      if (init.signal.aborted) abort();
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
     });
   }) as typeof fetch, async () => {
     const pending = confirmSubmittedTransactionByPolling(fake.connection, SIGNATURE);
@@ -310,6 +311,7 @@ test('default transaction confirmation keeps polling history after the reserved 
   let historyCalls = 0;
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     const request = JSON.parse(String(init.body));
     if (request.params[1]?.searchTransactionHistory !== true) {
       liveCalls += 1;
@@ -317,10 +319,10 @@ test('default transaction confirmation keeps polling history after the reserved 
       return new Promise<Response>((_resolve, reject) => {
         const abort = () => {
           activeLiveRequests -= 1;
-          reject(init.signal?.reason);
+          reject(signal?.reason);
         };
-        init.signal.addEventListener('abort', abort, { once: true });
-        if (init.signal.aborted) abort();
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
       });
     }
     historyCalls += 1;
@@ -373,6 +375,7 @@ test('default transaction confirmation exhausts the overall deadline while histo
   let historyRequestAborted = false;
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     const request = JSON.parse(String(init.body));
     const historical = request.params[1]?.searchTransactionHistory === true;
     if (!historical) {
@@ -385,10 +388,10 @@ test('default transaction confirmation exhausts the overall deadline while histo
       const abort = () => {
         if (historical) historyRequestAborted = true;
         else activeLiveRequests -= 1;
-        reject(init.signal?.reason);
+        reject(signal?.reason);
       };
-      init.signal.addEventListener('abort', abort, { once: true });
-      if (init.signal.aborted) abort();
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
     });
   }) as typeof fetch, async () => {
     const pending = confirmSubmittedTransactionByPolling(fake.connection, SIGNATURE);
@@ -482,15 +485,16 @@ test('HTTP signature polling propagates caller aborts', async () => {
   });
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     activeRequests += 1;
     requestStarted();
     return new Promise<Response>((_resolve, reject) => {
       const abort = () => {
         activeRequests -= 1;
-        reject(init.signal?.reason);
+        reject(signal?.reason);
       };
-      init.signal.addEventListener('abort', abort, { once: true });
-      if (init.signal.aborted) abort();
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
     });
   }) as typeof fetch, async () => {
     const pending = confirmSubmittedTransactionByPolling(fake.connection, SIGNATURE, {
@@ -518,6 +522,7 @@ test('request timeout aborts the active status fetch before the next poll starts
   });
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     calls += 1;
     assert.equal(activeRequests, 0);
     const request = JSON.parse(String(init.body));
@@ -535,10 +540,10 @@ test('request timeout aborts the active status fetch before the next poll starts
     return new Promise<Response>((_resolve, reject) => {
       const abort = () => {
         activeRequests -= 1;
-        reject(init.signal?.reason);
+        reject(signal?.reason);
       };
-      init.signal.addEventListener('abort', abort, { once: true });
-      if (init.signal.aborted) abort();
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
     });
   }) as typeof fetch, async () => {
     const pending = confirmSubmittedTransactionByPolling(fake.connection, SIGNATURE, {
@@ -609,6 +614,7 @@ test('blockhash request timeout aborts the stalled body before reconciliation co
   });
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     const request = JSON.parse(String(init.body));
     if (request.method === 'getSignatureStatuses') {
       statusCalls += 1;
@@ -629,10 +635,10 @@ test('blockhash request timeout aborts the stalled body before reconciliation co
         bodyStarted();
         const abort = () => {
           activeRequests -= 1;
-          reject(init.signal?.reason);
+          reject(signal?.reason);
         };
-        init.signal.addEventListener('abort', abort, { once: true });
-        if (init.signal.aborted) abort();
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
       }),
     } as unknown as Response;
   }) as typeof fetch, async () => {
@@ -660,6 +666,7 @@ test('caller abort cancels an active blockhash response body without another pol
   });
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     calls += 1;
     const request = JSON.parse(String(init.body));
     if (request.method === 'getSignatureStatuses') {
@@ -673,10 +680,10 @@ test('caller abort cancels an active blockhash response body without another pol
         bodyStarted();
         const abort = () => {
           activeRequests -= 1;
-          reject(init.signal?.reason);
+          reject(signal?.reason);
         };
-        init.signal.addEventListener('abort', abort, { once: true });
-        if (init.signal.aborted) abort();
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
       }),
     } as unknown as Response;
   }) as typeof fetch, async () => {
@@ -734,6 +741,7 @@ test('overall reconciliation deadline cancels an active blockhash body', async (
   });
   await withFetch((async (_input, init) => {
     assert.ok(init?.signal);
+    const signal = init.signal;
     const request = JSON.parse(String(init.body));
     if (request.method === 'getSignatureStatuses') {
       return signatureStatusResponse(request, null);
@@ -746,10 +754,10 @@ test('overall reconciliation deadline cancels an active blockhash body', async (
         bodyStarted();
         const abort = () => {
           activeRequests -= 1;
-          reject(init.signal?.reason);
+          reject(signal?.reason);
         };
-        init.signal.addEventListener('abort', abort, { once: true });
-        if (init.signal.aborted) abort();
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
       }),
     } as unknown as Response;
   }) as typeof fetch, async () => {

@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { encodeCall } from '../shared/ethereum/abi.ts';
@@ -103,7 +104,7 @@ test('closing a generation during scope enrichment cannot reopen it', t => {
   const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
   const setItem = prototype.setItem;
   let interleaved = false;
-  t.mock.method(prototype, 'setItem', function(key: string, value: string) {
+  mockMethod(t, prototype, 'setItem', function(key: string, value: string) {
     if (key === recordKey(hashA) && !interleaved) {
       interleaved = true;
       forgetEthereumRevealJob(scope, hashA, original.trackingId);
@@ -133,8 +134,8 @@ for (const [outer, inner] of [['add', 'add'], ['add', 'close'], ['close', 'add']
         forgetEthereumRevealJob(scope, hashB);
       }
     };
-    t.mock.method(prototype, 'setItem', function(key: string, value: string) { interleave(); setItem.call(this, key, value); });
-    t.mock.method(prototype, 'removeItem', function(key: string) { interleave(); removeItem.call(this, key); });
+    mockMethod(t, prototype, 'setItem', function(key: string, value: string) { interleave(); setItem.call(this, key, value); });
+    mockMethod(t, prototype, 'removeItem', function(key: string) { interleave(); removeItem.call(this, key); });
     if (outer === 'add') rememberEthereumRevealJob(scope, hashA, 1);
     else forgetEthereumRevealJob(scope, hashA);
     assert.ok(interleaved);
@@ -149,7 +150,8 @@ test('legacy reveal arrays remain read-only and stale legacy writes cannot reope
   const legacy = JSON.stringify([{ transactionHash: hashA, submittedAt: 1 }, { transactionHash: hashB, submittedAt: 2 },
     { transactionHash: hashB, submittedAt: 2 }, null, {}, { transactionHash: hashC, submittedAt: -1 }]);
   window.localStorage.setItem(legacyKey, legacy);
-  const writes = t.mock.method(Object.getPrototypeOf(window.localStorage), 'setItem');
+  const storagePrototype: Storage = Object.getPrototypeOf(window.localStorage);
+  const writes = t.mock.method(storagePrototype, 'setItem');
   assert.deepEqual(readEthereumRevealJobs(scope), [
     { transactionHash: hashA, submittedAt: 1, trackingId: 'legacy' },
     { transactionHash: hashB, submittedAt: 2, trackingId: 'legacy' },

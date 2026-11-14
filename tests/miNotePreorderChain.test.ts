@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import bs58 from 'bs58';
 import test, { type TestContext } from 'node:test';
@@ -51,7 +52,9 @@ test('a lagging finalized collection index retries the same minimum slot before 
   const fixture = chainFixture(t);
   const scan = fixture.connection.getProgramAccounts.bind(fixture.connection);
   const slots: number[] = [];
-  t.mock.method(fixture.connection, 'getProgramAccounts', async (program, options) => {
+  mockMethod(t, fixture.connection, 'getProgramAccounts', async (program, options) => {
+    assert.ok(options && typeof options === 'object');
+    assert.ok(options.minContextSlot !== undefined);
     slots.push(options.minContextSlot);
     if (slots.length === 1) throw new SolanaJSONRPCError({ code: -32016, message: 'Minimum context slot has not been reached' });
     return scan(program, options);

@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { discardLegacyBrowserState } from '../src/lib/discardLegacyBrowserState.ts';
@@ -80,7 +81,7 @@ test('failed removals do not prevent other retired records from being discarded'
   browser.localStorage.setItem(pendingKey, JSON.stringify(request));
   browser.sessionStorage.setItem(pendingKey, JSON.stringify(request));
   const remove = browser.localStorage.removeItem.bind(browser.localStorage);
-  context.mock.method(browser.localStorage, 'removeItem', key => {
+  mockMethod(context, browser.localStorage, 'removeItem', key => {
     if (key === reservation) throw new Error('Storage unavailable');
     remove(key);
   });
@@ -104,7 +105,7 @@ test('cleanup preserves a current pending request written after the retired valu
   const current = JSON.stringify({ ...request, orderId: 'new-order' });
   const get = browser.localStorage.getItem.bind(browser.localStorage);
   let reads = 0;
-  context.mock.method(browser.localStorage, 'getItem', key => {
+  mockMethod(context, browser.localStorage, 'getItem', key => {
     if (key === pendingKey && ++reads === 2) browser.localStorage.setItem(key, current);
     return get(key);
   });

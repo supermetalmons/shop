@@ -131,7 +131,7 @@ for (const { path, family, title, image } of [
           mintStatsReady: false,
           packStatusDropId: null,
           packStatusBreakdown: undefined,
-          packStatusDisplayLabels: undefined,
+          packStatusDisplayLabels: null,
           effectiveMintStats: undefined,
           connectedWallet: undefined,
           publicKey: null,
@@ -535,7 +535,8 @@ test('drop title and accessible X profile stay grouped separately from availabil
   const profile = view.getByRole('link', { name: 'Open @bis__cut on X' });
   assert.equal(profile.getAttribute('href'), 'https://x.com/bis__cut/status/2082471519683326394');
   const titleGroup = title.closest('.mint-panel__price');
-  assert.ok(titleGroup?.contains(profile));
+  assert.ok(titleGroup);
+  assert.ok(titleGroup.contains(profile));
   const availability = view.container.querySelector('.mint-panel__availability');
   assert.equal(availability?.textContent, '09 / 15 left');
   assert.equal(titleGroup.contains(availability), false);

@@ -28,8 +28,9 @@ function fixture() {
     connectedWallet: undefined, publicKey: null, owner: undefined, localAccountWallet: undefined,
     isViewerMode: false, suspended: false, walletModalVisible: false, receiptTransferOpen: false,
     routeDrop: null, inventory: [], pendingOpenBoxes: [], figureMetadataByKey: {},
-    getDropConfig: getFrontendDrop, getDropContent: resolveDropContent,
+    getDropConfig: id => id ? getFrontendDrop(id) : undefined, getDropContent: resolveDropContent,
     requireKnownDropConfig: (dropId) => {
+      assert.ok(dropId);
       const drop = getFrontendDrop(dropId);
       assert.ok(drop);
       return drop;

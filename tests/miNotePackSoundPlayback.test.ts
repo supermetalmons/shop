@@ -1,3 +1,4 @@
+import { mockMethod } from './helpers/mockMethod.ts';
 import assert from 'node:assert/strict';
 import test, { after, beforeEach } from 'node:test';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
@@ -36,7 +37,7 @@ test('a Mi Note clip retried after a failed preload stays silent if its viewer c
   const retryStarted = Promise.withResolvers<void>();
   const retryResponse = Promise.withResolvers<Response>();
   let targetFetches = 0;
-  t.mock.method(globalThis, 'fetch', async input => {
+  mockMethod(t, globalThis, 'fetch', async input => {
     if (String(input).endsWith('/folder_tap.mp3')) {
       if (++targetFetches === 1) return new Response('Temporary failure', { status: 503 });
       retryStarted.resolve();
