@@ -65,6 +65,11 @@ export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
   async backfillAttributes(value: unknown): Promise<EthereumRevealAttributeBackfillPage> {
     const request = parseRevealAttributeBackfillRequest(value);
     const deployment = await requireAttributeBackfillDeployment(this.env, request);
+    if (request.write && request.afterTokenId === null && deployment.chainId === 1) {
+      const timeout = createTimedAbortScope(undefined, { timeoutMs: 25_000, timeoutMessage: 'Mainnet attribute recovery verification timed out.' });
+      try { await raceWithSignal(verifyRevealDeployment(this.env, deployment, timeout.signal), timeout.signal); }
+      finally { timeout.dispose(); }
+    }
     return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).backfillAttributes(request);
   }
 

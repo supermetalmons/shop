@@ -38,6 +38,9 @@ test('native online catalog update preserves live reads and allocations through 
     import { ethereumReveal } from ${importPath('cloud/workers/api/src/ethereumReveal.ts')};
     import { ethereumInventoryItems } from ${importPath('cloud/workers/api/src/ethereumRead.ts')};
     import { ethereumConfig } from ${importPath('cloud/workers/api/src/ethereumRuntime.ts')};
+    import { revealTraitFixtureBlock } from ${importPath('cloud/workers/api/runtime-test/revealTraitFixture.ts')};
+    import { registerRevealCollectionBlocksFixture } from ${importPath('cloud/workers/api/test/revealCollectionBlocksFixture.ts')};
+    registerRevealCollectionBlocksFixture(${JSON.stringify(target)}, 'native addition');
     const constants = { ETHEREUM_111K_CHAIN_ID: '11155111', ETHEREUM_111K_CONTRACT_ADDRESS: ${JSON.stringify(contractAddress)},
       ETHEREUM_111K_METADATA_BASE_URI: ${JSON.stringify(metadataBaseUri)}, ETHEREUM_111K_DEPLOYMENT_BLOCK: '100', ALCHEMY_MI_NOTE_API_KEY: 'local-test' };
     const originalNow = Date.now;
@@ -56,7 +59,8 @@ test('native online catalog update preserves live reads and allocations through 
       }
       if (url.hostname === 'cdn.lil.org' && url.pathname.includes('/json/v0/')) {
         const id = Number(url.pathname.split('/').at(-1).split('.')[0]);
-        return new Response('{"collection block":"native addition","attributes":[{"trait_type":"source ID","value":'+id+
+        const block = url.pathname.includes('/videos/') && id > 58 ? 'native addition' : revealTraitFixtureBlock(url);
+        return new Response('{"collection block":'+JSON.stringify(block)+',"attributes":[{"trait_type":"source ID","value":'+id+
           '},{"trait_type":"big","value":9007199254740993},{"trait_type":"exact","value":1.00}]}',
           { headers: { 'Content-Type': 'application/json' } });
       }

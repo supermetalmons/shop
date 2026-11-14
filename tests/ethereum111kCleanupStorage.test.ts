@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deleteCleanupPrefix, inventoryCleanupPrefix, validateCleanupObject,
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { MAX_REVEAL_METADATA_BYTES } from '../cloud/workers/api/src/ethereumRevealAttributes.ts';
+import { createCleanupStorage, deleteCleanupPrefix, inventoryCleanupPrefix, validateCleanupObject,
   type CleanupObject, type CleanupStorage, type MetadataCleanupPolicy } from '../scripts/shared/ethereum111kCleanupStorage.ts';
 
 const ROOT = '111k-sepolia/';
@@ -17,6 +19,23 @@ const POLICY: MetadataCleanupPolicy = {
   mayReadKey: key => key.startsWith(CURRENT) && FILES.has(key.slice(CURRENT.length)),
 };
 const item = (key: string): CleanupObject => ({ key, bytes: 1, etag: ETAG });
+
+test('replacement verification reads complete 355 KiB metadata and retains the shared size bound', async t => {
+  const body = Buffer.alloc(355 * 1024, 'x');
+  let contentLength = body.length;
+  let reads = 0;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ success: true, result: { id: 'a'.repeat(32), status: 'active' } }));
+  t.mock.method(S3Client.prototype, 'send', async command => {
+    assert.ok(command instanceof GetObjectCommand);
+    return { ContentLength: contentLength, Body: { transformToByteArray: async () => { reads++; return body; } } };
+  });
+  const storage = await createCleanupStorage(POLICY, { CLOUDFLARE_API_TOKEN: 'fixture-token' });
+  t.after(() => storage.close());
+  assert.deepEqual(await storage.get(CURRENT + '1.json'), body);
+  contentLength = MAX_REVEAL_METADATA_BYTES + 1;
+  await assert.rejects(storage.get(CURRENT + '1.json'), /Invalid current metadata response/);
+  assert.equal(reads, 1);
+});
 
 function fixture() {
   const f = paginatedDeletionFixture();

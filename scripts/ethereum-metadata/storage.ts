@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Agent } from 'node:https';
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { MAX_REVEAL_METADATA_BYTES } from '../../cloud/workers/api/src/ethereumRevealAttributes.ts';
 import type { MetadataWriteFence } from './publicationLease.ts';
 
 export type MetadataNetwork = 'sepolia' | 'mainnet';
@@ -98,7 +99,7 @@ export class S3MetadataStorage implements MetadataStorage {
   async get(key: string): Promise<Buffer> {
     const response = await this.client.send(new GetObjectCommand({ Bucket: this.destination.bucket, Key: key }),
       { abortSignal: AbortSignal.timeout(30_000) });
-    if (!response.Body || !Number.isSafeInteger(response.ContentLength) || response.ContentLength! > 128 * 1024) {
+    if (!response.Body || !Number.isSafeInteger(response.ContentLength) || response.ContentLength! > MAX_REVEAL_METADATA_BYTES) {
       throw new Error(`Invalid R2 metadata response: ${key}`);
     }
     const body = Buffer.from(await response.Body.transformToByteArray());

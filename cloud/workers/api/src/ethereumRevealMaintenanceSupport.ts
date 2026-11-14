@@ -30,14 +30,19 @@ export function parseRevealAttributeBackfillRequest(value: unknown): EthereumRev
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid reveal attribute backfill request.');
   const row = value as Record<string, unknown>;
   const scope = parseRevealMaintenanceRequest({ deploymentId: row.deploymentId, expectedRevision: row.expectedRevision });
-  if (Object.keys(row).some(key => !['deploymentId', 'expectedRevision', 'write', 'afterTokenId', 'retryBlocked', 'recheckTokenId'].includes(key)) ||
+  if (Object.keys(row).some(key => !['deploymentId', 'expectedRevision', 'write', 'afterTokenId', 'retryBlocked', 'recheckTokenId', 'audit', 'frozenThroughMs'].includes(key)) ||
     row.retryBlocked !== undefined && typeof row.retryBlocked !== 'boolean' || typeof row.write !== 'boolean' ||
+    row.audit !== undefined && typeof row.audit !== 'boolean' ||
+    row.audit === true && (row.write || row.retryBlocked || row.recheckTokenId !== undefined ||
+      !Number.isSafeInteger(row.frozenThroughMs) || Number(row.frozenThroughMs) < 0 || Number(row.frozenThroughMs) > Date.now()) ||
+    row.audit !== true && row.frozenThroughMs !== undefined ||
     row.afterTokenId !== null && !isRevealArtworkTokenId(row.afterTokenId) ||
     row.recheckTokenId !== undefined && (!isRevealArtworkTokenId(row.recheckTokenId) || row.retryBlocked || row.afterTokenId !== null)) {
     throw new Error('Invalid reveal attribute backfill request.');
   }
   return { ...scope, afterTokenId: row.afterTokenId, write: row.write, ...(row.retryBlocked === true && { retryBlocked: true }),
-    ...(row.recheckTokenId !== undefined && { recheckTokenId: row.recheckTokenId }) };
+    ...(row.recheckTokenId !== undefined && { recheckTokenId: row.recheckTokenId }),
+    ...(row.audit === true && { audit: true, frozenThroughMs: row.frozenThroughMs as number }) };
 }
 
 export function parseRevealRetirementRequest(value: unknown): EthereumRevealRetirementRequest {
@@ -81,11 +86,16 @@ export async function requireRetiredRevealDeployment(env: Env, value: unknown,
 
 async function requireActiveRevealScope(env: Env, request: EthereumRevealMaintenanceRequest, operation: 'Replacement' | 'Backfill') {
   const deployment = await readRevealMaintenanceDeployment(env, request.deploymentId);
-  const control = parseEthereum111kControl(await env.COMMERCE_DB.prepare(ETHEREUM_111K_CONTROL_SQL).first());
-  if (deployment.revision !== request.expectedRevision || deployment.chainId !== 11155111 || deployment.dropId !== '111k_devnet' ||
+  const mainnetBackfill = operation === 'Backfill' && deployment.chainId === 1 && deployment.dropId === '111k';
+  const supportedScope = deployment.chainId === 11155111 && deployment.dropId === '111k_devnet' || mainnetBackfill;
+  if (deployment.revision !== request.expectedRevision || !supportedScope ||
     deployment.state !== 'active' || deployment.retiredAtMs != null ||
-    !isSupportedRevealDeployment(deployment) || operation === 'Replacement' && deployment.catalogUpdateId != null ||
-    deployment.provisionedAtMs === null || Number(env.ETHEREUM_111K_CHAIN_ID) !== deployment.chainId ||
+    !isSupportedRevealDeployment(deployment) || deployment.catalogUpdateId != null || deployment.provisionedAtMs === null) {
+    throw new Error(`${operation} reveal deployment must be active at the expected revision without another maintenance operation.`);
+  }
+  if (mainnetBackfill) return deployment;
+  const control = parseEthereum111kControl(await env.COMMERCE_DB.prepare(ETHEREUM_111K_CONTROL_SQL).first());
+  if (Number(env.ETHEREUM_111K_CHAIN_ID) !== deployment.chainId ||
     normalizeEthereumAddress(env.ETHEREUM_111K_CONTRACT_ADDRESS) !== deployment.contractAddress ||
     env.ETHEREUM_111K_METADATA_BASE_URI !== deployment.metadataBaseUri || Number(env.ETHEREUM_111K_DEPLOYMENT_BLOCK) !== deployment.deploymentBlock ||
     control.resetGuardId !== null || control.chainId !== deployment.chainId || control.contractAddress !== deployment.contractAddress) {

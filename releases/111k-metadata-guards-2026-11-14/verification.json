@@ -1,0 +1,281 @@
+{
+  "version": 1,
+  "complete": true,
+  "completedAt": "2026-11-14T10:59:33.366Z",
+  "commit": "ef373fa761d91787fcac24898df73142e887070e",
+  "deployment": {
+    "deploymentId": "mainnet-v1",
+    "dropId": "111k",
+    "chainId": 1,
+    "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "metadataBaseUri": "https://cdn.mons.shop/111k/",
+    "deploymentBlock": 26387160,
+    "catalogVersion": "111k-v8",
+    "templateSha256": "07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9",
+    "effectiveCatalogVersion": "111k-v9",
+    "effectiveCatalogSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1",
+    "catalogRevision": 1,
+    "revision": 9,
+    "previousApiVersion": "4df7ef45-81b5-4b12-97ff-c2728884fa24",
+    "apiVersion": "a4ebab7f-6de5-4a81-906d-b607d68ed519",
+    "deployedModuleSha256": "8b7ffe9f8d6ace1d228144f1100b058e3b3986106ec393f1261ce07399a4eb29",
+    "resourcesPreserved": true,
+    "frontendPreserved": true
+  },
+  "validation": {
+    "command": "npm run deploy:api",
+    "apiUnitTests": 3744,
+    "nativeRuntimeTests": 89,
+    "failedTests": 0,
+    "commerceFullAudit": {
+      "exitCode": 0,
+      "logSha256": "3429aea75e8d5d2c2aedf55cef4b130f44fdff6ba2704febae3d579208474e6f"
+    }
+  },
+  "metadata": {
+    "before": {
+      "total": 32060,
+      "artworks": 23134,
+      "eggs": 8926,
+      "blockPresent": 23134,
+      "canonicalMatch": 32060,
+      "missingBlock": 0,
+      "wrongBlock": 0,
+      "duplicateBlock": 0,
+      "nonAttributeMismatch": 0,
+      "headerMismatch": 0,
+      "immutableMismatch": 0,
+      "priorObjectsUnchanged": 28980,
+      "ownerTransitions": 0,
+      "enrichmentAdvances": 0,
+      "unexplainedChanges": 0,
+      "repairedVerified": 585,
+      "largeVerified": 5,
+      "readErrors": 0
+    },
+    "after": {
+      "total": 32080,
+      "artworks": 23148,
+      "eggs": 8932,
+      "blockPresent": 23148,
+      "canonicalMatch": 32080,
+      "missingBlock": 0,
+      "wrongBlock": 0,
+      "duplicateBlock": 0,
+      "nonAttributeMismatch": 0,
+      "headerMismatch": 0,
+      "immutableMismatch": 0,
+      "priorObjectsUnchanged": 32060,
+      "ownerTransitions": 0,
+      "enrichmentAdvances": 0,
+      "unexplainedChanges": 0,
+      "repairedVerified": 585,
+      "largeVerified": 5,
+      "readErrors": 0
+    },
+    "beforeCutoff": 1794652642950,
+    "afterCutoff": 1794653414609,
+    "immutableBeforeCohortPreserved": true,
+    "unchangedBeforeObjects": 32060,
+    "versionedActivity": {
+      "ownerTransitions": 0,
+      "enrichmentAdvances": 0,
+      "evidenceSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "repairedTokensStillHealthy": 585,
+    "largeArtworks": [
+      {
+        "tokenId": "11352",
+        "assetId": 66047,
+        "sha256": "e3f6cc834ec1aadff4dc71aa8490092e6dcf1d345b578a5d080e059adfc7829c",
+        "bytes": 303420,
+        "attributeCount": 4990
+      },
+      {
+        "tokenId": "17257",
+        "assetId": 64999,
+        "sha256": "465feaffe98c86793ce0181bbfb301a242aa2b037fad180592ce91257a32444f",
+        "bytes": 354969,
+        "attributeCount": 5500
+      },
+      {
+        "tokenId": "19193",
+        "assetId": 65426,
+        "sha256": "f246f9e06162eb9918de0745e32d19f880dc4df846c6513a0d3f54f1ea399ca6",
+        "bytes": 208850,
+        "attributeCount": 3266
+      },
+      {
+        "tokenId": "23751",
+        "assetId": 65224,
+        "sha256": "3d835404b10ada7c61721be52a1e96c373b5659c1dd111779b239453d2c78b75",
+        "bytes": 206516,
+        "attributeCount": 3239
+      },
+      {
+        "tokenId": "3195",
+        "assetId": 65509,
+        "sha256": "42ed11b31757839d58b3cc223e1db6eecd79a1cde85711034761e3c8976ea2d0",
+        "bytes": 219185,
+        "attributeCount": 3438
+      }
+    ]
+  },
+  "publicChecks": {
+    "repairedTokens": 585,
+    "knownRevealSamples": 13,
+    "provenanceUnchanged": true,
+    "legacyStorefrontUnchanged": true,
+    "onchainIdentityVerifiedReadOnly": true
+  },
+  "observation": {
+    "adoptedAt": "2026-11-14T10:49:07.551Z",
+    "observedAt": "2026-11-14T10:56:47.783Z",
+    "successfulCrons": 2,
+    "invocationErrors": 0,
+    "metricsFrom": "2026-11-14T10:49:07.551Z",
+    "metricsTo": "2026-11-14T10:56:47.785Z",
+    "mainnetHealth": {
+      "observedAt": "2026-11-14T10:59:17.518Z",
+      "timestamp": 1794653957309,
+      "outcome": "ok",
+      "workerVersion": "a4ebab7f-6de5-4a81-906d-b607d68ed519",
+      "data": {
+        "event": "ethereum_reveal_recovery_health",
+        "deploymentId": "mainnet-v1",
+        "ready": true,
+        "seeded": 111111,
+        "available": 79011,
+        "reserved": 0,
+        "frozen": 32100,
+        "publication": {
+          "published": 32100
+        },
+        "recovery": {
+          "migrationReady": true,
+          "migration": {
+            "phase": "ready",
+            "cursor": "",
+            "rowKey": null,
+            "offset": 0
+          },
+          "opaque": 0,
+          "opaqueCapacity": {
+            "used": 0,
+            "limit": 10000,
+            "available": 10000
+          },
+          "crates": {
+            "observed": 1605
+          },
+          "due": {
+            "active": {
+              "receiptJobs": 0,
+              "scanJobs": 0,
+              "oldestDueAgeMs": 0
+            },
+            "background": {
+              "receiptJobs": 0,
+              "scanJobs": 0,
+              "oldestDueAgeMs": 0
+            }
+          },
+          "dispatch": {
+            "limit": 64,
+            "inFlight": 1,
+            "active": 0,
+            "background": 1,
+            "pauseUntilMs": 0,
+            "nextRecoveryMs": null,
+            "earliestLeaseUntilMs": 1794653987210
+          }
+        },
+        "enrichment": {
+          "published": 23162
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 0,
+          "errors": {}
+        }
+      }
+    }
+  },
+  "evidence": {
+    "release-state.json": {
+      "bytes": 2211,
+      "sha256": "c00ca58ffc7f809e014729e646a45ad9a49df43372b5f7c433e48cb5eac907c6"
+    },
+    "deployment-before.json": {
+      "bytes": 3123,
+      "sha256": "5eeccdd5fe58e086081291d48b355c0ed86c86ca4f3fd4f1e2e6442ecc673181"
+    },
+    "deployment-final.json": {
+      "bytes": 3906,
+      "sha256": "0c54e89f1e7e28758cfb4edac97012bad080cc719fdb161da195cf7331f9ae7c"
+    },
+    "deployed-source-final-verification.json": {
+      "bytes": 437,
+      "sha256": "19eb022e24fd1f7a6522764f31bd08d48504eae3e1d046b65c043b3ebab56ac7"
+    },
+    "registry-before.json": {
+      "bytes": 1116,
+      "sha256": "a22d257e57219ed7cc2ed248de5e8e48cd1b78ba2e9f7da8991eafb969c57d2a"
+    },
+    "registry-after.json": {
+      "bytes": 1116,
+      "sha256": "731dfea3645e4c08137e676b3f3c9a3d066c7654e38c390055f77d91ad6f18aa"
+    },
+    "before/audit.json": {
+      "bytes": 21705881,
+      "sha256": "f857999876226db642d7dabbb851c972f897a23b920f375a075125a36781f198"
+    },
+    "after/audit.json": {
+      "bytes": 21719325,
+      "sha256": "ec4d25a96348d818fc70626593187c70b27d2c7c02f1e2526cbb0862cc279103"
+    },
+    "before/verification.json": {
+      "bytes": 2501,
+      "sha256": "30a82558cb65ff4b3ed1c7715c04b03f12454e0d2c91a06dd1c26c621af97cd7"
+    },
+    "after/verification.json": {
+      "bytes": 2489,
+      "sha256": "4dfe26ab747280a6092b8e007822caf233b61847cf2911a3380e7ec1eddf45b3"
+    },
+    "public-before.json": {
+      "bytes": 129603,
+      "sha256": "1232156b9b96f23c4dff74f524e61c404059eb2f2c0099176ae1159ff6c77583"
+    },
+    "public-after.json": {
+      "bytes": 129759,
+      "sha256": "aaf4a18f137c4e09801d2430d7da7efa8cc4511fb399e2ee9c93a36fc2d318ea"
+    },
+    "public-smoke-after.json": {
+      "bytes": 10163,
+      "sha256": "36ce1c88ae4ba16a07d026b7913e85450c6ede84be5562af11d0afba685bdfb8"
+    },
+    "commerce-full-result.json": {
+      "bytes": 376,
+      "sha256": "0b62bc2502ed1cf8b7a45309ffacaeef64f7d82ed6dace016ef0c418f5387cdd"
+    },
+    "commerce-full.log": {
+      "bytes": 1386,
+      "sha256": "3429aea75e8d5d2c2aedf55cef4b130f44fdff6ba2704febae3d579208474e6f"
+    },
+    "before/objects.jsonl": {
+      "sha256": "90d90786fd1e88ee818d2a5d92d28e82ccacbf85d70bedb34470954505d0057d"
+    },
+    "after/objects.jsonl": {
+      "sha256": "438d1948ce0a364b81e6e9cc41dbfbb54314f66fac42624f8b2a37faf0364ca7"
+    },
+    "health.jsonl": {
+      "bytes": 11661,
+      "sha256": "3bad1f1ba057e8aa77cc8b4df7a580806861efc4e457f3ca2113edc0c2e6bc7c"
+    },
+    "deploy-api.log": {
+      "bytes": 474603,
+      "sha256": "a39f114d3e65bf769f8bb94af303d77c819bd0164e3ec8c502dbc4945af762e3"
+    }
+  }
+}

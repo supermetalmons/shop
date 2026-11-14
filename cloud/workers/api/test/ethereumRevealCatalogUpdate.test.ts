@@ -11,6 +11,7 @@ import type { EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateRes
 import { EthereumRevealCatalogUpdate, parseCatalogUpdateRequest } from '../src/ethereumRevealCatalogUpdate.ts';
 import { EthereumRevealStore, type RevealSql, type RevealPublicationJob } from '../src/ethereumRevealStore.ts';
 import { d1Database } from './commerceD1Harness.ts';
+import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
 const source = getRevealCatalog('111k-v5')!;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
@@ -27,6 +28,7 @@ function batch() {
   target.categories.eggs.count -= 3;
   target.categories.videos.count += 3;
   target.categories.videos.aspectRatioIndexById = [...target.categories.videos.aspectRatioIndexById!, 0, 0, 0];
+  registerRevealCollectionBlocksFixture(target, 'new videos');
   const body: RevealCatalogUpdateBody = { version: 1, nonce: '10000000-0000-4000-8000-000000000001',
     predecessor: { manifest: source, descriptor: computeRevealCatalogDescriptor(source) },
     target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) },
@@ -297,7 +299,7 @@ test('trait failures do not activate a candidate or stop ordinary reveals', asyn
   await f.run('begin');
   await f.run('advance');
   f.faults.traitFailure = true;
-  await assert.rejects(f.run('advance'), /HTTP 503/);
+  await assert.rejects(f.run('advance'), /http-503/);
   assert.equal(f.current().state, 'active');
   assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
   f.freezeEggs([source.categories.eggs.count]);
@@ -306,6 +308,57 @@ test('trait failures do not activate a candidate or stop ordinary reveals', asyn
   await f.run('advance');
   assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.metadataStaged, 3);
   await f.run('cancel');
+});
+
+test('a legacy activating catalog revalidates stored traits across restart without refetching or changing historical bytes', async t => {
+  const f = fixture(t);
+  await f.run('begin');
+  await f.run('advance');
+  await f.run('advance');
+  while (f.store.catalogUpdate.status(f.update.batchId)!.generationSeeded < 111111) f.store.catalogUpdate.generationStage(f.update.batchId);
+  f.store.catalogUpdate.seal(f.update.batchId);
+  const key = `catalog-update:${f.update.batchId}`;
+  f.kv.set(key, { ...f.kv.get(key) as object, phase: 'activating' });
+  const saved = f.database.prepare('SELECT attributes_json,attributes_sha256 FROM reveal_catalog_mappings ORDER BY egg_id').all();
+  f.database.exec('DROP INDEX reveal_catalog_metadata_validation; ALTER TABLE reveal_catalog_mappings DROP COLUMN collection_block_validated; PRAGMA query_only=ON;');
+  assert.equal((await f.run('inspect')).staged, 0);
+  f.database.exec('PRAGMA query_only=OFF');
+  f.store.catalogUpdate.initialize();
+  f.reopen();
+  f.faults.traitFailure = true;
+  const requests = f.traits.length;
+  const validated = await f.run('advance');
+  assert.equal(validated.phase, 'activating');
+  assert.equal(validated.staged, 3);
+  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.activatedAtMs, null);
+  f.reopen();
+  assert.equal((await f.run('advance')).phase, 'publishing');
+  assert.equal(f.current().catalogRevision, 1);
+  assert.equal(f.traits.length, requests);
+  assert.deepEqual(f.database.prepare('SELECT attributes_json,attributes_sha256 FROM reveal_catalog_mappings ORDER BY egg_id').all(), saved);
+  f.database.exec('UPDATE reveal_catalog_mappings SET collection_block_validated=0; PRAGMA query_only=ON;');
+  assert.equal((await f.run('inspect')).staged, 3);
+  assert.deepEqual(f.store.catalogUpdate.metadataPreparationPage(f.update.batchId), []);
+});
+
+test('a legacy activating catalog rejects invalid stored traits before cutover instead of fetching replacements', async t => {
+  const f = fixture(t);
+  await f.run('begin');
+  await f.run('advance');
+  const attributesJson = '[{"trait_type":"collection block","value":"wrong stored label"}]';
+  f.database.prepare('UPDATE reveal_catalog_mappings SET attributes_json=?,attributes_sha256=?')
+    .run(attributesJson, createHash('sha256').update(attributesJson).digest('hex'));
+  f.database.exec("UPDATE reveal_catalog_generations SET phase='ready',seeded=111111");
+  const key = `catalog-update:${f.update.batchId}`;
+  f.kv.set(key, { ...f.kv.get(key) as object, phase: 'activating' });
+  f.faults.traitFailure = true;
+  f.reopen();
+  await assert.rejects(f.run('advance'), /collection-block-mismatch/);
+  assert.equal(f.traits.length, 0);
+  assert.equal(f.counters.writes, 0);
+  assert.equal(f.current().catalogRevision, 0);
+  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.activatedAtMs, null);
+  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.metadataStaged, 0);
 });
 
 test('activation remains readable across registry mirror failure and publication acknowledgments lost on restart', async t => {

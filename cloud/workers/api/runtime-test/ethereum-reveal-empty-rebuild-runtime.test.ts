@@ -24,7 +24,10 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
     batchSha256: batch.batchSha256, expectedRevision: 3 };
   const source = `
     import { DurableObject } from 'cloudflare:workers';
+    import { createHash } from 'node:crypto';
     import { EthereumRevealStore } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealStore.ts'))};
+    import { lookupRevealCollectionBlock } from ${JSON.stringify(resolve('shared/ethereum/revealCollectionBlocks.ts'))};
+    import { revealCollectionBlocks } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealCollectionBlocks.ts'))};
     import { EthereumRevealEmptyPoolFence, ETHEREUM_REVEAL_EMPTY_POOL_DRAIN_MS } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealEmptyPoolFence.ts'))};
     const deployment=${JSON.stringify(deployment)}, scope=${JSON.stringify(scope)};
     let externalRequests=0;
@@ -68,11 +71,16 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
           updates.begin(input.batch,this.now);
           for(let offset=0;offset<input.batch.mappings.length;offset+=256)updates.stageMappings(input.batch.batchId,input.batch.mappings.slice(offset,offset+256));
           updates.sealMappings(input.batch.batchId);
-          const attributesJson='[{"trait_type":"collection block","value":"sparse history"}]';
+          const blocks=revealCollectionBlocks(input.batch.target.descriptor);
           for(;;){
             const page=updates.metadataPreparationPage(input.batch.batchId,256);
             if(!page.length)break;
-            updates.metadataStage(input.batch.batchId,page.map(row=>({...row,attributesJson,sha256:${JSON.stringify(createHash('sha256').update('[{"trait_type":"collection block","value":"sparse history"}]').digest('hex'))}})));
+            updates.metadataStage(input.batch.batchId,page.map(row=>{
+              const block=lookupRevealCollectionBlock(blocks,row.category,row.assetId);
+              if(!block)throw new Error('Missing sparse fixture collection block');
+              const attributesJson=JSON.stringify([{trait_type:'collection block',value:block}]);
+              return {...row,attributesJson,sha256:createHash('sha256').update(attributesJson).digest('hex')};
+            }));
           }
           return updates.status(input.batch.batchId);
         }

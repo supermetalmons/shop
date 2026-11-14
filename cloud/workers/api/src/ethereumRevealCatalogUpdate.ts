@@ -204,6 +204,7 @@ export class EthereumRevealCatalogUpdate {
         const catalog = this.registry.getCatalog(record.target.catalogVersion, record.target.manifestSha256)!;
         const rows = this.updates.metadataPreparationPage(record.batchId, PAGE_SIZE);
         const payloads = await Promise.all(rows.map(async row => {
+          if ('attributesJson' in row) return row;
           const timeout = createTimedAbortScope(undefined, { timeoutMs: 25_000, timeoutMessage: 'Artwork trait staging timed out.' });
           try {
             const attributesJson = await fetchRevealAttributePayload(row.category, row.assetId, timeout.signal, fetch, catalog);

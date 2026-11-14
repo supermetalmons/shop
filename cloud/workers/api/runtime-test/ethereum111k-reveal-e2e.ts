@@ -7,7 +7,7 @@ import { encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 import { ETHEREUM_REVEAL_PATHS, type EthereumRevealedArtwork, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from '../../../../scripts/shared/ethereum111kLocalReveal.ts';
-import { withRevealTraitFixture } from './revealTraitFixture.ts';
+import { revealTraitFixtureBlock, withRevealTraitFixture } from './revealTraitFixture.ts';
 
 export async function runEthereumRevealE2E(input: {
   root: string; rpcUrl: string; contractAddress: string; deploymentBlock: number; metadataBaseUri: string; buyer: string;
@@ -101,7 +101,11 @@ export async function runEthereumRevealE2E(input: {
         animation_url: artwork.animation_url, aspectRatio: artwork.aspectRatio, attributes: artwork.attributes }, {
         category: asset.category, image: `https://cdn.lil.org/nft/111k/${asset.path}`,
         animation_url: asset.animation ? `https://cdn.lil.org/nft/111k/${asset.animation}` : undefined,
-        aspectRatio: asset.aspectRatio, attributes: [{ trait_type: 'type', value: asset.category }],
+        aspectRatio: asset.aspectRatio, attributes: [
+          ...(asset.category === 'egg' ? [] : [{ trait_type: 'collection block',
+            value: revealTraitFixtureBlock(`https://cdn.lil.org/nft/111k/${asset.path.split('/')[0]}/json/v0/${asset.assetId}.json`) }]),
+          { trait_type: 'type', value: asset.category },
+        ],
       });
     }
     assert.deepEqual(revealed.artworks.map(artwork => artwork.tokenId), Array.from({ length: 20 }, (_, index) => String(index + 1)));
@@ -115,7 +119,7 @@ export async function runEthereumRevealE2E(input: {
       const artwork: EthereumRevealedArtwork = revealed.artworks[index];
       const attributes = [{ trait_type: 'type', value: asset.category }];
       const expectedAttributes = asset.category === 'egg' ? attributes : [
-        { trait_type: 'collection block', value: asset.path.split('/')[0] }, ...attributes,
+        { trait_type: 'collection block', value: revealTraitFixtureBlock(`https://cdn.lil.org/nft/111k/${asset.path.split('/')[0]}/json/v0/${asset.assetId}.json`) }, ...attributes,
         { trait_type: 'asset ID', value: asset.assetId },
       ];
       const key = `${new URL(input.metadataBaseUri).pathname.slice(1)}${artwork.tokenId}.json`;
@@ -124,7 +128,7 @@ export async function runEthereumRevealE2E(input: {
         const object = await env.ETHEREUM_REVEAL_METADATA.get(key);
         if (object) {
           published = await object.text();
-          if (asset.category === 'egg' || JSON.parse(published).attributes[0]?.trait_type === 'collection block') break;
+          if (asset.category === 'egg' || JSON.parse(published).attributes.some((row: { trait_type: string }) => row.trait_type === 'asset ID')) break;
         }
         await new Promise(done => setTimeout(done, 100));
       }

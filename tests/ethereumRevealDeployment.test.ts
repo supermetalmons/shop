@@ -92,8 +92,64 @@ test('attribute backfill pins an explicit Sepolia deployment revision across pag
   for (const override of [{ chain_id: 1, metadata_base_uri: 'https://cdn.mons.shop/111k/mainnet/' }, { state: 'paused' },
     { drop_id: 'pre111k' }, { catalog_version: '111k-v4' }]) {
     await assert.rejects(runEthereumRevealControl(args, { query: () => [{ ...registered, ...override }],
-      maintenance: async () => assert.fail() }), /active Sepolia/);
+      maintenance: async () => assert.fail() }), /active 111k/);
   }
+});
+
+test('mainnet backfill delegates chain verification to private maintenance while retaining the selected registry revision', async t => {
+  const { query, register } = await fixture(t);
+  register();
+  const mainnet: Record<string, unknown> = { ...query('SELECT * FROM ethereum_reveal_deployments')[0], chain_id: 1, drop_id: '111k',
+    metadata_base_uri: 'https://cdn.mons.shop/111k/', state: 'active', revision: 9, provisioned_at_ms: 2 };
+  const args = ['backfill-attributes', '--deployment-id', registration.deploymentId, '--expected-revision', '9', '--retry-blocked'];
+  for (const write of [false, true]) {
+    const result = await runEthereumRevealControl([...args, ...(write ? ['--write'] : [])], {
+      query: () => [mainnet], verifyDeployment: async () => assert.fail('Mainnet recovery must not require local RPC credentials'),
+      maintenance: async run => {
+        return run({ purgeRetired: async () => assert.fail(), inspectRetired: async () => assert.fail(), backfillAttributes: async request => {
+          assert.equal(request.expectedRevision, 9);
+          assert.equal(request.write, write);
+          return { nextCursor: null, eligible: 1, missing: 0, invalid: 1, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: Number(write) };
+        } });
+      },
+    });
+    assert.ok('requeued' in result);
+    assert.equal(result.requeued, Number(write));
+  }
+  await assert.rejects(runEthereumRevealControl([...args, '--write'], { query: () => [mainnet],
+    maintenance: async () => { throw new Error('Onchain identity changed'); } }), /Onchain identity/);
+});
+
+test('attribute audits pin a frozen cutoff and reject write modes or changing pages', async t => {
+  const { database, query, register } = await fixture(t);
+  register();
+  database.exec("UPDATE ethereum_reveal_deployments SET state='active',revision=3,provisioned_at_ms=2");
+  const args = ['backfill-attributes', '--deployment-id', registration.deploymentId, '--audit', '--frozen-through-ms', '1000'];
+  for (const extra of [['--write', '--expected-revision', '3'], ['--retry-blocked'], ['--recheck-token', '1'], ['--frozen-through-ms', '-1']]) {
+    assert.throws(() => parseEthereumRevealControlArgs([...args.slice(0, 4), ...extra]));
+  }
+  assert.throws(() => parseEthereumRevealControlArgs(['status', '--audit']));
+  assert.throws(() => parseEthereumRevealControlArgs(args.filter(value => value !== '--audit')));
+  const token = { tokenId: '1', category: 'painting' as const, assetId: 1, assignmentRevision: 0, metadataRevision: 1,
+    metadataSha256: 'a'.repeat(64), frozenMetadataSha256: 'b'.repeat(64), nonAttributeSha256: 'c'.repeat(64),
+    collectionBlock: 'plane of existence', enrichment: null };
+  const result = await runEthereumRevealControl(args, { query, maintenance: async run => run({
+    purgeRetired: async () => assert.fail(), inspectRetired: async () => assert.fail(), backfillAttributes: async request => {
+      assert.deepEqual(request, { deploymentId: registration.deploymentId, expectedRevision: 3, afterTokenId: null,
+        write: false, audit: true, frozenThroughMs: 1000 });
+      return { nextCursor: null, eligible: 1, missing: 1, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0,
+        frozenThroughMs: 1000, tokens: [token] };
+    },
+  }) });
+  assert.ok('tokens' in result && 'frozenThroughMs' in result);
+  assert.deepEqual(result.tokens, [token]);
+  assert.equal(result.frozenThroughMs, 1000);
+  await assert.rejects(runEthereumRevealControl(args, { query, maintenance: async run => run({
+    purgeRetired: async () => assert.fail(), inspectRetired: async () => assert.fail(), backfillAttributes: async () => ({
+      nextCursor: null, eligible: 0, missing: 0, invalid: 0, conflict: 0, conflictRechecks: 0, enqueued: 0, requeued: 0,
+      frozenThroughMs: 1001, tokens: [],
+    }),
+  }) }), /invalid page/);
 });
 
 async function controlManifest(t: TestContext, value: Record<string, unknown>): Promise<string> {

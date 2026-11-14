@@ -231,7 +231,7 @@ The bucket CORS policy allows all origins and request headers, allows `GET` and 
 
 Use the same exposed-header list in the bucket CORS policy. This permits anonymous browser reads and embedding from third-party sites. See [R2 CORS](https://developers.cloudflare.com/r2/buckets/cors/) and [response-header rules](https://developers.cloudflare.com/rules/transform/response-header-modification/).
 
-The API fetches the contract's exact expected public URL over HTTP with `cache: 'no-store'`, rejects redirects, and applies a ten-second timeout. Metadata bodies are bounded to 256 KiB, with eight concurrent reads and cancellation. Ownership reads remain pinned to a canonical block snapshot. Fulfillment previews deduplicate only pending reads and fetch again on subsequent requests.
+The API fetches the contract's exact expected public URL over HTTP with `cache: 'no-store'`, rejects redirects, and applies a ten-second timeout. Metadata bodies are bounded to 512 KiB, with eight concurrent reads and cancellation. Ownership reads remain pinned to a canonical block snapshot. Fulfillment previews deduplicate only pending reads and fetch again on subsequent requests.
 
 Freshness applies when a client requests metadata. An already rendered page or a marketplace's indexed copy does not refresh merely because the R2 object changes. The [unpack reveal service](111k_reveal.md) returns confirmed artwork immediately and publishes frozen JSON through durable background jobs. Marketplaces maintain their own caches; use their refresh tools or the existing ERC-4906 refresh mechanism when necessary. See [R2 consistency](https://developers.cloudflare.com/r2/reference/consistency/) and [ERC-4906](https://eips.ethereum.org/EIPS/eip-4906).
 

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
+import { MAX_REVEAL_METADATA_BYTES } from '../../cloud/workers/api/src/ethereumRevealAttributes.ts';
 import type { MetadataWriteFence } from '../ethereum-metadata/publicationLease.ts';
 
 const ACCOUNT = 'e25f90fc073ea309b54b8b5144bf28e0';
@@ -157,7 +158,7 @@ export async function createCleanupStorage(policy: MetadataCleanupPolicy, env: N
     async get(key) {
       if (!policy.mayReadKey(key)) throw new Error('Unapproved metadata snapshot key.');
       const object = await client.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }), { abortSignal: AbortSignal.timeout(30_000) });
-      if (!object.Body || !Number.isSafeInteger(object.ContentLength) || object.ContentLength! > 128 * 1024) throw new Error('Invalid current metadata response.');
+      if (!object.Body || !Number.isSafeInteger(object.ContentLength) || object.ContentLength! > MAX_REVEAL_METADATA_BYTES) throw new Error('Invalid current metadata response.');
       const bytes = await object.Body.transformToByteArray();
       if (bytes.length !== object.ContentLength) throw new Error('Incomplete current metadata response.');
       return bytes;

@@ -1,9 +1,16 @@
-import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest } from '../../../../shared/ethereum/revealMaintenance.js';
+import { createHash } from 'node:crypto';
+import type { EthereumRevealAttributeAuditToken, EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest } from '../../../../shared/ethereum/revealMaintenance.js';
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.js';
+import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
+import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum } from './ethereumRevealEnrichmentStore.js';
+import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
+import { parseMetadataJson } from './ethereumMetadataJson.js';
 
 const PAGE_SIZE = 256;
+const hash = (json: string) => createHash('sha256').update(json).digest('hex');
 
 function assignmentRevision(sql: RevealSql, table: string, alias: string): string {
   return sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().some(column => column.name === 'assignment_revision')
@@ -13,6 +20,62 @@ function assignmentRevision(sql: RevealSql, table: string, alias: string): strin
 function ownerOverrideGuard(sql: RevealSql): string {
   return sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_slot_overrides'").toArray().length
     ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)' : '';
+}
+
+function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, frozenThroughMs: number): EthereumRevealAttributeBackfillPage {
+  const hasOwners = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_tokens'").toArray().length > 0;
+  const ownerPublication = hasOwners ? `LEFT JOIN owner_hatching_tokens o ON o.token_id=a.token_id
+    LEFT JOIN owner_hatching_publication op ON op.token_id=o.token_id` : '';
+  const publicationStatus = hasOwners
+    ? "CASE WHEN o.token_id IS NULL THEN p.status WHEN op.metadata_revision=o.metadata_revision THEN op.status END" : 'p.status';
+  if (sql.exec(`SELECT a.token_id FROM assignments a LEFT JOIN publication p ON p.token_id=a.token_id
+      ${ownerPublication} WHERE a.token_id IS NOT NULL AND a.frozen_at_ms<=? AND ${publicationStatus} IS NOT 'published' LIMIT 1`, frozenThroughMs).toArray().length) {
+    throw new Error('Attribute audit requires complete metadata publication for every artwork frozen through the cutoff.');
+  }
+  const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
+  const actualRevision = assignmentRevision(sql, 'assignments', 'a');
+  const jobRevision = hasJobs ? assignmentRevision(sql, 'reveal_enrichment', 'e') : '0';
+  type AuditRow = { token_id: string; eligible: number; job_status: NonNullable<EthereumRevealAttributeAuditToken['enrichment']>['status'] | null;
+    last_error: string | null; attempts: number; assignment_revision: number; target_sha256: string | null };
+  const rows = sql.exec<AuditRow>(`WITH page AS MATERIALIZED (
+      SELECT token_id FROM assignments WHERE token_id>? AND frozen_at_ms<=? ORDER BY token_id LIMIT ?
+    ) SELECT page.token_id,(a.category!='egg' ${ownerOverrideGuard(sql)}) AS eligible,
+      ${hasJobs ? `e.status AS job_status,e.last_error,e.attempts,${jobRevision} AS assignment_revision,e.target_sha256`
+        : 'NULL AS job_status,NULL AS last_error,0 AS attempts,0 AS assignment_revision,NULL AS target_sha256'}
+    FROM page JOIN assignments a ON a.token_id=page.token_id
+    ${hasJobs ? `LEFT JOIN reveal_enrichment e ON e.token_id=page.token_id AND e.version=? AND ${jobRevision}=${actualRevision}` : ''}
+    ORDER BY page.token_id`, afterTokenId ?? '', frozenThroughMs, PAGE_SIZE, ...(hasJobs ? [REVEAL_ENRICHMENT_VERSION] : [])).toArray();
+  const catalogs = new EthereumRevealCatalogUpdateStore(sql, action => action());
+  const blocks = revealCollectionBlocks(catalogs.effectiveCatalog());
+  const tokens = rows.map(row => {
+    const current = catalogs.canonicalMetadata([row.token_id])[0];
+    if (!current) throw new Error('Published artwork is missing canonical metadata.');
+    const frozen = sql.exec<{ metadata_json: string }>('SELECT metadata_json FROM assignments WHERE token_id=?', row.token_id).toArray()[0];
+    if (!frozen) throw new Error('Published artwork is missing frozen metadata.');
+    const { attributes: _attributes, ...metadata } = parseMetadataJson(current.metadataJson) as Record<string, unknown>;
+    let enrichment: EthereumRevealAttributeAuditToken['enrichment'] = null;
+    if (row.eligible && row.job_status !== null && row.assignment_revision === current.assignmentRevision) {
+      const target = sql.exec<{ target_json: string | null }>('SELECT target_json FROM reveal_enrichment WHERE token_id=? AND version=?',
+        row.token_id, REVEAL_ENRICHMENT_VERSION).toArray()[0];
+      if (!target) throw new Error('Published artwork enrichment changed during audit.');
+      enrichment = { status: row.job_status, assignmentRevision: row.assignment_revision,
+        attempts: row.attempts, lastError: row.last_error, targetSha256: row.target_sha256,
+        checksumValid: target.target_json === null && row.target_sha256 === null ? null : matchesEnrichmentChecksum(target.target_json, row.target_sha256,
+          acknowledgedEnrichmentHash(sql, row.token_id, REVEAL_ENRICHMENT_VERSION, row.assignment_revision)) };
+    }
+    return { tokenId: row.token_id, category: current.category, assetId: current.assetId,
+      assignmentRevision: current.assignmentRevision, metadataRevision: current.metadataRevision,
+      metadataSha256: current.targetSha256, frozenMetadataSha256: hash(frozen.metadata_json), nonAttributeSha256: hash(JSON.stringify(metadata)),
+      collectionBlock: getOwnerHatchingGrail(current.category, current.assetId)?.collectionBlock
+        ?? lookupRevealCollectionBlock(blocks, current.category, current.assetId),
+      enrichment };
+  });
+  const eligible = rows.filter(row => row.eligible);
+  return { nextCursor: rows.length === PAGE_SIZE ? rows[rows.length - 1].token_id : null, eligible: eligible.length,
+    missing: eligible.filter(row => row.job_status === null).length, invalid: eligible.filter(row => row.job_status === 'invalid').length,
+    conflict: eligible.filter(row => row.job_status === 'conflict').length,
+    conflictRechecks: eligible.filter(row => row.last_error === 'conflict-recheck').length, enqueued: 0, requeued: 0,
+    frozenThroughMs, tokens };
 }
 
 function recheckPublishedToken(sql: RevealSql, tokenId: string, write: boolean, hasJobs: boolean): EthereumRevealAttributeBackfillPage {
@@ -50,7 +113,12 @@ function recheckPublishedToken(sql: RevealSql, tokenId: string, write: boolean, 
 }
 
 export function backfillRevealAttributePage(sql: RevealSql,
-  request: Pick<EthereumRevealAttributeBackfillRequest, 'afterTokenId' | 'write' | 'retryBlocked' | 'recheckTokenId'>): EthereumRevealAttributeBackfillPage {
+  request: Pick<EthereumRevealAttributeBackfillRequest, 'afterTokenId' | 'write' | 'retryBlocked' | 'recheckTokenId' | 'audit' | 'frozenThroughMs'>): EthereumRevealAttributeBackfillPage {
+  if (request.audit) {
+    if (request.write || request.retryBlocked || request.recheckTokenId || !Number.isSafeInteger(request.frozenThroughMs) ||
+      request.frozenThroughMs! < 0 || request.frozenThroughMs! > Date.now()) throw new Error('Attribute audit requires a read-only frozen cutoff.');
+    return auditRevealAttributePage(sql, request.afterTokenId, request.frozenThroughMs!);
+  }
   const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
   if (request.recheckTokenId) return recheckPublishedToken(sql, request.recheckTokenId, request.write, hasJobs);
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');

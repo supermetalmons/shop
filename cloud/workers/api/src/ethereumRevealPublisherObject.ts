@@ -6,7 +6,8 @@ import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegis
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import type { EthereumArtworkCategory } from '../../../../shared/ethereum/reveal.js';
 import { REVEAL_ENRICHMENT_SLOTS } from './ethereumRevealEnrichmentStore.js';
-import { attributePublisherName, fetchRevealAttributes, InvalidRevealAttributes, MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
+import { attributePublisherName, fetchRevealAttributes, InvalidRevealAttributes, MAX_REVEAL_METADATA_BYTES,
+  RevealAttributeSourceUnavailable } from './ethereumRevealAttributes.js';
 import type { RevealPublicationJob } from './ethereumRevealStore.js';
 import { requireRetiredRevealDeployment, requireRevealObjectIdentity } from './ethereumRevealMaintenanceSupport.js';
 import { revealDeploymentCatalog } from './ethereumRevealCatalog.js';
@@ -123,7 +124,7 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
     const prepare = async () => {
       const deployment = await this.requireCurrentScope(scope, timeout.signal);
       const catalog = job.catalogVersion ? getRevealCatalog(job.catalogVersion, job.catalogSha256) : revealDeploymentCatalog(deployment);
-      if (!catalog) throw new InvalidRevealAttributes('Attribute catalog is not supported.');
+      if (!catalog) throw new RevealAttributeSourceUnavailable('catalog-unavailable');
       timeout.signal.throwIfAborted();
       return fetchRevealAttributes(job.category, job.assetId, job.baseJson, timeout.signal, fetch, catalog);
     };
@@ -133,7 +134,11 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
     try {
       return { status: 'prepared', ...await raceWithSignal(work, timeout.signal) };
     } catch (error) {
-      return { status: error instanceof InvalidRevealAttributes ? 'invalid' : 'source-unavailable' };
+      const status = error instanceof InvalidRevealAttributes ? 'invalid' : 'source-unavailable';
+      const reason = error instanceof RevealAttributeSourceUnavailable ? error.reason :
+        error instanceof InvalidRevealAttributes ? 'invalid-local-attributes' : timeout.timedOut() ? 'source-timeout' : 'preparation-unavailable';
+      console.error({ event: 'ethereum_reveal_attribute_preparation_error', deploymentId: scope.deploymentId, status, reason });
+      return { status };
     } finally { timeout.dispose(); }
   }
 

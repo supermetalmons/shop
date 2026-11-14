@@ -18,7 +18,11 @@ const deployment = { deploymentId: 'online-load', dropId: '111k_devnet', chainId
 test('native online pools stage 9358 and all remaining eggs while ordinary requests continue', { timeout: 180_000 }, async t => {
   const source = `
     import { DurableObject } from 'cloudflare:workers';
+    import { createHash } from 'node:crypto';
     import { EthereumRevealStore } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealStore.ts'))};
+    import { registerRevealCollectionBlocksFixture } from ${JSON.stringify(resolve('cloud/workers/api/test/revealCollectionBlocksFixture.ts'))};
+    import { lookupRevealCollectionBlock } from ${JSON.stringify(resolve('shared/ethereum/revealCollectionBlocks.ts'))};
+    import { revealCollectionBlocks } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealCollectionBlocks.ts'))};
     const deployment = ${JSON.stringify(deployment)};
     const observation = { transactionHash: '0x'+'1'.repeat(64),blockHash:'0x'+'2'.repeat(64),blockNumber:101 };
     const payload='[{"trait_type":"collection block","value":"load"},{"trait_type":"serial","value":9007199254740993}]';
@@ -43,12 +47,21 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
           sql.exec("INSERT INTO publication(token_id,status) SELECT token_id,'published' FROM assignments");
           return { frozen:input.amount };
         }
-        if(input.command==='begin')return updates.begin(input.batch,1000);
+        if(input.command==='begin') {
+          registerRevealCollectionBlocksFixture(input.batch.target.manifest,'load');
+          this.targetBlocks=revealCollectionBlocks(input.batch.target.descriptor);
+          return updates.begin(input.batch,1000);
+        }
         if(input.command==='mapping')return updates.stageMappings(input.batchId,input.rows);
         if(input.command==='sealMapping')return updates.sealMappings(input.batchId);
         if(input.command==='metadata') {
           const rows=updates.metadataPreparationPage(input.batchId,256);
-          if(rows.length)updates.metadataStage(input.batchId,rows.map(row=>({...row,attributesJson:payload,sha256:input.sha256})));
+          if(rows.length)updates.metadataStage(input.batchId,rows.map(row=>{
+            const block=lookupRevealCollectionBlock(this.targetBlocks,row.category,row.assetId);
+            if(!block)throw new Error('Missing load fixture collection block');
+            const attributesJson=payload.replace('"load"',JSON.stringify(block));
+            return {...row,attributesJson,sha256:createHash('sha256').update(attributesJson).digest('hex')};
+          }));
           return updates.status(input.batchId);
         }
         if(input.command==='generation') { const start=performance.now(); const value=updates.generationStage(input.batchId,256);return {...value,duration:performance.now()-start}; }
@@ -85,8 +98,6 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
     exports: { Pool: { type: 'durable-object', storage: 'sqlite' } },
   } }] });
   try {
-    const payload = '[{"trait_type":"collection block","value":"load"},{"trait_type":"serial","value":9007199254740993}]';
-    const sha256 = createHash('sha256').update(payload).digest('hex');
     for (const amount of [9358, predecessor.categories.eggs.count]) {
       const target = structuredClone(predecessor);
       const category = amount === 9358 ? 'painting' : 'video';
@@ -115,7 +126,7 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
       await request('begin', { batch });
       for (let offset = 0; offset < amount; offset += 256) await request('mapping', { rows: batch.mappings.slice(offset, offset + 256) });
       await request('sealMapping');
-      while ((await request('metadata', { sha256 })).metadataStaged !== amount) {}
+      while ((await request('metadata')).metadataStaged !== amount) {}
       let seeded = 0, maximumStageMs = 0, ordinary = 0;
       while (seeded < 111111) {
         const [stage, read] = await Promise.all([request('generation'), request('read')]);
