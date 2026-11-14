@@ -1,5 +1,6 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { isDropFamily } from '../../config/deployment';
+import { useSoundReadiness } from '../../hooks/useSoundReadiness';
 import {
   usesAssetGatedRevealFlow,
   usesClearCard3dRevealFlow,
@@ -25,13 +26,29 @@ import { preloadRevealFrames } from '../../lib/revealFrameSequence';
 import { DEFAULT_BOX_SOUND_CLICK_URL, DEFAULT_BOX_SOUND_REVEAL_URL, pickRandomSoundUrl } from './sounds';
 import type { RevealDropContext } from './contracts';
 
+function releasePreloadVideos(root: HTMLDivElement): void {
+  root.querySelectorAll('video').forEach(video => {
+    video.pause();
+    video.removeAttribute('src');
+    video.querySelectorAll('source').forEach(source => source.removeAttribute('src'));
+    video.load();
+  });
+  root.replaceChildren();
+}
+
+function preloadSound(url: string): void {
+  void soundPlayer.preloadSound(url).catch(() => undefined);
+}
+
 export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDropContext, 'getDropConfig' | 'getDropContent'>) {
   const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const preloadedInteractivePackKeysRef = useRef<Set<string>>(new Set());
   const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
-  const soundInitPromiseRef = useRef<Promise<void> | null>(null);
+  const { ensureSoundReady, soundInitPromiseRef } = useSoundReadiness();
+  const assetsGenerationRef = useRef(0);
+  const soundPreloadTimersRef = useRef(new Set<number>());
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
   const videoPreloadKeyRef = useRef<string>('');
   const dropRevealIsAnimated = useCallback(
@@ -209,9 +226,7 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
       const key = `${revealMediaBase}|${ids.join(',')}`;
       if (videoPreloadKeyRef.current === key) return;
       videoPreloadKeyRef.current = key;
-      while (root.firstChild) {
-        root.removeChild(root.firstChild);
-      }
+      releasePreloadVideos(root);
       ids.forEach((mediaId) => {
         const movSrc = joinDropAssetUrl(revealMediaBase, `${mediaId}.mov`);
         const webmSrc = joinDropAssetUrl(revealMediaBase, `${mediaId}.webm`);
@@ -236,40 +251,22 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
     [ensureVideoPreloadRoot, revealMediaBaseForDropId],
   );
 
-  const ensureSoundReady = useCallback(() => {
-    if (soundPlayer.isInitialized) return Promise.resolve();
-    if (soundInitPromiseRef.current) return soundInitPromiseRef.current;
-    const promise = soundPlayer.initializeOnUserInteraction(true);
-    soundInitPromiseRef.current = promise.finally(() => {
-      if (soundInitPromiseRef.current === promise) {
-        soundInitPromiseRef.current = null;
-      }
-    });
-    return soundInitPromiseRef.current;
-  }, []);
-
   const preloadRevealSounds = useCallback((dropId?: string) => {
     if (usesMiNotePack3dRevealForDropId(dropId)) {
       void preloadMiNotePackSounds();
       return;
     }
+    const generation = assetsGenerationRef.current;
     const { click, reveal, cardSwipe, cardSpread } = revealSoundUrlsForDropId(dropId);
     const motionSounds = [cardSwipe, cardSpread].filter((soundUrl): soundUrl is string => Boolean(soundUrl));
-    void soundPlayer.preloadSound(reveal);
-    click.forEach((clickUrl) => {
-      void soundPlayer.preloadSound(clickUrl);
-    });
-    motionSounds.forEach((motionUrl) => {
-      void soundPlayer.preloadSound(motionUrl);
-    });
+    preloadSound(reveal);
+    click.forEach(preloadSound);
+    motionSounds.forEach(preloadSound);
     void ensureSoundReady().then(() => {
-      void soundPlayer.preloadSound(reveal);
-      click.forEach((clickUrl) => {
-        void soundPlayer.preloadSound(clickUrl);
-      });
-      motionSounds.forEach((motionUrl) => {
-        void soundPlayer.preloadSound(motionUrl);
-      });
+      if (assetsGenerationRef.current !== generation) return;
+      preloadSound(reveal);
+      click.forEach(preloadSound);
+      motionSounds.forEach(preloadSound);
     });
   }, [ensureSoundReady, revealSoundUrlsForDropId, usesMiNotePack3dRevealForDropId]);
   const preloadCardMotionSoundsForDropId = useCallback(
@@ -277,7 +274,7 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
       const { cardSwipe, cardSpread } = revealSoundUrlsForDropId(dropId);
       [cardSwipe, cardSpread].forEach((motionUrl) => {
         if (motionUrl) {
-          void soundPlayer.preloadSound(motionUrl);
+          preloadSound(motionUrl);
         }
       });
     },
@@ -289,9 +286,13 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
         preloadCardMotionSoundsForDropId(dropId);
         return;
       }
-      window.setTimeout(() => {
+      const generation = assetsGenerationRef.current;
+      const timer = window.setTimeout(() => {
+        soundPreloadTimersRef.current.delete(timer);
+        if (assetsGenerationRef.current !== generation) return;
         preloadCardMotionSoundsForDropId(dropId);
       }, 0);
+      soundPreloadTimersRef.current.add(timer);
     },
     [preloadCardMotionSoundsForDropId],
   );
@@ -300,8 +301,10 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
       const soundUrls = revealSoundUrlsForDropId(dropId);
       const motionUrl = soundUrls[soundKey];
       if (!motionUrl) return;
+      const generation = assetsGenerationRef.current;
+      const isActive = () => assetsGenerationRef.current === generation;
       const play = () => {
-        void soundPlayer.playSound(motionUrl, soundUrls.clickVolume);
+        if (isActive()) void soundPlayer.playSound(motionUrl, soundUrls.clickVolume, isActive);
       };
       if (soundPlayer.isInitialized) {
         play();
@@ -319,8 +322,10 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
   const playRevealSoundForDropId = useCallback(
     (dropId?: string) => {
       const { reveal, revealVolume } = revealSoundUrlsForDropId(dropId);
+      const generation = assetsGenerationRef.current;
+      const isActive = () => assetsGenerationRef.current === generation;
       const play = () => {
-        void soundPlayer.playSound(reveal, revealVolume);
+        if (isActive()) void soundPlayer.playSound(reveal, revealVolume, isActive);
       };
       if (soundPlayer.isInitialized) {
         play();
@@ -337,8 +342,11 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
     (dropId?: string) => {
       const { click, clickVolume } = revealSoundUrlsForDropId(dropId);
       const clickUrl = pickRandomSoundUrl(click);
+      const generation = assetsGenerationRef.current;
+      const isActive = () => assetsGenerationRef.current === generation;
       void ensureSoundReady().then(() => {
-        void soundPlayer.playSound(clickUrl, clickVolume);
+        if (!isActive()) return;
+        void soundPlayer.playSound(clickUrl, clickVolume, isActive);
         scheduleCardMotionSoundPreloadForDropId(dropId);
       });
     },
@@ -372,24 +380,32 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
   const clearRevealVideos = useCallback(() => {
     videoPreloadKeyRef.current = '';
     if (videoPreloadRootRef.current) {
-      while (videoPreloadRootRef.current.firstChild) {
-        videoPreloadRootRef.current.removeChild(videoPreloadRootRef.current.firstChild);
-      }
+      releasePreloadVideos(videoPreloadRootRef.current);
     }
   }, []);
 
   const resetRevealAssets = useCallback(() => {
-    preloadedBoxFramesRef.current.clear();
-    boxFramePreloadImagesRef.current.clear();
+    assetsGenerationRef.current += 1;
+    soundPreloadTimersRef.current.forEach(timer => window.clearTimeout(timer));
+    soundPreloadTimersRef.current.clear();
+    boxFramePreloadImagesRef.current.forEach(image => {
+      image.onload = null;
+      image.onerror = null;
+      image.src = '';
+    });
+    preloadedBoxFramesRef.current = new Set();
+    boxFramePreloadImagesRef.current = new Map();
     preloadedInteractivePackKeysRef.current.clear();
     clearPonchoDrifellaImageCache(ponchoImageCacheRef.current);
     autoplayFramePreloadScheduledDropIdRef.current = null;
-    videoPreloadKeyRef.current = '';
+    clearRevealVideos();
     if (videoPreloadRootRef.current) {
       videoPreloadRootRef.current.remove();
       videoPreloadRootRef.current = null;
     }
-  }, []);
+  }, [clearRevealVideos]);
+
+  useEffect(() => resetRevealAssets, [resetRevealAssets]);
 
   return {
     dropRevealIsAnimated,

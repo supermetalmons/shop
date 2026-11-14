@@ -11,7 +11,6 @@ import { buildStartOpenBoxTxWithPending, fetchBoxMinterConfig } from '../../lib/
 import { getMediaIdForFigureId } from '../../lib/figureMediaMap';
 import { normalizeBoxDisplayImage } from '../../lib/dropContent';
 import { fetchMiNotePackId } from '../../lib/miNotePackIdentity';
-import { soundPlayer } from '../../lib/SoundPlayer';
 import type { PonchoDrifellaRevealRequestStatus } from '../../lib/ponchoDrifellaReveal';
 import { preloadDrifCardVisualAssets } from '../../lib/drifCardVisualAssets';
 import {
@@ -35,7 +34,6 @@ import { isUserRejectedError } from '../commerce/transactionSupport';
 import { persistCompletedReveal } from '../persistedState';
 import type { InventoryItem } from '../../types';
 import { calcInteractiveCardViewerTargetRectInViewport, calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
-import { pickRandomSoundUrl } from './sounds';
 import type { ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
 import type { ShopRevealOptions } from './contracts';
 import { useRevealAssets } from './useRevealAssets';
@@ -57,9 +55,9 @@ export function useShopReveal(options: ShopRevealOptions) {
   const {
     usesInteractiveCardPackRevealForDropId, usesClearCard3dRevealForDropId,
     revealFrameCountForDropId, revealRendererForDropId, boxAspectRatioForDropId,
-    resolveInteractiveCardPackMediaIdForBox, revealSoundUrlsForDropId,
+    resolveInteractiveCardPackMediaIdForBox,
     preloadRevealAssetsForPackMedia, preloadInteractiveCardPackRevealCardAssetsForDropId,
-    preloadRevealVideos, ensureSoundReady,
+    preloadRevealVideos,
     playClickSoundForDropId, playRevealSoundForDropId, playCardMotionSoundForDropId,
   } = assets;
   const session = useRevealSession({ ...options, assets });
@@ -329,8 +327,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     }
     if (!ensureRevealOverlayAdvanceAllowed()) return;
 
-    const { click, clickVolume } = revealSoundUrlsForDropId(revealOverlay.dropId);
-    void ensureSoundReady().then(() => soundPlayer.playSound(pickRandomSoundUrl(click), clickVolume));
+    playClickSoundForDropId(revealOverlay.dropId);
     const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
     const attempt = beginRevealAttempt(revealOverlay.id, revealOverlay.dropId, revealContent.reveal.mode);
 

@@ -24,6 +24,7 @@ import {
   sameRevealOverlayRect,
 } from './lib/revealOverlayLayout';
 import { soundPlayer } from './lib/SoundPlayer';
+import { useSoundReadiness } from './hooks/useSoundReadiness';
 import { navigate } from './navigation';
 
 const LITTLE_SWAG_BOXES_DROP = (() => {
@@ -102,7 +103,7 @@ export default function LittleSwagBoxesWipApp() {
   const [autoOpening, setAutoOpening] = useState(false);
   const [focusedMode, setFocusedMode] = useState(false);
   const [resetKey, setResetKey] = useState(0);
-  const soundInitPromiseRef = useRef<Promise<void> | null>(null);
+  const { ensureSoundReady } = useSoundReadiness();
   const revealSoundPlayedRef = useRef(false);
   const revealButtonRef = useRef<HTMLButtonElement | null>(null);
   const loadedFramesRef = useRef(new Set<string>());
@@ -149,16 +150,6 @@ export default function LittleSwagBoxesWipApp() {
       ['--reveal-media-shift-y' as never]: `${Math.floor(size * 0.1)}px`,
     };
   }, [targetRect.height, targetRect.width]);
-
-  const ensureSoundReady = useCallback(() => {
-    if (soundPlayer.isInitialized) return Promise.resolve();
-    if (soundInitPromiseRef.current) return soundInitPromiseRef.current;
-    const promise = soundPlayer.initializeOnUserInteraction(true);
-    soundInitPromiseRef.current = promise.finally(() => {
-      if (soundInitPromiseRef.current === promise) soundInitPromiseRef.current = null;
-    });
-    return soundInitPromiseRef.current;
-  }, []);
 
   const playClickSound = useCallback(() => {
     void ensureSoundReady().then(() => {

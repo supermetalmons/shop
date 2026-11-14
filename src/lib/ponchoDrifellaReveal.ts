@@ -338,8 +338,17 @@ async function preloadPonchoDrifellaImage(
       if (!resolvedImage) {
         throw new Error(`Failed to preload image: ${normalizedImageSrc}`);
       }
-      await decodePonchoDrifellaImage(resolvedImage);
-      imageCache.resident.set(normalizedImageSrc, resolvedImage);
+      const listeners = getPonchoDrifellaImageCacheInvalidationListeners(imageCache);
+      const releaseImage = () => { resolvedImage.src = ''; };
+      listeners.add(releaseImage);
+      try {
+        await decodePonchoDrifellaImage(resolvedImage);
+        if (getPonchoDrifellaCacheGeneration(imageCache) === generation) {
+          imageCache.resident.set(normalizedImageSrc, resolvedImage);
+        }
+      } finally {
+        listeners.delete(releaseImage);
+      }
     }
     return;
   }
@@ -382,7 +391,7 @@ async function preloadPonchoDrifellaImage(
         imageCache.resident.delete(normalizedImageSrc);
         recordPonchoDrifellaImageLoadFailure(imageCache, normalizedImageSrc);
       }
-      pendingImages.delete(normalizedImageSrc);
+      if (pendingImages.get(normalizedImageSrc) === image) pendingImages.delete(normalizedImageSrc);
       reject(new Error(reason));
     };
 
@@ -414,7 +423,7 @@ async function preloadPonchoDrifellaImage(
         if (getPonchoDrifellaCacheGeneration(imageCache) === generation) {
           imageCache.pending.delete(normalizedImageSrc);
         }
-        pendingImages.delete(normalizedImageSrc);
+        if (pendingImages.get(normalizedImageSrc) === image) pendingImages.delete(normalizedImageSrc);
       }
     };
 

@@ -1,6 +1,7 @@
 class SoundPlayer {
   private audioContext!: AudioContext;
   private audioBufferCache = new Map<string, AudioBuffer>();
+  private audioBufferPromises = new Map<string, Promise<AudioBuffer>>();
   private arrayBufferCache = new Map<string, ArrayBuffer>();
   private arrayBufferPromises = new Map<string, Promise<ArrayBuffer>>();
   public isInitialized = false;
@@ -85,15 +86,25 @@ class SoundPlayer {
     }
   }
 
-  private async loadAudioBuffer(url: string): Promise<AudioBuffer> {
+  private async loadAudioBuffer(url: string, context: AudioContext): Promise<AudioBuffer> {
     if (this.audioBufferCache.has(url)) {
       return this.audioBufferCache.get(url)!;
     }
-    const arrayBuffer = await this.getOrFetchArrayBuffer(url);
-    this.arrayBufferCache.delete(url);
-    const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-    this.audioBufferCache.set(url, audioBuffer);
-    return audioBuffer;
+    const pending = this.audioBufferPromises.get(url);
+    if (pending) return pending;
+    const promise = (async () => {
+      const arrayBuffer = await this.getOrFetchArrayBuffer(url);
+      this.arrayBufferCache.delete(url);
+      const audioBuffer = await context.decodeAudioData(arrayBuffer);
+      this.audioBufferCache.set(url, audioBuffer);
+      return audioBuffer;
+    })();
+    this.audioBufferPromises.set(url, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.audioBufferPromises.get(url) === promise) this.audioBufferPromises.delete(url);
+    }
   }
 
   private teardownRestartListeners(): void {
@@ -167,7 +178,7 @@ class SoundPlayer {
     const ctx = await this.prepareContext();
     if (!ctx) return;
     try {
-      const audioBuffer = await this.loadAudioBuffer(url);
+      const audioBuffer = await this.loadAudioBuffer(url, ctx);
       if (document.visibilityState !== "visible" || isActive?.() === false) return;
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
@@ -191,7 +202,7 @@ class SoundPlayer {
     const ctx = await this.prepareContext();
     if (!ctx) return;
     try {
-      await this.loadAudioBuffer(url);
+      await this.loadAudioBuffer(url, ctx);
     } catch (_) {
       this.setupRestartListeners();
     }

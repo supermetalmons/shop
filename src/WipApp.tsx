@@ -24,6 +24,7 @@ import {
   sameRevealOverlayRect,
 } from './lib/revealOverlayLayout';
 import { soundPlayer } from './lib/SoundPlayer';
+import { useSoundReadiness } from './hooks/useSoundReadiness';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { navigate } from './navigation';
 import { ModalFocusScope } from './components/ModalFocusScope';
@@ -135,7 +136,7 @@ function LocalPlayWipApp({ dropId }: { dropId: Exclude<PackWipDropId, 'little_sw
   const [focusedMode, setFocusedMode] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
-  const soundInitPromiseRef = useRef<Promise<void> | null>(null);
+  const { ensureSoundReady, soundInitPromiseRef } = useSoundReadiness();
   const revealButtonRef = useRef<HTMLButtonElement | null>(null);
   const revealContainerLabel = dropAssetLabel(wipDrop, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
@@ -146,18 +147,6 @@ function LocalPlayWipApp({ dropId }: { dropId: Exclude<PackWipDropId, 'little_sw
   const currentCards = useMemo(() => {
     return getInteractiveCardPackCardsByFigureIds(wipDrop.dropId, cardIds);
   }, [cardIds, wipDrop.dropId]);
-
-  const ensureSoundReady = useCallback(() => {
-    if (soundPlayer.isInitialized) return Promise.resolve();
-    if (soundInitPromiseRef.current) return soundInitPromiseRef.current;
-    const promise = soundPlayer.initializeOnUserInteraction(true);
-    soundInitPromiseRef.current = promise.finally(() => {
-      if (soundInitPromiseRef.current === promise) {
-        soundInitPromiseRef.current = null;
-      }
-    });
-    return soundInitPromiseRef.current;
-  }, []);
 
   const preloadCardMotionSounds = useCallback(() => {
     cardMotionSoundUrls.forEach((motionUrl) => {
