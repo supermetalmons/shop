@@ -6,9 +6,10 @@ import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegis
 import { computeRevealCatalogDescriptor, type RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import { revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
-import { buildNewRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
+import { buildNewRevealedArtwork, buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
 import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
 import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
@@ -38,7 +39,7 @@ function batch(predecessor: RevealAssetCatalog = source, count = 3): RevealCatal
   return { ...body, batchId: `catalog-${batchSha256.slice(0, 32)}`, batchSha256 };
 }
 
-function fixture(t: TestContext, scope = deployment) {
+function fixture(t: TestContext, scope = deployment, seedInventory = true) {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys=ON');
   let failSql: string | undefined;
@@ -59,7 +60,7 @@ function fixture(t: TestContext, scope = deployment) {
   const random: number[] = [];
   const store = new EthereumRevealStore(sql, transaction, maximum => { const value = random.shift() ?? 0; assert.ok(value < maximum); return value; });
   store.configure(scope);
-  while (!store.initializeChunk()) {}
+  if (seedInventory) while (!store.initializeChunk()) {}
   t.after(() => database.close());
   return { store, database, sql, transaction, random, fail: (fragment?: string) => { failSql = fragment; },
     observe: <T>(action: () => T) => {
@@ -125,7 +126,7 @@ test('canonical metadata batches reads with bounded parameters and preserves ord
   const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
   const reader = f.reopen().catalogUpdate;
   const counts: number[] = [];
-  for (const [size, budget] of [[1, 12], [16, 12], [99, 12], [100, 18], [120, 18]]) {
+  for (const [size, budget] of [[1, 12], [16, 12], [99, 12], [100, 19], [120, 18]]) {
     const requested = ids.slice(0, size).reverse();
     const result = f.observe(() => reader.canonicalMetadata(requested));
     counts.push(result.queries.length);
@@ -153,6 +154,99 @@ test('canonical metadata batches reads with bounded parameters and preserves ord
   assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
   assert.deepEqual(f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
   t.diagnostic(`canonical metadata queries for 1/16/99/100/120 tokens: ${counts.join('/')}`);
+});
+
+test('canonical payload reads stay byte bounded across ordinary, enriched, mapped and owner metadata', t => {
+  const f = fixture(t, deployment, false);
+  const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+  const descriptor = JSON.stringify(computeRevealCatalogDescriptor(source));
+  for (const revision of [1, 2, 3]) {
+    f.database.prepare(`INSERT INTO reveal_catalog_generations(batch_id,batch_sha256,predecessor_json,target_json,
+      target_manifest_json,source_revision,target_revision,mapping_count,mapping_sha256,phase,started_at_ms,activated_at_ms)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(`generation-${revision}`, 'a'.repeat(64), descriptor, descriptor,
+      JSON.stringify(source), revision - 1, revision, 4, 'b'.repeat(64), revision === 3 ? 'staging' : 'complete', revision, revision === 3 ? null : revision);
+  }
+  f.database.exec("UPDATE settings SET active_catalog_generation='generation-2',catalog_revision=2; INSERT INTO crates(crate_token_id) VALUES('111112')");
+  const frozen = new Map<string, ReturnType<typeof buildNewRevealedArtwork>>();
+  const enrichedMetadata = new Map<string, string>();
+  for (let id = 1; id <= 13; id++) {
+    const tokenId = String(id);
+    const mapped = id >= 9 && id <= 12;
+    const fresh = mapped && id % 2 === 1;
+    const category = mapped || id === 13 ? 'egg' : 'painting';
+    const build = mapped && !fresh ? buildRevealedArtwork : buildNewRevealedArtwork;
+    const built = build({ templateJson: id <= 4
+      ? JSON.stringify({ ...JSON.parse(templateJson), description: '☀'.repeat(id === 4 ? 130_000 : 70_000) }) : templateJson,
+      tokenId, crateTokenId: '111112', category: fresh ? 'painting' : category, assetId: id, observation, catalog: source });
+    if (fresh) {
+      built.artwork.name = `saved fresh ${id}`;
+      built.metadataJson = JSON.stringify({ ...JSON.parse(built.metadataJson), name: built.artwork.name }) + '\n';
+    }
+    assert.ok(Buffer.byteLength(built.metadataJson) <= MAX_REVEAL_METADATA_BYTES);
+    frozen.set(tokenId, built);
+    f.database.prepare(`INSERT INTO assignments(category,asset_id,crate_token_id,slot,token_id,artwork_json,
+      metadata_json,placeholder_json,frozen_at_ms,assignment_revision) VALUES(?,?,'111112',?,?,?,?,?,?,?)`)
+      .run(category, id, id - 1, tokenId, JSON.stringify(built.artwork), built.metadataJson, built.placeholderJson, 1000, fresh ? 2 : 0);
+    f.database.prepare('INSERT INTO publication(token_id,status) VALUES(?,?)').run(tokenId, id % 2 ? 'published' : 'pending');
+    if (id >= 5 && id <= 8) {
+      const block = built.artwork.attributes!.find(attribute => attribute.trait_type === 'collection block')!;
+      const enriched = applyRevealAttributePayload(built.metadataJson, JSON.stringify([block, { trait_type: 'large', value: '☀'.repeat(115_000) }]));
+      enrichedMetadata.set(tokenId, enriched.metadataJson);
+      f.database.prepare(`INSERT INTO reveal_enrichment(token_id,version,assignment_revision,status,target_json,target_sha256)
+        VALUES(?,?,0,'published',?,?)`).run(tokenId, REVEAL_ENRICHMENT_VERSION, enriched.metadataJson, enriched.metadataSha256);
+    }
+    if (mapped) for (const revision of [1, 2, 3]) {
+      const target = buildNewRevealedArtwork({ templateJson, tokenId, crateTokenId: '111112', category: 'painting', assetId: id, observation, catalog: source });
+      const block = target.artwork.attributes!.find(attribute => attribute.trait_type === 'collection block')!;
+      const attributes = JSON.stringify([block, { trait_type: 'generation', value: revision },
+        { trait_type: 'large', value: '☀'.repeat(115_000) }]);
+      f.database.prepare(`INSERT INTO reveal_catalog_mappings(batch_id,egg_id,category,asset_id,attributes_json,
+        attributes_sha256,origin_category,origin_asset_id) VALUES(?,?,'painting',?,?,?,'egg',?)`)
+        .run(`generation-${revision}`, id, id, attributes, digest(attributes), id);
+    }
+  }
+  const initial = f.store.catalogUpdate.canonicalMetadata(['13'])[0];
+  const owned = { ...initial, metadataRevision: 4, metadataJson: JSON.stringify({ ...JSON.parse(initial.metadataJson), readyToHatch: true }) + '\n' };
+  owned.targetSha256 = digest(owned.metadataJson);
+  f.database.prepare(`INSERT INTO owner_hatching_batches(batch_id,source_sha256,input_sha256,ready_count,grail_count,fresh_egg_count,created_at_ms)
+    VALUES('owner','a','b',1,0,1,1000)`).run();
+  f.database.prepare(`INSERT INTO owner_hatching_tokens(token_id,batch_id,egg_id,original_json,status,canonical_json,metadata_revision)
+    VALUES('13','owner',13,?,'ready',?,4)`).run(JSON.stringify(initial), JSON.stringify(owned));
+  const reader = f.store.catalogUpdate;
+  const expected = new Map([...frozen.keys()].map(id => [id, reader.canonicalMetadata([id])[0]]));
+  assert.deepEqual(expected.get('13'), owned);
+  for (const id of ['1', '2', '3', '4']) assert.equal(expected.get(id)!.metadataJson, frozen.get(id)!.metadataJson);
+  for (const [id, metadataJson] of enrichedMetadata) assert.equal(expected.get(id)!.metadataJson, metadataJson);
+  for (const id of ['9', '10', '11', '12']) {
+    const value = expected.get(id)!;
+    assert.equal(value.category, 'painting');
+    assert.equal(value.assetId, Number(id));
+    assert.equal(value.assignmentRevision, 2);
+    assert.equal(value.metadataRevision, 5);
+    assert.equal(value.migration, Number(id) % 2 === 0);
+    assert.equal(value.artwork.name, Number(id) % 2 ? `saved fresh ${id}` : id);
+    assert.equal(value.artwork.attributes!.find(attribute => attribute.trait_type === 'generation')!.value, 2);
+  }
+  const payloads: Array<{ rows: number; bytes: number }> = [];
+  const sql: RevealSql = { exec<T extends Record<string, string | number | null | ArrayBuffer>>(query: string, ...bindings: Array<string | number | null | ArrayBuffer>) {
+    assert.match(query, /^(SELECT|WITH)\b/);
+    assert.ok(bindings.length <= 100);
+    const rows = f.sql.exec<T>(query, ...bindings).toArray();
+    const bytes = rows.reduce((total, row) => total + Object.entries(row).reduce((sum, [key, value]) =>
+      sum + (key.endsWith('_json') && typeof value === 'string' ? Buffer.byteLength(value) : 0), 0), 0);
+    if (bytes) payloads.push({ rows: rows.length, bytes });
+    return { toArray: () => rows };
+  } };
+  const schema = f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
+  const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
+  f.database.exec('PRAGMA query_only=ON');
+  const readonly = new EthereumRevealCatalogUpdateStore(sql, () => { throw new Error('Canonical reads must not write.'); });
+  const ids = ['12', '4', '8', '1', '13', '999', '7', '10', '3', '11', '6', '2', '9', '5', '4', '13'];
+  assert.deepEqual(readonly.canonicalMetadata(ids), ids.flatMap(id => expected.has(id) ? [expected.get(id)] : []));
+  assert.ok(payloads.every(page => page.bytes <= 1024 * 1024 || page.rows === 1), JSON.stringify(payloads));
+  assert.ok(payloads.some(page => page.bytes > 1024 * 1024 && page.rows === 1));
+  assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
+  assert.deepEqual(f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
 });
 
 test('catalog staging rejects conflicting collection blocks before activation and corrected traits publish fresh mapped tokens', t => {
