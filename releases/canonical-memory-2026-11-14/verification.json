@@ -1,0 +1,406 @@
+{
+  "version": 1,
+  "complete": true,
+  "completedAt": "2026-11-14T13:26:25.835976+00:00",
+  "codeCommit": "c4250e738e559720d81ab5e0b8b6bd242e6e327d",
+  "deployments": {
+    "api": {
+      "worker": "mons-shop-api",
+      "deploymentId": "39f872f7-75d7-4a23-9da0-d9ab0207615a",
+      "versionId": "4477d349-ac27-4bf7-a5fe-57c02aae7a39",
+      "createdAt": "2026-11-14T13:14:45.881826Z"
+    },
+    "frontend": {
+      "worker": "mons-shop",
+      "deploymentId": "64f960d7-3059-4c5a-9214-f669465f6b00",
+      "versionId": "871b60fb-235f-4045-8f9d-b14763a38046",
+      "createdAt": "2026-11-14T12:05:22.343203Z"
+    }
+  },
+  "frontendPreserved": true,
+  "resourceBindingsPreserved": true,
+  "storefrontConfigurationPreserved": true,
+  "deployedSource": {
+    "checkedAt": "2026-11-14T13:15:26.442Z",
+    "versionId": "4477d349-ac27-4bf7-a5fe-57c02aae7a39",
+    "moduleExactMatch": true,
+    "entrypointBytes": 13713918,
+    "uploadBundleSha256": "484ee8a4d81d57064281b97820f98f4289570cf559a66a539094e6ed36ba66ef",
+    "localModuleSha256": "141227288930611a8b41ae6816f800abe961effc7c8cef3f49c32966e3c8d826",
+    "deployedModuleSha256": "141227288930611a8b41ae6816f800abe961effc7c8cef3f49c32966e3c8d826"
+  },
+  "validation": {
+    "command": "npm run deploy:api",
+    "commit": "c4250e738e559720d81ab5e0b8b6bd242e6e327d",
+    "exitCode": 0,
+    "apiVersion": "4477d349-ac27-4bf7-a5fe-57c02aae7a39",
+    "suites": [
+      {
+        "suite": "test:api",
+        "tests": 3748,
+        "passed": 3748,
+        "failed": 0
+      },
+      {
+        "suite": "test:api:runtime",
+        "tests": 91,
+        "passed": 91,
+        "failed": 0
+      }
+    ],
+    "logSha256": "89cd557f11983b50d75c7552a624429bc9a763ce94ae0d27a7ce1034634886fe"
+  },
+  "metadata": {
+    "scope": {
+      "deploymentId": "mainnet-v1",
+      "chainId": 1,
+      "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "metadataBaseUri": "https://cdn.mons.shop/111k/",
+      "effectiveCatalogVersion": "111k-v9",
+      "effectiveCatalogSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1",
+      "catalogRevision": 1,
+      "revision": 9
+    },
+    "before": {
+      "total": 33240,
+      "artworks": 23979,
+      "eggs": 9261,
+      "blockPresent": 23979,
+      "canonicalMatch": 33240,
+      "missingBlock": 0,
+      "wrongBlock": 0,
+      "duplicateBlock": 0,
+      "nonAttributeMismatch": 0,
+      "headerMismatch": 0,
+      "immutableMismatch": 0,
+      "priorObjectsUnchanged": 32320,
+      "ownerTransitions": 0,
+      "enrichmentAdvances": 0,
+      "unexplainedChanges": 0,
+      "repairedVerified": 585,
+      "largeVerified": 5,
+      "readErrors": 0
+    },
+    "after": {
+      "total": 33240,
+      "artworks": 23979,
+      "eggs": 9261,
+      "blockPresent": 23979,
+      "canonicalMatch": 33240,
+      "missingBlock": 0,
+      "wrongBlock": 0,
+      "duplicateBlock": 0,
+      "nonAttributeMismatch": 0,
+      "headerMismatch": 0,
+      "immutableMismatch": 0,
+      "priorObjectsUnchanged": 33240,
+      "ownerTransitions": 0,
+      "enrichmentAdvances": 0,
+      "unexplainedChanges": 0,
+      "repairedVerified": 585,
+      "largeVerified": 5,
+      "readErrors": 0
+    },
+    "beforeCutoff": 1794661635908,
+    "afterCutoff": 1794662388449,
+    "repairWritesIssued": false,
+    "largeArtworks": [
+      {
+        "tokenId": "11352",
+        "assetId": 66047,
+        "sha256": "e3f6cc834ec1aadff4dc71aa8490092e6dcf1d345b578a5d080e059adfc7829c",
+        "bytes": 303420,
+        "attributeCount": 4990
+      },
+      {
+        "tokenId": "17257",
+        "assetId": 64999,
+        "sha256": "465feaffe98c86793ce0181bbfb301a242aa2b037fad180592ce91257a32444f",
+        "bytes": 354969,
+        "attributeCount": 5500
+      },
+      {
+        "tokenId": "19193",
+        "assetId": 65426,
+        "sha256": "f246f9e06162eb9918de0745e32d19f880dc4df846c6513a0d3f54f1ea399ca6",
+        "bytes": 208850,
+        "attributeCount": 3266
+      },
+      {
+        "tokenId": "23751",
+        "assetId": 65224,
+        "sha256": "3d835404b10ada7c61721be52a1e96c373b5659c1dd111779b239453d2c78b75",
+        "bytes": 206516,
+        "attributeCount": 3239
+      },
+      {
+        "tokenId": "3195",
+        "assetId": 65509,
+        "sha256": "42ed11b31757839d58b3cc223e1db6eecd79a1cde85711034761e3c8976ea2d0",
+        "bytes": 219185,
+        "attributeCount": 3438
+      }
+    ]
+  },
+  "publicChecks": {
+    "repairedTokens": 585,
+    "allRepairBytesMatchPlanned": true,
+    "knownRevealSamples": 13,
+    "assignmentsAndProvenanceUnchanged": true,
+    "apiProxies": [
+      {
+        "domain": "mons.shop",
+        "status": 200,
+        "matchesBeforeStorefront": true,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "access-control-allow-origin": null,
+          "etag": null
+        },
+        "dropId": "111k_devnet",
+        "deploymentId": "v17",
+        "chainId": 11155111,
+        "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+        "catalogRevision": 3,
+        "enabled": true,
+        "testnet": true
+      },
+      {
+        "domain": "www.mons.shop",
+        "status": 200,
+        "matchesBeforeStorefront": true,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "access-control-allow-origin": null,
+          "etag": null
+        },
+        "dropId": "111k_devnet",
+        "deploymentId": "v17",
+        "chainId": 11155111,
+        "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v17/",
+        "catalogRevision": 3,
+        "enabled": true,
+        "testnet": true
+      }
+    ],
+    "onchainIdentity": {
+      "readOnly": true,
+      "rpcUrl": "https://ethereum-rpc.publicnode.com",
+      "apiVersion": "4477d349-ac27-4bf7-a5fe-57c02aae7a39",
+      "frontendVersion": "871b60fb-235f-4045-8f9d-b14763a38046",
+      "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "expectedChainId": 1,
+      "expectedBaseUri": "https://cdn.mons.shop/111k/",
+      "passed": true,
+      "chainId": 1,
+      "blockNumber": 26413488,
+      "codePresent": true,
+      "runtimeCodeBytes": 24566,
+      "runtimeCodeSha256": "95727ce60c1e2358ff16478ee92ebe70c57a32c2cdda382b09c59702bc15082b",
+      "baseUri": "https://cdn.mons.shop/111k/",
+      "baseUriMatchesConfig": true,
+      "checkedAt": "2026-11-14T13:21:13.959Z"
+    }
+  },
+  "observation": {
+    "adoptedAt": "2026-11-14T13:19:45.882Z",
+    "metrics": {
+      "from": "2026-11-14T13:19:45.882Z",
+      "to": "2026-11-14T13:25:16.322Z",
+      "rows": [
+        {
+          "dimensions": {
+            "eventType": "fetch",
+            "status": "success"
+          },
+          "sum": {
+            "errors": 0,
+            "requests": 244,
+            "subrequests": 1636
+          }
+        },
+        {
+          "dimensions": {
+            "eventType": "rpc",
+            "status": "clientDisconnected"
+          },
+          "sum": {
+            "errors": 0,
+            "requests": 79,
+            "subrequests": 78
+          }
+        },
+        {
+          "dimensions": {
+            "eventType": "cron",
+            "status": "success"
+          },
+          "sum": {
+            "errors": 0,
+            "requests": 1,
+            "subrequests": 7
+          }
+        }
+      ]
+    },
+    "successfulCrons": 1,
+    "invocationErrors": 0,
+    "mainnetHealth": {
+      "observedAt": "2026-11-14T13:25:31.007Z",
+      "timestamp": 1794662730232,
+      "outcome": "ok",
+      "workerVersion": "4477d349-ac27-4bf7-a5fe-57c02aae7a39",
+      "data": {
+        "event": "ethereum_reveal_recovery_health",
+        "deploymentId": "mainnet-v1",
+        "ready": true,
+        "seeded": 111111,
+        "available": 77871,
+        "reserved": 0,
+        "frozen": 33240,
+        "publication": {
+          "published": 33240
+        },
+        "recovery": {
+          "migrationReady": true,
+          "migration": {
+            "phase": "ready",
+            "cursor": "",
+            "rowKey": null,
+            "offset": 0
+          },
+          "opaque": 0,
+          "opaqueCapacity": {
+            "used": 0,
+            "limit": 10000,
+            "available": 10000
+          },
+          "crates": {
+            "observed": 1662
+          },
+          "due": {
+            "active": {
+              "receiptJobs": 0,
+              "scanJobs": 0,
+              "oldestDueAgeMs": 0
+            },
+            "background": {
+              "receiptJobs": 0,
+              "scanJobs": 0,
+              "oldestDueAgeMs": 0
+            }
+          },
+          "dispatch": {
+            "limit": 64,
+            "inFlight": 1,
+            "active": 0,
+            "background": 1,
+            "pauseUntilMs": 0,
+            "nextRecoveryMs": null,
+            "earliestLeaseUntilMs": 1794662760147
+          }
+        },
+        "enrichment": {
+          "published": 23979
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 0,
+          "errors": {}
+        }
+      }
+    }
+  },
+  "memoryScope": "Bounds temporary input payloads to a 1 MiB group budget, allowing single oversized rows. Complete returned records still accumulate; the pre-existing total-result memory limit is unchanged.",
+  "evidence": {
+    "release-state.json": {
+      "bytes": 3222,
+      "sha256": "4b77d5ece06c993406d07b1ca253113cf2830518893f9ccff688a9b9a773ea36"
+    },
+    "deployment-before.json": {
+      "bytes": 3123,
+      "sha256": "91284df47eb49bdd10d680698a9742789ab33fc01c7f601c26a088f6a1a6cf07"
+    },
+    "deployment-final.json": {
+      "bytes": 3903,
+      "sha256": "4c7e1fe28862b9e4f9ee64753daefb1f50424acdb82f7a8f22f6612c8d59d242"
+    },
+    "deployed-source-final-verification.json": {
+      "bytes": 437,
+      "sha256": "0cbd8872ea9747d7c65b04ccb88e0d3849f77f5c159cd5ec72c33c271eef6302"
+    },
+    "registry-before.json": {
+      "bytes": 1159,
+      "sha256": "52b2f701d9178e61e9e610d9c411c80165858017cb448c0b7ecd59ec514fff95"
+    },
+    "registry-after.json": {
+      "bytes": 1159,
+      "sha256": "6b93c42dd2701409bfc9ed68412d9250560f9680ba7b33741a6642d9020ebdc4"
+    },
+    "deploy-checks.json": {
+      "bytes": 474,
+      "sha256": "69a1c4afc19944b5ef46966faf7980b35a335f8313fb52791acac92fec3a99e1"
+    },
+    "deploy-api.log": {
+      "bytes": 476098,
+      "sha256": "89cd557f11983b50d75c7552a624429bc9a763ce94ae0d27a7ce1034634886fe"
+    },
+    "before/audit.json": {
+      "bytes": 22503146,
+      "sha256": "e5c25ffc22227c6d47ea9708d86b68a813811aec9f01bf1c0f3fa44ba8dae029"
+    },
+    "before/verification.json": {
+      "bytes": 2501,
+      "sha256": "c4e6027f6c6c661764ed4339b8741f3d0ce7193f7a1056361336844a44b68e02"
+    },
+    "before/objects.jsonl": {
+      "bytes": 17527340,
+      "sha256": "1f743ae97a7d61c98a3fcd8571fdb013ae50d3855374b5af31a79f6bb15cd6d0"
+    },
+    "after/audit.json": {
+      "bytes": 22503146,
+      "sha256": "2145751371db5eca0ffa09c87727c4537d1f7c54042981d7587736521c1e0ee6"
+    },
+    "after/verification.json": {
+      "bytes": 2489,
+      "sha256": "c2f0a50e170fca38a36b38c9c97056d37b4c62c41513f7b36fec4731aaa09c96"
+    },
+    "after/objects.jsonl": {
+      "bytes": 17527340,
+      "sha256": "b13d1a2b1e623d181970e06c11a32dbc664313e509f98bffad4897b136a45e14"
+    },
+    "after/capture-complete.json": {
+      "bytes": 180,
+      "sha256": "6e33077f98287d3ac0747997843f345bc76e8bf31342376988bd798805fc8b83"
+    },
+    "public-before.json": {
+      "bytes": 129637,
+      "sha256": "5c2e281c3a80fcdee25738280adacf83ef5230e4c3da2cf3aa2bc87a9b3c5c4b"
+    },
+    "public-smoke-before.json": {
+      "bytes": 9909,
+      "sha256": "90431a29626c803a0b419c51fd32d87e5b74d2b925f7cf7946b9710d797a4ca4"
+    },
+    "public-after.json": {
+      "bytes": 129768,
+      "sha256": "44baa6100219e223d4cf0300bb193f3152531278765cdcbda8a34231cd6eb0b5"
+    },
+    "public-smoke-after.json": {
+      "bytes": 9926,
+      "sha256": "eff5070a7067cc0b68ad7331baff85376ba8f5a5b7bfdb5283623ff1ff4e26d5"
+    },
+    "onchain-identity-after.json": {
+      "bytes": 657,
+      "sha256": "848024b502e2c580201317011dd70aad3954ff83a526fda254671ba712605bca"
+    },
+    "health.jsonl": {
+      "bytes": 4467,
+      "sha256": "eb64da327408193650377572bff763063459602c96cd51900e5d122ac7ff763d"
+    }
+  }
+}
