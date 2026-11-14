@@ -1,0 +1,20 @@
+{
+  "complete": true,
+  "appliedAt": "2026-11-14T13:45:36.552Z",
+  "scope": {
+    "deployment_id": "mainnet-v1",
+    "drop_id": "111k",
+    "chain_id": 1,
+    "contract_address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "metadata_base_uri": "https://cdn.mons.shop/111k/",
+    "revision": 9,
+    "state": "active",
+    "retired_at_ms": null,
+    "catalog_update_id": null,
+    "catalog_revision": 1
+  },
+  "journalSha256": "5a144a5e5573f61cbcfeee771e120410c5022f4c46f783443e47cbf83e4aec04",
+  "objectCount": 6077,
+  "updated": 6077,
+  "unchanged": 0
+}

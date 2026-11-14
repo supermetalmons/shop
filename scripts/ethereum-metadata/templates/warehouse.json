@@ -1,6 +1,6 @@
 {
   "name": "Warehouse #{{displayId}}",
-  "description": "",
+  "description": "a sealed warehouse of 11 crates containing 220 nfts",
   "image": "https://cdn.lil.org/nft/111k/warehouse.webp",
   "attributes": [
     { "trait_type": "type", "value": "warehouse" }

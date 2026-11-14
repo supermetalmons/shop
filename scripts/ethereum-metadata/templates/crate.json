@@ -1,6 +1,6 @@
 {
   "name": "Crate #{{displayId}}",
-  "description": "",
+  "description": "a sealed crate pack of 20 nfts",
   "image": "https://cdn.lil.org/nft/111k/crate.webp",
   "attributes": [
     { "trait_type": "type", "value": "crate" }

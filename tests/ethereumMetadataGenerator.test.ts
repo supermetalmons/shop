@@ -16,11 +16,13 @@ import { validateMetadata } from '../scripts/ethereum-metadata/validate.ts';
 import { generateMetadata } from '../scripts/ethereum-metadata/generate.ts';
 import { withMetadataLock } from '../scripts/ethereum-metadata/lock.ts';
 
-const examples: Array<{ kind: EthereumItemKind; name: string; image: string; type: string }> = [
+const examples: Array<{ kind: EthereumItemKind; name: string; image: string; type: string; description?: string }> = [
   { kind: 'artwork', name: '1', image: 'placeholder.png', type: 'painting' },
-  { kind: 'warehouse', name: 'Warehouse #1', image: 'warehouse.webp', type: 'warehouse' },
-  { kind: 'relic', name: 'back_crucifix', image: 'relics/1.png', type: 'relic' },
-  { kind: 'crate', name: 'Crate #1', image: 'crate.webp', type: 'crate' },
+  { kind: 'warehouse', name: 'Warehouse #1', image: 'warehouse.webp', type: 'warehouse',
+    description: 'a sealed warehouse of 11 crates containing 220 nfts' },
+  { kind: 'relic', name: 'back_crucifix', image: 'relics/1.png', type: 'relic',
+    description: 'a sealed relic of 111 crates containing 2220 nfts' },
+  { kind: 'crate', name: 'Crate #1', image: 'crate.webp', type: 'crate', description: 'a sealed crate pack of 20 nfts' },
   { kind: 'crate_receipt', name: 'Crate Receipt #1', image: 'placeholder.png', type: 'crate receipt' },
   { kind: 'artwork_receipt', name: 'Receipt #1', image: 'placeholder.png', type: 'receipt' },
   { kind: 'relic_receipt', name: 'Relic Receipt #1', image: 'placeholder.png', type: 'relic receipt' },
@@ -30,7 +32,7 @@ test('the editable templates produce the approved metadata format', async () => 
   const { templates } = await loadMetadataTemplates();
   for (const example of examples) {
     assert.deepEqual(renderMetadata(example.kind, 1, templates), {
-      name: example.name, description: '', image: `https://cdn.lil.org/nft/111k/${example.image}`,
+      name: example.name, description: example.description ?? '', image: `https://cdn.lil.org/nft/111k/${example.image}`,
       attributes: [{ trait_type: 'type', value: example.type }],
       ...(example.kind === 'relic' ? {} : { aspectRatio: example.kind === 'crate' ? { width: 4, height: 3 } :
         example.kind === 'warehouse' ? { width: 3, height: 2 } : { width: 466, height: 503 } }),
@@ -51,7 +53,7 @@ test('the final crate override reproduces the published metadata without changin
   assert.equal(metadataBody({ kind: 'crate', displayId: 5555, tokenId: '116666', file: '116666.json' }, templates), published);
   assert.equal(Object.hasOwn(renderMetadata('crate', 5555, templates), 'displayOverrides'), false);
   assert.deepEqual(renderMetadata('crate', 5554, templates), {
-    name: 'Crate #5554', description: '', image: 'https://cdn.lil.org/nft/111k/crate.webp',
+    name: 'Crate #5554', description: 'a sealed crate pack of 20 nfts', image: 'https://cdn.lil.org/nft/111k/crate.webp',
     attributes: [{ trait_type: 'type', value: 'crate' }], aspectRatio: { width: 4, height: 3 },
   });
 });
@@ -60,6 +62,7 @@ test('historical crate templates reproduce their original bytes without display 
   const { templates } = await loadMetadataTemplates();
   const journal = JSON.parse(await readFile(new URL('../releases/111k-mainnet-v1/rare-crate-2026-11-12/journal.json', import.meta.url), 'utf8'));
   delete templates.crate.displayOverrides;
+  templates.crate.description = '';
   assert.equal(metadataBody({ kind: 'crate', displayId: 5555, tokenId: '116666', file: '116666.json' }, templates), journal.beforeJson);
 });
 
@@ -89,7 +92,8 @@ test('all eighteen relics use their exact names and individual images', async ()
   ];
   for (let displayId = 1; displayId <= 18; displayId++) {
     assert.deepEqual(renderMetadata('relic', displayId, templates), {
-      name: names[displayId - 1], description: '', image: `https://cdn.lil.org/nft/111k/relics/${displayId}.png`,
+      name: names[displayId - 1], description: 'a sealed relic of 111 crates containing 2220 nfts',
+      image: `https://cdn.lil.org/nft/111k/relics/${displayId}.png`,
       attributes: [{ trait_type: 'type', value: 'relic' }],
     });
   }

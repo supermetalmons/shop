@@ -20,7 +20,7 @@
     "stanczyk hat",
     "The Night Parade of 111,111 Demons"
   ],
-  "description": "",
+  "description": "a sealed relic of 111 crates containing 2220 nfts",
   "image": "https://cdn.lil.org/nft/111k/relics/{{displayId}}.png",
   "attributes": [
     { "trait_type": "type", "value": "relic" }

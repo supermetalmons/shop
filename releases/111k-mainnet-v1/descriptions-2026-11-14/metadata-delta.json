@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "operation": "mainnet-container-descriptions",
+  "scope": {
+    "deployment_id": "mainnet-v1",
+    "drop_id": "111k",
+    "chain_id": 1,
+    "contract_address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "metadata_base_uri": "https://cdn.mons.shop/111k/",
+    "revision": 9,
+    "state": "active",
+    "retired_at_ms": null,
+    "catalog_update_id": null,
+    "catalog_revision": 1
+  },
+  "preparedAt": "2026-11-14T13:38:42.232Z",
+  "appliedAt": "2026-11-14T13:45:36.552Z",
+  "objectCount": 6077,
+  "changedFields": [
+    "description"
+  ],
+  "groups": [
+    {
+      "kind": "crate",
+      "firstTokenId": 111112,
+      "lastTokenId": 116665,
+      "objectCount": 5554,
+      "description": "a sealed crate pack of 20 nfts"
+    },
+    {
+      "kind": "warehouse",
+      "firstTokenId": 116667,
+      "lastTokenId": 117171,
+      "objectCount": 505,
+      "description": "a sealed warehouse of 11 crates containing 220 nfts"
+    },
+    {
+      "kind": "relic",
+      "firstTokenId": 117172,
+      "lastTokenId": 117189,
+      "objectCount": 18,
+      "description": "a sealed relic of 111 crates containing 2220 nfts"
+    }
+  ],
+  "excludedTokenIds": [
+    116666
+  ],
+  "journal": {
+    "path": ".cache/111k-mainnet-descriptions-2026-11-14/journal.json",
+    "journalSha256": "5a144a5e5573f61cbcfeee771e120410c5022f4c46f783443e47cbf83e4aec04",
+    "fileSha256": "be4779393e504523be1fb858085c3c5ae814e274c74a10a390802b8684234c31"
+  },
+  "maintenanceScript": {
+    "path": ".cache/111k-mainnet-descriptions-2026-11-14/maintenance.ts",
+    "sha256": "c67b7384d9f4c2439b96360aa8bf2326f82f8d0ab91cd91f0ead4521c0722c2b"
+  },
+  "beforeInventorySha256": "d992a5442f27fade3768360e326cb2a6bc93dabef2f654b0c059845fc7076cc3",
+  "afterInventorySha256": "cc0ddf231680cf2ba3e2c41c4e18a0a95143cfaceabfbc4285be29bbf1df4477",
+  "generatorTests": {
+    "command": "node --import tsx --test tests/ethereumMetadataGenerator.test.ts",
+    "passed": 22,
+    "failed": 0
+  },
+  "historicalPublicationUnchanged": true,
+  "applicationDeployment": false,
+  "contractTransactionsSent": false
+}

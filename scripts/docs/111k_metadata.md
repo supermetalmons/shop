@@ -100,7 +100,7 @@ painting alternatives and playable media from `metadata.image`.
 
 ## Templates
 
-Each template contains `name`, `description`, `image`, and `attributes`. The six updated media templates also include their measured `aspectRatio`. Descriptions remain empty except for the final crate override below, and each template has one lowercase `type` trait:
+Each template contains `name`, `description`, `image`, and `attributes`. The six updated media templates also include their measured `aspectRatio`. Artwork and receipt descriptions remain empty, and each template has one lowercase `type` trait:
 
 | Template | Name | Image filename | Aspect ratio | Type value |
 | --- | --- | --- | --- | --- |
@@ -111,6 +111,12 @@ Each template contains `name`, `description`, `image`, and `attributes`. The six
 | `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `crate receipt` |
 | `artwork_receipt.json` | `Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `receipt` |
 | `relic_receipt.json` | `Relic Receipt #{{displayId}}` | `placeholder.png` | 466:503 | `relic receipt` |
+
+Container descriptions for future fresh generation on either network are:
+
+- Crates #1–5554: `a sealed crate pack of 20 nfts`
+- Warehouses #1–505: `a sealed warehouse of 11 crates containing 220 nfts`
+- Relics #1–18: `a sealed relic of 111 crates containing 2220 nfts`
 
 The generated [reveal references](../ethereum-metadata/reveal-assets/111k_devnet/README.md#manifest-and-metadata-references)
 cover all five artwork categories. They retain `{{tokenId}}` and `{{assetId}}`
@@ -123,7 +129,7 @@ All image filenames above are rooted at `https://cdn.lil.org/nft/111k/`, includi
 
 The relic template keeps the exact eighteen names in its `displayNames` array, ordered by display ID. Generation uses the selected name and omits this authoring-only array from token metadata. Historical template snapshots without the array retain their original name pattern.
 
-The crate template keeps crate #5555's values in `displayOverrides["5555"]`: description `a sealed crate pack of 31 nfts`, image `https://cdn.lil.org/nft/111k/rare_crate.png`, and aspect ratio 2:3. Future fresh generation applies this override to token `116666` and omits `displayOverrides` from its JSON. The result reproduces the [saved live mainnet metadata](../../releases/111k-mainnet-v1/rare-crate-2026-11-12/116666.json). This source update does not regenerate or republish mainnet. Immutable historical template snapshots without the override continue to reproduce their original bytes.
+The crate template keeps crate #5555's values in `displayOverrides["5555"]`: description `a sealed crate pack of 31 nfts`, image `https://cdn.lil.org/nft/111k/rare_crate.png`, and aspect ratio 2:3. Future fresh generation applies this override to token `116666` and omits `displayOverrides` from its JSON. The result reproduces the [saved live mainnet metadata](../../releases/111k-mainnet-v1/rare-crate-2026-11-12/116666.json). Editing these source templates does not regenerate or republish live metadata. Immutable historical template snapshots retain their original descriptions and continue to reproduce their original bytes.
 
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
@@ -190,6 +196,16 @@ Full verification checks every direct token JSON against its expected key, byte 
 Registration repeats full verification from `publicationDirectory` rather than trusting a sample or a saved success report. It also verifies the onchain deployment and exact metadata URI. Wait 65 seconds after the last upload before registration. After registration, the reveal publisher permanently owns the prefix and generic upload or restore is blocked. Preparing or registering a collection does not activate the shop; storefront activation remains a separate launch step.
 
 Snapshot restoration, when used for an unregistered destination, requires a complete 344984-object snapshot matching that destination and network. Historical five-kind and six-kind backups are not supported by this baseline. Restoration rewrites the snapshot bytes and headers and verifies the complete inventory; it cannot reset a registered reveal prefix. New deployment recovery normally consists of resuming the validated fresh-prefix publication before registration.
+
+## Updating live container descriptions
+
+The mainnet description update targets exactly 6,077 objects beneath `https://cdn.mons.shop/111k/`: crate tokens `111112`–`116665`, warehouse tokens `116667`–`117171`, and relic tokens `117172`–`117189`. Use the descriptions listed above. Exclude crate #5555, token `116666`, entirely. Live Sepolia metadata, artwork tokens, receipts, and collection metadata are outside this update.
+
+The [14 November 2026 publication](../../releases/111k-mainnet-v1/descriptions-2026-11-14/README.md) completed this update and verified all 6,077 objects, public API samples, unchanged metadata, and the subsequent scheduler interval.
+
+Use scoped conditional maintenance writes, following the [rare-crate update](../../releases/111k-mainnet-v1/rare-crate-2026-11-12/README.md), rather than generic collection upload or restore. Discover and freeze the current mainnet deployment identity and registry revision, original object bytes and ETags, and exact replacement bytes in a new maintenance journal. Replace only the top-level description; preserve names, images, attributes, aspect ratios, and all other content. Check the registration before and after publication, require each original ETag, retain JSON content type and `no-store`, and update the stored SHA-256. Resume the same journal after interruption; accept exact target bytes as already complete and reject unexpected contents or registration changes.
+
+Verify every target in storage and through the public CDN, check the public metadata API, and confirm crate #5555 plus unrelated metadata remain unchanged. Recheck final metadata after a scheduler interval. Retain the maintenance journal and verification record separately from the immutable original publication and its hashes. Template edits alone do not establish publication completion, and this update does not send contract transactions or marketplace refreshes.
 
 ## Updating live relic images
 
