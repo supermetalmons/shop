@@ -52,6 +52,11 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
           this.targetBlocks=revealCollectionBlocks(input.batch.target.descriptor);
           return updates.begin(input.batch,1000);
         }
+        if(!this.targetBlocks) {
+          const operation=updates.reader.operation(input.batchId);
+          registerRevealCollectionBlocksFixture(JSON.parse(operation.target_manifest_json),'load');
+          this.targetBlocks=revealCollectionBlocks(JSON.parse(operation.target_json));
+        }
         if(input.command==='mapping')return updates.stageMappings(input.batchId,input.rows);
         if(input.command==='sealMapping')return updates.sealMappings(input.batchId);
         if(input.command==='metadata') {
@@ -126,7 +131,12 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
       await request('begin', { batch });
       for (let offset = 0; offset < amount; offset += 256) await request('mapping', { rows: batch.mappings.slice(offset, offset + 256) });
       await request('sealMapping');
-      while ((await request('metadata')).metadataStaged !== amount) {}
+      const evict = () => runtime.unsafeEvictDurableObject('online-pool-load', 'Pool', { name: String(amount) });
+      await evict();
+      let metadata = await request('metadata');
+      assert.ok(Number(metadata.metadataStaged) > 0 && Number(metadata.metadataStaged) < amount);
+      await evict();
+      while (metadata.metadataStaged !== amount) metadata = await request('metadata');
       let seeded = 0, maximumStageMs = 0, ordinary = 0;
       while (seeded < 111111) {
         const [stage, read] = await Promise.all([request('generation'), request('read')]);
@@ -141,6 +151,7 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
       await request('seal');
       assert.equal((await request('ordinary', { index: ordinary++ })).revision, 0);
       const activated = await request('activate');
+      await evict();
       const read = await request('read');
       assert.equal(read.revision, 1);
       assert.equal(read.category, category);
