@@ -773,7 +773,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
     },
   ]);
   let releases = 0;
-  const d1Dependencies = dependencies(identityHarness, 2_000, {
+  const d1Dependencies = dependencies(identityHarness, 55_000, {
     acquireAuthWalletBindingReconcileLease: async () => ({
       id: '00000000-0000-4000-8000-000000000001',
       wallet: OWNER,
