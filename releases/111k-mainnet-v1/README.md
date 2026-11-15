@@ -1,5 +1,7 @@
 # 111k mainnet deployment
 
+Ownership update: [15 November nomination of the treasury Safe](ownership-transfer-2026-11-15/README.md), awaiting the Safe's `acceptOwnership()` transaction. The deployer remains owner until acceptance; the deployment settings below record the original configuration.
+
 Latest artwork catalog: [v9 empty-pool rebuild](../111k-catalog-v9/README.md), adding 16,651 paintings before mint opening. Mainnet uses catalog revision 1 with 38,652 remaining egg slots; the sale remains closed.
 
 Latest API update: [mainnet public APIs and reveal enabled](public-api-readiness-2026-11-11.json), with the onchain sale still closed and zero token supply. See the [VVV mainnet checklist](../../scripts/docs/111k_mainnet_vvv.md).

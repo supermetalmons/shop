@@ -4,6 +4,8 @@ The registered Ethereum mainnet collection uses internal deployment ID `mainnet-
 
 ## Current operations
 
+The [15 November ownership handover](../../releases/111k-mainnet-v1/ownership-transfer-2026-11-15/README.md) nominated treasury Safe `0x72D0c5623A05033F9eE4495D408BC6c05DF8367d` and is awaiting its `acceptOwnership()` transaction. Read `owner()` and `pendingOwner()` before preparing owner actions. After acceptance, owner-only administration must execute through the Safe. The original deployment manifests retain the initial owner as historical evidence.
+
 For artwork additions to the registered collection, use the [catalog expansion workflow](111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs). Discover the deployment's current catalog and registry revisions before preparing an operation, and resume matching bundles with their original journal revision. Preserve registration, publication, and transaction evidence. Generic metadata upload and restore reject registered prefixes.
 
 The [mainnet release record](../../releases/111k-mainnet-v1/README.md) documents the original deployment and subsequent operations; each record describes its verification time. Read current sale settings, allowances, and prices through the [scoped mainnet APIs](111k_mainnet_vvv.md). The recorded [v9 catalog expansion](../../releases/111k-catalog-v9/README.md) followed the original v8 registration without changing the contract or metadata prefix.

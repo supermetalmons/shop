@@ -1,0 +1,49 @@
+{
+  "status": "prepared",
+  "before": {
+    "checkedAt": "2026-11-15T14:00:42.020Z",
+    "chainId": 1,
+    "collection": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "safe": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+    "blockNumber": 26420865,
+    "blockHash": "0xb68dccd1becef793ca520aecd6bf9e5614989340f19c86edee0781ebb8f93bdd",
+    "runtimeKeccak256": "0xb41332e14958d030ba932e7cff8704e89f0027dc83407129a697131f1c88fc5e",
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "pendingOwner": "0x0000000000000000000000000000000000000000",
+    "safeOwners": [
+      "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "0xe4790dd79c334e3f848904975272ec17f9f70366",
+      "0xe938ebb66b92692ab01f76c99cfac1928482e7b9"
+    ],
+    "safeThreshold": "2",
+    "safeNonce": "1",
+    "safeVersion": "1.5.0",
+    "latestNonce": "48",
+    "pendingNonce": "48",
+    "deployerBalanceWei": "1895262625115577",
+    "baseFeePerGasWei": "230011951",
+    "quoteSigner": "0x43c829cbb3648cc5eb8ebaa15fb7cfab21ecc2ea",
+    "saleActive": true,
+    "baseURI": "https://cdn.mons.shop/111k/"
+  },
+  "transaction": {
+    "chainId": 1,
+    "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "valueWei": "0",
+    "data": "0xf2fde38b00000000000000000000000072d0c5623a05033f9ee4495d408bc6c05df8367d",
+    "nonce": "48",
+    "gasLimit": "62916",
+    "gasPrice": "560023902",
+    "maximumFeeWei": "35234463818232"
+  },
+  "acceptance": {
+    "chainId": 1,
+    "from": "0x72d0c5623a05033f9ee4495d408bc6c05df8367d",
+    "to": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "valueWei": "0",
+    "data": "0x79ba5097",
+    "operation": 0
+  }
+}

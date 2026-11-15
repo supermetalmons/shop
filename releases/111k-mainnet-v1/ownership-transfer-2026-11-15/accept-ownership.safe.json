@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "chainId": "1",
+  "createdAt": 1794751271715,
+  "meta": {
+    "name": "111K: accept contract ownership",
+    "description": "Accept ownership of the 111K mainnet collection after the deployer nomination. One call to acceptOwnership(), 0 ETH.",
+    "createdFromSafeAddress": "0x72D0c5623A05033F9eE4495D408BC6c05DF8367d",
+    "createdFromOwnerAddress": "",
+    "checksum": "0xee3c0eb4275012fcba492d8c1dfae98c297f743feebdd0a465a8e1b50157aa88"
+  },
+  "transactions": [
+    {
+      "to": "0x08cDed8258730bda384FF198001E47a1B50f7f9d",
+      "value": "0",
+      "data": "0x79ba5097",
+      "contractMethod": {
+        "inputs": [],
+        "name": "acceptOwnership",
+        "payable": false
+      },
+      "contractInputsValues": {}
+    }
+  ]
+}
