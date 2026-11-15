@@ -1,10 +1,10 @@
-import { randomUUID } from 'node:crypto';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import type { EthereumRevealEmptyPoolResult } from '../../shared/ethereum/revealMaintenance.ts';
+import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../../shared/ethereum/revealMaintenance.ts';
 import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenance.ts';
+import { writeDurableJsonJournalAsync } from '../shared/durableJsonJournal.ts';
 import { readRevealCatalogUpdateBundle } from './catalogUpdate.ts';
 import { withMetadataLock } from './lock.ts';
 
@@ -30,15 +30,9 @@ export function parseEmptyPoolArgs(argv: string[]) {
     deploymentId: values['deployment-id']!, operationId: values['operation-id']!, expectedRevision: Number(values['expected-revision']) };
 }
 
-async function writeJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
-    await rename(temporary, path);
-  } finally { await rm(temporary, { force: true }); }
-}
+type EmptyPoolTransport = (request: EthereumRevealEmptyPoolRequest) => Promise<EthereumRevealEmptyPoolResult>;
 
-export async function emptyPoolMain(argv: string[]): Promise<EthereumRevealEmptyPoolResult> {
+export async function emptyPoolMain(argv: string[], dependencies: { transport?: EmptyPoolTransport } = {}): Promise<EthereumRevealEmptyPoolResult> {
   const options = parseEmptyPoolArgs(argv);
   const { batch } = await readRevealCatalogUpdateBundle(options.directory);
   const request = { deploymentId: options.deploymentId, operationId: options.operationId, expectedRevision: options.expectedRevision };
@@ -50,29 +44,33 @@ export async function emptyPoolMain(argv: string[]): Promise<EthereumRevealEmpty
         throw new Error('Empty-pool journal belongs to another operation or original revision.');
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    return withEthereumRevealMaintenance(async transport => {
-      if (!transport.rebuildEmptyPool) throw new Error('Empty-pool maintenance is unavailable.');
+    const execute = async (transport: EmptyPoolTransport) => {
       const send = async (action: 'inspect' | 'begin' | 'advance' | 'verify' | 'cancel') => {
-        const result = await transport.rebuildEmptyPool!({ ...request, action, ...(action === 'begin' ? { batch } : {}) });
+        const result = await transport({ ...request, action, ...(action === 'begin' ? { batch } : {}) });
         if (result.deploymentId !== request.deploymentId || result.operationId !== request.operationId) throw new Error('Empty-pool response identity changed.');
         return result;
       };
       if (options.command === 'inspect' || options.command === 'verify') return send(options.command);
       if (options.command === 'cancel') {
         const result = await send('cancel');
-        await writeJson(journalPath, { ...request, batchSha256: batch.batchSha256, result });
+        await writeDurableJsonJournalAsync({ filePath: journalPath, mode: 'replace', value: { ...request, batchSha256: batch.batchSha256, result } });
         return result;
       }
-      await writeJson(journalPath, { ...request, batchSha256: batch.batchSha256, result: null });
+      await writeDurableJsonJournalAsync({ filePath: journalPath, mode: 'replace', value: { ...request, batchSha256: batch.batchSha256, result: null } });
       let result = await send('begin');
       for (;;) {
-        await writeJson(journalPath, { ...request, batchSha256: batch.batchSha256, result });
+        await writeDurableJsonJournalAsync({ filePath: journalPath, mode: 'replace', value: { ...request, batchSha256: batch.batchSha256, result } });
         process.stderr.write(JSON.stringify({ observedAt: new Date().toISOString(), ...result }) + '\n');
         if (result.complete || result.phase === 'cancelled') return result;
         const wait = Math.min(5000, Math.max(0, result.retryAfterMs));
         if (wait) await new Promise(resolveWait => setTimeout(resolveWait, wait));
         result = await send('advance');
       }
+    };
+    if (dependencies.transport) return execute(dependencies.transport);
+    return withEthereumRevealMaintenance(transport => {
+      if (!transport.rebuildEmptyPool) throw new Error('Empty-pool maintenance is unavailable.');
+      return execute(request => transport.rebuildEmptyPool!(request));
     });
   };
   return options.command === 'apply' || options.command === 'cancel'

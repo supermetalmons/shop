@@ -1,8 +1,9 @@
 import bs58 from 'bs58';
+import { decodeSolanaSigner } from './solanaSigner.js';
 import nacl from 'tweetnacl';
 import {
   type Connection,
-  Keypair,
+  type Keypair,
   PublicKey,
   TransactionMessage,
   VersionedTransaction,
@@ -453,14 +454,9 @@ async function onchainConfig(runtime: FulfillmentRuntime, runRpc: FulfillmentRpc
 }
 
 function signer(secret: string): Keypair {
-  let bytes: Uint8Array;
-  try {
-    bytes = bs58.decode(secret.trim());
-  } catch {
-    throw fulfillmentError('unavailable', 'COSIGNER_SECRET is not configured');
-  }
-  if (bytes.length !== 64) throw fulfillmentError('unavailable', 'COSIGNER_SECRET is not configured');
-  return Keypair.fromSecretKey(bytes);
+  return decodeSolanaSigner(secret, failure => failure.kind === 'key-validation'
+    ? failure.cause
+    : fulfillmentError('unavailable', 'COSIGNER_SECRET is not configured'));
 }
 
 function addressEncryptor(secret: string): (plaintext: string) => { encrypted: string; hint: string } | null {

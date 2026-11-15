@@ -15,7 +15,7 @@ import { parseRelicReservation, relicReservation, validateRelicReservationSkip, 
 import { deploymentGas, matchingRuntime, validateDeploymentBalance, validateDeploymentGasPrice } from './pre111k-deployment.mjs';
 import { verify111kCollectionURI } from './111k-verification.mjs';
 import { withMetadataLock } from '../../../scripts/ethereum-metadata/lock.ts';
-import { record111kReleaseLocation, resolve111kReleaseLocation } from '../../../scripts/shared/ethereum111kReleaseLocations.ts';
+import { default111kReleaseDirectory, record111kReleaseLocation, resolve111kReleaseLocation } from '../../../scripts/shared/ethereum111kReleaseLocations.ts';
 
 export const NFT111K_SEPOLIA = Object.freeze({
   chainId: 11155111,
@@ -93,7 +93,7 @@ function privateDirectory(directory) {
   const allowed = directory => {
     const relative = path.relative(repository, directory);
     if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-      assert.ok(relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
+      assert.ok(relative.startsWith(`.operations${path.sep}`) || relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
         'Release state must be in a private ignored directory or outside the repository');
     }
   };
@@ -139,7 +139,8 @@ export function parse111kDeploymentArgs(argv) {
     'Invalid previous contract');
   return { command, network: 'sepolia', deploymentId, previousContract: normalized(previousContract), relicReservation: reservation,
     previousDirectory: values['--previous-directory'] && path.resolve(values['--previous-directory']),
-    directory: path.resolve(values['--directory'] || path.join(project, '.local', `111k-sepolia-${deploymentId ?? 'v16'}`)),
+    directory: path.resolve(values['--directory'] || (deploymentId ? default111kReleaseDirectory(deploymentId)
+      : path.join(project, '.local', '111k-sepolia-v16'))),
     keystore: values['--keystore'], passwordFile: values['--password-file'] };
 }
 

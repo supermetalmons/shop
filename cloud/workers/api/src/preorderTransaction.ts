@@ -22,6 +22,7 @@ import type { ProfileProviderFetch } from './boundedResponse.js';
 import { ProfileReadError } from './dataAccess.js';
 import { createSolanaConnection } from './solanaConnection.js';
 import { SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
+import { decodeSolanaSigner } from './solanaSigner.js';
 
 const CORE_PROGRAM = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
@@ -99,14 +100,7 @@ function publicKey(value: string, field: string): PublicKey {
 }
 
 function cosigner(secret: string, authority: string): Keypair {
-  let key: Keypair;
-  try {
-    const bytes = bs58.decode(secret.trim());
-    if (bytes.length !== 64) throw new Error('invalid');
-    key = Keypair.fromSecretKey(bytes);
-  } catch {
-    throw unavailable('Preorder signing is not configured correctly.');
-  }
+  const key = decodeSolanaSigner(secret, () => unavailable('Preorder signing is not configured correctly.'));
   if (key.publicKey.toBase58() !== authority) {
     throw unavailable('Preorder signer does not match the collection authority.');
   }

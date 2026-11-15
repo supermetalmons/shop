@@ -1,5 +1,5 @@
 import bs58 from 'bs58';
-import { Keypair } from '@solana/web3.js';
+import { decodeSolanaSigner } from './solanaSigner.js';
 import Stripe from 'stripe';
 import { getApiDrop } from './dropConfig.js';
 import {
@@ -269,21 +269,9 @@ async function fetchOnchainConfig(
 }
 
 export function requireFulfillmentPrerequisites(env: CheckoutEnv, config: StripeCheckoutOnchainConfig): void {
-  let secretKey: Uint8Array;
-  try {
-    secretKey = bs58.decode(String(env.COSIGNER_SECRET || '').trim());
-  } catch {
-    throw new StripeCheckoutSessionError('failed-precondition', 'COSIGNER_SECRET is not configured for Stripe checkout fulfillment');
-  }
-  if (secretKey.length !== 64) {
-    throw new StripeCheckoutSessionError('failed-precondition', 'COSIGNER_SECRET is not configured for Stripe checkout fulfillment');
-  }
-  let cosigner: string;
-  try {
-    cosigner = Keypair.fromSecretKey(secretKey).publicKey.toBase58();
-  } catch {
-    throw new StripeCheckoutSessionError('failed-precondition', 'COSIGNER_SECRET is not configured for Stripe checkout fulfillment');
-  }
+  const cosigner = decodeSolanaSigner(String(env.COSIGNER_SECRET || ''), () =>
+    new StripeCheckoutSessionError('failed-precondition', 'COSIGNER_SECRET is not configured for Stripe checkout fulfillment'))
+    .publicKey.toBase58();
   if (cosigner !== config.admin) {
     throw new StripeCheckoutSessionError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
       expectedAdmin: config.admin,

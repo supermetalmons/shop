@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import { open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { open, readFile, realpath, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { decodeReturn, encodeCall } from '../../shared/ethereum/abi.ts';
@@ -14,6 +13,7 @@ import { run111kDeployment } from '../../onchain/ethereum/scripts/111k-deploymen
 import { metadataIdentities, sha256 } from '../ethereum-metadata/catalog.ts';
 import { withMetadataLock } from '../ethereum-metadata/lock.ts';
 import { createD1MaintenanceRunner } from './d1MaintenanceRunner.ts';
+import { writeDurableJsonJournalAsync } from './durableJsonJournal.ts';
 import { sqlString } from './commerceD1Maintenance.ts';
 import { ETHEREUM_111K_DATA_PREFLIGHT_SQL, ETHEREUM_111K_OPS_PREFLIGHT_SQL,
   requireZeroEthereum111kHistory } from './ethereum111kMaintenance.ts';
@@ -704,16 +704,7 @@ export async function run111kReplacementCleanup(options: ReplacementCleanupOptio
       newDeployment: context.newDeployment, journalPath: context.journalPath }, { write: context.write })),
     loadJournal: async path => { try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; } },
     saveJournal: async (path, journal) => {
-      const temporary = `${path}.${randomUUID()}.tmp`;
-      const handle = await open(temporary, 'wx', 0o600);
-      try {
-        try { await handle.writeFile(`${JSON.stringify(journal, null, 2)}\n`); await handle.sync(); } finally { await handle.close(); }
-        await rename(temporary, path);
-        const directory = await open(dirname(path), 'r');
-        try { await directory.sync(); } finally { await directory.close(); }
-      } finally {
-        await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
-      }
+      await writeDurableJsonJournalAsync({ filePath: path, value: journal, mode: 'replace' });
     },
     clearJournal: async path => {
       await unlink(path);

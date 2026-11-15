@@ -60,7 +60,7 @@ function privateDirectory(directory) {
   const allowed = filename => {
     const relative = path.relative(repository, filename);
     if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-      assert.ok(relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
+      assert.ok(relative.startsWith(`.operations${path.sep}`) || relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
         'Mainnet release state must be private and ignored or outside the repository');
     }
   };

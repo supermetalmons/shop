@@ -144,3 +144,7 @@ API deployment runs checks, applies migrations, verifies remote integrity, and
 publishes the Worker. Use the [Commerce maintenance procedure](scripts/docs/commerce_operations.md#pause-and-resume-maintenance)
 when a change requires paused consumers. Frontend publication follows the API.
 Production rollout is a separate operation from local validation.
+
+Private operation evidence and disposable source caches follow the
+[local artifact policy](scripts/docs/local_artifacts.md). Use `npm run artifacts -- init`
+for new evidence storage and `npm run clean:cache` to inspect the bounded cleanup plan.

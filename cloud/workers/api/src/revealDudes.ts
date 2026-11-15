@@ -1,7 +1,8 @@
 import bs58 from 'bs58';
+import { decodeSolanaSigner } from './solanaSigner.js';
 import {
   ComputeBudgetProgram,
-  Keypair,
+  type Keypair,
   PublicKey,
   SystemProgram,
   TransactionInstruction,
@@ -214,14 +215,8 @@ function canonicalPublicKey(value: string, label: string): PublicKey {
 
 function cosigner(env: Env): Keypair {
   const secret = typeof env.COSIGNER_SECRET === 'string' ? env.COSIGNER_SECRET.trim() : '';
-  if (!secret) throw new RevealDudesError('unavailable', 'Reveal signing is temporarily unavailable.');
-  try {
-    const bytes = bs58.decode(secret);
-    if (bytes.length !== 64) throw new Error('invalid');
-    return Keypair.fromSecretKey(bytes);
-  } catch {
-    throw new RevealDudesError('unavailable', 'Reveal signing is temporarily unavailable.');
-  }
+  return decodeSolanaSigner(secret, () =>
+    new RevealDudesError('unavailable', 'Reveal signing is temporarily unavailable.'));
 }
 
 async function failRevealSubmissionSafely(

@@ -1,10 +1,9 @@
 import { matchesCommittedDropConfig } from './committedDropConfig.js';
-import bs58 from 'bs58';
 import { z } from 'zod';
 import {
   type AddressLookupTableAccount,
   ComputeBudgetProgram,
-  Keypair,
+  type Keypair,
   PublicKey,
   SystemProgram,
   TransactionInstruction,
@@ -89,6 +88,7 @@ import {
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { mapWithConcurrency } from './mapWithConcurrency.js';
 import { buildDeliveryDropRuntime, configuredDropPublicKey } from './solanaDropRuntime.js';
+import { decodeSolanaSigner } from './solanaSigner.js';
 
 import { deriveDeliveryAddress, encodeDeliverInstruction } from './deliveryProtocol.js';
 import { DeliveryPrepareError } from './deliveryPrepareErrors.js';
@@ -491,20 +491,8 @@ function secureDeliveryId(): number {
 }
 
 function decodeCosigner(secret: string): Keypair {
-  let decoded: Uint8Array;
-  try {
-    decoded = bs58.decode(secret.trim());
-  } catch {
-    throw new DeliveryPrepareError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.');
-  }
-  if (decoded.length !== 64) {
-    throw new DeliveryPrepareError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.');
-  }
-  try {
-    return Keypair.fromSecretKey(decoded);
-  } catch {
-    throw new DeliveryPrepareError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.');
-  }
+  return decodeSolanaSigner(secret, () =>
+    new DeliveryPrepareError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.'));
 }
 
 function maximumDeliveryLamports(runtime: DeliveryRuntime): number {

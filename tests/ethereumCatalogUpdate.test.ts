@@ -376,7 +376,7 @@ test('read-only verification pages every object and rejects a stalled cursor', a
 
 test('failed begin preserves original operation revision and rejects a different revision on retry', async t => {
   const input = await fixture(t);
-  await prepareRevealCatalogUpdate(input);
+  const { batch } = await prepareRevealCatalogUpdate(input);
   const options = { ...input, deploymentId: 'test', expectedRevision: 4, action: 'apply' as const, fetchSource: mediaFetch };
   await assert.rejects(runRevealCatalogUpdate({ ...options, transport: async () => { throw new Error('interrupted'); } }), /interrupted/);
   const journal = JSON.parse(await readFile(join(input.directory, 'test.journal.json'), 'utf8'));
@@ -384,6 +384,39 @@ test('failed begin preserves original operation revision and rejects a different
   assert.equal(journal.result, null);
   await assert.rejects(runRevealCatalogUpdate({ ...options, expectedRevision: 5,
     transport: async () => { throw new Error('wrong revision reached transport'); } }), /original revision/);
+  const resumed = await runRevealCatalogUpdate({ ...options, transport: async request => {
+    assert.equal(request.expectedRevision, 4);
+    assert.equal(request.batchId, batch.batchId);
+    return { deploymentId: 'test', batchId: batch.batchId, phase: 'complete', complete: true, catalogRevision: 2,
+      total: 3, staged: 3, applied: 3, published: 3, frozen: 1, retryAfterMs: 0 };
+  } });
+  assert.equal(resumed.complete, true);
+  assert.equal(JSON.parse(await readFile(join(input.directory, 'test.journal.json'), 'utf8')).expectedRevision, 4);
+  assert.equal((await readdir(input.directory)).some(name => name.endsWith('.tmp') || name.endsWith('.lock')), false);
+});
+
+test('a failed catalog journal checkpoint stops transport and preserves its previous bytes', async t => {
+  const input = await fixture(t);
+  const { batch } = await prepareRevealCatalogUpdate(input);
+  const journalPath = join(input.directory, 'test.journal.json');
+  const previous = JSON.stringify({ deploymentId: 'test', expectedRevision: 4, batchId: batch.batchId,
+    batchSha256: batch.batchSha256, result: null });
+  await writeFile(journalPath, previous);
+  const originalRename = fs.rename;
+  const rename = t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+    if (args[1] === journalPath) throw new Error('journal publication interrupted');
+    await originalRename(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(runRevealCatalogUpdate({ ...input, deploymentId: 'test', expectedRevision: 4, action: 'apply',
+      fetchSource: mediaFetch, transport: async () => { assert.fail('transport started without a journal checkpoint'); } }), /publication interrupted/);
+  } finally {
+    rename.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal(await readFile(journalPath, 'utf8'), previous);
+  assert.equal((await readdir(input.directory)).some(name => name.endsWith('.tmp') || name.endsWith('.lock')), false);
 });
 
 test('concurrent local mutation commands cannot overwrite the operation journal', async t => {

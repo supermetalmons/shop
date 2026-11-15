@@ -21,7 +21,8 @@ const retiredRow = (scope: ReplacementArtifactScope = old) => ({ deployment_id: 
   template_sha256: 'a'.repeat(64), state: 'paused', revision: 3, created_at_ms: 1, updated_at_ms: 3,
   activated_at_ms: 2, provisioned_at_ms: 1, last_error: null, retired_at_ms: 3, replacement_deployment_id: 'v17' });
 
-function fixture(t: { after: (callback: () => void) => void }, queryRetiredDeployments: (sql: string) => Record<string, unknown>[] = () => []) {
+function fixture(t: { after: (callback: () => void) => void }, queryRetiredDeployments: (sql: string) => Record<string, unknown>[] = () => [],
+  privateRoot: '.cache' | '.operations' = '.cache') {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), '111k-replacement-artifacts-')));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const repositoryRoot = path.join(directory, 'repository');
@@ -33,14 +34,14 @@ function fixture(t: { after: (callback: () => void) => void }, queryRetiredDeplo
     fs.writeFileSync(filename, typeof value === 'string' ? value : JSON.stringify(value));
     return filename;
   };
-  const releaseDirectory = path.join(repositoryRoot, '.cache/111k-v17-release/contract');
-  write('.gitignore', '.cache/\nonchain/ethereum/.local/\n');
-  write('.cache/111k-v17-release/contract/manifest.json', { ...manifest(current), previousContract: old.contractAddress });
-  const signedJournal = write('.cache/111k-v17-release/contract/transactions.private.json', { previousContract: old.contractAddress, signed: 'preserve-current' });
+  const releaseDirectory = path.join(repositoryRoot, `${privateRoot}/111k-v17-release/contract`);
+  write('.gitignore', '.cache/\n.operations/\nonchain/ethereum/.local/\n');
+  write(`${privateRoot}/111k-v17-release/contract/manifest.json`, { ...manifest(current), previousContract: old.contractAddress });
+  const signedJournal = write(`${privateRoot}/111k-v17-release/contract/transactions.private.json`, { previousContract: old.contractAddress, signed: 'preserve-current' });
   write('releases/111k-sepolia-v16/deployment.json', manifest(old));
   write('releases/111k-sepolia-v16/README.md', '# Old release\n');
-  write('.cache/111k-v16-release/contract/manifest.json', manifest(old));
-  write('.cache/111k-v16-release/contract/transactions.private.json', { signed: 'old' });
+  write(`${privateRoot}/111k-v16-release/contract/manifest.json`, manifest(old));
+  write(`${privateRoot}/111k-v16-release/contract/transactions.private.json`, { signed: 'old' });
   write('.cache/111k-metadata/v16/upload-sepolia-test.json', { network: 'sepolia', bucket: 'cdn-mons-shop', prefix: '111k-sepolia/v16/' });
   write('.cache/111k-metadata/v16/1.json', { image: 'public' });
   write('.cache/111k-metadata/v17/upload-sepolia-test.json', { network: 'sepolia', bucket: 'cdn-mons-shop', prefix: '111k-sepolia/v17/' });
@@ -88,6 +89,33 @@ test('replacement artifact planning is scoped and application removes only appro
     /https:\/\/github\.com\/supermetalmons\/shop\/blob\/[0-9a-f]{40}\/releases\/111k-sepolia-v16\/README.md/);
   assert.equal(fs.readdirSync(f.releaseDirectory).filter(name => name.endsWith('.jsonl')).length, 0);
   assert.equal((await f.run(true)).complete, true);
+});
+
+test('operations retirement removes the full old release parent and preserves unrelated private evidence', async t => {
+  const f = fixture(t, undefined, '.operations');
+  const oldParent = '.operations/111k-v16-release';
+  f.write(`${oldParent}/published-metadata/1.json`, { image: 'old' });
+  f.write(`${oldParent}/recovery/snapshot.json`, { scope: old });
+  const protectedFiles = [f.signedJournal, f.newMetadata, f.mainnet, f.unrelated,
+    f.write('.operations/111k-v17-release/published-metadata/1.json', { image: 'current' }),
+    f.write('.operations/111k-mainnet-v1-release/contract/manifest.json', { ...manifest(old), chainId: 1 }),
+    f.write('.operations/pre111k-mainnet-v2/transactions.private.json', { signed: 'pre111k' }),
+    f.write('.operations/unrelated-audit/evidence.json', { previousContract: old.contractAddress }),
+  ];
+  const before = protectedFiles.map(filename => fs.readFileSync(filename));
+  await record111kReleaseLocation(path.join(f.repositoryRoot, oldParent, 'contract'), old,
+    { repositoryRoot: f.repositoryRoot, homeRoot: f.homeRoot });
+  const planned = await f.run();
+  const plan = JSON.parse(fs.readFileSync(planned.planPath, 'utf8'));
+  assert.deepEqual(plan.artifacts.filter((target: { path: string }) => target.path.startsWith('.operations/'))
+    .map((target: { path: string }) => target.path), [oldParent]);
+  assert.equal(planned.targets, 4);
+  assert.equal((await f.run(true)).complete, true);
+  assert.equal(fs.existsSync(path.join(f.repositoryRoot, oldParent)), false);
+  for (const [index, filename] of protectedFiles.entries()) assert.deepEqual(fs.readFileSync(filename), before[index]);
+  assert.equal((await f.run(true)).complete, true);
+  f.write(`${oldParent}/contract/manifest.json`, manifest(old));
+  await assert.rejects(f.run(), /Retired artifacts reappeared/);
 });
 
 test('interrupted per-file deletion resumes from checksum-proven remaining files', async t => {
@@ -475,14 +503,18 @@ test('newly retired owners cannot silently expand an already bound artifact plan
   assert.ok(fs.existsSync(path.join(f.repositoryRoot, cache, '1.json')));
 });
 
-test('a replacement that starts using a planned cache blocks deletion before any file is removed', async t => {
-  const f = fixture(t);
-  await f.run();
-  f.write('.cache/111k-v17-release/reveal-manifest.json', { ...current, publicationDirectory: '../111k-metadata/v16' });
-  await assert.rejects(f.run(true), /Replacement still requires an old metadata cache/);
-  assert.ok(fs.existsSync(path.join(f.repositoryRoot, '.cache/111k-metadata/v16/1.json')));
-  assert.ok(fs.existsSync(path.join(f.repositoryRoot, 'releases/111k-sepolia-v16/deployment.json')));
-});
+for (const privateRoot of ['.cache', '.operations'] as const) {
+  test(`a ${privateRoot} replacement using a planned cache blocks deletion before any file is removed`, async t => {
+    const f = fixture(t, undefined, privateRoot);
+    await f.run();
+    const publicationDirectory = path.relative(path.dirname(f.releaseDirectory), path.join(f.repositoryRoot, '.cache/111k-metadata/v16'));
+    f.write(`${privateRoot}/111k-v17-release/reveal-manifest.json`, { ...current, publicationDirectory });
+    await assert.rejects(f.run(true), /Replacement still requires an old metadata cache/);
+    assert.ok(fs.existsSync(path.join(f.repositoryRoot, '.cache/111k-metadata/v16/1.json')));
+    assert.ok(fs.existsSync(path.join(f.repositoryRoot, `${privateRoot}/111k-v16-release/contract/manifest.json`)));
+    assert.ok(fs.existsSync(path.join(f.repositoryRoot, 'releases/111k-sepolia-v16/deployment.json')));
+  });
+}
 
 test('both supported runtime defaults must move to the replacement namespace before artifact planning', async t => {
   const f = fixture(t);

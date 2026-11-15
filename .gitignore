@@ -15,6 +15,7 @@ node_modules/
 dist/
 .vite/
 .cache/
+.operations/
 /output/canvas/
 /output/eggs/
 /output/video-frames/

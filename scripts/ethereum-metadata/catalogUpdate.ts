@@ -9,6 +9,7 @@ import { revealCatalogAdditions, revealCatalogUpdateHash, validateRevealCatalogU
 import { selectRevealCollectionBlocks, validateRevealCollectionBlocks } from '../../shared/ethereum/revealCollectionBlocks.ts';
 import type { EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenance.ts';
+import { writeDurableJsonJournalAsync } from '../shared/durableJsonJournal.ts';
 import { buildRevealAssetCatalog, withRevealAssetImportLock } from './assetImport.ts';
 import { sha256 } from './catalog.ts';
 import { withMetadataLock } from './lock.ts';
@@ -31,14 +32,6 @@ type UpdateTransport = (request: EthereumRevealCatalogUpdateRequest) => Promise<
 async function optionalFile(path: string): Promise<string | null> {
   try { return await readFile(path, 'utf8'); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
-}
-
-async function writeJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
-    await rename(temporary, path);
-  } finally { await rm(temporary, { force: true }); }
 }
 
 function requireUnchangedSource(before: string, after: string): void {
@@ -230,9 +223,7 @@ export async function promoteRevealCatalogUpdate(directory: string, options: { r
       throw new Error('Conflicting supported predecessor catalog.');
     }
     if (!prior) {
-      const staging = `${ancestorPath}.${randomUUID()}.tmp`;
-      await writeFile(staging, `${JSON.stringify([...ancestors, bundle.batch.predecessor.manifest], null, 2)}\n`, { flag: 'wx' });
-      await rename(staging, ancestorPath);
+      await writeDurableJsonJournalAsync({ filePath: ancestorPath, mode: 'replace', value: [...ancestors, bundle.batch.predecessor.manifest] });
     }
     await importAssets({ sourcePath: join(resolve(directory), 'source.json'),
       catalogVersion: bundle.batch.target.descriptor.catalogVersion, availableEggs: bundle.batch.target.manifest.importSettings.availableEggs });
@@ -344,12 +335,12 @@ async function executeRevealCatalogUpdate(options: RunRevealCatalogUpdateOptions
     }
     if (options.action !== 'apply') return transport({ ...request, action: options.action });
     const preflight = await preflightRevealCatalogUpdateMedia(batch, options.fetchSource);
-    await writeJson(join(directory, `${options.deploymentId}.media-preflight.json`), preflight);
-    await writeJson(journalPath, { ...request, batchSha256: batch.batchSha256, result: null });
+    await writeDurableJsonJournalAsync({ filePath: join(directory, `${options.deploymentId}.media-preflight.json`), mode: 'replace', value: preflight });
+    await writeDurableJsonJournalAsync({ filePath: journalPath, mode: 'replace', value: { ...request, batchSha256: batch.batchSha256, result: null } });
     let result = await transport({ ...request, action: 'begin', batch });
     while (true) {
       if (result.deploymentId !== request.deploymentId || result.batchId !== batch.batchId) throw new Error('Catalog maintenance returned a different operation identity.');
-      await writeJson(journalPath, { ...request, batchSha256: batch.batchSha256, result });
+      await writeDurableJsonJournalAsync({ filePath: journalPath, mode: 'replace', value: { ...request, batchSha256: batch.batchSha256, result } });
       options.onProgress?.(result);
       if (result.complete || result.phase === 'cancelled') return result;
       const delay = Math.min(5_000, Math.max(0, result.retryAfterMs ?? 0));

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { inspect111kReleaseLocation, read111kReleaseLocation, record111kReleaseLocation,
+import { default111kReleaseDirectory, inspect111kReleaseLocation, read111kReleaseLocation, record111kReleaseLocation,
   resolve111kReleaseLocation, type Ethereum111kReleaseScope } from '../scripts/shared/ethereum111kReleaseLocations.ts';
 
 const scope: Ethereum111kReleaseScope = { chainId: 11155111, deploymentId: 'v16',
@@ -78,11 +78,52 @@ test('location registry records cannot be replaced through symlinks', async t =>
   const f = fixture(t);
   const directory = f.release('private');
   await record111kReleaseLocation(directory, scope, f.options);
-  const filename = path.join(f.options.repositoryRoot, '.cache/111k-release-locations/v16.json');
+  const filename = path.join(f.options.repositoryRoot, '.operations/111k-release-locations/v16.json');
   const before = fs.readFileSync(filename);
   fs.renameSync(filename, `${filename}.real`); fs.symlinkSync(`${filename}.real`, filename);
   await assert.rejects(record111kReleaseLocation(directory, scope, f.options), /record cannot be a symlink/);
   assert.deepEqual(fs.readFileSync(`${filename}.real`), before);
+});
+
+test('new release state and registries use operations storage while frozen legacy locations still resolve', async t => {
+  const f = fixture(t);
+  assert.equal(default111kReleaseDirectory(scope.deploymentId, f.options.repositoryRoot),
+    path.join(f.options.repositoryRoot, '.operations/111k-v16-release/contract'));
+  const directory = f.release('repository/.operations/111k-v16-release/contract');
+  const recorded = await resolve111kReleaseLocation(scope, f.options);
+  assert.equal(recorded.directory, directory);
+  const preferred = path.join(f.options.repositoryRoot, '.operations/111k-release-locations');
+  const previous = path.join(f.options.repositoryRoot, '.cache/111k-release-locations');
+  assert.ok(fs.existsSync(path.join(preferred, 'v16.json')));
+  fs.mkdirSync(path.dirname(previous), { recursive: true });
+  fs.renameSync(preferred, previous);
+  assert.deepEqual(await resolve111kReleaseLocation(scope, f.options), recorded);
+  fs.mkdirSync(preferred, { mode: 0o700 });
+  assert.throws(() => read111kReleaseLocation(scope, f.options), /Two release location registries/);
+  fs.rmdirSync(preferred);
+  fs.renameSync(previous, preferred);
+  assert.deepEqual(await resolve111kReleaseLocation(scope, f.options), recorded);
+});
+
+test('default release lookup preserves previously frozen cache and contract-project paths', t => {
+  const f = fixture(t);
+  const old = f.release('repository/onchain/ethereum/.local/111k-sepolia-v16');
+  assert.equal(default111kReleaseDirectory('v16', f.options.repositoryRoot), old);
+  fs.rmSync(old, { recursive: true });
+  const cached = f.release('repository/.cache/111k-v16-release/contract');
+  assert.equal(default111kReleaseDirectory('v16', f.options.repositoryRoot), cached);
+  assert.throws(() => default111kReleaseDirectory('../outside', f.options.repositoryRoot));
+});
+
+test('default release lookup follows the recorded copy and refuses unrecorded ambiguity', async t => {
+  const f = fixture(t);
+  const original = f.release('repository/onchain/ethereum/.local/111k-sepolia-v16');
+  f.release('repository/.cache/111k-v16-release/contract');
+  assert.throws(() => default111kReleaseDirectory('v16', f.options.repositoryRoot), /Multiple release directories/);
+  await record111kReleaseLocation(original, scope, f.options);
+  assert.equal(default111kReleaseDirectory('v16', f.options.repositoryRoot), original);
+  f.release('repository/.operations/111k-v16-release/contract');
+  assert.equal(default111kReleaseDirectory('v16', f.options.repositoryRoot), original);
 });
 
 test('custom directories must contain only release outputs and cannot own signing material', async t => {

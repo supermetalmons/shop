@@ -46,7 +46,8 @@ test('the deployment runner admits only explicit Sepolia operations', () => {
   assert.equal(NFT111K_SEPOLIA.chainId, 11155111);
   assert.equal(NFT111K_SEPOLIA.previousContract, '0xe665d1043f72886f49894006ea196450b33f0f89');
   assert.throws(() => parse111kDeploymentArgs(['prepare']), /explicit fresh --deployment-id/);
-  assert.equal(parse111kDeploymentArgs(['prepare', ...reservationArgs, '--deployment-id', 'v99']).directory, path.join(project, '.local', '111k-sepolia-v99'));
+  assert.equal(parse111kDeploymentArgs(['prepare', ...reservationArgs, '--deployment-id', 'v99']).directory,
+    path.resolve(project, '../../.operations/111k-v99-release/contract'));
   assert.ok(parse111kDeploymentArgs(['prepare', ...reservationArgs, '--network', 'sepolia', '--deployment-id', 'runner-test', '--directory', '/tmp/runner-test']));
   assert.equal(parse111kDeploymentArgs(['finalize', '--directory', '/tmp/runner-test']).command, 'finalize');
   for (const argv of [

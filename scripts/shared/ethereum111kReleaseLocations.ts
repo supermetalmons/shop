@@ -13,6 +13,32 @@ const repository = fileURLToPath(new URL('../../', import.meta.url));
 const serialized = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const inside = (file: string, directory: string) => file === directory || file.startsWith(`${directory}${path.sep}`);
+
+function knownReleaseDirectories(root: string, deploymentId: string): string[] {
+  assert.match(deploymentId, /^[a-z0-9][a-z0-9-]{0,63}$/);
+  return ['.operations', '.cache'].flatMap(base => [path.join(root, base, `111k-${deploymentId}-release/contract`),
+    path.join(root, base, `111k-${deploymentId}-release`)]).concat(path.join(root, `onchain/ethereum/.local/111k-sepolia-${deploymentId}`));
+}
+
+export function default111kReleaseDirectory(deploymentId: string, repositoryRoot = repository): string {
+  const root = fs.realpathSync(repositoryRoot);
+  const candidates = knownReleaseDirectories(root, deploymentId);
+  const options = { repositoryRoot: root };
+  const filename = path.join(registryDirectory(options), `${deploymentId}.json`);
+  let recordExists = false;
+  try {
+    assert.ok(fs.lstatSync(filename).isFile(), 'Release location record cannot be a symlink');
+    recordExists = true;
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  if (recordExists) {
+    const scope = JSON.parse(fs.readFileSync(filename, 'utf8')) as Ethereum111kReleaseScope;
+    assert.equal(scope.deploymentId, deploymentId, 'Recorded release deployment ID changed');
+    return read111kReleaseLocation(scope, options)!.directory;
+  }
+  const existing = candidates.filter(candidate => fs.existsSync(path.join(candidate, 'manifest.json')));
+  assert.ok(existing.length <= 1, 'Multiple release directories exist; pass --directory to select the frozen release');
+  return existing[0] ?? candidates[0];
+}
 const releaseFiles = new Set(['manifest.json', 'transactions.private.json', 'deployment.json', 'config.snapshot.json', 'reveal-manifest.json',
   'cleanup-finalization.json', 'cleanup-artifacts.json', 'cleanup-artifacts-progress.json',
   ...['artifact', 'standard-input', 'compiler-output', 'sourcify-request', 'sourcify-submission', 'sourcify-job',
@@ -71,8 +97,7 @@ export function inspect111kReleaseLocation(directory: string, expected: Ethereum
   const manifestPath = path.join(canonical, 'manifest.json');
   assert.ok(fs.lstatSync(manifestPath).isFile(), 'Release location manifest cannot be a symlink');
   const root = roots(options).repository;
-  if (![path.join(root, `.cache/111k-${scope.deploymentId}-release/contract`), path.join(root, `.cache/111k-${scope.deploymentId}-release`),
-    path.join(root, `onchain/ethereum/.local/111k-sepolia-${scope.deploymentId}`)].includes(canonical)) requireDedicatedContents(canonical);
+  if (!knownReleaseDirectories(root, scope.deploymentId).includes(canonical)) requireDedicatedContents(canonical);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   for (const [key, value] of Object.entries(scope)) {
     assert.equal(key === 'metadataBaseUri' ? manifest.metadataBaseUri ?? manifest.metadataBaseURI : manifest[key], value,
@@ -87,13 +112,18 @@ function requireLocationPath(canonical: string, options: Options): void {
   assert.ok(![anchors.repository, anchors.home].some(anchor => inside(anchor, canonical)), 'A release location cannot contain the repository or home root');
   if (inside(canonical, anchors.repository)) {
     const relative = path.relative(anchors.repository, canonical);
-    assert.ok(relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
+    assert.ok(relative.startsWith(`.operations${path.sep}`) || relative.startsWith(`.cache${path.sep}`) || relative.startsWith(`onchain${path.sep}ethereum${path.sep}.local${path.sep}`),
       'Release locations inside the repository must use private ignored directories');
   }
 }
 
 function registryDirectory(options: Options): string {
-  const directory = path.resolve(options.registryDirectory ?? path.join(roots(options).repository, '.cache/111k-release-locations'));
+  const root = roots(options).repository;
+  const preferred = path.join(root, '.operations/111k-release-locations');
+  const previous = path.join(root, '.cache/111k-release-locations');
+  assert.ok(options.registryDirectory || !fs.existsSync(preferred) || !fs.existsSync(previous),
+    'Two release location registries exist; reconcile them before continuing');
+  const directory = path.resolve(options.registryDirectory ?? (fs.existsSync(previous) ? previous : preferred));
   try {
     assert.ok(fs.lstatSync(directory).isDirectory(), 'Release location registry cannot be a symlink');
     return fs.realpathSync(directory);
@@ -159,8 +189,7 @@ export async function resolve111kReleaseLocation(expected: Ethereum111kReleaseSc
     return recorded;
   }
   const root = roots(options).repository;
-  const candidates = [path.join(root, `.cache/111k-${expected.deploymentId}-release/contract`),
-    path.join(root, `.cache/111k-${expected.deploymentId}-release`), path.join(root, `onchain/ethereum/.local/111k-sepolia-${expected.deploymentId}`)];
+  const candidates = knownReleaseDirectories(root, expected.deploymentId);
   const directory = candidates.find(candidate => fs.existsSync(path.join(candidate, 'manifest.json')));
   assert.ok(directory, 'Previous release location is unknown; pass --previous-directory before preparing the replacement');
   return record111kReleaseLocation(directory, expected, options);

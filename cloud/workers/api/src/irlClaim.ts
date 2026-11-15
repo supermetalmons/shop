@@ -1,14 +1,12 @@
 import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
 import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { matchesCommittedDropConfig } from './committedDropConfig.js';
-import bs58 from 'bs58';
 import {
   type AddressLookupTableAccount,
   ComputeBudgetProgram,
-  Keypair,
+  type Keypair,
   PublicKey,
-  SystemProgram,
-  TransactionInstruction,
+  type TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
@@ -91,6 +89,9 @@ import { readLatestBlockhashWithContext, readSolanaLookupTable } from './solanaR
 import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
+import { bubblegumBurnV2Ix } from './bubblegum.js';
+import { buildMintReceiptsInstruction } from './receiptInstructions.js';
+import { decodeSolanaSigner } from './solanaSigner.js';
 
 export const IRL_CLAIM_PREPARE_PATH = '/claims/irl/prepare';
 
@@ -99,8 +100,6 @@ const HANDLER_TIMEOUT_MS = 55_000;
 const HELIUS_ASSETS_PAGE_LIMIT = HELIUS_SEARCH_ASSETS_PAGE_LIMITS[0];
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const BURN_POLICY = { missingAssetResult: true, nonBooleanFlagIsBurnt: false } as const;
-const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
-const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
 const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
 const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey(MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS);
@@ -535,43 +534,8 @@ function resolveClaimDropId(claim: Record<string, unknown>, legacyDropIds: strin
 }
 
 function decodeCosigner(secret: string): Keypair {
-  let decoded: Uint8Array;
-  try {
-    decoded = bs58.decode(secret.trim());
-  } catch {
-    throw new IrlClaimError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.');
-  }
-  if (decoded.length !== 64) {
-    throw new IrlClaimError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.');
-  }
-  try {
-    return Keypair.fromSecretKey(decoded);
-  } catch {
-    throw new IrlClaimError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.');
-  }
-}
-
-function u16LE(value: number): Buffer {
-  const buffer = Buffer.alloc(2);
-  buffer.writeUInt16LE(value & 0xffff, 0);
-  return buffer;
-}
-
-function u32LE(value: number): Buffer {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32LE(value >>> 0, 0);
-  return buffer;
-}
-
-function u64LE(value: number): Buffer {
-  if (!Number.isSafeInteger(value) || value < 0) throw new IrlClaimError('failed-precondition', 'Invalid burn nonce');
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64LE(BigInt(value), 0);
-  return buffer;
-}
-
-function borshOption(value?: Buffer | null): Buffer {
-  return value ? Buffer.concat([Buffer.from([1]), value]) : Buffer.from([0]);
+  return decodeSolanaSigner(secret, () =>
+    new IrlClaimError('failed-precondition', 'COSIGNER_SECRET is not configured correctly.'));
 }
 
 function parseProof(
@@ -619,34 +583,30 @@ function burnInstruction(
   coreCollection: PublicKey,
   proof: DecodedReceiptProof,
 ): TransactionInstruction {
-  const data = Buffer.concat([
-    IX_BURN_V2,
-    proof.root,
-    proof.dataHash,
-    proof.creatorHash,
-    borshOption(proof.assetDataHash),
-    borshOption(proof.flags == null ? null : Buffer.from([proof.flags])),
-    u64LE(proof.nonce),
-    u32LE(proof.index),
-  ]);
-  return new TransactionInstruction({
-    programId: BUBBLEGUM_PROGRAM_ID,
-    keys: [
-      { pubkey: deriveTreeConfig(proof.merkleTree), isSigner: false, isWritable: true },
-      { pubkey: owner, isSigner: true, isWritable: true },
-      { pubkey: owner, isSigner: true, isWritable: false },
-      { pubkey: proof.leafOwner, isSigner: false, isWritable: false },
-      { pubkey: proof.leafDelegate, isSigner: false, isWritable: false },
-      { pubkey: proof.merkleTree, isSigner: false, isWritable: true },
-      { pubkey: coreCollection, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
-      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...proof.proofAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
-    ],
-    data,
+  if (!Number.isSafeInteger(proof.nonce) || proof.nonce < 0) {
+    throw new IrlClaimError('failed-precondition', 'Invalid burn nonce');
+  }
+  return bubblegumBurnV2Ix({
+    bubblegumProgramId: BUBBLEGUM_PROGRAM_ID,
+    mplNoopProgramId: MPL_NOOP_PROGRAM_ID,
+    mplAccountCompressionProgramId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+    mplCoreProgramId: MPL_CORE_PROGRAM_ID,
+    mplCoreCpiSigner: MPL_CORE_CPI_SIGNER,
+    treeConfig: deriveTreeConfig(proof.merkleTree),
+    payer: owner,
+    authority: owner,
+    leafOwner: proof.leafOwner,
+    leafDelegate: proof.leafDelegate,
+    merkleTree: proof.merkleTree,
+    coreCollection,
+    root: proof.root,
+    dataHash: proof.dataHash,
+    creatorHash: proof.creatorHash,
+    assetDataHash: proof.assetDataHash,
+    flags: proof.flags,
+    nonce: proof.nonce,
+    index: proof.index,
+    proof: proof.proofAccounts,
   });
 }
 
@@ -657,29 +617,15 @@ function mintReceiptsInstruction(
   coreCollection: PublicKey,
   dudeIds: number[],
 ): TransactionInstruction {
-  const data = Buffer.concat([
-    IX_MINT_RECEIPTS,
-    u32LE(0),
-    u32LE(dudeIds.length),
-    ...dudeIds.map(u16LE),
-  ]);
-  return new TransactionInstruction({
+  return buildMintReceiptsInstruction({
     programId: runtime.boxMinterProgramId,
-    keys: [
-      { pubkey: runtime.boxMinterConfigPda, isSigner: false, isWritable: false },
-      { pubkey: cosigner, isSigner: true, isWritable: true },
-      { pubkey: owner, isSigner: false, isWritable: false },
-      { pubkey: runtime.receiptsMerkleTree, isSigner: false, isWritable: true },
-      { pubkey: deriveTreeConfig(runtime.receiptsMerkleTree), isSigner: false, isWritable: true },
-      { pubkey: coreCollection, isSigner: false, isWritable: true },
-      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
+    configPda: runtime.boxMinterConfigPda,
+    receiptsMerkleTree: runtime.receiptsMerkleTree,
+    signer: cosigner,
+    recipient: owner,
+    coreCollection,
+    boxIds: [],
+    dudeIds,
   });
 }
 

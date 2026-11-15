@@ -31,7 +31,7 @@ companions. Confirm the egg allocation fits the available inventory. Freeze
 the resulting catalog before registration. Ordinary reveal preserves confirmed
 assignments; explicit catalog expansion can replace cutoff eggs with new artworks.
 
-Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. The first mainnet deployment may register the clean `111k/` root using internal ID `mainnet-v1`; follow the [mainnet runbook](111k_mainnet.md). Other new prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired identities continue to reserve their prefixes after testnet data is purged. Deployment IDs are globally unique across networks. A dedicated URI suffix must equal its deployment ID; the mainnet root retains its ID only in the registry and release manifest. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
+Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. The first mainnet deployment already owns the clean `111k/` root under internal ID `mainnet-v1`; follow the [mainnet operations and recovery guide](111k_mainnet.md) for that registered collection. Other new prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; retired identities continue to reserve their prefixes after testnet data is purged. Deployment IDs are globally unique across networks. A dedicated URI suffix must equal its deployment ID; the mainnet root retains its ID only in the registry and release manifest. Choose a new ID for each replacement and keep its identity in one manifest throughout registration, status checks, and activation. The [testnet guide](111k_testnet.md) records the current deployment. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
 The relic collection contains 344984 metadata objects, including relic tokens 117172–117189 and terminal relic receipts 3000001–3000018. Every relic receipt uses `https://cdn.lil.org/nft/111k/placeholder.png`. Publish the complete collection to each replacement prefix before deployment and registration; a selected-object preview cannot qualify. New relic publications use `https://cdn.lil.org/nft/111k/relics/1.png` through `18.png`. Registered live relics can migrate through the [dedicated image maintenance procedure](111k_metadata.md#updating-live-relic-images); frozen publication records retain their original image URLs. Owner allocation reserves relic crate supply before sales; claiming does not change the reserved supply. Opening a relic creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
 
@@ -45,7 +45,7 @@ npm run ethereum:metadata -- upload --network sepolia --prefix "$sepolia_prefix"
 npm run ethereum:metadata -- verify --network sepolia --prefix "$sepolia_prefix" --directory "$metadata_dir"
 ```
 
-For the first mainnet deployment, use the [clean-root bootstrap](111k_mainnet.md). Additional mainnet collections require another globally unique ID and `111k/<deploymentId>/` with `--network mainnet`. Each network needs its own deployment manifest.
+The first mainnet [clean-root bootstrap is complete](111k_mainnet.md#completed-root-bootstrap). Additional mainnet collections require another globally unique ID and `111k/<deploymentId>/` with `--network mainnet`. Each network needs its own deployment manifest.
 
 Initialization creates missing objects with conditional writes and rejects differing contents. Resume with the same revision directory and exact prefix. Require each verification report to have `complete: true` and `objectCount: 344984`; selected-object verification never qualifies a prefix for registration. After any upload or restore that attempted writes, wait 65 seconds before another mutation or registration for that prefix, including after a failed command.
 
@@ -614,7 +614,9 @@ failure before retrying; do not bypass the guard or delete the current signed
 journal. Mainnet, pre111k, shared assets, and unrelated data are protected.
 
 Private release locations are indexed by deployment ID and frozen into the next
-replacement manifest. For a pre-existing custom directory, pass
+replacement manifest. New releases use `.operations/111k-<deployment-id>-release/contract`;
+existing frozen releases retain their recorded paths under the
+[local artifact policy](local_artifacts.md). For a pre-existing custom directory, pass
 `--previous-directory PATH` to `prepare` or a recovery `finalize`. Custom release
 directories must be dedicated to release outputs; keep signing keys elsewhere.
 Mainnet/shared cache ownership includes publication reports, journals, and snapshots.

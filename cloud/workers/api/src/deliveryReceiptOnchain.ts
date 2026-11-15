@@ -2,7 +2,7 @@ import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import {
   Connection,
-  Keypair,
+  type Keypair,
   PublicKey,
   SystemProgram,
   TransactionInstruction,
@@ -23,11 +23,7 @@ import {
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
 import {
-  BUBBLEGUM_PROGRAM_ADDRESS,
-  MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
-  MPL_CORE_CPI_SIGNER_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
-  MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
@@ -39,6 +35,8 @@ import { createSolanaConnection } from './solanaConnection.js';
 import { pollSignatureConfirmation } from './signaturePolling.js';
 import { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery.js';
 import { buildDeliveryDropRuntime, configuredDropPublicKey } from './solanaDropRuntime.js';
+import { decodeSolanaSigner } from './solanaSigner.js';
+import { buildMintReceiptsInstruction } from './receiptInstructions.js';
 
 export { DeliveryReceiptError } from './deliveryReceiptErrors.js';
 export { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery.js';
@@ -49,13 +47,8 @@ export const MAX_U32 = 0xffff_ffff;
 const MPL_CORE_COLLECTION_V1_DISCRIMINATOR = 5;
 const MPL_CORE_COLLECTION_V1_MIN_BYTES = 49;
 const IX_CLOSE_DELIVERY = Buffer.from('ae641ab98ea5f208', 'hex');
-const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
-const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
-const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey(MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS);
-const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
-const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
 
 export type DeliveryRuntime = {
   config: ApiDropConfig;
@@ -98,20 +91,8 @@ export function runtimeForDrop(rawDropId: string): DeliveryRuntime {
 }
 
 export function decodeCosigner(secret: string): Keypair {
-  let decoded: Uint8Array;
-  try {
-    decoded = bs58.decode(secret.trim());
-  } catch {
-    throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
-  }
-  if (decoded.length !== 64) {
-    throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
-  }
-  try {
-    return Keypair.fromSecretKey(decoded);
-  } catch {
-    throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
-  }
+  return decodeSolanaSigner(secret, () =>
+    new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.'));
 }
 
 export function createConnection(context: ProviderContext, runtime: DeliveryRuntime): Connection {
@@ -139,12 +120,6 @@ export function createConnection(context: ProviderContext, runtime: DeliveryRunt
   });
 }
 
-function u16LE(value: number): Buffer {
-  const buffer = Buffer.alloc(2);
-  buffer.writeUInt16LE(value & 0xffff, 0);
-  return buffer;
-}
-
 function u32LE(value: number): Buffer {
   if (!Number.isInteger(value) || value < 0 || value > MAX_U32) {
     throw new DeliveryReceiptError('invalid-argument', 'Invalid unsigned 32-bit integer.');
@@ -159,10 +134,6 @@ export function deriveDeliveryPda(runtime: DeliveryRuntime, deliveryId: number):
     throw new DeliveryReceiptError('invalid-argument', 'Invalid unsigned 32-bit integer.');
   }
   return deriveDeliveryAddress(runtime, deliveryId);
-}
-
-function deriveTreeConfigPda(merkleTree: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([merkleTree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
 function decodeOnchainConfig(data: Buffer): DecodedOnchainConfig {
@@ -248,30 +219,6 @@ export function mplCoreBurnInstruction(args: {
   });
 }
 
-function encodeMintReceiptsArgs(
-  runtime: DeliveryRuntime,
-  boxIds: readonly number[],
-  dudeIds: readonly number[],
-): Buffer {
-  for (const id of boxIds) {
-    if (!Number.isSafeInteger(id) || id < 1 || id > 0xffff_ffff) {
-      throw new DeliveryReceiptError('invalid-argument', `Invalid box id: ${id}`);
-    }
-  }
-  for (const id of dudeIds) {
-    if (!Number.isSafeInteger(id) || id < 1 || id > runtime.maxDudeId) {
-      throw new DeliveryReceiptError('invalid-argument', `Invalid figure id: ${id}`);
-    }
-  }
-  return Buffer.concat([
-    IX_MINT_RECEIPTS,
-    u32LE(boxIds.length),
-    ...boxIds.map(u32LE),
-    u32LE(dudeIds.length),
-    ...dudeIds.map(u16LE),
-  ]);
-}
-
 export function mintReceiptsInstruction(args: {
   runtime: DeliveryRuntime;
   signer: PublicKey;
@@ -280,23 +227,25 @@ export function mintReceiptsInstruction(args: {
   boxIds: readonly number[];
   dudeIds: readonly number[];
 }): TransactionInstruction {
-  return new TransactionInstruction({
+  for (const id of args.boxIds) {
+    if (!Number.isSafeInteger(id) || id < 1 || id > 0xffff_ffff) {
+      throw new DeliveryReceiptError('invalid-argument', `Invalid box id: ${id}`);
+    }
+  }
+  for (const id of args.dudeIds) {
+    if (!Number.isSafeInteger(id) || id < 1 || id > args.runtime.maxDudeId) {
+      throw new DeliveryReceiptError('invalid-argument', `Invalid figure id: ${id}`);
+    }
+  }
+  return buildMintReceiptsInstruction({
     programId: args.runtime.boxMinterProgramId,
-    keys: [
-      { pubkey: args.runtime.boxMinterConfigPda, isSigner: false, isWritable: false },
-      { pubkey: args.signer, isSigner: true, isWritable: true },
-      { pubkey: args.recipient, isSigner: false, isWritable: false },
-      { pubkey: args.runtime.receiptsMerkleTree, isSigner: false, isWritable: true },
-      { pubkey: deriveTreeConfigPda(args.runtime.receiptsMerkleTree), isSigner: false, isWritable: true },
-      { pubkey: args.coreCollection, isSigner: false, isWritable: true },
-      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: encodeMintReceiptsArgs(args.runtime, args.boxIds, args.dudeIds),
+    configPda: args.runtime.boxMinterConfigPda,
+    receiptsMerkleTree: args.runtime.receiptsMerkleTree,
+    signer: args.signer,
+    recipient: args.recipient,
+    coreCollection: args.coreCollection,
+    boxIds: args.boxIds,
+    dudeIds: args.dudeIds,
   });
 }
 

@@ -146,7 +146,8 @@ function retiredMetadataOwners(current: ReplacementArtifactScope, query: Commerc
 function checkReplacementPublicationDependencies(roots: { repository: string }, current: ReplacementArtifactScope,
   releaseDirectory: string, targets: string[]) {
   const revealManifests = [path.join(releaseDirectory, 'reveal-manifest.json')];
-  if (releaseDirectory === path.join(roots.repository, `.cache/111k-${current.deploymentId}-release/contract`)) {
+  if (['.cache', '.operations'].some(root =>
+    releaseDirectory === path.join(roots.repository, `${root}/111k-${current.deploymentId}-release/contract`))) {
     revealManifests.push(path.join(path.dirname(releaseDirectory), 'reveal-manifest.json'));
   }
   for (const currentReveal of revealManifests) {
@@ -196,6 +197,7 @@ function targetPath(target: Pick<Target, 'root' | 'path'>, roots: { repository: 
       || parts.length === 2 && parts[0] === '.cache' && [
         `111k-${id}-release`, `111k-${id}-scenes`, `111k-${id}-live-ui`,
       ].includes(parts[1])
+      || parts.length === 2 && parts[0] === '.operations' && parts[1] === `111k-${id}-release`
       || parts.length === 2 && parts[0] === '.cache' && parts[1].startsWith(`111k-${id}-live-ui-recheck-`)
         && /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/.test(parts[1].slice(`111k-${id}-live-ui-recheck-`.length))
       || parts.length === 3 && parts[0] === '.cache' && parts[1] === '111k-metadata'
@@ -315,7 +317,8 @@ async function discover(roots: { repository: string; home: string }, old: Replac
       add('repository', directory);
     }
   }
-  for (const relative of [`.cache/111k-${old.deploymentId}-release`, `onchain/ethereum/.local/111k-sepolia-${old.deploymentId}`]) {
+  for (const relative of [`.cache/111k-${old.deploymentId}-release`, `.operations/111k-${old.deploymentId}-release`,
+    `onchain/ethereum/.local/111k-sepolia-${old.deploymentId}`]) {
     const directory = path.join(roots.repository, relative);
     if (!noSymlinks(directory, true)) continue;
     const identity = [path.join(directory, 'contract/manifest.json'), path.join(directory, 'manifest.json')].find(filename => noSymlinks(filename, true));
@@ -500,12 +503,14 @@ export async function cleanup111kReplacementArtifacts(context: Context, options:
     assert.ok(Array.isArray(progress.removed), 'Invalid artifact cleanup progress');
     assert.equal(progress.planSha256, planSha256, 'Artifact plan changed after cleanup started');
     assert.ok(location || plan.artifacts.some(target => target.root === 'repository' && [
-      `.cache/111k-${old.deploymentId}-release`, `onchain/ethereum/.local/111k-sepolia-${old.deploymentId}`,
+      `.cache/111k-${old.deploymentId}-release`, `.operations/111k-${old.deploymentId}-release`,
+      `onchain/ethereum/.local/111k-sepolia-${old.deploymentId}`,
     ].includes(target.path)), 'Previous private release location is unknown; record it with --previous-directory before finalizing');
     const targets = plan.artifacts.map(target => targetPath(target, roots, old, location));
     assert.equal(new Set(targets).size, targets.length, 'Duplicate artifact targets');
     const protectedPaths = [releaseDirectory, path.join(roots.repository, `releases/111k-sepolia-${current.deploymentId}`),
       path.join(roots.repository, `.cache/111k-${current.deploymentId}-release`),
+      path.join(roots.repository, `.operations/111k-${current.deploymentId}-release`),
       path.join(roots.repository, `.cache/111k-metadata/${current.deploymentId}`),
       path.join(roots.repository, `onchain/ethereum/.local/111k-sepolia-${current.deploymentId}`)];
     for (const target of targets) assert.ok(!protectedPaths.some(protectedPath => inside(protectedPath, target) || inside(target, protectedPath)),

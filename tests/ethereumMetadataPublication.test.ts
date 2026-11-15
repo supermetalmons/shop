@@ -26,6 +26,20 @@ test('generic upload, restore and lease acquisition permanently refuse the retir
   assertMetadataPublicationAllowed('https://cdn.mons.shop/111k-sepolia/current/');
 });
 
+test('read-phase lease renewal retains ownership without requiring a writer drain', async t => {
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', import.meta.url), 'utf8'));
+  let now = 0;
+  let renewals = 0;
+  const lease = await acquireMetadataPublicationLease('https://cdn.mons.shop/111k/', { now: () => now, wallNow: () => now,
+    query: sql => { if (sql.startsWith('UPDATE')) renewals++; return database.prepare(sql).all(); } });
+  for (now = 30_001; now <= 300_010; now += 30_001) await lease.renew();
+  assert.equal(renewals, 10);
+  await lease.close();
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM ethereum_metadata_publication_leases').get()!.count, 0);
+});
+
 async function publicationFixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), '111k-publication-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

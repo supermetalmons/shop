@@ -5,7 +5,7 @@ import { Keypair, PublicKey, TransactionMessage, VersionedTransaction } from '@s
 import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts';
-import { isRetryableStripeCheckoutFulfillmentError } from '../src/stripeCheckout/service.ts';
+import { isRetryableStripeCheckoutFulfillmentError, runStripeCheckoutFulfillmentWithRetry } from '../src/stripeCheckout/service.ts';
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
@@ -75,6 +75,47 @@ function matchingConfig(): {
       },
     },
   };
+}
+
+test('Stripe fulfillment preserves terminal SDK errors without retrying malformed 64-byte signer keys', async (context) => {
+  const { commerce } = commerceFixture(context);
+  const dependencies = flowDependencies({
+    ADDRESS_DECRYPTION_SECRET: '',
+    COSIGNER_SECRET: bs58.encode(new Uint8Array(64).fill(1)),
+  } as Parameters<typeof flowDependencies>[0], commerce, new AbortController().signal);
+  let attempts = 0;
+  await assert.rejects(runStripeCheckoutFulfillmentWithRetry(async () => {
+    attempts += 1;
+    return dependencies.cosigner();
+  }, {
+    commerce,
+    checkoutKey: commerceKeys.stripeCheckout('card_nft_binder_devnet', 'cs_test_invalid_signer'),
+    summarizeError: () => ({}),
+    maxAttempts: 3,
+    retryDelayMs: 0,
+  }), (error) => {
+    assert(error instanceof Error);
+    assert.equal(error instanceof StripeCheckoutFulfillmentError, false);
+    assert.equal(error.message, 'provided secretKey is invalid');
+    assert.equal(isRetryableStripeCheckoutFulfillmentError(error), false);
+    return true;
+  });
+  assert.equal(attempts, 1);
+});
+
+for (const secret of ['not-base58', bs58.encode(new Uint8Array(32).fill(1))]) {
+  test(`Stripe fulfillment keeps ${secret === 'not-base58' ? 'encoding' : 'length'} signer failures retryable`, context => {
+    const dependencies = flowDependencies({
+      ADDRESS_DECRYPTION_SECRET: '', COSIGNER_SECRET: secret,
+    } as Parameters<typeof flowDependencies>[0], commerceFixture(context).commerce, new AbortController().signal);
+    assert.throws(() => dependencies.cosigner(), (error) => {
+      assert(error instanceof StripeCheckoutFulfillmentError);
+      assert.equal(error.code, 'unavailable');
+      assert.equal(error.message, 'COSIGNER_SECRET is not configured');
+      assert.equal(isRetryableStripeCheckoutFulfillmentError(error), true);
+      return true;
+    });
+  });
 }
 
 test('Stripe fulfillment validates deployment invariants against on-chain config', () => {

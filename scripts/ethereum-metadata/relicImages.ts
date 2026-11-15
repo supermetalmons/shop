@@ -10,6 +10,7 @@ import { parseRelicImagePatch, parseRelicImagesScope, RELIC_IMAGE_TOKEN_IDS, rel
 import { createAsyncD1MaintenanceQuery } from '../shared/asyncD1MaintenanceQuery.ts';
 import { sqlString, type CommerceAuthorityQuery } from '../shared/commerceD1Maintenance.ts';
 import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenance.ts';
+import { writeDurableJsonJournalAsync } from '../shared/durableJsonJournal.ts';
 import { withMetadataLock } from './lock.ts';
 
 const API = 'https://api.mons.shop/ethereum/111k';
@@ -40,14 +41,6 @@ function journalBody(value: RelicImagesJournal | JournalBody): JournalBody {
 async function optionalFile(path: string): Promise<string | null> {
   try { return await readFile(path, 'utf8'); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
-}
-
-async function writeJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
-    await rename(temporary, path);
-  } finally { await rm(temporary, { force: true }); }
 }
 
 function parseObjects(value: unknown, field?: 'name'): RelicImagePatch[] {
@@ -181,8 +174,8 @@ export async function applyRelicImages(directory: string, dependencies: Dependen
           throw new Error(`Invalid relic image application result for token ${patch.tokenId}.`);
         }
         completed.push({ tokenId: result.tokenId, status: result.status });
-        await writeJson(join(destination, 'progress.json'), { journalSha256: journal.journalSha256,
-          updatedAt: (dependencies.now ?? (() => new Date()))().toISOString(), complete: false, completed });
+        await writeDurableJsonJournalAsync({ filePath: join(destination, 'progress.json'), mode: 'replace', value: {
+          journalSha256: journal.journalSha256, updatedAt: (dependencies.now ?? (() => new Date()))().toISOString(), complete: false, completed } });
         dependencies.onProgress?.({ tokenId: result.tokenId, status: result.status, completed: completed.length, total: journal.objects.length });
       }
       requireExpectedObjects(journal, await inspect(journal.scope, transport, journal.field), true);
@@ -233,7 +226,7 @@ export async function verifyRelicImages(directory: string, dependencies: Depende
       storageVerified: journal.objects.length, cdnVerified: journal.objects.length, apiVerified: journal.objects.length,
       metadataBaseUri: journal.scope.metadataBaseUri, expectedRevision: journal.scope.expectedRevision,
       ...(journal.field ? { field: journal.field } : {}) };
-    await writeJson(join(destination, 'verification.json'), report);
+    await writeDurableJsonJournalAsync({ filePath: join(destination, 'verification.json'), mode: 'replace', value: report });
     return report;
   });
 }

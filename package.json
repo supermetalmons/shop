@@ -96,6 +96,8 @@
     "bootstrap:commerce": "node --import tsx scripts/ops/bootstrapCommerce.ts",
     "backfill:stripe-chargebacks": "node --import tsx scripts/ops/backfillStripeChargebacks.ts",
     "check:queue-backlogs": "node --import tsx scripts/ops/checkQueueBacklogs.ts",
+    "artifacts": "node --import tsx scripts/ops/localArtifacts.ts",
+    "clean:cache": "node --import tsx scripts/ops/localArtifacts.ts cache",
     "ethereum111k-control": "node --import tsx scripts/ops/ethereum111kControl.ts",
     "ethereum-reveal-control": "node --import tsx scripts/ops/ethereumRevealControl.ts",
     "reset:ethereum111k": "node --import tsx scripts/ops/resetEthereum111k.ts",
