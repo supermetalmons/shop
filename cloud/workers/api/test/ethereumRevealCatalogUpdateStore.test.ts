@@ -10,7 +10,7 @@ import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.ts
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import { buildNewRevealedArtwork, buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
-import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
+import { EthereumRevealCatalogReader } from '../src/ethereumRevealCatalogReader.ts';
 import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
 const source = getRevealCatalog('111k-v5')!;
@@ -90,14 +90,14 @@ function stageMetadata(store: EthereumRevealStore, update: RevealCatalogUpdateBa
   for (let offset = 0; offset < update.mappings.length; offset += 256) operation.stageMappings(update.batchId, update.mappings.slice(offset, offset + 256));
   operation.sealMappings(update.batchId);
   for (;;) {
-    const page = operation.metadataPreparationPage(update.batchId, 256);
+    const page = operation.reader.metadataPreparationPage(update.batchId, 256);
     if (!page.length) break;
     operation.metadataStage(update.batchId, page.map(row => ({ ...row, attributesJson, sha256: attributesSha256 })));
   }
 }
 
 function stageGeneration(store: EthereumRevealStore, update: RevealCatalogUpdateBatch, interleave?: () => void) {
-  while (store.catalogUpdate.status(update.batchId)!.generationSeeded < 111111) {
+  while (store.catalogUpdate.reader.status(update.batchId)!.generationSeeded < 111111) {
     store.catalogUpdate.generationStage(update.batchId);
     interleave?.();
   }
@@ -105,12 +105,31 @@ function stageGeneration(store: EthereumRevealStore, update: RevealCatalogUpdate
 }
 
 function conservation(store: EthereumRevealStore, database: DatabaseSync) {
-  const pools = store.catalogUpdate.pools();
+  const pools = store.catalogUpdate.reader.pools();
   assert.equal(pools.reduce((sum, row) => sum + row.total, 0), 111111);
   assert.equal(pools.reduce((sum, row) => sum + row.available, 0) + Number(database.prepare('SELECT COUNT(*) AS count FROM assignments').get()!.count), 111111);
-  assert.equal(new Set(store.catalogUpdate.canonicalMetadata(['1', '2', '3']).map(row => `${row.category}:${row.assetId}`)).size,
-    store.catalogUpdate.canonicalMetadata(['1', '2', '3']).length);
+  assert.equal(new Set(store.catalogUpdate.reader.canonicalMetadata(['1', '2', '3']).map(row => `${row.category}:${row.assetId}`)).size,
+    store.catalogUpdate.reader.canonicalMetadata(['1', '2', '3']).length);
 }
+
+test('catalog inspection is query-only on an uninitialized database', t => {
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  const sql: RevealSql = { exec<T>(query: string, ...bindings: Array<string | number | null | ArrayBuffer>) {
+    return { toArray: () => database.prepare(query).all(...bindings.map(value => value instanceof ArrayBuffer ? new Uint8Array(value) : value)) as T[] };
+  } };
+  const schema = database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
+  const changes = database.prepare('SELECT total_changes() AS changes').get()!.changes;
+  database.exec('PRAGMA query_only=ON');
+  const reader = new EthereumRevealCatalogReader(sql);
+  assert.equal(reader.status(), null);
+  assert.equal(reader.effectiveCatalog(), null);
+  assert.deepEqual(reader.canonicalMetadata(['1', '1']), []);
+  assert.deepEqual(reader.canonicalArtworks(['1']), []);
+  assert.deepEqual(reader.eligibleCutoffEggs(0), []);
+  assert.equal(database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
+  assert.deepEqual(database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
+});
 
 test('canonical metadata batches reads with bounded parameters and preserves order, duplicates, and publication evidence', t => {
   const f = fixture(t);
@@ -118,13 +137,14 @@ test('canonical metadata batches reads with bounded parameters and preserves ord
   const crates = Array.from({ length: 6 }, (_, index) => ({ crateTokenId: String(111112 + index),
     tokenIds: Array.from({ length: 20 }, (_, offset) => String(index * 20 + offset + 1)) }));
   f.store.freeze(deployment, observation, crates, 1000);
-  const published = f.store.catalogUpdate.canonicalMetadata(['1'])[0];
+  const published = f.store.catalogUpdate.reader.canonicalMetadata(['1'])[0];
   f.database.prepare("UPDATE publication SET status='published',metadata_revision=? WHERE token_id='1'").run(published.metadataRevision);
   const ids = crates.flatMap(crate => crate.tokenIds);
-  const expected = new Map(ids.map(tokenId => [tokenId, f.store.catalogUpdate.canonicalMetadata([tokenId])[0]]));
+  const expected = new Map(ids.map(tokenId => [tokenId, f.store.catalogUpdate.reader.canonicalMetadata([tokenId])[0]]));
   const schema = f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
   const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
-  const reader = f.reopen().catalogUpdate;
+  f.database.exec('PRAGMA query_only=ON');
+  const reader = new EthereumRevealCatalogReader(f.sql);
   const counts: number[] = [];
   for (const [size, budget] of [[1, 12], [16, 12], [99, 12], [100, 19], [120, 18]]) {
     const requested = ids.slice(0, size).reverse();
@@ -205,14 +225,14 @@ test('canonical payload reads stay byte bounded across ordinary, enriched, mappe
         .run(`generation-${revision}`, id, id, attributes, digest(attributes), id);
     }
   }
-  const initial = f.store.catalogUpdate.canonicalMetadata(['13'])[0];
+  const initial = f.store.catalogUpdate.reader.canonicalMetadata(['13'])[0];
   const owned = { ...initial, metadataRevision: 4, metadataJson: JSON.stringify({ ...JSON.parse(initial.metadataJson), readyToHatch: true }) + '\n' };
   owned.targetSha256 = digest(owned.metadataJson);
   f.database.prepare(`INSERT INTO owner_hatching_batches(batch_id,source_sha256,input_sha256,ready_count,grail_count,fresh_egg_count,created_at_ms)
     VALUES('owner','a','b',1,0,1,1000)`).run();
   f.database.prepare(`INSERT INTO owner_hatching_tokens(token_id,batch_id,egg_id,original_json,status,canonical_json,metadata_revision)
     VALUES('13','owner',13,?,'ready',?,4)`).run(JSON.stringify(initial), JSON.stringify(owned));
-  const reader = f.store.catalogUpdate;
+  const reader = f.store.catalogUpdate.reader;
   const expected = new Map([...frozen.keys()].map(id => [id, reader.canonicalMetadata([id])[0]]));
   assert.deepEqual(expected.get('13'), owned);
   for (const id of ['1', '2', '3', '4']) assert.equal(expected.get(id)!.metadataJson, frozen.get(id)!.metadataJson);
@@ -240,7 +260,7 @@ test('canonical payload reads stay byte bounded across ordinary, enriched, mappe
   const schema = f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
   const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
   f.database.exec('PRAGMA query_only=ON');
-  const readonly = new EthereumRevealCatalogUpdateStore(sql, () => { throw new Error('Canonical reads must not write.'); });
+  const readonly = new EthereumRevealCatalogReader(sql);
   const ids = ['12', '4', '8', '1', '13', '999', '7', '10', '3', '11', '6', '2', '9', '5', '4', '13'];
   assert.deepEqual(readonly.canonicalMetadata(ids), ids.flatMap(id => expected.has(id) ? [expected.get(id)] : []));
   assert.ok(payloads.every(page => page.bytes <= 1024 * 1024 || page.rows === 1), JSON.stringify(payloads));
@@ -265,11 +285,11 @@ test('catalog staging rejects conflicting collection blocks before activation an
     const payload = JSON.stringify(attributes);
     assert.throws(() => operation.metadataStage(update.batchId, [{ ...mapping, attributesJson: payload,
       sha256: createHash('sha256').update(payload).digest('hex') }]), /collection-block-mismatch/);
-    assert.equal(operation.status(update.batchId)!.metadataStaged, 0);
+    assert.equal(operation.reader.status(update.batchId)!.metadataStaged, 0);
     assert.equal(f.database.prepare('SELECT attributes_json FROM reveal_catalog_mappings WHERE batch_id=?').get(update.batchId)!.attributes_json, null);
     assert.throws(() => operation.generationStage(update.batchId), /Stage every new artwork/);
     assert.throws(() => operation.activate(update.batchId), /cannot activate/);
-    assert.equal(operation.effectiveCatalog()!.catalogRevision, 0);
+    assert.equal(operation.reader.effectiveCatalog()!.catalogRevision, 0);
   }
   operation.metadataStage(update.batchId, [{ ...mapping, attributesJson, sha256: attributesSha256 }]);
   stageGeneration(f.store, update);
@@ -292,7 +312,7 @@ test('legacy metadata validation is query-only before migration and resumes in b
   const update = batch();
   stageMetadata(f.store, update);
   const saved = f.database.prepare('SELECT attributes_json,attributes_sha256 FROM reveal_catalog_mappings ORDER BY egg_id').all();
-  const reader = new EthereumRevealCatalogUpdateStore(f.sql, () => { throw new Error('Read-only status attempted a write.'); });
+  const reader = new EthereumRevealCatalogReader(f.sql);
   assert.equal(reader.status(update.batchId)!.metadataStaged, 3);
   f.database.exec('DROP INDEX reveal_catalog_metadata_validation; ALTER TABLE reveal_catalog_mappings DROP COLUMN collection_block_validated; PRAGMA query_only=ON;');
   const changes = f.database.prepare('SELECT total_changes() AS count').get()!.count;
@@ -304,7 +324,7 @@ test('legacy metadata validation is query-only before migration and resumes in b
   assert.equal(reader.status(update.batchId)!.metadataStaged, 0);
   assert.throws(() => store.catalogUpdate.generationStage(update.batchId), /validate its collection block/);
   for (let validated = 1; validated <= 3; validated++) {
-    const [row] = store.catalogUpdate.metadataPreparationPage(update.batchId, 1);
+    const [row] = store.catalogUpdate.reader.metadataPreparationPage(update.batchId, 1);
     assert.ok('attributesJson' in row);
     store.catalogUpdate.metadataStage(update.batchId, [row]);
     store = f.reopen();
@@ -350,11 +370,11 @@ for (const phase of ['staging', 'ready'] as const) test(`legacy ${phase} candida
       .run(payload, checksum, update.batchId);
     if (phase === 'ready') f.database.prepare("UPDATE reveal_catalog_generations SET phase='ready',seeded=111111 WHERE batch_id=?").run(update.batchId);
     const resumed = f.reopen().catalogUpdate;
-    const [row] = resumed.metadataPreparationPage(update.batchId);
+    const [row] = resumed.reader.metadataPreparationPage(update.batchId);
     assert.ok('attributesJson' in row);
     assert.throws(() => resumed.metadataStage(update.batchId, [row]), /collection-block-mismatch|Invalid staged artwork attributes/);
-    assert.equal(resumed.status(update.batchId)!.metadataStaged, 0);
-    assert.equal(resumed.status(update.batchId)!.activatedAtMs, null);
+    assert.equal(resumed.reader.status(update.batchId)!.metadataStaged, 0);
+    assert.equal(resumed.reader.status(update.batchId)!.activatedAtMs, null);
     assert.throws(() => phase === 'ready' ? resumed.seal(update.batchId) : resumed.generationStage(update.batchId), /validate its collection block/);
     assert.throws(() => resumed.activate(update.batchId), /validate its collection block|cannot activate/);
     assert.deepEqual({ ...f.database.prepare('SELECT attributes_json,attributes_sha256,collection_block_validated FROM reveal_catalog_mappings WHERE batch_id=?').get(update.batchId) },
@@ -376,15 +396,15 @@ for (const allocation of ['reserved', 'free'] as const) {
     stageGeneration(f.store, sparse);
     f.store.catalogUpdate.activate(sparse.batchId, 3000);
     f.store.catalogUpdate.finalize(sparse.batchId);
-    assert.equal(f.store.catalogUpdate.activeCatalog().categories.eggs.count, eggId - 1);
-    assert.equal(f.store.catalogUpdate.ownerHatching.slotOverride({ category: 'egg', assetId: eggId }), null);
+    assert.equal(f.store.catalogUpdate.reader.activeCatalog().categories.eggs.count, eggId - 1);
+    assert.equal(f.store.catalogUpdate.ownerHatching.reader.slotOverride({ category: 'egg', assetId: eggId }), null);
     if (allocation === 'free') {
       const row = f.database.prepare("SELECT slot FROM reveal_catalog_free WHERE generation=? AND category='egg' AND asset_id=?")
         .get(sparse.batchId, eggId)!;
       f.random.push(source.categories['3d'].count + source.categories.animated.count, Number(row.slot));
     }
     f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 4000);
-    const canonical = f.reopen().catalogUpdate.canonicalMetadata(['1'])[0];
+    const canonical = f.reopen().catalogUpdate.reader.canonicalMetadata(['1'])[0];
     assert.equal(canonical.category, 'egg');
     assert.equal(canonical.assetId, eggId);
     assert.equal(canonical.artwork.name, `Egg #${eggId}`);
@@ -410,20 +430,20 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
     grails: [{ category: 'animated', assetId: 422, attributesJson: attributesJson.replace('new artworks', 'DROWEE') }], freshEggIds: [76700] }, 4000);
   const next = batch(initial.target.manifest, 1);
   assert.throws(() => f.store.catalogUpdate.begin(next, 4001), /protected by owner hatching/);
-  assert.equal(f.store.catalogUpdate.status(next.batchId), null);
-  assert.deepEqual(owner.readyTokenIds(), ['1', '2']);
+  assert.equal(f.store.catalogUpdate.reader.status(next.batchId), null);
+  assert.deepEqual(owner.reader.readyTokenIds(), ['1', '2']);
   const ordinaryId = String(f.database.prepare('SELECT token_id FROM owner_hatching_tokens WHERE grail_asset_id IS NULL').get()!.token_id);
   const grailId = ordinaryId === '1' ? '2' : '1';
   owner.hatch(ordinaryId, 5000);
   const requested = ['3', grailId, '999', ordinaryId, '3', grailId];
-  const ordinary = f.store.catalogUpdate.canonicalMetadata(['3'])[0];
-  const reader = f.reopen().catalogUpdate;
+  const ordinary = f.store.catalogUpdate.reader.canonicalMetadata(['3'])[0];
+  const reader = f.reopen().catalogUpdate.reader;
   const mixed = f.observe(() => reader.canonicalMetadata(requested));
-  assert.deepEqual(mixed.value, [ordinary, owner.canonical(grailId), owner.canonical(ordinaryId), ordinary, owner.canonical(grailId)]);
+  assert.deepEqual(mixed.value, [ordinary, owner.reader.canonical(grailId), owner.reader.canonical(ordinaryId), ordinary, owner.reader.canonical(grailId)]);
   assert.ok(mixed.queries.length <= 12, `mixed owner/ordinary read used ${mixed.queries.length} queries`);
   assert.equal(mixed.queries.filter(entry => /FROM owner_hatching_tokens\s+WHERE token_id IN/.test(entry.query)).length, 2);
   conservation(f.store, f.database);
-  assert.deepEqual(f.store.catalogUpdate.eligibleCutoffEggs(76699), [76700]);
+  assert.deepEqual(f.store.catalogUpdate.reader.eligibleCutoffEggs(76699), [76700]);
   const row = f.database.prepare("SELECT slot FROM reveal_catalog_free WHERE generation=? AND category='egg' AND asset_id=76700")
     .get(initial.batchId)!;
   const origin = f.store.catalogUpdate.takeFree('egg', Number(row.slot));
@@ -432,20 +452,20 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   f.store.freeze(deployment, observation, [{ crateTokenId: '111113', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 21)) }], 5001);
   const original = f.database.prepare("SELECT * FROM assignments WHERE token_id='21'").get();
   assert.equal(f.store.frozen(['21'])[0].category, 'egg');
-  assert.equal(f.store.catalogUpdate.canonicalMetadata(['21'])[0].assetId, 76700);
+  assert.equal(f.store.catalogUpdate.reader.canonicalMetadata(['21'])[0].assetId, 76700);
   const body: RevealCatalogUpdateBody = { ...next, version: 2, eggCutoff: 76699,
     mappings: next.mappings.map(mapping => ({ ...mapping, eggId: 76700 })) };
   const batchSha256 = revealCatalogUpdateHash(body);
   const explicit: RevealCatalogUpdateBatch = { ...body, batchSha256, batchId: `catalog-${batchSha256.slice(0, 32)}` };
   stageMetadata(f.store, explicit);
-  assert.deepEqual(f.store.catalogUpdate.eligibleCutoffEggs(76699), []);
+  assert.deepEqual(f.store.catalogUpdate.reader.eligibleCutoffEggs(76699), []);
   assert.throws(() => owner.prepare({ batchId: 'owner-conflict', sourceSha256: 'b'.repeat(64), candidateTokenIds: ['21'], readyCount: 1,
     grails: [{ category: 'animated', assetId: 423, attributesJson: attributesJson.replace('new artworks', 'DROWEE') }], freshEggIds: [] }, 5002), /Not enough eligible/);
   f.store.catalogUpdate.generationStage(explicit.batchId);
   owner.hatch(grailId, 5003);
   stageGeneration(f.store, explicit);
   f.store.catalogUpdate.activate(explicit.batchId, 6000);
-  const publication = f.store.catalogUpdate.publicationPage(explicit.batchId);
+  const publication = f.store.catalogUpdate.reader.publicationPage(explicit.batchId);
   assert.equal(publication.length, 1);
   assert.equal(publication[0].tokenId, '21');
   assert.equal(publication[0].eggId, 76700);
@@ -454,9 +474,9 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   f.store.catalogUpdate.acknowledgePublication(explicit.batchId, '21', publication[0].metadataRevision, publication[0].targetSha256);
   f.store.catalogUpdate.finalize(explicit.batchId);
   conservation(f.store, f.database);
-  assert.equal(f.store.catalogUpdate.pools().find(pool => pool.category === 'animated')!.total, source.categories.animated.count + 1);
-  assert.equal(f.reopen().catalogUpdate.verify(explicit.batchId).published, 1);
-  assert.equal(owner.isRetiredEgg(Number(JSON.parse(String(f.database.prepare('SELECT original_json FROM owner_hatching_tokens WHERE token_id=?').get(ordinaryId)!.original_json)).assetId)), true);
+  assert.equal(f.store.catalogUpdate.reader.pools().find(pool => pool.category === 'animated')!.total, source.categories.animated.count + 1);
+  assert.equal(f.reopen().catalogUpdate.reader.verify(explicit.batchId).published, 1);
+  assert.equal(owner.reader.isRetiredEgg(Number(JSON.parse(String(f.database.prepare('SELECT original_json FROM owner_hatching_tokens WHERE token_id=?').get(ordinaryId)!.original_json)).assetId)), true);
 });
 
 test('replacement inspection can read a pre-owner ledger without initializing or writing schema', t => {
@@ -468,7 +488,7 @@ test('replacement inspection can read a pre-owner ledger without initializing or
     f.database.exec(`DROP TABLE ${String(row.name)}`);
   }
   const before = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
-  const store = new EthereumRevealCatalogUpdateStore(f.sql, () => { throw new Error('Read-only inspection attempted a transaction.'); });
+  const store = new EthereumRevealCatalogReader(f.sql);
   assert.equal(store.ownerHatching.available, false);
   const result = f.observe(() => store.canonicalMetadata(['2', '1', '999', '1']));
   assert.deepEqual(result.value.map(value => value.tokenId), ['2', '1', '1']);
@@ -488,7 +508,7 @@ test('catalogue verification and eligible inspection read completed pre-owner sc
   stageMetadata(f.store, update);
   stageGeneration(f.store, update);
   f.store.catalogUpdate.activate(update.batchId, 3000);
-  const job = f.store.catalogUpdate.publicationPage(update.batchId)[0];
+  const job = f.store.catalogUpdate.reader.publicationPage(update.batchId)[0];
   f.store.catalogUpdate.acknowledgePublication(update.batchId, job.tokenId, job.metadataRevision, job.targetSha256);
   f.store.catalogUpdate.finalize(update.batchId);
   f.database.exec('PRAGMA foreign_keys=OFF');
@@ -508,7 +528,8 @@ test('catalogue verification and eligible inspection read completed pre-owner sc
     ALTER TABLE reveal_catalog_generations DROP COLUMN mode;`);
   const before = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
   const schema = f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all();
-  const store = new EthereumRevealCatalogUpdateStore(f.sql, () => { throw new Error('Read-only verification attempted a transaction.'); });
+  f.database.exec('PRAGMA query_only=ON');
+  const store = new EthereumRevealCatalogReader(f.sql);
   assert.equal(store.verify(update.batchId).published, 1);
   assert.equal(store.publicationPage(update.batchId)[0].tokenId, '1');
   assert.deepEqual(store.pendingPublications(update.batchId), []);
@@ -531,9 +552,9 @@ test('online activation maps free, private and frozen units atomically without r
   stageMetadata(f.store, update);
   stageGeneration(f.store, update);
   assert.equal(f.store.frozen(['1'])[0].category, 'egg');
-  assert.equal(f.store.catalogUpdate.pools().find(row => row.category === 'egg')!.total, maximum);
+  assert.equal(f.store.catalogUpdate.reader.pools().find(row => row.category === 'egg')!.total, maximum);
   f.store.catalogUpdate.activate(update.batchId, 3000);
-  const changed = f.store.catalogUpdate.canonicalMetadata(['1'])[0];
+  const changed = f.store.catalogUpdate.reader.canonicalMetadata(['1'])[0];
   assert.equal(changed.category, 'video');
   assert.equal(changed.assetId, 61);
   assert.equal(changed.metadataRevision, 3);
@@ -544,25 +565,25 @@ test('online activation maps free, private and frozen units atomically without r
   assert.equal(f.store.frozen(['2'])[0].category, 'egg');
   f.store.freeze(deployment, observation, [{ crateTokenId: '111113', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 21)) }], 3001);
   assert.equal(f.store.frozen(['21'])[0].category, 'video');
-  assert.equal(f.store.catalogUpdate.canonicalMetadata(['21'])[0].assetId, 60);
-  assert.equal(f.store.catalogUpdate.status(update.batchId)!.frozen, 1);
-  assert.equal(f.store.catalogUpdate.publicationPage(update.batchId).length, 1);
+  assert.equal(f.store.catalogUpdate.reader.canonicalMetadata(['21'])[0].assetId, 60);
+  assert.equal(f.store.catalogUpdate.reader.status(update.batchId)!.frozen, 1);
+  assert.equal(f.store.catalogUpdate.reader.publicationPage(update.batchId).length, 1);
   f.random.push(111110, 0);
   f.store.reserve(['111114']);
   f.store.freeze(deployment, observation, [{ crateTokenId: '111114', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 41)) }], 3002);
-  assert.equal(f.store.catalogUpdate.canonicalMetadata(['41'])[0].assetId, 59);
+  assert.equal(f.store.catalogUpdate.reader.canonicalMetadata(['41'])[0].assetId, 59);
   assert.equal(f.store.frozen(['41'])[0].category, 'video');
   assert.equal(f.store.tokensResponse(deployment, ['1']).catalogRevision, 1);
   assert.equal(f.store.transactionResponse(deployment, observation.transactionHash).catalogRevision, 1);
   conservation(f.store, f.database);
-  const job = f.store.catalogUpdate.pendingPublications(update.batchId)[0];
-  assert.ok(f.store.catalogUpdate.validateMetadataWrite(job));
-  assert.equal(f.store.catalogUpdate.validateMetadataWrite({ ...job, metadataRevision: 0 }), false);
+  const job = f.store.catalogUpdate.reader.pendingPublications(update.batchId)[0];
+  assert.ok(f.store.catalogUpdate.reader.validateMetadataWrite(job));
+  assert.equal(f.store.catalogUpdate.reader.validateMetadataWrite({ ...job, metadataRevision: 0 }), false);
   f.store.catalogUpdate.acknowledgePublication(update.batchId, job.tokenId, job.metadataRevision, job.targetSha256);
   f.store.catalogUpdate.finalize(update.batchId);
   while (f.store.catalogUpdate.prune(update.batchId).remaining) {}
   assert.equal(f.database.prepare('SELECT COUNT(*) AS count FROM free_slots').get()!.count, 0);
-  assert.equal(f.store.catalogUpdate.verify(update.batchId).published, 1);
+  assert.equal(f.store.catalogUpdate.reader.verify(update.batchId).published, 1);
   assert.equal(f.reopen().frozen(['1'])[0].category, 'video');
   assert.throws(() => f.database.prepare("UPDATE assignments SET metadata_json='{}' WHERE token_id='1'").run(), /Frozen reveal/);
 });
@@ -588,8 +609,8 @@ test('candidate free slots mirror live allocations and releases while staging, i
   assert.equal(f.store.frozen(['1'])[0].category, 'egg');
   f.store.catalogUpdate.activate(update.batchId, 3000);
   assert.equal(f.store.frozen(['1'])[0].category, 'video');
-  assert.equal(f.store.catalogUpdate.status(update.batchId)!.frozen, 1);
-  const publication = f.store.catalogUpdate.pendingPublications(update.batchId)[0];
+  assert.equal(f.store.catalogUpdate.reader.status(update.batchId)!.frozen, 1);
+  const publication = f.store.catalogUpdate.reader.pendingPublications(update.batchId)[0];
   f.store.catalogUpdate.acknowledgePublication(update.batchId, publication.tokenId, publication.metadataRevision, publication.targetSha256);
   conservation(f.store, f.database);
   f.store.catalogUpdate.finalize(update.batchId);
@@ -604,7 +625,7 @@ test('cancelling staged work leaves reads and allocations online and permits a n
   const before = f.store.summary();
   f.store.catalogUpdate.cancel(update.batchId);
   assert.deepEqual(f.store.summary(), before);
-  assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
+  assert.equal(f.store.catalogUpdate.reader.effectiveCatalog()!.catalogRevision, 0);
   while (f.store.catalogUpdate.prune(update.batchId).remaining) {}
   f.store.reserve(['111113']);
   conservation(f.store, f.database);
@@ -618,16 +639,16 @@ test('a conflict on one replacement does not prevent other replacements from pub
   stageMetadata(f.store, update);
   stageGeneration(f.store, update);
   f.store.catalogUpdate.activate(update.batchId, 3000);
-  const first = f.store.catalogUpdate.pendingPublications(update.batchId, 1, 3000)[0];
+  const first = f.store.catalogUpdate.reader.pendingPublications(update.batchId, 1, 3000)[0];
   f.store.catalogUpdate.failPublication(update.batchId, first.tokenId, first.metadataRevision, 'conflict', 3000);
-  const rest = f.store.catalogUpdate.pendingPublications(update.batchId, 8, 3001);
+  const rest = f.store.catalogUpdate.reader.pendingPublications(update.batchId, 8, 3001);
   assert.equal(rest.length, 2);
   assert.ok(rest.every(row => row.tokenId !== first.tokenId));
   for (const row of rest) f.store.catalogUpdate.acknowledgePublication(update.batchId, row.tokenId, row.metadataRevision, row.targetSha256);
   f.store.reserve(['111113']);
-  assert.equal(f.store.catalogUpdate.status(update.batchId)!.conflicts, 1);
+  assert.equal(f.store.catalogUpdate.reader.status(update.batchId)!.conflicts, 1);
   assert.throws(() => f.store.catalogUpdate.cancel(update.batchId), /resume forward/);
-  assert.equal(f.store.catalogUpdate.pendingPublications(update.batchId, 8, 303001).length, 1);
+  assert.equal(f.store.catalogUpdate.reader.pendingPublications(update.batchId, 8, 303001).length, 1);
 });
 
 test('500 reveal projections stay compact while canonical inventory metadata keeps full staged traits', { timeout: 60_000 }, t => {
@@ -642,7 +663,7 @@ test('500 reveal projections stay compact while canonical inventory metadata kee
   const payload = JSON.stringify([{ trait_type: 'collection block', value: 'new artworks' }, { trait_type: 'large', value: 'x'.repeat(64 * 1024) }]);
   const sha256 = createHash('sha256').update(payload).digest('hex');
   for (;;) {
-    const page = f.store.catalogUpdate.metadataPreparationPage(update.batchId, 8);
+    const page = f.store.catalogUpdate.reader.metadataPreparationPage(update.batchId, 8);
     if (!page.length) break;
     f.store.catalogUpdate.metadataStage(update.batchId, page.map(row => ({ ...row, attributesJson: payload, sha256 })));
   }
@@ -652,7 +673,7 @@ test('500 reveal projections stay compact while canonical inventory metadata kee
   assert.equal(items.length, 500);
   assert.ok(items.every(row => row.category === 'video' && row.metadataRevision === 2 && row.attributes?.every(attribute => attribute.trait_type !== 'large')));
   assert.ok(Buffer.byteLength(JSON.stringify(items)) < 512 * 1024);
-  const full = f.store.catalogUpdate.canonicalMetadata(['1'])[0];
+  const full = f.store.catalogUpdate.reader.canonicalMetadata(['1'])[0];
   assert.equal(full.metadataRevision, 3);
   assert.equal(JSON.parse(full.metadataJson).attributes.find((attribute: { trait_type: string }) => attribute.trait_type === 'large').value.length, 64 * 1024);
 });
@@ -665,11 +686,11 @@ test('oversized merged metadata is rejected before activation while the original
   f.store.catalogUpdate.sealMappings(update.batchId);
   const payload = JSON.stringify([{ trait_type: 'collection block', value: 'new artworks' }, { trait_type: 'data', value: 'x'.repeat(MAX_REVEAL_METADATA_BYTES - 200) }]);
   assert.ok(Buffer.byteLength(payload) < MAX_REVEAL_METADATA_BYTES);
-  const [row] = f.store.catalogUpdate.metadataPreparationPage(update.batchId);
+  const [row] = f.store.catalogUpdate.reader.metadataPreparationPage(update.batchId);
   assert.throws(() => f.store.catalogUpdate.metadataStage(update.batchId, [{ ...row, attributesJson: payload,
     sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 512 KiB/);
-  assert.equal(f.store.catalogUpdate.status(update.batchId)!.metadataStaged, 0);
-  assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
+  assert.equal(f.store.catalogUpdate.reader.status(update.batchId)!.metadataStaged, 0);
+  assert.equal(f.store.catalogUpdate.reader.effectiveCatalog()!.catalogRevision, 0);
   f.store.reserve(['111112']);
 });
 
@@ -680,7 +701,7 @@ test('staging preserves the legacy size bound when fresh metadata would deduplic
   operation.begin(update, 2000);
   operation.stageMappings(update.batchId, update.mappings);
   operation.sealMappings(update.batchId);
-  const [row] = operation.metadataPreparationPage(update.batchId);
+  const [row] = operation.reader.metadataPreparationPage(update.batchId);
   const block = { trait_type: 'collection block', value: 'new artworks' };
   const payload = JSON.stringify(Array(Math.floor((MAX_REVEAL_METADATA_BYTES - 200) / (JSON.stringify(block).length + 1))).fill(block));
   const fresh = buildNewRevealedArtwork({ templateJson, tokenId: '111111', crateTokenId: '116666', category: row.category,
@@ -689,7 +710,7 @@ test('staging preserves the legacy size bound when fresh metadata would deduplic
   assert.ok(Buffer.byteLength(applyRevealAttributePayload(fresh.metadataJson, payload).metadataJson) < MAX_REVEAL_METADATA_BYTES);
   assert.throws(() => operation.metadataStage(update.batchId, [{ ...row, attributesJson: payload,
     sha256: createHash('sha256').update(payload).digest('hex') }]), /exceeds 512 KiB/);
-  assert.equal(operation.status(update.batchId)!.metadataStaged, 0);
+  assert.equal(operation.reader.status(update.batchId)!.metadataStaged, 0);
   assert.equal(f.database.prepare('SELECT attributes_json FROM reveal_catalog_mappings WHERE batch_id=?').get(update.batchId)!.attributes_json, null);
 });
 
@@ -704,8 +725,8 @@ for (const amount of [9358, source.categories.eggs.count]) test(`online generati
   const activated = performance.now();
   f.store.catalogUpdate.activate(update.batchId, 3000);
   const activationMs = performance.now() - activated;
-  assert.equal(f.store.catalogUpdate.activeCatalog().categories.eggs.count, source.categories.eggs.count - amount);
-  assert.equal(f.store.catalogUpdate.pools().find(row => row.category === 'egg')!.total, source.categories.eggs.count - amount);
+  assert.equal(f.store.catalogUpdate.reader.activeCatalog().categories.eggs.count, source.categories.eggs.count - amount);
+  assert.equal(f.store.catalogUpdate.reader.pools().find(row => row.category === 'egg')!.total, source.categories.eggs.count - amount);
   conservation(f.store, f.database);
   f.store.freeze(deployment, observation, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 3001);
   if (amount === source.categories.eggs.count) assert.ok(f.store.frozen(Array.from({ length: 20 }, (_, index) => String(index + 1))).every(row => row.category !== 'egg'));

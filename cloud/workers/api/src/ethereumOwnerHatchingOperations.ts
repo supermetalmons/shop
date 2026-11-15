@@ -80,7 +80,7 @@ export class EthereumOwnerHatchingOperations {
   private status(deployment: EthereumRevealDeployment, batchId: string): OwnerHatchingMaintenanceResult {
     const row = this.read(batchId);
     const request = JSON.parse(row.request_json) as OwnerHatchingMaintenanceRequest;
-    const prepared = this.options.store.catalogUpdate.ownerHatching.batchStatus(batchId);
+    const prepared = this.options.store.catalogUpdate.ownerHatching.reader.batchStatus(batchId);
     const activation = this.activation(batchId);
     const staged = row.phase === 'complete' ? request.grailIds!.length : this.options.sql.exec<{ count: number }>(
       'SELECT COUNT(*) AS count FROM owner_hatching_trait_staging WHERE batch_id=?', batchId).toArray()[0].count;
@@ -146,11 +146,11 @@ export class EthereumOwnerHatchingOperations {
     const source = supplement.batches.find(batch => batch.source.sha256 === request.sourceSha256);
     if (!source || request.catalogSha256 !== ownerHatchingCatalogSha256 ||
       request.grailIds!.some(id => !source.artworks.some(asset => asset.assetId === id)) ||
-      request.grailIds!.some(id => this.options.store.catalogUpdate.ownerHatching.reservedGrail({ category: 'animated', assetId: id })) ||
-      request.freshEggIds!.some(id => !this.options.store.catalogUpdate.freshOwnerEggAvailable(id))) {
+      request.grailIds!.some(id => this.options.store.catalogUpdate.ownerHatching.reader.reservedGrail({ category: 'animated', assetId: id })) ||
+      request.freshEggIds!.some(id => !this.options.store.catalogUpdate.reader.freshOwnerEggAvailable(id))) {
       throw new Error('Owner hatching catalog or fresh egg inventory does not match.');
     }
-    const effective = this.options.store.catalogUpdate.effectiveCatalog();
+    const effective = this.options.store.catalogUpdate.reader.effectiveCatalog();
     if (!effective?.generation || source.predecessor.catalogVersion !== effective.catalogVersion ||
       source.predecessor.manifestSha256 !== effective.manifestSha256) throw new Error('Owner hatching requires its catalog predecessor.');
     await this.options.requireCurrent(request.expectedRevision);
@@ -176,8 +176,8 @@ export class EthereumOwnerHatchingOperations {
       const current = this.read(row.batch_id);
       if (current.phase !== 'scanning' || current.scanned !== row.scanned || current.block_hash !== row.block_hash) return;
       this.requirePreparationCatalog(current);
-      for (const token of this.options.store.catalogUpdate.canonicalMetadata(minted)) {
-        if (token.category !== 'egg' || this.options.store.catalogUpdate.ownerHatching.hasProtectedEgg(token.assetId)) continue;
+      for (const token of this.options.store.catalogUpdate.reader.canonicalMetadata(minted)) {
+        if (token.category !== 'egg' || this.options.store.catalogUpdate.ownerHatching.reader.hasProtectedEgg(token.assetId)) continue;
         this.options.sql.exec('INSERT OR IGNORE INTO owner_hatching_candidates(batch_id,token_id) VALUES(?,?)', row.batch_id, token.tokenId);
       }
       this.options.sql.exec(`UPDATE owner_hatching_preparations SET scanned=?,phase=?,candidates=
@@ -188,12 +188,12 @@ export class EthereumOwnerHatchingOperations {
 
   private async refreshScan(deployment: EthereumRevealDeployment, row: Preparation): Promise<void> {
     const owner = this.options.store.catalogUpdate.ownerHatching;
-    if (row.phase !== 'scanning' || owner.batchStatus(row.batch_id)) throw new Error('Only an unfinished scan can refresh its snapshot.');
+    if (row.phase !== 'scanning' || owner.reader.batchStatus(row.batch_id)) throw new Error('Only an unfinished scan can refresh its snapshot.');
     const captured = await this.scanSnapshot(deployment);
     await this.options.requireCurrent();
     this.options.transaction(() => {
       const current = this.read(row.batch_id);
-      if (current.phase !== 'scanning' || current.scanned !== row.scanned || current.block_hash !== row.block_hash || owner.batchStatus(row.batch_id)) {
+      if (current.phase !== 'scanning' || current.scanned !== row.scanned || current.block_hash !== row.block_hash || owner.reader.batchStatus(row.batch_id)) {
         throw new Error('Scan changed while refreshing its snapshot; inspect before retrying.');
       }
       this.requirePreparationCatalog(current);
@@ -210,7 +210,7 @@ export class EthereumOwnerHatchingOperations {
       'SELECT asset_id FROM owner_hatching_trait_staging WHERE batch_id=?', row.batch_id).toArray().map(value => value.asset_id));
     const remaining = request.grailIds!.filter(id => !staged.has(id)).slice(0, 8);
     const payloads = await Promise.all(remaining.map(async assetId => ({ assetId, attributesJson: await fetchRevealAttributePayload(
-      'animated', assetId, AbortSignal.timeout(20_000), fetch, this.options.store.catalogUpdate.activeCatalog(), true) })));
+      'animated', assetId, AbortSignal.timeout(20_000), fetch, this.options.store.catalogUpdate.reader.activeCatalog(), true) })));
     await this.options.requireCurrent();
     this.options.transaction(() => {
       const current = this.read(row.batch_id);
@@ -240,14 +240,14 @@ export class EthereumOwnerHatchingOperations {
   }
 
   private requirePreparationCatalog(row: Preparation): void {
-    if (row.catalog_revision !== this.options.store.catalogUpdate.effectiveCatalog()?.catalogRevision) {
+    if (row.catalog_revision !== this.options.store.catalogUpdate.reader.effectiveCatalog()?.catalogRevision) {
       throw new Error('The catalog changed while preparing owner hatching.');
     }
   }
 
   private async refreshActivation(deployment: EthereumRevealDeployment, row: Preparation): Promise<void> {
     const owner = this.options.store.catalogUpdate.ownerHatching;
-    if (row.phase !== 'activating' || owner.batchStatus(row.batch_id)) {
+    if (row.phase !== 'activating' || owner.reader.batchStatus(row.batch_id)) {
       throw new Error('Only an unallocated activation can refresh its snapshot.');
     }
     const previous = this.activation(row.batch_id)!;
@@ -260,7 +260,7 @@ export class EthereumOwnerHatchingOperations {
     this.options.transaction(() => {
       const current = this.read(row.batch_id);
       const activation = this.activation(row.batch_id);
-      if (current.phase !== 'activating' || owner.batchStatus(row.batch_id) ||
+      if (current.phase !== 'activating' || owner.reader.batchStatus(row.batch_id) ||
         activation?.checked !== previous.checked || activation.block_hash !== previous.block_hash) {
         throw new Error('Activation changed while refreshing its snapshot; inspect before retrying.');
       }
@@ -304,7 +304,7 @@ export class EthereumOwnerHatchingOperations {
 
   private async activate(deployment: EthereumRevealDeployment, row: Preparation, request: OwnerHatchingMaintenanceRequest): Promise<void> {
     const owner = this.options.store.catalogUpdate.ownerHatching;
-    if (owner.batchStatus(row.batch_id)) return;
+    if (owner.reader.batchStatus(row.batch_id)) return;
     if (row.phase === 'prepared') {
       const snapshot = await withEthereumReadProvider(this.context(deployment), async context => {
         const value = await ethereumBlockSnapshot(context);
@@ -357,7 +357,7 @@ export class EthereumOwnerHatchingOperations {
 
   private async verify(deployment: EthereumRevealDeployment, row: Preparation, request: OwnerHatchingMaintenanceRequest): Promise<void> {
     const status = this.status(deployment, row.batch_id);
-    if (!this.options.store.catalogUpdate.ownerHatching.batchStatus(row.batch_id)) throw new Error('Owner hatching has not activated.');
+    if (!this.options.store.catalogUpdate.ownerHatching.reader.batchStatus(row.batch_id)) throw new Error('Owner hatching has not activated.');
     if (this.enrichmentPending(status)) { await this.options.wake(); return; }
     if (status.published !== request.readyCount || status.retrying || status.conflicts) {
       if (row.phase === 'complete') throw new Error('Owner hatching publication verification failed.');
@@ -368,7 +368,7 @@ export class EthereumOwnerHatchingOperations {
     const tokens = this.options.sql.exec<{ token_id: string }>(`SELECT token_id FROM owner_hatching_tokens WHERE batch_id=?
       AND CAST(token_id AS INTEGER)>? ORDER BY CAST(token_id AS INTEGER) LIMIT 16`, row.batch_id, Number(row.verification_cursor ?? 0)).toArray();
     const verified = await Promise.all(tokens.map(async ({ token_id: tokenId }) => {
-      const canonical = this.options.store.catalogUpdate.ownerHatching.canonical(tokenId)!;
+      const canonical = this.options.store.catalogUpdate.ownerHatching.reader.canonical(tokenId)!;
       const object = await this.options.env.ETHEREUM_REVEAL_METADATA.get(new URL(ethereumTokenMetadataUri(deployment, tokenId)).pathname.slice(1));
       if (!object || object.size > MAX_REVEAL_METADATA_BYTES) throw new Error('Owner hatching metadata is missing or oversized.');
       const body = await object.text();
@@ -378,11 +378,11 @@ export class EthereumOwnerHatchingOperations {
     }));
     await this.options.requireCurrent();
     if (this.enrichmentPending(this.status(deployment, row.batch_id))) { await this.options.wake(); return; }
-    if (verified.some(value => this.options.store.catalogUpdate.ownerHatching.canonical(value.tokenId)?.metadataRevision !== value.metadataRevision)) {
+    if (verified.some(value => this.options.store.catalogUpdate.ownerHatching.reader.canonical(value.tokenId)?.metadataRevision !== value.metadataRevision)) {
       if (row.phase === 'complete') throw new Error('Owner hatching metadata changed during verification; retry the page.');
       return;
     }
-    const pools = this.options.store.catalogUpdate.pools();
+    const pools = this.options.store.catalogUpdate.reader.pools();
     const assigned = this.options.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM assignments').toArray()[0].count;
     const counts = this.options.sql.exec<{ tokens: number; targets: number; grails: number; fresh: number; used_fresh: number;
       ordinary_hatched: number; retired: number; claimed: number; hatched: number }>(`SELECT

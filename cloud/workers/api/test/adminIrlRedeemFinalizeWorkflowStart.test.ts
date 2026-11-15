@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import bs58 from 'bs58';
 import { createAdminIrlRedeemFinalizeOperationId } from '../../../../shared/contracts.ts';
-import type { AdminIrlRedeemFinalizeResponse } from '../src/adminIrlRedeemFinalize.ts';
+import type { AdminIrlRedeemFinalizeResponse } from '../src/adminIrlRedeemRequestState.ts';
 import { ensureAdminIrlRedeemFinalizeWorkflowRunning } from '../src/adminIrlRedeemFinalizeWorkflowStart.ts';
 import type { AdminIrlRedeemFinalizeWorkflowPayload } from '../src/adminIrlRedeemFinalizeWorkflowState.ts';
 import { isSignalCancellationError } from '../src/boundedRequest.ts';

@@ -10,7 +10,7 @@ import {
   publishAdminIrlRedeemFinalizeWorkflow,
   resumeAndReconcileAdminIrlRedeemFinalizeWorkflow,
   validateAdminIrlRedeemFinalizeWorkflow,
-} from './adminIrlRedeemFinalize.js';
+} from './adminIrlRedeemFinalizeWorkflowStages.js';
 import {
   AdminIrlRedeemFinalizeError,
   adminIrlRedeemFinalizeWorkflowError,

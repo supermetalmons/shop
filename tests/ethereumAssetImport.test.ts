@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -296,6 +296,35 @@ test('interrupted imports and interrupted recovery roll back before retrying, wh
   assert.deepEqual(revealCatalogMedia(retried.manifest, '3d', 1).aspectRatio, { width: 2, height: 1 });
   assert.equal((await importRevealAssets({ rootDirectory: f.rootDirectory, check: true })).status, 'checked');
   await assert.rejects(readFile(join(f.rootDirectory, '.cache/111k-assets/recovery.json')), { code: 'ENOENT' });
+});
+
+test('asset imports resume the original named-path recovery journal without rewriting it during check', async t => {
+  const f = await fixture(t);
+  await importRevealAssets(f.options);
+  const nextSource = `${JSON.stringify(sample())}\n`;
+  const nextCatalog = buildRevealAssetCatalog(nextSource, { catalogVersion: '111k-v6', availableEggs: 111111 });
+  const nextDescriptor = { catalogVersion: '111k-v6', manifestSha256: digest(JSON.stringify(nextCatalog)) };
+  const files = [`${assetDirectory}/source.json`, `${assetDirectory}/manifest.json`, descriptorPath];
+  const next = [nextSource, `${JSON.stringify(nextCatalog, null, 2)}\n`, `${JSON.stringify(nextDescriptor, null, 2)}\n`];
+  const previous = await Promise.all(files.map(file => readFile(join(f.rootDirectory, file))));
+  const journal = files.map((file, index) => ({ file, previous: previous[index].toString('base64'), nextSha256: digest(next[index]) }));
+  const stateDirectory = join(f.rootDirectory, '.cache/111k-assets');
+  const journalPath = join(stateDirectory, 'recovery.json');
+  await mkdir(stateDirectory, { recursive: true });
+  await writeFile(journalPath, JSON.stringify(journal));
+  await writeFile(join(f.rootDirectory, files[0]), next[0]);
+  await writeFile(join(f.rootDirectory, files[1]), next[1]);
+  await writeFile(f.inputPath, nextSource);
+  const interrupted = await snapshot(f.rootDirectory);
+  const options = { ...f.options, catalogVersion: '111k-v6' };
+  await assert.rejects(importRevealAssets({ ...options, check: true }), /Interrupted asset import/);
+  assert.deepEqual(await snapshot(f.rootDirectory), interrupted);
+  const retried = await importRevealAssets(options);
+  assert.deepEqual(retried.manifest, nextCatalog);
+  assert.deepEqual(retried.descriptor, nextDescriptor);
+  assert.equal(await readFile(join(f.rootDirectory, files[0]), 'utf8'), nextSource);
+  assert.equal((await importRevealAssets({ rootDirectory: f.rootDirectory, check: true })).status, 'checked');
+  await assert.rejects(readFile(journalPath), { code: 'ENOENT' });
 });
 
 test('recovery preserves intervening edits and allows a higher revision after they are restored', async t => {

@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRevealAssetCatalog, withRevealAssetImportLock } from './assetImport.ts';
+import { createRecoverableFileSet, readOptionalFile as optional, type FileSetRecoveryEntry } from '../shared/recoverableFileSet.ts';
 import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog,
   REVEAL_ASSET_FAMILIES, type RevealAssetCatalog } from '../../shared/ethereum/revealAssetCatalog.ts';
 import { lookupRevealCollectionBlock, selectRevealCollectionBlocks, validateRevealCollectionBlocks,
@@ -111,70 +112,29 @@ export function buildRevealCollectionBlocks(input: {
   return result;
 }
 
-async function optional(path: string): Promise<Buffer | null> {
-  try { return await readFile(path); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
-}
-
-type Recovery = { previous: string | null; nextSha256: string };
-
-async function recover(root: string): Promise<void> {
-  const journalPath = join(root, STATE, 'recovery.json');
-  const bytes = await optional(journalPath);
-  if (!bytes) return;
-  const entries: unknown = JSON.parse(bytes.toString('utf8'));
-  if (!Array.isArray(entries) || entries.length !== FILES.length) throw new Error('Invalid collection block recovery journal.');
-  const journal = entries.map((entry: unknown): Recovery => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
-      !('previous' in entry) || entry.previous !== null && typeof entry.previous !== 'string' ||
-      !('nextSha256' in entry) || typeof entry.nextSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.nextSha256) ||
-      typeof entry.previous === 'string' && Buffer.from(entry.previous, 'base64').toString('base64') !== entry.previous) {
-      throw new Error('Invalid collection block recovery entry.');
-    }
-    return { previous: entry.previous as string | null, nextSha256: entry.nextSha256 };
+function collectionBlockFileSet(root: string) {
+  return createRecoverableFileSet({
+    stateDirectory: join(root, STATE),
+    staging: 'flat',
+    restoreUnchanged: true,
+    decodeJournal(entries): FileSetRecoveryEntry[] {
+      if (!Array.isArray(entries) || entries.length !== FILES.length) throw new Error('Invalid collection block recovery journal.');
+      return entries.map((entry: unknown, index) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+          !('previous' in entry) || entry.previous !== null && typeof entry.previous !== 'string' ||
+          !('nextSha256' in entry) || typeof entry.nextSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.nextSha256) ||
+          typeof entry.previous === 'string' && Buffer.from(entry.previous, 'base64').toString('base64') !== entry.previous) {
+          throw new Error('Invalid collection block recovery entry.');
+        }
+        return { path: join(root, ASSETS, FILES[index]),
+          previous: entry.previous === null ? null : Buffer.from(entry.previous as string, 'base64'), nextSha256: entry.nextSha256 };
+      });
+    },
+    encodeJournal: entries => entries.map(entry => ({ previous: entry.previous?.toString('base64') ?? null, nextSha256: entry.nextSha256 })),
+    conflictMessage: (path, phase) => phase === 'write'
+      ? `Collection block output changed during import: ${basename(path)}`
+      : `Collection block output changed after interruption: ${basename(path)}`,
   });
-  for (const [index, entry] of journal.entries()) {
-    const path = join(root, ASSETS, FILES[index]);
-    const current = await optional(path);
-    const previous = entry.previous === null ? null : Buffer.from(entry.previous, 'base64');
-    if (current === null ? previous === null : previous !== null && current.equals(previous)) continue;
-    if (current === null || sha256(current) !== entry.nextSha256) throw new Error(`Collection block output changed after interruption: ${FILES[index]}`);
-  }
-  for (const [index, entry] of journal.entries()) {
-    const path = join(root, ASSETS, FILES[index]);
-    if (entry.previous === null) await rm(path, { force: true });
-    else {
-      const temporary = join(root, STATE, 'restore.tmp');
-      await writeFile(temporary, Buffer.from(entry.previous, 'base64'));
-      await rename(temporary, path);
-    }
-  }
-  await rm(journalPath);
-}
-
-async function writeOutputs(root: string, next: readonly Buffer[], previous: readonly (Buffer | null)[]): Promise<void> {
-  const state = join(root, STATE);
-  await mkdir(state, { recursive: true });
-  try {
-    for (const [index, bytes] of next.entries()) {
-      await writeFile(join(state, `${index}.tmp`), bytes);
-      const current = await optional(join(root, ASSETS, FILES[index]));
-      if (current === null ? previous[index] !== null : previous[index] === null || !current.equals(previous[index]!)) {
-        throw new Error(`Collection block output changed during import: ${FILES[index]}`);
-      }
-    }
-    await writeFile(join(state, 'recovery.tmp'), JSON.stringify(previous.map((bytes, index) => ({
-      previous: bytes?.toString('base64') ?? null, nextSha256: sha256(next[index]),
-    }))));
-    await rename(join(state, 'recovery.tmp'), join(state, 'recovery.json'));
-    for (const [index, file] of FILES.entries()) await rename(join(state, `${index}.tmp`), join(root, ASSETS, file));
-    await rm(join(state, 'recovery.json'));
-  } catch (error) {
-    await recover(root);
-    throw error;
-  } finally {
-    await Promise.all(['0.tmp', '1.tmp', 'recovery.tmp'].map(file => rm(join(state, file), { force: true })));
-  }
 }
 
 async function runImport(root: string, options: RevealCollectionBlocksImportOptions) {
@@ -204,7 +164,9 @@ async function runImport(root: string, options: RevealCollectionBlocksImportOpti
   const old = [savedSource, savedArtifact];
   const changedFiles = FILES.flatMap((file, index) => old[index]?.equals(next[index]) ? [] : [relative(root, join(directory, file))]);
   if (options.check && changedFiles.length) throw new Error(`Collection block outputs are stale: ${changedFiles.join(', ')}`);
-  if (!options.check && changedFiles.length) await writeOutputs(root, next, old);
+  if (!options.check && changedFiles.length) await collectionBlockFileSet(root).write(FILES.map((file, index) => ({
+    path: join(root, ASSETS, file), bytes: next[index], previous: old[index],
+  })));
   return { status: options.check ? 'checked' as const : changedFiles.length ? 'updated' as const : 'unchanged' as const,
     sourceSha256: artifact.source.sha256, catalogs: artifact.catalogs.map(({ catalogVersion }) => catalogVersion),
     rangeCount: Object.values(artifact.ranges).reduce((count, ranges) => count + ranges.length, 0), changedFiles };
@@ -218,5 +180,5 @@ export async function importRevealCollectionBlocks(options: RevealCollectionBloc
     }
     return runImport(root, options);
   }
-  return withRevealAssetImportLock(root, async () => { await recover(root); return runImport(root, options); });
+  return withRevealAssetImportLock(root, async () => { await collectionBlockFileSet(root).recover(); return runImport(root, options); });
 }

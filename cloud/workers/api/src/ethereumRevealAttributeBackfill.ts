@@ -5,7 +5,7 @@ import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatching
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum } from './ethereumRevealEnrichmentStore.js';
-import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
 import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
 import { parseMetadataJson } from './ethereumMetadataJson.js';
 
@@ -45,7 +45,7 @@ function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, f
     FROM page JOIN assignments a ON a.token_id=page.token_id
     ${hasJobs ? `LEFT JOIN reveal_enrichment e ON e.token_id=page.token_id AND e.version=? AND ${jobRevision}=${actualRevision}` : ''}
     ORDER BY page.token_id`, afterTokenId ?? '', frozenThroughMs, PAGE_SIZE, ...(hasJobs ? [REVEAL_ENRICHMENT_VERSION] : [])).toArray();
-  const catalogs = new EthereumRevealCatalogUpdateStore(sql, action => action());
+  const catalogs = new EthereumRevealCatalogReader(sql);
   const blocks = revealCollectionBlocks(catalogs.effectiveCatalog());
   const tokens = rows.map(row => {
     const current = catalogs.canonicalMetadata([row.token_id])[0];

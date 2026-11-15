@@ -32,6 +32,7 @@ import {
   renderDeploymentRegistryFileFromSource, writeDeploymentRegistryFile, type DeploymentDropConfigSerialized,
 } from './shared/deploymentRegistry.ts';
 import { loadNewDropConfigById } from './shared/newDropLoader.ts';
+import { prepareOperationPath, resolveOperationPath } from './shared/operationLocations.ts';
 import {
   buildDiscountMerkleData, finalizeDiscountMerkleAndDeploymentRegistry,
   resolveDeploymentDiscountAddresses, validateDiscountMerkleDatasetForDeploy,
@@ -495,7 +496,8 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
   if (gate.target.programs.find(program => program.name === 'box_minter')?.programId !== plan.programId) throw new Error('Source program differs from the locally tested shared program.');
   const discountDataset = await validateDiscountMerkleDatasetForDeploy({ root, dropId: plan.dropId, dropFamily: 'mi_note_cards', merkleRoot: discount.root, proofs: discount.proofs });
   const context: DeploymentContext = { config, plan, collectionConfig, discountRoot: discount.root };
-  const journalPath = path.join(root, '.cache/two-config-deployments', plan.cluster, `${plan.dropId}.json`);
+  const relativeJournal = `two-config-deployments/${plan.cluster}/${plan.dropId}.json`;
+  const journalPath = resolveOperationPath(root, relativeJournal);
   const recordPath = path.join(root, 'releases', plan.dropId.replaceAll('_', '-'), 'deployment.json');
   const recorded = readJournal(journalPath, plan);
   let journal: DeploymentJournal = recorded?.journal || {
@@ -503,7 +505,14 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
     collection: inspectCollection(await connection.getAccountInfo(new PublicKey(plan.collection), 'finalized'), plan, collectionConfig),
   };
   let journalSource = recorded?.source;
-  const persist = () => { journalSource = writeDurableJson(journalPath, journal, journalSource); };
+  const assertJournalLocation = () => {
+    if (resolveOperationPath(root, relativeJournal) !== journalPath) throw new Error('Deployment evidence location changed; preserve its journal and retry.');
+  };
+  const persist = () => {
+    assertJournalLocation();
+    prepareOperationPath(root, journalPath);
+    journalSource = writeDurableJson(journalPath, journal, journalSource);
+  };
   const steps: StepKind[] = ['delegates', 'mint-config', 'operations-config', 'receipt-tree', 'lookup-table'];
   let finalizedSlot = Math.max(manifest.chain.slot, journal.finalizedSlot ?? 0,
     ...journal.transactions.map(entry => entry.finalizedSlot ?? 0));
@@ -531,6 +540,7 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
   let signer: Keypair | undefined;
   try {
     const revalidate = async () => {
+      assertJournalLocation();
       registry = await deps.readRegistry(registryPath);
       if (readFileSync(manifestPath, 'utf8') !== manifestSource) throw new Error('Inventory manifest changed after review.');
       const fresh = await deps.loadConfig({ root, dropId: args.dropId });

@@ -12,7 +12,7 @@ import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revea
 import { EthereumOwnerHatchingOperations } from '../src/ethereumOwnerHatchingOperations.ts';
 import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import type { EthereumRevealStore, RevealSql } from '../src/ethereumRevealStore.ts';
-import type { OwnerHatchingBatchInput } from '../src/ethereumOwnerHatchingStore.ts';
+import type { OwnerHatchingBatchInput } from '../src/ethereumOwnerHatchingTypes.ts';
 
 const descriptor = getRevealCatalogDescriptor('111k-v9')!;
 const deployment: EthereumRevealDeployment = {
@@ -72,12 +72,14 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
   const revisions = new Map<string, number>();
   const metadata = (tokenId: string) => JSON.stringify({ name: tokenId, readyToHatch: true, metadataRevision: revisions.get(tokenId) ?? 1 });
   const owner = {
-    reservedGrail: () => false,
-    hasProtectedEgg: (id: number) => state.protected.has(id),
-    batchStatus: (batchId: string) => state.prepared?.batchId === batchId ? { readyCount: state.prepared.readyCount, published: state.published, hatched: 0,
-      pendingPublication: state.prepared.readyCount - state.published, conflicts: state.conflicts,
-      pendingEnrichment: state.pendingEnrichment, failedEnrichment: state.failedEnrichment } : null,
-    canonical: (tokenId: string) => ({ targetSha256: digest(metadata(tokenId)), metadataRevision: revisions.get(tokenId) ?? 1 }),
+    reader: {
+      reservedGrail: () => false,
+      hasProtectedEgg: (id: number) => state.protected.has(id),
+      batchStatus: (batchId: string) => state.prepared?.batchId === batchId ? { readyCount: state.prepared.readyCount, published: state.published, hatched: 0,
+        pendingPublication: state.prepared.readyCount - state.published, conflicts: state.conflicts,
+        pendingEnrichment: state.pendingEnrichment, failedEnrichment: state.failedEnrichment } : null,
+      canonical: (tokenId: string) => ({ targetSha256: digest(metadata(tokenId)), metadataRevision: revisions.get(tokenId) ?? 1 }),
+    },
     eligibleCandidate: (tokenId: string) => !state.nonEgg.has(tokenId) && !state.protected.has(Number(tokenId)) &&
       !state.claimed.has(tokenId) && !database.prepare('SELECT 1 FROM owner_hatching_tokens WHERE token_id=?').get(tokenId),
     prepare: (input: OwnerHatchingBatchInput) => {
@@ -96,12 +98,14 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
   };
   const store = { catalogUpdate: {
     ownerHatching: owner,
-    effectiveCatalog: () => ({ ...descriptor, generation: 'mainnet-v9-generation', catalogRevision: state.catalogRevision }),
-    activeCatalog: () => getRevealCatalog('111k-v9'),
-    freshOwnerEggAvailable: (id: number) => id >= 55304 && id <= 76700,
-    canonicalMetadata: (tokenIds: string[]) => tokenIds.map(tokenId => ({ tokenId, assetId: Number(tokenId),
-      category: state.nonEgg.has(tokenId) ? 'painting' : 'egg' })),
-    pools: () => [{ available: 111111 - state.assigned - (state.conservation ? 0 : 1), total: 111111 }],
+    reader: {
+      effectiveCatalog: () => ({ ...descriptor, generation: 'mainnet-v9-generation', catalogRevision: state.catalogRevision }),
+      activeCatalog: () => getRevealCatalog('111k-v9'),
+      freshOwnerEggAvailable: (id: number) => id >= 55304 && id <= 76700,
+      canonicalMetadata: (tokenIds: string[]) => tokenIds.map(tokenId => ({ tokenId, assetId: Number(tokenId),
+        category: state.nonEgg.has(tokenId) ? 'painting' : 'egg' })),
+      pools: () => [{ available: 111111 - state.assigned - (state.conservation ? 0 : 1), total: 111111 }],
+    },
   } } as unknown as EthereumRevealStore;
   const env = { ALCHEMY_MI_NOTE_API_KEY: 'fixture', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'false',
     ETHEREUM_REVEAL_METADATA: { async get(key: string) {

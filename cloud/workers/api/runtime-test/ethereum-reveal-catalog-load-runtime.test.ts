@@ -55,14 +55,14 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
         if(input.command==='mapping')return updates.stageMappings(input.batchId,input.rows);
         if(input.command==='sealMapping')return updates.sealMappings(input.batchId);
         if(input.command==='metadata') {
-          const rows=updates.metadataPreparationPage(input.batchId,256);
+          const rows=updates.reader.metadataPreparationPage(input.batchId,256);
           if(rows.length)updates.metadataStage(input.batchId,rows.map(row=>{
             const block=lookupRevealCollectionBlock(this.targetBlocks,row.category,row.assetId);
             if(!block)throw new Error('Missing load fixture collection block');
             const attributesJson=payload.replace('"load"',JSON.stringify(block));
             return {...row,attributesJson,sha256:createHash('sha256').update(attributesJson).digest('hex')};
           }));
-          return updates.status(input.batchId);
+          return updates.reader.status(input.batchId);
         }
         if(input.command==='generation') { const start=performance.now(); const value=updates.generationStage(input.batchId,256);return {...value,duration:performance.now()-start}; }
         if(input.command==='seal')return updates.seal(input.batchId);
@@ -72,18 +72,18 @@ test('native online pools stage 9358 and all remaining eggs while ordinary reque
           this.random.push(3421,0);
           this.store.reserve([crate]);
           this.store.freeze(deployment,observation,[{crateTokenId:crate,tokenIds:Array.from({length:20},(_,index)=>String(first+index))}],2001);
-          return {revision:updates.effectiveCatalog().catalogRevision,artworks:this.store.frozen([String(first)]).map(value=>({category:value.category,tokenId:value.tokenId}))};
+          return {revision:updates.reader.effectiveCatalog().catalogRevision,artworks:this.store.frozen([String(first)]).map(value=>({category:value.category,tokenId:value.tokenId}))};
         }
         if(input.command==='read') {
-          const canonical=updates.canonicalMetadata(['1'])[0];
-          return {revision:updates.effectiveCatalog().catalogRevision,category:canonical.category,metadataRevision:canonical.metadataRevision,metadataJson:canonical.metadataJson};
+          const canonical=updates.reader.canonicalMetadata(['1'])[0];
+          return {revision:updates.reader.effectiveCatalog().catalogRevision,category:canonical.category,metadataRevision:canonical.metadataRevision,metadataJson:canonical.metadataJson};
         }
         if(input.command==='verify') {
-          const pools=updates.pools();
+          const pools=updates.reader.pools();
           return {total:pools.reduce((sum,pool)=>sum+pool.total,0),free:pools.reduce((sum,pool)=>sum+pool.available,0),
             assigned:sql.exec('SELECT COUNT(*) AS count FROM assignments').one().count,
             originalEggs:sql.exec("SELECT COUNT(*) AS count FROM assignments WHERE category='egg' AND assignment_revision=0").one().count,
-            eggs:pools.find(pool=>pool.category==='egg').total,status:updates.status(input.batchId)};
+            eggs:pools.find(pool=>pool.category==='egg').total,status:updates.reader.status(input.batchId)};
         }
         throw new Error('Unknown command');
       }

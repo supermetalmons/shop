@@ -4,7 +4,9 @@ import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } fr
 import { validateRevealCatalogUpdateBatch } from '../../../../shared/ethereum/revealCatalogUpdate.js';
 import { getRevealCatalog, getRevealCatalogDescriptor } from '../../../../shared/ethereum/revealCatalogRegistry.js';
 import type { RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
-import type { EthereumRevealCatalogUpdateStore, RevealCatalogUpdateStatus } from './ethereumRevealCatalogUpdateStore.js';
+import type { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import type { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
+import type { RevealCatalogUpdateStatus } from './ethereumRevealCatalogTypes.js';
 import { EthereumRevealEmptyPoolFence, type EthereumRevealEmptyPoolFenceScope } from './ethereumRevealEmptyPoolFence.js';
 import { verifyEmptyRevealChain } from './ethereumRevealChain.js';
 
@@ -18,7 +20,8 @@ type RecordState = EthereumRevealEmptyPoolFenceScope & {
 type Host = {
   env: Env; storage: DurableObjectStorage; fence: EthereumRevealEmptyPoolFence;
   initializeStore(): EthereumRevealCatalogUpdateStore;
-  readStore(): EthereumRevealCatalogUpdateStore;
+  writeStore(): EthereumRevealCatalogUpdateStore;
+  readStore(): EthereumRevealCatalogReader;
   quiescent(): boolean;
   wake(deployment: EthereumRevealDeployment): Promise<void>;
 };
@@ -50,7 +53,7 @@ export class EthereumRevealEmptyPool {
     }
     return record;
   }
-  private store(_record?: RecordState): EthereumRevealCatalogUpdateStore {
+  private reader(): EthereumRevealCatalogReader {
     return this.host.readStore();
   }
   private mutate<T>(record: RecordState, action: (store: EthereumRevealCatalogUpdateStore) => T): T {
@@ -89,10 +92,10 @@ export class EthereumRevealEmptyPool {
     if (request.action === 'inspect' || request.action === 'verify') {
       const record = await this.load(request);
       const current = await this.current(deployment, record);
-      const status = record ? this.store(record).status(record.operationId) ?? undefined : undefined;
+      const status = record ? this.reader().status(record.operationId) ?? undefined : undefined;
       if (request.action === 'verify') {
         if (!record || !['observing', 'complete'].includes(record.phase) || this.host.fence.status()) throw new Error('Empty-pool activation is incomplete.');
-        this.store(record).verifyEmptyRebuild(record.operationId);
+        this.reader().verifyEmptyRebuild(record.operationId);
         await this.verifyChain(this.host.env, current, AbortSignal.timeout(15000));
       }
       return this.result(request, current, record, status);
@@ -124,7 +127,7 @@ export class EthereumRevealEmptyPool {
             identity: { chainId, contractAddress, metadataBaseUri, deploymentBlock, catalogVersion, templateSha256 } };
           await this.save(record);
         }
-        const status = this.store(record).status(record.operationId);
+        const status = this.reader().status(record.operationId);
         if (status?.activatedAtMs != null || record.phase !== 'fencing') return await this.advance(request, current, record);
         this.host.fence.acquire(record, Date.now());
         this.mutate(record, store => store.beginEmptyRebuild({ operationId: record!.operationId, batch }));
@@ -137,7 +140,7 @@ export class EthereumRevealEmptyPool {
           if (!row) throw new Error('Empty-pool registry claim changed; inspect before retrying.');
         }
         current = await this.owned(current, record);
-        return this.result(request, current, record, this.store(record).status(record.operationId) ?? undefined);
+        return this.result(request, current, record, this.reader().status(record.operationId) ?? undefined);
       }
       if (!record) throw new Error('Begin the empty-pool operation with its frozen batch.');
       if (request.action === 'cancel') return await this.cancel(request, current, record);
@@ -160,7 +163,7 @@ export class EthereumRevealEmptyPool {
 
   private async advance(request: EthereumRevealEmptyPoolRequest, current: EthereumRevealDeployment,
     record: RecordState): Promise<EthereumRevealEmptyPoolResult> {
-    const status = this.store(record).status(record.operationId);
+    const status = this.reader().status(record.operationId);
     if (record.phase === 'complete' || record.phase === 'cancelled') return this.result(request, current, record, status ?? undefined);
     if (!status) throw new Error('Retry begin with the frozen empty-pool batch.');
     if (status.activatedAtMs != null) {
@@ -182,14 +185,14 @@ export class EthereumRevealEmptyPool {
       }
       if (Date.now() < record.observationUntilMs) return this.result(request, current, record, status);
       if (!record.observedVerified) {
-        this.store(record).verifyEmptyRebuild(record.operationId);
+        this.reader().verifyEmptyRebuild(record.operationId);
         await this.verifyChain(this.host.env, current, AbortSignal.timeout(15000));
-        this.store(record).finalize(record.operationId);
+        this.host.writeStore().finalize(record.operationId);
         record.observedVerified = true;
         await this.save(record);
       }
-      const cleanup = this.store(record).pruneEmptyRebuild(record.operationId, 4096);
-      if (cleanup.remaining > 0) return this.result(request, current, record, this.store(record).status(record.operationId) ?? undefined);
+      const cleanup = this.host.writeStore().pruneEmptyRebuild(record.operationId, 4096);
+      if (cleanup.remaining > 0) return this.result(request, current, record, this.reader().status(record.operationId) ?? undefined);
       const row = await this.host.env.OPS_DB.prepare(`UPDATE ethereum_reveal_deployments SET catalog_update_id=NULL,
         catalog_update_started_at_ms=NULL,revision=revision+1,updated_at_ms=? WHERE deployment_id=? AND revision=?
         AND catalog_update_id=? AND retired_at_ms IS NULL RETURNING deployment_id`)
@@ -197,7 +200,7 @@ export class EthereumRevealEmptyPool {
       if (!row) throw new Error('Empty-pool completion needs retry.');
       record.phase = 'complete';
       await this.save(record);
-      return this.result(request, await this.current(current, record), record, this.store(record).status(record.operationId) ?? undefined);
+      return this.result(request, await this.current(current, record), record, this.reader().status(record.operationId) ?? undefined);
     }
     current = await this.owned(current, record);
     if (current.state !== 'paused') throw new Error('Empty-pool writes require paused reveals.');
@@ -232,12 +235,12 @@ export class EthereumRevealEmptyPool {
       await this.host.wake(current);
     }
     await this.save(record);
-    return this.result(request, current, record, this.store(record).status(record.operationId) ?? undefined);
+    return this.result(request, current, record, this.reader().status(record.operationId) ?? undefined);
   }
 
   private async cancel(request: EthereumRevealEmptyPoolRequest, current: EthereumRevealDeployment,
     record: RecordState): Promise<EthereumRevealEmptyPoolResult> {
-    const status = this.store(record).status(record.operationId);
+    const status = this.reader().status(record.operationId);
     if (status?.activatedAtMs != null) throw new Error('An activated empty-pool rebuild must finish forward.');
     if (record.phase === 'cancelled') return this.result(request, current, record, status ?? undefined);
     if (!this.host.quiescent()) throw new Error('Reveal writers have not drained.');
@@ -262,6 +265,6 @@ export class EthereumRevealEmptyPool {
     await this.save(record);
     current = await this.current(current, record);
     await this.host.wake(current);
-    return this.result(request, current, record, this.store(record).status(record.operationId) ?? undefined);
+    return this.result(request, current, record, this.reader().status(record.operationId) ?? undefined);
   }
 }

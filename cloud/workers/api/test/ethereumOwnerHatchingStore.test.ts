@@ -3,11 +3,13 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
-import { EthereumOwnerHatchingStore, type OwnerHatchingBatchInput, type OwnerHatchingCanonical,
-  type OwnerHatchingEnrichmentError, type OwnerHatchingHooks } from '../src/ethereumOwnerHatchingStore.ts';
+import { EthereumOwnerHatchingStore } from '../src/ethereumOwnerHatchingStore.ts';
+import { EthereumOwnerHatchingReader } from '../src/ethereumOwnerHatchingReader.ts';
+import type { OwnerHatchingBatchInput, OwnerHatchingCanonical,
+  OwnerHatchingEnrichmentError, OwnerHatchingHooks } from '../src/ethereumOwnerHatchingTypes.ts';
 import type { RevealSql } from '../src/ethereumRevealStore.ts';
 import { parseMetadataJson } from '../src/ethereumMetadataJson.ts';
-import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
+import { EthereumRevealCatalogReader } from '../src/ethereumRevealCatalogReader.ts';
 import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 
 const digest = (value: string) => bytesToHex(sha256(value));
@@ -86,7 +88,7 @@ function fixture(t: TestContext) {
       return { origin, effective: origin };
     },
     releaseReplacement(origin, eggId) {
-      assert.deepEqual(store.slotOverride(origin), { category: 'egg', assetId: eggId });
+      assert.deepEqual(store.reader.slotOverride(origin), { category: 'egg', assetId: eggId });
       database.prepare("INSERT INTO free_assets VALUES('egg',?)").run(eggId);
       database.prepare("UPDATE pool_counts SET available=available+1 WHERE category='egg'").run();
     },
@@ -103,7 +105,7 @@ function fixture(t: TestContext) {
   const input: OwnerHatchingBatchInput = { batchId: 'batch-1', sourceSha256: 'a'.repeat(64), candidateTokenIds: ['1', '2', '3', '4'],
     readyCount: 2, grails: [{ category: 'animated', assetId: 422, attributesJson: '[{"trait_type":"collection block","value":"DROWEE"}]' }],
     freshEggIds: [55_304] };
-  return { database, input, get store() { return store; }, reopen,
+  return { database, sql, input, get store() { return store; }, reopen,
     observe: <T>(action: () => T) => {
       const queries: Array<{ query: string; bindings: number }> = [];
       observed = queries;
@@ -123,7 +125,7 @@ test('preparation is private, deterministic on retry, and consumes no ordinary r
   const f = fixture(t);
   const before = f.database.prepare('SELECT * FROM free_assets').all();
   const result = f.store.prepare(f.input, 1000);
-  assert.deepEqual(f.store.readyTokenIds(), ['1', '4']);
+  assert.deepEqual(f.store.reader.readyTokenIds(), ['1', '4']);
   assert.equal(result.ready, 2);
   assert.equal(result.phase, 'publishing');
   assert.equal(result.grailCount, 1);
@@ -131,7 +133,7 @@ test('preparation is private, deterministic on retry, and consumes no ordinary r
   assert.deepEqual(f.database.prepare('SELECT * FROM free_assets').all(), before);
   assert.equal('grails' in result, false);
   assert.equal(JSON.stringify(result).includes('422'), false);
-  const ready = f.store.canonical('1')!;
+  const ready = f.store.reader.canonical('1')!;
   assert.equal(JSON.parse(ready.metadataJson).readyToHatch, true);
   assert.equal(ready.category, 'egg');
   assert.equal(ready.metadataRevision, 4);
@@ -144,9 +146,9 @@ test('bulk owner reads preserve canonical payloads and slot order across bounded
   f.store.prepare(f.input, 1000);
   f.store.hatch('4', 2000);
   const ids = ['4', ...Array.from({ length: 101 }, (_, index) => String(index + 10)), '1', '4'];
-  const expected = new Map([['1', f.store.canonical('1')!], ['4', f.store.canonical('4')!]]);
+  const expected = new Map([['1', f.store.reader.canonical('1')!], ['4', f.store.reader.canonical('4')!]]);
   const changes = f.database.prepare('SELECT total_changes() AS changes').get()!.changes;
-  const canonical = f.observe(() => f.store.canonicals(ids));
+  const canonical = f.observe(() => f.store.reader.canonicals(ids));
   assert.deepEqual(canonical.value, expected);
   assert.equal(canonical.queries.length, 4);
   assert.ok(canonical.queries.every(entry => entry.bindings <= 100 && entry.query.startsWith('SELECT')));
@@ -156,13 +158,45 @@ test('bulk owner reads preserve canonical payloads and slot order across bounded
   }
   const origins = Array.from({ length: 51 }, (_, index) => ({ category: 'painting' as const, assetId: index + 1 }));
   origins.push(origins[0]);
-  const overrides = f.observe(() => f.store.slotOverrides(origins));
+  const overrides = f.observe(() => f.store.reader.slotOverrides(origins));
   assert.deepEqual(overrides.value, [{ category: 'egg', assetId: 55_304 }, ...Array(50).fill(null), { category: 'egg', assetId: 55_304 }]);
   assert.equal(overrides.queries.length, 2);
   assert.ok(overrides.queries.every(entry => entry.bindings <= 100 && entry.query.startsWith('SELECT')));
   assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
-  assert.deepEqual(f.observe(() => f.store.canonicals([])), { value: new Map(), queries: [] });
-  assert.deepEqual(f.observe(() => f.store.slotOverrides([])), { value: [], queries: [] });
+  assert.deepEqual(f.observe(() => f.store.reader.canonicals([])), { value: new Map(), queries: [] });
+  assert.deepEqual(f.observe(() => f.store.reader.slotOverrides([])), { value: [], queries: [] });
+});
+
+test('standalone owner inspection reads populated state without changing schema or rows', t => {
+  const f = fixture(t);
+  f.store.prepare(f.input, 1000);
+  f.store.hatch('4', 2000);
+  const job = f.store.enrichmentPage(3000)[0];
+  f.store.failEnrichment(job.tokenId, job.metadataRevision, 3000, 'source-unavailable');
+  const schema = f.database.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name').all();
+  const changes = f.database.prepare('SELECT total_changes() AS count').get()!.count;
+  f.database.exec('PRAGMA query_only=ON');
+
+  const reader = new EthereumOwnerHatchingReader(f.sql);
+  assert.equal(reader.available, true);
+  assert.equal(reader.token('1')!.status, 'ready');
+  assert.equal(reader.hasBatch(), true);
+  assert.equal(reader.isRetiredEgg(4), true);
+  assert.equal(reader.hasProtectedEgg(1), true);
+  assert.equal(reader.usedFreshEgg(55_304), true);
+  assert.equal(reader.reservedGrail({ category: 'animated', assetId: 422 }), true);
+  assert.equal(reader.claimedArtwork({ category: 'painting', assetId: 1 }), true);
+  assert.deepEqual(reader.slotOverride({ category: 'egg', assetId: 4 }), { category: 'painting', assetId: 1 });
+  assert.deepEqual(reader.slotOverrides([{ category: 'painting', assetId: 1 }]), [{ category: 'egg', assetId: 55_304 }]);
+  assert.equal(reader.canonical('4')!.category, 'painting');
+  assert.equal(reader.canonicals(['4', '1', '4']).size, 2);
+  assert.deepEqual(reader.readyTokenIds(), ['1']);
+  assert.equal(reader.batchStatus()!.pendingPublication, 2);
+  assert.deepEqual(reader.enrichmentSummary(), { pending: 1, failed: 1, completed: 0, errors: { 'source-unavailable': 1 } });
+  assert.equal(reader.nextWake(4000), 4000);
+  assert.equal(reader.publicationError(), null);
+  assert.deepEqual(f.database.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name').all(), schema);
+  assert.equal(f.database.prepare('SELECT total_changes() AS count').get()!.count, changes);
 });
 
 test('owner payload queries respect the byte budget while preserving large Unicode metadata and duplicate requests', t => {
@@ -190,14 +224,14 @@ test('owner payload queries respect the byte budget while preserving large Unico
       bytes: rows.reduce((sum, row) => sum + Buffer.byteLength(String(row.canonical_json)), 0) });
     return { toArray: () => rows as T[] };
   } };
-  const store = new EthereumRevealCatalogUpdateStore(sql, () => { throw new Error('Canonical reads must not write.'); });
+  const reader = new EthereumRevealCatalogReader(sql);
   const ids = ['4', '2', '1', '3', '2', '999'];
-  assert.deepEqual(store.canonicalMetadata(ids), ids.flatMap(id => expected.has(id) ? [expected.get(id)] : []));
+  assert.deepEqual(reader.canonicalMetadata(ids), ids.flatMap(id => expected.has(id) ? [expected.get(id)] : []));
   assert.ok(payloads.length > 1);
   assert.ok(payloads.every(page => page.bytes <= 1024 * 1024 || page.count === 1));
   assert.ok(payloads.some(page => page.bytes > 1024 * 1024 && page.count === 1));
   const count = payloads.length;
-  assert.deepEqual(store.ownerHatching.canonicals(['998', '999']), new Map());
+  assert.deepEqual(reader.ownerHatching.canonicals(['998', '999']), new Map());
   assert.equal(payloads.length, count);
 });
 
@@ -211,11 +245,11 @@ test('grail hatch retires its egg, preserves frozen identity, and survives repea
   assert.equal(hatched.artwork.category, 'animated');
   assert.equal(hatched.artwork.image, 'https://example.com/animated/422.png');
   assert.deepEqual(hatched.artwork.observation, observation);
-  assert.equal(f.store.isRetiredEgg(1), true);
-  assert.equal(f.store.claimedArtwork({ category: 'animated', assetId: 422 }), true);
-  assert.deepEqual(f.store.slotOverride({ category: 'egg', assetId: 1 }), { category: 'animated', assetId: 422 });
-  assert.deepEqual(f.store.readyTokenIds(), ['4']);
-  assert.equal('readyToHatch' in JSON.parse(f.store.canonical('1')!.metadataJson), false);
+  assert.equal(f.store.reader.isRetiredEgg(1), true);
+  assert.equal(f.store.reader.claimedArtwork({ category: 'animated', assetId: 422 }), true);
+  assert.deepEqual(f.store.reader.slotOverride({ category: 'egg', assetId: 1 }), { category: 'animated', assetId: 422 });
+  assert.deepEqual(f.store.reader.readyTokenIds(), ['4']);
+  assert.equal('readyToHatch' in JSON.parse(f.store.reader.canonical('1')!.metadataJson), false);
   assert.equal(f.draws(), 0);
   assert.deepEqual(f.reopen().hatch('1', 3000), hatched);
   assert.equal(f.builds(), 1);
@@ -233,9 +267,9 @@ test('ordinary hatch draws live, replaces the free slot with a fresh egg, and pr
   assert.equal(hatched.kind, 'hatched');
   if (hatched.kind !== 'hatched') return;
   assert.equal(hatched.artwork.image, 'https://example.com/painting/2.png');
-  assert.equal(f.store.isRetiredEgg(4), true);
-  assert.deepEqual(f.store.slotOverride({ category: 'egg', assetId: 4 }), { category: 'painting', assetId: 2 });
-  assert.deepEqual(f.store.slotOverride({ category: 'painting', assetId: 2 }), { category: 'egg', assetId: 55_304 });
+  assert.equal(f.store.reader.isRetiredEgg(4), true);
+  assert.deepEqual(f.store.reader.slotOverride({ category: 'egg', assetId: 4 }), { category: 'painting', assetId: 2 });
+  assert.deepEqual(f.store.reader.slotOverride({ category: 'painting', assetId: 2 }), { category: 'egg', assetId: 55_304 });
   assert.deepEqual(f.database.prepare('SELECT * FROM free_assets ORDER BY category,asset_id').all().map(row => ({ ...row })),
     [{ category: 'egg', asset_id: 55_304 }, { category: 'painting', asset_id: 3 }]);
   const after = f.database.prepare('SELECT * FROM pool_counts ORDER BY category').all();
@@ -251,9 +285,9 @@ test('ordinary exhaustion and blocked eligibility leave readiness and all invent
   f.store.prepare(f.input, 1000);
   f.database.exec('DELETE FROM free_assets');
   assert.deepEqual(f.store.hatch('4', 2000), { kind: 'unavailable' });
-  assert.equal(f.store.isRetiredEgg(4), false);
+  assert.equal(f.store.reader.isRetiredEgg(4), false);
   assert.equal(f.database.prepare('SELECT token_id FROM owner_hatching_fresh_eggs').get()!.token_id, null);
-  assert.deepEqual(f.store.readyTokenIds(), ['1', '4']);
+  assert.deepEqual(f.store.reader.readyTokenIds(), ['1', '4']);
   f.block(true);
   assert.deepEqual(f.store.hatch('1', 2000), { kind: 'not-ready' });
   assert.deepEqual(f.store.hatch('2', 2000), { kind: 'not-ready' });
@@ -273,7 +307,7 @@ test('ordinary hatch failure rolls back asset consumption, fresh egg use, overri
   assert.deepEqual(f.database.prepare('SELECT * FROM free_assets ORDER BY asset_id').all(), before);
   assert.deepEqual(f.database.prepare('SELECT * FROM pool_counts ORDER BY category').all(), counts);
   assert.equal(f.database.prepare('SELECT COUNT(*) AS count FROM owner_hatching_slot_overrides').get()!.count, 0);
-  assert.equal(f.store.isRetiredEgg(4), false);
+  assert.equal(f.store.reader.isRetiredEgg(4), false);
   assert.equal(f.database.prepare('SELECT token_id FROM owner_hatching_fresh_eggs').get()!.token_id, null);
   f.failBuild(false);
   assert.equal(f.store.hatch('4', 3000).kind, 'hatched');
@@ -291,13 +325,13 @@ test('stale readiness publication cannot acknowledge or overwrite hatch publicat
   assert.equal(jobs[0].metadata_revision, 6);
   assert.equal(JSON.parse(jobs[0].expected_jsons_json!).length, 3);
   f.store.completePublications(jobs.map(job => ({ job, status: 'retry' })), 3000);
-  assert.equal(f.store.publicationError(), 'publication-unavailable');
+  assert.equal(f.store.reader.publicationError(), 'publication-unavailable');
   assert.equal(f.store.claimPublications(4000).length, 0);
   const resumed = f.reopen().claimPublications(5000);
   assert.equal(resumed.length, 1);
   f.store.completePublications(resumed.map(job => ({ job, status: 'published' })), 5000);
-  assert.equal(f.store.batchStatus()!.phase, 'complete');
-  assert.equal(f.store.publicationError(), null);
+  assert.equal(f.store.reader.batchStatus()!.phase, 'complete');
+  assert.equal(f.store.reader.publicationError(), null);
 });
 
 test('ordinary enrichment is durable, fenced by revision, and cannot change the chosen artwork', t => {
@@ -317,7 +351,7 @@ test('ordinary enrichment is durable, fenced by revision, and cannot change the 
     JSON.stringify({ ...base, image: 'https://example.com/wrong.png', attributes: [{ trait_type: 'artist', value: 'Wrong' }] })), /cannot change/);
   assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision, enriched), true);
   assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision, enriched), false);
-  const canonical = f.store.canonical(job.tokenId)!;
+  const canonical = f.store.reader.canonical(job.tokenId)!;
   assert.equal(canonical.assetId, 1);
   assert.equal(canonical.metadataRevision, 7);
   assert.equal(canonical.expectedJsons.length, 4);
@@ -334,14 +368,14 @@ test('enrichment errors survive reopening, follow retry backoff, and clear only 
   let now = 3000;
   let job = f.store.enrichmentPage(now)[0];
   assert.equal(job.lastError, null);
-  assert.deepEqual(f.store.enrichmentSummary(), { pending: 1, failed: 0, completed: 0, errors: {} });
+  assert.deepEqual(f.store.reader.enrichmentSummary(), { pending: 1, failed: 0, completed: 0, errors: {} });
   const reasons: OwnerHatchingEnrichmentError[] = ['invalid', 'source-unavailable', 'enrichment-failed'];
   for (const reason of reasons) {
     assert.equal(f.store.failEnrichment(job.tokenId, job.metadataRevision - 1, now, reason), false);
     assert.equal(f.store.failEnrichment(job.tokenId, job.metadataRevision, now, reason), true);
     const retryAt = now + 1000 * 2 ** job.attempts;
     f.reopen();
-    assert.deepEqual(f.store.enrichmentSummary(), { pending: 1, failed: 1, completed: 0, errors: { [reason]: 1 } });
+    assert.deepEqual(f.store.reader.enrichmentSummary(), { pending: 1, failed: 1, completed: 0, errors: { [reason]: 1 } });
     assert.equal(f.store.enrichmentPage(retryAt - 1).length, 0);
     job = f.store.enrichmentPage(retryAt)[0];
     assert.equal(job.lastError, reason);
@@ -349,11 +383,11 @@ test('enrichment errors survive reopening, follow retry backoff, and clear only 
   }
   const enriched = JSON.stringify({ ...JSON.parse(job.baseJson), attributes: [{ trait_type: 'artist', value: 'Regular Artist' }] }) + '\n';
   assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision - 1, enriched), false);
-  assert.deepEqual(f.store.enrichmentSummary().errors, { 'enrichment-failed': 1 });
+  assert.deepEqual(f.store.reader.enrichmentSummary().errors, { 'enrichment-failed': 1 });
   assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision, enriched), true);
   assert.equal(f.store.failEnrichment(job.tokenId, job.metadataRevision, now, 'invalid'), false);
   assert.equal(f.store.failEnrichment(job.tokenId, job.metadataRevision + 1, now, 'invalid'), false);
-  assert.deepEqual(f.reopen().enrichmentSummary(), { pending: 0, failed: 0, completed: 1, errors: {} });
+  assert.deepEqual(f.reopen().reader.enrichmentSummary(), { pending: 0, failed: 0, completed: 1, errors: {} });
   assert.equal(f.database.prepare('SELECT last_error FROM owner_hatching_enrichment WHERE token_id=?').get(job.tokenId)!.last_error, null);
 });
 
@@ -365,15 +399,15 @@ test('base hatch publication remains immediate while batch enrichment is pending
   const publications = f.store.claimPublications(2000);
   assert.equal(publications.length, 2);
   f.store.completePublications(publications.map(job => ({ job, status: 'published' })), 2000);
-  assert.equal(f.store.batchStatus()!.phase, 'complete');
-  assert.equal(f.store.batchStatus()!.pendingEnrichment, 1);
-  assert.equal(f.store.batchStatus()!.failedEnrichment, 0);
+  assert.equal(f.store.reader.batchStatus()!.phase, 'complete');
+  assert.equal(f.store.reader.batchStatus()!.pendingEnrichment, 1);
+  assert.equal(f.store.reader.batchStatus()!.failedEnrichment, 0);
   const job = f.store.enrichmentPage(3000)[0];
   f.store.failEnrichment(job.tokenId, job.metadataRevision, 3000, 'invalid');
-  assert.equal(f.store.batchStatus()!.phase, 'complete');
-  assert.equal(f.store.batchStatus()!.pendingPublication, 0);
-  assert.equal(f.store.batchStatus()!.pendingEnrichment, 1);
-  assert.equal(f.store.batchStatus()!.failedEnrichment, 1);
+  assert.equal(f.store.reader.batchStatus()!.phase, 'complete');
+  assert.equal(f.store.reader.batchStatus()!.pendingPublication, 0);
+  assert.equal(f.store.reader.batchStatus()!.pendingEnrichment, 1);
+  assert.equal(f.store.reader.batchStatus()!.failedEnrichment, 1);
   assert.deepEqual(f.store.hatch('4', 4000), hatched);
   assert.equal(f.builds(), 1);
   assert.equal(f.draws(), 1);
@@ -382,19 +416,19 @@ test('base hatch publication remains immediate while batch enrichment is pending
 test('busy enrichment defers only enrichment wakes and retains durable claim recovery', t => {
   const f = fixture(t);
   f.store.prepare({ ...f.input, readyCount: 3, grails: [], freshEggIds: [55_304, 55_305, 55_306] }, 1000);
-  for (const tokenId of f.store.readyTokenIds()) assert.equal(f.store.hatch(tokenId, 2000).kind, 'hatched');
-  assert.equal(f.store.nextWake(2000, true), 2000);
+  for (const tokenId of f.store.reader.readyTokenIds()) assert.equal(f.store.hatch(tokenId, 2000).kind, 'hatched');
+  assert.equal(f.store.reader.nextWake(2000, true), 2000);
   f.store.completePublications(f.store.claimPublications(2000).map(job => ({ job, status: 'published' })), 2000);
   const [job] = f.store.enrichmentPage(3000, 1);
-  assert.equal(f.store.nextWake(3000), 3000);
-  assert.equal(f.store.nextWake(3000, true), 63_000);
+  assert.equal(f.store.reader.nextWake(3000), 3000);
+  assert.equal(f.store.reader.nextWake(3000, true), 63_000);
   const enriched = JSON.stringify({ ...JSON.parse(job.baseJson), attributes: [{ trait_type: 'artist', value: 'Regular Artist' }] });
   assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision, enriched), true);
-  assert.equal(f.store.nextWake(4000, true), 4000);
+  assert.equal(f.store.reader.nextWake(4000, true), 4000);
   f.store.completePublications(f.store.claimPublications(4000).map(value => ({ job: value, status: 'published' })), 4000);
   const pending = f.reopen().enrichmentPage(5000);
   assert.equal(pending.length, 2);
-  assert.equal(f.reopen().nextWake(5000), 65_000);
+  assert.equal(f.reopen().reader.nextWake(5000), 65_000);
   assert.equal(f.store.enrichmentPage(64_999).length, 0);
   assert.equal(f.store.enrichmentPage(65_000).length, 2);
 });
@@ -413,24 +447,24 @@ test('legacy enrichment jobs remain readable and migrate additively without losi
   f.database.exec('ALTER TABLE owner_hatching_enrichment DROP COLUMN last_error');
   const before = f.database.prepare('SELECT * FROM owner_hatching_enrichment ORDER BY token_id').all();
   const legacy = f.reopen(false);
-  assert.deepEqual(legacy.enrichmentSummary(), { pending: 1, failed: 0, completed: 1, errors: {} });
-  assert.deepEqual(legacy.enrichmentSummary('batch-1'), { pending: 1, failed: 0, completed: 0, errors: {} });
-  assert.deepEqual(legacy.enrichmentSummary('batch-2'), { pending: 0, failed: 0, completed: 1, errors: {} });
-  assert.deepEqual(legacy.enrichmentSummary('absent'), { pending: 0, failed: 0, completed: 0, errors: {} });
-  assert.equal(legacy.batchStatus('batch-1')!.pendingEnrichment, 1);
-  assert.equal(legacy.batchStatus('batch-1')!.failedEnrichment, 0);
+  assert.deepEqual(legacy.reader.enrichmentSummary(), { pending: 1, failed: 0, completed: 1, errors: {} });
+  assert.deepEqual(legacy.reader.enrichmentSummary('batch-1'), { pending: 1, failed: 0, completed: 0, errors: {} });
+  assert.deepEqual(legacy.reader.enrichmentSummary('batch-2'), { pending: 0, failed: 0, completed: 1, errors: {} });
+  assert.deepEqual(legacy.reader.enrichmentSummary('absent'), { pending: 0, failed: 0, completed: 0, errors: {} });
+  assert.equal(legacy.reader.batchStatus('batch-1')!.pendingEnrichment, 1);
+  assert.equal(legacy.reader.batchStatus('batch-1')!.failedEnrichment, 0);
   assert.equal(legacy.initialized, false);
   assert.equal(f.database.prepare('PRAGMA table_info(owner_hatching_enrichment)').all().some(row => row.name === 'last_error'), false);
   f.reopen();
   assert.deepEqual(f.database.prepare('SELECT token_id,metadata_revision,status,attempts,next_check_ms FROM owner_hatching_enrichment ORDER BY token_id').all(), before);
-  assert.deepEqual(f.store.enrichmentSummary(), { pending: 1, failed: 0, completed: 1, errors: {} });
+  assert.deepEqual(f.store.reader.enrichmentSummary(), { pending: 1, failed: 0, completed: 1, errors: {} });
   assert.equal(f.store.enrichmentPage(4999).length, 0);
   const retry = f.store.enrichmentPage(5000)[0];
   assert.equal(retry.tokenId, pending.tokenId);
   assert.equal(retry.attempts, 2);
   assert.equal(retry.lastError, null);
   f.store.failEnrichment(retry.tokenId, retry.metadataRevision, 5000, 'invalid');
-  assert.deepEqual(f.reopen().enrichmentSummary('batch-1'), { pending: 1, failed: 1, completed: 0, errors: { invalid: 1 } });
+  assert.deepEqual(f.reopen().reader.enrichmentSummary('batch-1'), { pending: 1, failed: 1, completed: 0, errors: { invalid: 1 } });
 });
 
 test('additive batches cannot reuse ready tokens, grails, fresh eggs, or retired eggs', t => {
@@ -439,12 +473,12 @@ test('additive batches cannot reuse ready tokens, grails, fresh eggs, or retired
   assert.throws(() => f.store.prepare({ ...f.input, batchId: 'batch-2' }), /unavailable assets/);
   const second = { ...f.input, batchId: 'batch-2', grails: [{ category: 'animated' as const, assetId: 423 }], freshEggIds: [55_305] };
   f.store.prepare(second, 2000);
-  assert.deepEqual(f.store.readyTokenIds(), ['1', '2', '3', '4']);
+  assert.deepEqual(f.store.reader.readyTokenIds(), ['1', '2', '3', '4']);
   assert.throws(() => f.store.prepare({ ...second, batchId: 'batch-3', grails: [], freshEggIds: [55_306, 55_307] }), /Not enough/);
-  assert.equal(f.store.batchStatus('batch-3'), null);
-  assert.equal(f.store.usedFreshEgg(55_306), false);
+  assert.equal(f.store.reader.batchStatus('batch-3'), null);
+  assert.equal(f.store.reader.usedFreshEgg(55_306), false);
   f.store.hatch('1', 3000);
-  assert.equal(f.store.hasProtectedEgg(1), true);
+  assert.equal(f.store.reader.hasProtectedEgg(1), true);
 });
 
 test('a fresh replacement egg can be minted and hatched in a later batch without reusing its retired artwork', t => {
@@ -458,16 +492,16 @@ test('a fresh replacement egg can be minted and hatched in a later batch without
   assert.equal(result.kind, 'hatched');
   if (result.kind !== 'hatched') return;
   assert.equal(result.artwork.image, 'https://example.com/painting/2.png');
-  assert.equal(f.store.isRetiredEgg(55_304), true);
-  assert.deepEqual(f.store.slotOverride({ category: 'painting', assetId: 1 }), { category: 'painting', assetId: 2 });
-  assert.deepEqual(f.store.slotOverride({ category: 'painting', assetId: 2 }), { category: 'egg', assetId: 55_305 });
+  assert.equal(f.store.reader.isRetiredEgg(55_304), true);
+  assert.deepEqual(f.store.reader.slotOverride({ category: 'painting', assetId: 1 }), { category: 'painting', assetId: 2 });
+  assert.deepEqual(f.store.reader.slotOverride({ category: 'painting', assetId: 2 }), { category: 'egg', assetId: 55_305 });
   const history = f.database.prepare("SELECT asset_id FROM owner_hatching_slot_history WHERE origin_category='painting' AND origin_asset_id=1 ORDER BY created_at_ms").all();
   assert.deepEqual(history.map(row => row.asset_id), [55_304, 2]);
-  assert.equal(f.store.usedFreshEgg(55_304), true);
+  assert.equal(f.store.reader.usedFreshEgg(55_304), true);
   assert.throws(() => f.database.exec('DELETE FROM owner_hatching_slot_history'), /cannot be deleted/);
 });
 
-test('a read-only owner store tolerates a pre-feature ledger without creating tables', t => {
+test('a standalone owner reader tolerates a pre-feature ledger without creating tables', t => {
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   const sql: RevealSql = { exec<T extends Record<string, string | number | null | ArrayBuffer>>(query: string,
@@ -478,27 +512,28 @@ test('a read-only owner store tolerates a pre-feature ledger without creating ta
     return { toArray: () => rows as T[] };
   } };
   const unexpected = (): never => { throw new Error('Read-only inspection called a mutation hook.'); };
-  const store = new EthereumOwnerHatchingStore(sql, unexpected, { canonical: unexpected, build: unexpected,
-    takeOrdinary: unexpected, originForToken: unexpected, transitionSlot: unexpected, releaseReplacement: unexpected,
-    freshEggAvailable: unexpected, eligibleEgg: unexpected });
-  assert.equal(store.available, false);
-  assert.equal(store.initialized, false);
-  assert.equal(store.canonical('1'), null);
-  assert.deepEqual(store.canonicals(['2', '1', '1']), new Map());
-  assert.equal(store.slotOverride({ category: 'egg', assetId: 1 }), null);
-  assert.deepEqual(store.slotOverrides([{ category: 'egg', assetId: 2 }, { category: 'painting', assetId: 1 }]), [null, null]);
-  assert.equal(store.batchStatus(), null);
-  assert.deepEqual(store.enrichmentSummary(), { pending: 0, failed: 0, completed: 0, errors: {} });
-  assert.equal(store.hasProtectedEgg(1), false);
-  assert.deepEqual(store.readyTokenIds(), []);
-  assert.equal(store.nextWake(1000), null);
-  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM sqlite_schema').get()!.count, 0);
+  database.exec('PRAGMA query_only=ON');
+  const schema = database.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name').all();
+  const changes = database.prepare('SELECT total_changes() AS count').get()!.count;
+  const reader = new EthereumOwnerHatchingReader(sql);
+  assert.equal(reader.available, false);
+  assert.equal(reader.canonical('1'), null);
+  assert.deepEqual(reader.canonicals(['2', '1', '1']), new Map());
+  assert.equal(reader.slotOverride({ category: 'egg', assetId: 1 }), null);
+  assert.deepEqual(reader.slotOverrides([{ category: 'egg', assetId: 2 }, { category: 'painting', assetId: 1 }]), [null, null]);
+  assert.equal(reader.batchStatus(), null);
+  assert.deepEqual(reader.enrichmentSummary(), { pending: 0, failed: 0, completed: 0, errors: {} });
+  assert.equal(reader.hasProtectedEgg(1), false);
+  assert.deepEqual(reader.readyTokenIds(), []);
+  assert.equal(reader.nextWake(1000), null);
+  assert.deepEqual(database.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name').all(), schema);
+  assert.equal(database.prepare('SELECT total_changes() AS count').get()!.count, changes);
+  database.exec('PRAGMA query_only=OFF');
   const writer = new EthereumOwnerHatchingStore(sql, action => action(), { canonical: unexpected, build: unexpected,
     takeOrdinary: unexpected, originForToken: unexpected, transitionSlot: unexpected, releaseReplacement: unexpected,
     freshEggAvailable: unexpected, eligibleEgg: unexpected });
   writer.initialize();
-  assert.equal(store.available, true);
-  assert.equal(store.initialized, false);
+  assert.equal(reader.available, true);
 });
 
 test('enriched exact numeric traits persist while repeated hatch artwork stays compact', t => {
@@ -510,8 +545,8 @@ test('enriched exact numeric traits persist while repeated hatch artwork stays c
     '"attributes":[{"trait_type":"large","value":9007199254740993},{"trait_type":"exact","value":1.00},' +
     '{"trait_type":"full","value":"' + 'x'.repeat(64 * 1024) + '"}]');
   assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision, enriched), true);
-  const saved = f.reopen().canonical('4')!;
-  assert.deepEqual(f.store.canonicals(['4', '1', '4']).get('4'), saved);
+  const saved = f.reopen().reader.canonical('4')!;
+  assert.deepEqual(f.store.reader.canonicals(['4', '1', '4']).get('4'), saved);
   const metadata = parseMetadataJson(saved.metadataJson);
   assert.match(JSON.stringify(metadata), /9007199254740993/);
   assert.match(JSON.stringify(metadata), /"value":1\.00/);

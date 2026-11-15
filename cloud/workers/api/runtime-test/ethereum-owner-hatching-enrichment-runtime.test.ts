@@ -165,7 +165,7 @@ test('native owner enrichment recovers failures and schedules work without block
       async hatchAll() {
         const deployment = await current(this.env);
         this.configure(deployment);
-        for (const tokenId of this.store.catalogUpdate.ownerHatching.readyTokenIds()) {
+        for (const tokenId of this.store.catalogUpdate.ownerHatching.reader.readyTokenIds()) {
           if (this.store.catalogUpdate.ownerHatching.hatch(tokenId, Date.now()).kind !== 'hatched') throw new Error('Hatch failed');
         }
         await this.arm();
@@ -174,14 +174,14 @@ test('native owner enrichment recovers failures and schedules work without block
       async snapshot() {
         const store = await this.openStore();
         const sql = this.ctx.storage.sql;
-        const canonical = store.catalogUpdate.ownerHatching.canonical('1');
+        const canonical = store.catalogUpdate.ownerHatching.reader.canonical('1');
         const now = Date.now();
-        return { bootId, owner: store.catalogUpdate.ownerHatching.enrichmentSummary(), health: store.summary(),
+        return { bootId, owner: store.catalogUpdate.ownerHatching.reader.enrichmentSummary(), health: store.summary(),
           jobs: sql.exec('SELECT token_id,status,attempts,last_error,next_check_ms FROM owner_hatching_enrichment').toArray(),
           canonical: { category: canonical.category, assetId: canonical.assetId, metadataRevision: canonical.metadataRevision },
           publication: sql.exec('SELECT token_id,status,metadata_revision FROM owner_hatching_publication').toArray(),
           sourceRequests, errors, alarmCalls, alarmAt: await this.ctx.storage.getAlarm(), now,
-          ownerEnrichmentWakeAt: store.catalogUpdate.ownerHatching.nextWake(now, this.ownerEnrichmentRun !== null) };
+          ownerEnrichmentWakeAt: store.catalogUpdate.ownerHatching.reader.nextWake(now, this.ownerEnrichmentRun !== null) };
       }
     }
     export default { async fetch(request, bindings) {

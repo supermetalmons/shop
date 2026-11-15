@@ -6,7 +6,7 @@ import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import { buildRevealCatalogUpdateBatch } from '../../../../scripts/ethereum-metadata/catalogUpdate.ts';
-import type { RevealCatalogUpdateStatus } from '../src/ethereumRevealCatalogUpdateStore.ts';
+import type { RevealCatalogUpdateStatus } from '../src/ethereumRevealCatalogTypes.ts';
 
 test('native empty mainnet rebuild replaces sparse history under the fence and preserves normal enrichment', { timeout: 90_000 }, async t => {
   const origin = getRevealCatalog('111k-v7')!;
@@ -52,8 +52,8 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
         });
       }
       snapshot() {
-        const sql=this.ctx.storage.sql,pools=this.store.catalogUpdate.pools();
-        return {effective:this.store.catalogUpdate.effectiveCatalog(),status:this.store.catalogUpdate.status(scope.operationId),
+        const sql=this.ctx.storage.sql,pools=this.store.catalogUpdate.reader.pools();
+        return {effective:this.store.catalogUpdate.reader.effectiveCatalog(),status:this.store.catalogUpdate.reader.status(scope.operationId),
           pools,free:pools.reduce((sum,pool)=>sum+pool.available,0),
           origin:JSON.parse(sql.exec('SELECT deployment_json FROM settings WHERE id=1').one().deployment_json),
           base:sql.exec('SELECT allocation_base_generation FROM settings WHERE id=1').one().allocation_base_generation,
@@ -73,7 +73,7 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
           updates.sealMappings(input.batch.batchId);
           const blocks=revealCollectionBlocks(input.batch.target.descriptor);
           for(;;){
-            const page=updates.metadataPreparationPage(input.batch.batchId,256);
+            const page=updates.reader.metadataPreparationPage(input.batch.batchId,256);
             if(!page.length)break;
             updates.metadataStage(input.batch.batchId,page.map(row=>{
               const block=lookupRevealCollectionBlock(blocks,row.category,row.assetId);
@@ -82,7 +82,7 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
               return {...row,attributesJson,sha256:createHash('sha256').update(attributesJson).digest('hex')};
             }));
           }
-          return updates.status(input.batch.batchId);
+          return updates.reader.status(input.batch.batchId);
         }
         if(input.command==='history-stage')return updates.generationStage(input.batchId);
         if(input.command==='init') {
@@ -107,11 +107,11 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
           return this.snapshot();
         }
         if(input.command==='stage') return this.fence.withRebuild(scope,()=>updates.stageEmptyRebuild(scope.operationId,4096));
-        if(input.command==='verify') return updates.verifyEmptyRebuild(scope.operationId);
+        if(input.command==='verify') return updates.reader.verifyEmptyRebuild(scope.operationId);
         if(input.command==='activate') return this.fence.withRebuild(scope,()=>{
           updates.sealEmptyRebuild(scope.operationId);
           updates.activateEmptyRebuild(scope.operationId,this.now);
-          updates.verifyEmptyRebuild(scope.operationId);
+          updates.reader.verifyEmptyRebuild(scope.operationId);
           updates.finalize(scope.operationId);
           return this.snapshot();
         });
@@ -125,9 +125,9 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
           this.store.freeze(deployment,{transactionHash:'0x'+'1'.repeat(64),blockHash:'0x'+'2'.repeat(64),blockNumber:101},
             [{crateTokenId:'111112',tokenIds:Array.from({length:20},(_,index)=>String(index+1))}],this.now);
           this.store.publicationComplete('1');
-          const canonical=updates.canonicalMetadata(['1'])[0];
+          const canonical=updates.reader.canonicalMetadata(['1'])[0];
           const claim=this.store.enrichment.claim(this.now).find(row=>row.token_id==='1');
-          return {canonical,claim,externalRequests,free:updates.pools().reduce((sum,pool)=>sum+pool.available,0)};
+          return {canonical,claim,externalRequests,free:updates.reader.pools().reduce((sum,pool)=>sum+pool.available,0)};
         }
         throw new Error('Unknown native rebuild command.');
       }

@@ -10,7 +10,8 @@ import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.
 import { buildNewRevealedArtwork, buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
-import { EthereumOwnerHatchingStore, type OwnerHatchingCanonical } from '../src/ethereumOwnerHatchingStore.ts';
+import { EthereumOwnerHatchingStore } from '../src/ethereumOwnerHatchingStore.ts';
+import { type OwnerHatchingCanonical } from '../src/ethereumOwnerHatchingTypes.ts';
 
 function revealSql(db: DatabaseSync): RevealSql {
   return { exec<T>(query: string, ...args: Array<string | number | null | ArrayBuffer>) {
@@ -504,7 +505,7 @@ test('audit follows owner publication through takeover and ignores superseded in
     assert.equal(page.tokens!.length, 1);
     assert.equal(page.tokens![0].category, 'painting');
     assert.equal(page.tokens![0].assetId, 41171);
-    assert.equal(page.tokens![0].metadataSha256, owners.canonical('1')!.targetSha256);
+    assert.equal(page.tokens![0].metadataSha256, owners.reader.canonical('1')!.targetSha256);
     assert.equal(page.tokens![0].collectionBlock, 'little swag');
   }
   for (const ownerState of ['pending', 'conflict', null]) {

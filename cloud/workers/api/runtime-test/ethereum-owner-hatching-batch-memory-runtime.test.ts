@@ -9,7 +9,7 @@ test('native 100-token owner scans preserve large quoted and Unicode metadata wi
   const source = `
     import { DurableObject } from 'cloudflare:workers';
     import { createHash } from 'node:crypto';
-    import { EthereumRevealCatalogUpdateStore } from ${path('cloud/workers/api/src/ethereumRevealCatalogUpdateStore.ts')};
+    import { EthereumRevealCatalogReader } from ${path('cloud/workers/api/src/ethereumRevealCatalogReader.ts')};
     import { buildNewRevealedArtwork } from ${path('cloud/workers/api/src/ethereumRevealCatalog.ts')};
     import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from ${path('cloud/workers/api/src/ethereumRevealAttributes.ts')};
     import { getRevealCatalog } from ${path('shared/ethereum/revealCatalogRegistry.ts')};
@@ -17,7 +17,7 @@ test('native 100-token owner scans preserve large quoted and Unicode metadata wi
       constructor(ctx,env) {
         super(ctx,env);
         ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS owner_hatching_tokens(token_id TEXT PRIMARY KEY,canonical_json TEXT)');
-        this.store=new EthereumRevealCatalogUpdateStore(ctx.storage.sql,work=>ctx.storage.transactionSync(work));
+        this.store=new EthereumRevealCatalogReader(ctx.storage.sql);
       }
       seed(start,unicode) {
         const catalog=getRevealCatalog('111k-v9');

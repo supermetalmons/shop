@@ -127,7 +127,6 @@ function assertCleanOverlay(view: ReturnType<typeof render>) {
   assert.equal(view.queryByRole('status'), null);
   assert.equal(view.queryByRole('alert'), null);
   assert.equal(view.queryByRole('button', { name: 'Close' }), null);
-  assert.equal(view.container.querySelector('.mi-note-wip__status'), null);
 }
 
 test('an unresolved pack keeps its placeholder until the correct 3D variant is available', async () => {
@@ -145,7 +144,7 @@ test('an unresolved pack keeps its placeholder until the correct 3D variant is a
 test('the same preview survives the 3D handoff and returns when the viewer fails', async () => {
   const h = await mount({ viewerOnly: true, loadingImageSrc: '/pack.webp' });
   const image = h.view.container.querySelector('.mi-note-pack-overlay__fallback img');
-  const stage = h.view.container.querySelector('.mi-note-wip__stage');
+  const stage = h.view.container.querySelector('.mi-note-pack__stage');
   assert.ok(image);
   assert.equal(stage?.getAttribute('aria-hidden'), 'true');
   ready();
@@ -161,7 +160,7 @@ test('preview crossfades do not bubble into the overlay close transition', async
   let transitions = 0;
   const h = await mount({ onTransitionEnd: () => { transitions += 1; } });
   fireEvent.transitionEnd(h.view.container.querySelector('.mi-note-pack-overlay__fallback')!, { propertyName: 'opacity' });
-  fireEvent.transitionEnd(h.view.container.querySelector('.mi-note-wip__stage')!, { propertyName: 'opacity' });
+  fireEvent.transitionEnd(h.view.container.querySelector('.mi-note-pack__stage')!, { propertyName: 'opacity' });
   assert.equal(transitions, 0);
   fireEvent.transitionEnd(h.view.container.querySelector('.reveal-overlay__frame')!, { propertyName: 'opacity' });
   assert.equal(transitions, 1);

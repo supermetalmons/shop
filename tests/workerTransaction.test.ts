@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -12,7 +12,7 @@ import {
 import { createWorkerTransactionSigner } from '../scripts/ops/worker-transaction/signer.ts';
 import { type createWorkerVersionClient, type TemporaryWorkerVersion, type WorkerSnapshot } from '../scripts/ops/worker-transaction/cloudflare.ts';
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, legacy = false) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'worker-transaction-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const payer = Keypair.generate();
@@ -25,7 +25,8 @@ function fixture(t: TestContext) {
     balance: 1, failPreflight: false, failVerify: false, failCleanup: false, failBroadcast: false, uploadMode: 'ok' as 'ok' | 'unknown' | 'rejected',
     visible: false, productionUnchanged: true, simulationAccounts: [] as string[][],
     version: undefined as TemporaryWorkerVersion | undefined, bundle: '', signature: '' };
-  const directory = path.join(root, '.cache/worker-transactions/test-transfer');
+  const directory = path.join(root, legacy ? '.cache' : '.operations', 'worker-transactions/test-transfer');
+  if (legacy) mkdirSync(directory, { recursive: true, mode: 0o700 });
   const journalPath = path.join(directory, 'journal.json');
   const journal = () => JSON.parse(readFileSync(journalPath, 'utf8')) as WorkerTransactionJournal;
   const connection = {
@@ -95,7 +96,7 @@ function fixture(t: TestContext) {
   };
   const run = (write = false, selected = operation) => runWorkerTransaction(selected, { root, cloudflare: target, write }, dependencies);
   return { root, target, payer, recipient, state, operation, dependencies, run, journal, journalPath,
-    receiptPath: path.join(directory, 'receipt.json'), lockPath: path.join(root, '.cache/worker-transactions/locks', `${target.accountId}-${target.workerName}.lock`) };
+    receiptPath: path.join(directory, 'receipt.json'), lockPath: path.join(root, '.operations/worker-transactions/locks', `${target.accountId}-${target.workerName}.lock`) };
 }
 
 test('default invocation only validates and simulates without Cloudflare, signing, or files', async t => {
@@ -106,6 +107,15 @@ test('default invocation only validates and simulates without Cloudflare, signin
   assert.deepEqual(f.state.simulations, [false]);
   assert.equal(f.state.sends, 0); assert.equal(f.state.uploads, 0);
   assert.equal(existsSync(path.join(f.root, '.cache')), false);
+  assert.equal(existsSync(path.join(f.root, '.operations')), false);
+});
+
+test('new operations cannot use the target-lock directory as their ID', async t => {
+  const f = fixture(t);
+  for (const write of [false, true]) await assert.rejects(f.run(write, { ...f.operation, id: 'locks' }), /reserved/);
+  assert.deepEqual(f.state.events, []);
+  assert.equal(existsSync(path.join(f.root, '.cache')), false);
+  assert.equal(existsSync(path.join(f.root, '.operations')), false);
 });
 
 test('explicit write freezes one message, journals it before broadcast and saves verified cleanup receipt', async t => {
@@ -121,6 +131,45 @@ test('explicit write freezes one message, journals it before broadcast and saves
   assert.equal(receipt.feeLamports, 5000); assert.equal(receipt.worker.absent, true);
   assert.equal(f.journal().cleanup?.productionUnchanged, true);
   assert.equal(existsSync(f.lockPath), false);
+  assert.equal(existsSync(f.lockPath.replace('/.operations/', '/.cache/')), false);
+  assert.equal(statSync(path.join(f.root, '.operations')).mode & 0o777, 0o700);
+});
+
+test('legacy Worker journals resume in place and read-only inspection creates no new operation storage', async t => {
+  const f = fixture(t, true);
+  assert.equal((await f.run()).mode, 'preflight');
+  assert.equal(existsSync(path.join(f.root, '.operations')), false);
+  f.state.failCleanup = true;
+  await assert.rejects(f.run(true), /Cleanup unavailable/);
+  const signed = f.journal().signed;
+  rmSync(path.join(f.root, '.operations'), { recursive: true });
+  const before = readFileSync(f.journalPath, 'utf8');
+  assert.equal((await f.run()).mode, 'verified');
+  assert.equal(readFileSync(f.journalPath, 'utf8'), before);
+  assert.equal(existsSync(path.join(f.root, '.operations')), false);
+  f.state.failCleanup = false;
+  assert.equal((await f.run(true)).mode, 'complete');
+  assert.deepEqual(f.journal().signed, signed);
+  assert.equal(f.state.uploads, 1); assert.equal(f.state.sends, 1);
+  assert.equal(existsSync(path.join(f.root, '.operations/worker-transactions/test-transfer')), false);
+  assert.ok(existsSync(f.receiptPath));
+});
+
+test('duplicate Worker operation evidence stops before signer cleanup or submission', async t => {
+  const f = fixture(t);
+  f.state.failCleanup = true;
+  await assert.rejects(f.run(true), /Cleanup unavailable/);
+  const before = readFileSync(f.journalPath, 'utf8');
+  const legacy = f.journalPath.replace('/.operations/', '/.cache/');
+  mkdirSync(path.dirname(legacy), { recursive: true, mode: 0o700 });
+  writeFileSync(legacy, before);
+  f.state.failCleanup = false; f.state.events.length = 0;
+  await assert.rejects(f.run(), /both .operations and .cache/);
+  await assert.rejects(f.run(true), /both .operations and .cache/);
+  assert.deepEqual(f.state.events, []);
+  assert.equal(readFileSync(f.journalPath, 'utf8'), before);
+  assert.equal(readFileSync(legacy, 'utf8'), before);
+  assert.equal(f.state.uploads, 1); assert.equal(f.state.sends, 1);
 });
 
 test('preflight instruction replacement cannot change the recorded intent or signed transfer', async t => {
@@ -247,12 +296,18 @@ test('definitively rejected upload remains unsubmitted and a corrected retry can
 });
 
 test('stale lock reports its owner and preserves existing recovery evidence', async t => {
-  const f = fixture(t);
-  mkdirSync(path.dirname(f.lockPath), { recursive: true });
-  writeFileSync(f.lockPath, '1234567');
-  await assert.rejects(f.run(true), error => error instanceof Error && /1234567/.test(error.message) && /stopped/.test(error.message) && /preserve all journals/.test(error.message));
-  assert.equal(readFileSync(f.lockPath, 'utf8'), '1234567');
-  assert.deepEqual(f.state.events, []);
+  for (const legacy of [false, true]) {
+    const f = fixture(t);
+    const held = legacy ? f.lockPath.replace('/.operations/', '/.cache/') : f.lockPath;
+    const other = legacy ? f.lockPath : f.lockPath.replace('/.operations/', '/.cache/');
+    mkdirSync(path.dirname(held), { recursive: true, mode: 0o700 });
+    writeFileSync(held, '1234567');
+    await assert.rejects(f.run(true), error => error instanceof Error && /1234567/.test(error.message) && /stopped/.test(error.message) && /preserve all journals/.test(error.message));
+    assert.equal(readFileSync(held, 'utf8'), '1234567');
+    assert.equal(existsSync(other), false);
+    assert.equal(existsSync(path.join(path.dirname(f.journalPath), 'operation.lock')), false);
+    assert.deepEqual(f.state.events, []);
+  }
 });
 
 test('resume rejects a different Worker or signer binding after cleaning the saved version', async t => {
@@ -271,7 +326,7 @@ test('resume rejects a different Worker or signer binding after cleaning the sav
 test('operation lock cannot be bypassed by choosing a different Worker target', async t => {
   const f = fixture(t);
   const lock = path.join(path.dirname(f.journalPath), 'operation.lock');
-  mkdirSync(path.dirname(lock), { recursive: true });
+  mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
   writeFileSync(lock, '7654321');
   await assert.rejects(runWorkerTransaction(f.operation, { root: f.root, write: true,
     cloudflare: { accountId: 'b'.repeat(32), workerName: 'other-api' } }, f.dependencies), /7654321/);
@@ -280,25 +335,112 @@ test('operation lock cannot be bypassed by choosing a different Worker target', 
 });
 
 test('unresolved cleanup blocks another operation on the same Worker until the original resumes', async t => {
+  for (const legacy of [false, true]) {
+    const f = fixture(t, legacy);
+    f.state.failCleanup = true;
+    await assert.rejects(f.run(true), /Cleanup unavailable/);
+    const pending = readFileSync(f.journalPath, 'utf8');
+    const next = { ...f.operation, id: 'second-transfer', preflight: async () => { throw new Error('Next operation reached preflight'); } };
+    if (!legacy) mkdirSync(path.join(f.root, '.cache/worker-transactions/second-transfer'), { recursive: true, mode: 0o700 });
+    const runNext = () => runWorkerTransaction(next, { root: f.root, write: true,
+      cloudflare: { ...f.target, accountId: f.target.accountId.toUpperCase() } }, f.dependencies);
+    f.state.failCleanup = false; f.state.events.length = 0;
+    await assert.rejects(runNext(), error => error instanceof Error && /unresolved Worker cleanup/i.test(error.message) && error.message.includes(f.operation.id));
+    assert.deepEqual(f.state.events, []);
+    assert.equal(readFileSync(f.journalPath, 'utf8'), pending);
+    assert.deepEqual(f.state.simulations, [false, true]);
+    assert.equal(f.state.uploads, 1); assert.equal(f.state.sends, 1);
+    assert.equal((await f.run(true)).mode, 'complete');
+    f.state.events.length = 0;
+    await assert.rejects(runNext(), /Next operation reached preflight/);
+    assert.deepEqual(f.state.events, ['snapshot']);
+    assert.equal(f.journal().cleanup?.absent, true);
+    assert.equal(f.state.uploads, 1); assert.equal(f.state.sends, 1);
+  }
+});
+
+test('retained locks operations block new work and resume in place in either root', async t => {
+  for (const base of ['.cache', '.operations']) {
+    const f = fixture(t);
+    const preflight = await f.run();
+    assert.ok(preflight.mode === 'preflight');
+    f.state.failCleanup = true;
+    await assert.rejects(f.run(true), /Cleanup unavailable/);
+    const operation = { ...f.operation, id: 'locks' };
+    const intentHash = createHash('sha256').update(JSON.stringify({ ...preflight.intent, id: operation.id })).digest('hex');
+    const journalPath = path.join(f.root, base, 'worker-transactions/locks/journal.json');
+    const saved = { ...f.journal(), operationId: operation.id, intentHash };
+    writeFileSync(journalPath, JSON.stringify(saved));
+    rmSync(f.journalPath);
+    const pending = readFileSync(journalPath, 'utf8');
+    const next = { ...f.operation, id: 'next-transfer', preflight: async () => { throw new Error('Next operation reached preflight'); } };
+    f.state.failCleanup = false;
+    f.state.events.length = 0;
+    await assert.rejects(f.run(true, next), /Operation locks has unresolved Worker cleanup/);
+    assert.deepEqual(f.state.events, []);
+    assert.equal(readFileSync(journalPath, 'utf8'), pending);
+    assert.equal((await f.run(false, operation)).mode, 'verified');
+    assert.equal(readFileSync(journalPath, 'utf8'), pending);
+    assert.equal((await f.run(true, operation)).mode, 'complete');
+    const completed = JSON.parse(readFileSync(journalPath, 'utf8')) as WorkerTransactionJournal;
+    assert.deepEqual(completed.signed, saved.signed);
+    assert.equal(completed.cleanup?.absent, true);
+    assert.ok(existsSync(path.join(path.dirname(journalPath), 'receipt.json')));
+    assert.equal(existsSync(f.journalPath), false);
+    assert.equal(existsSync(path.join(f.root, base === '.cache' ? '.operations' : '.cache', 'worker-transactions/locks/journal.json')), false);
+    f.state.events.length = 0;
+    await assert.rejects(f.run(true, next), /Next operation reached preflight/);
+    assert.deepEqual(f.state.events, ['snapshot']);
+    assert.equal(f.state.uploads, 1);
+    assert.equal(f.state.sends, 1);
+  }
+});
+
+test('duplicate retained locks journals fail closed without touching either copy', async t => {
   const f = fixture(t);
-  f.state.failCleanup = true;
-  await assert.rejects(f.run(true), /Cleanup unavailable/);
-  const pending = readFileSync(f.journalPath, 'utf8');
-  const next = { ...f.operation, id: 'second-transfer', preflight: async () => { throw new Error('Next operation reached preflight'); } };
-  const runNext = () => runWorkerTransaction(next, { root: f.root, write: true,
-    cloudflare: { ...f.target, accountId: f.target.accountId.toUpperCase() } }, f.dependencies);
-  f.state.failCleanup = false; f.state.events.length = 0;
-  await assert.rejects(runNext(), error => error instanceof Error && /unresolved Worker cleanup/i.test(error.message) && error.message.includes(f.operation.id));
+  const pending = JSON.stringify({ version: 1, operationId: 'locks', target: f.target, uploadStarted: true });
+  const files = ['.cache', '.operations'].map(base => {
+    const directory = path.join(f.root, base, 'worker-transactions/locks');
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const file = path.join(directory, 'journal.json');
+    writeFileSync(file, pending);
+    return file;
+  });
+  await assert.rejects(f.run(true), /both .operations and .cache/);
+  await assert.rejects(f.run(true, { ...f.operation, id: 'locks' }), /both .operations and .cache/);
   assert.deepEqual(f.state.events, []);
-  assert.equal(readFileSync(f.journalPath, 'utf8'), pending);
-  assert.deepEqual(f.state.simulations, [false, true]);
-  assert.equal(f.state.uploads, 1); assert.equal(f.state.sends, 1);
-  assert.equal((await f.run(true)).mode, 'complete');
-  f.state.events.length = 0;
-  await assert.rejects(runNext(), /Next operation reached preflight/);
-  assert.deepEqual(f.state.events, ['snapshot']);
-  assert.equal(f.journal().cleanup?.absent, true);
-  assert.equal(f.state.uploads, 1); assert.equal(f.state.sends, 1);
+  for (const file of files) assert.equal(readFileSync(file, 'utf8'), pending);
+});
+
+test('unsigned retained locks journals remain resumable after replacement preflight fails', async t => {
+  for (const base of ['.cache', '.operations']) {
+    const f = fixture(t);
+    const preflight = await f.run();
+    assert.ok(preflight.mode === 'preflight');
+    f.state.uploadMode = 'rejected';
+    await assert.rejects(f.run(true), /rejected upload/);
+    const operation = { ...f.operation, id: 'locks' };
+    const intentHash = createHash('sha256').update(JSON.stringify({ ...preflight.intent, id: operation.id })).digest('hex');
+    const journalPath = path.join(f.root, base, 'worker-transactions/locks/journal.json');
+    const saved = { ...f.journal(), operationId: operation.id, intentHash };
+    assert.equal(saved.signed, undefined);
+    assert.equal(saved.uploadStarted, false);
+    assert.equal(saved.cleanup, undefined);
+    writeFileSync(journalPath, JSON.stringify(saved));
+    rmSync(f.journalPath);
+    const pending = readFileSync(journalPath, 'utf8');
+    f.state.failPreflight = true;
+    for (let retry = 0; retry < 2; retry++) {
+      await assert.rejects(f.run(true, operation), /Business precondition unavailable/);
+      assert.equal(readFileSync(journalPath, 'utf8'), pending);
+      assert.deepEqual(JSON.parse(readFileSync(path.join(path.dirname(journalPath), `${saved.attemptId}.json`), 'utf8')), saved);
+    }
+    f.state.failPreflight = false;
+    assert.equal((await f.run(false, operation)).mode, 'preflight');
+    assert.equal(readFileSync(journalPath, 'utf8'), pending);
+    assert.equal(f.state.uploads, 1);
+    assert.equal(f.state.sends, 0);
+  }
 });
 
 test('unresolved cleanup on another Worker does not block a new operation', async t => {

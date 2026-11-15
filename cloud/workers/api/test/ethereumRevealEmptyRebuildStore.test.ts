@@ -63,7 +63,7 @@ function fixture(t: TestContext, chainId = 1, catalog = predecessor) {
 
 function stage(store: EthereumRevealStore) {
   store.catalogUpdate.beginEmptyRebuild({ operationId, batch, now: 1000 });
-  while (store.catalogUpdate.status(operationId)!.generationSeeded < 111111) store.catalogUpdate.stageEmptyRebuild(operationId);
+  while (store.catalogUpdate.reader.status(operationId)!.generationSeeded < 111111) store.catalogUpdate.stageEmptyRebuild(operationId);
   store.catalogUpdate.sealEmptyRebuild(operationId);
 }
 
@@ -83,7 +83,7 @@ function stageOnline(store: EthereumRevealStore, update: RevealCatalogUpdateBatc
   updates.sealMappings(update.batchId);
   const blocks = revealCollectionBlocks(update.target.descriptor);
   for (;;) {
-    const page = updates.metadataPreparationPage(update.batchId, 256);
+    const page = updates.reader.metadataPreparationPage(update.batchId, 256);
     if (!page.length) break;
     updates.metadataStage(update.batchId, page.map(row => {
       const block = lookupRevealCollectionBlock(blocks, row.category, row.assetId);
@@ -92,7 +92,7 @@ function stageOnline(store: EthereumRevealStore, update: RevealCatalogUpdateBatc
       return { ...row, attributesJson, sha256: digest(attributesJson) };
     }));
   }
-  while (updates.status(update.batchId)!.generationSeeded < 111111) updates.generationStage(update.batchId);
+  while (updates.reader.status(update.batchId)!.generationSeeded < 111111) updates.generationStage(update.batchId);
   updates.seal(update.batchId);
 }
 
@@ -115,32 +115,32 @@ test('empty rebuild replaces an activated sparse allocation base and preserves l
   });
   const before = priorInventory();
   f.store.catalogUpdate.beginEmptyRebuild({ operationId, batch, now: 1000 });
-  while (f.store.catalogUpdate.status(operationId)!.generationSeeded < 111111) f.store.catalogUpdate.stageEmptyRebuild(operationId);
-  assert.equal(f.store.catalogUpdate.verifyEmptyRebuild(operationId).targetRevision, 2);
+  while (f.store.catalogUpdate.reader.status(operationId)!.generationSeeded < 111111) f.store.catalogUpdate.stageEmptyRebuild(operationId);
+  assert.equal(f.store.catalogUpdate.reader.verifyEmptyRebuild(operationId).targetRevision, 2);
   f.database.prepare("UPDATE reveal_catalog_free SET origin_asset_id=111112,asset_id=111112 WHERE generation=? AND category='painting' AND slot=0").run(operationId);
   assert.throws(() => f.store.catalogUpdate.sealEmptyRebuild(operationId), /asset identities/);
   assert.deepEqual(priorInventory(), before);
-  assert.equal(f.store.catalogUpdate.status(operationId)!.phase, 'staging');
+  assert.equal(f.store.catalogUpdate.reader.status(operationId)!.phase, 'staging');
   f.database.prepare("UPDATE reveal_catalog_free SET origin_asset_id=1,asset_id=1 WHERE generation=? AND category='painting' AND slot=0").run(operationId);
   f.store.catalogUpdate.sealEmptyRebuild(operationId);
   f.fail('UPDATE settings SET active_catalog_generation');
   assert.throws(() => f.store.catalogUpdate.activateEmptyRebuild(operationId, 2000), /injected failure/);
   f.fail();
   assert.deepEqual(priorInventory(), before);
-  assert.equal(f.store.catalogUpdate.status(operationId)!.phase, 'ready');
-  assert.equal(f.store.catalogUpdate.status(operationId)!.activatedAtMs, null);
+  assert.equal(f.store.catalogUpdate.reader.status(operationId)!.phase, 'ready');
+  assert.equal(f.store.catalogUpdate.reader.status(operationId)!.activatedAtMs, null);
   const reopened = f.open();
   reopened.catalogUpdate.activateEmptyRebuild(operationId, 2000);
-  assert.equal(reopened.catalogUpdate.verifyEmptyRebuild(operationId).targetRevision, 2);
+  assert.equal(reopened.catalogUpdate.reader.verifyEmptyRebuild(operationId).targetRevision, 2);
   reopened.catalogUpdate.finalize(operationId);
   while (reopened.catalogUpdate.pruneEmptyRebuild(operationId).remaining) {}
   assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM reveal_catalog_mappings WHERE batch_id=?').get(sparse.batchId)!.n, 5201);
-  assert.deepEqual(reopened.catalogUpdate.resolveUnit({ category: 'egg', assetId: 1 }), { category: 'egg', assetId: 1, assignmentRevision: 2 });
+  assert.deepEqual(reopened.catalogUpdate.reader.resolveUnit({ category: 'egg', assetId: 1 }), { category: 'egg', assetId: 1, assignmentRevision: 2 });
   assert.equal(f.database.prepare("SELECT COUNT(*) AS n FROM reveal_catalog_free WHERE generation=? AND category='painting' AND asset_id BETWEEN 47129 AND 52329").get(operationId)!.n, 5201);
   f.random.push(target.categories['3d'].count + target.categories.animated.count, 0);
   reopened.freeze(f.deployment, { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 },
     [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 3000);
-  assert.equal(reopened.catalogUpdate.canonicalMetadata(['1'])[0].category, 'egg');
+  assert.equal(reopened.catalogUpdate.reader.canonicalMetadata(['1'])[0].category, 'egg');
   const next = structuredClone(target);
   next.catalogVersion = '111k-v10';
   next.categories.eggs.count--;
@@ -149,15 +149,15 @@ test('empty rebuild replaces an activated sparse allocation base and preserves l
   const update = sparseBatch(target, next);
   stageOnline(reopened, update);
   reopened.catalogUpdate.activate(update.batchId, 4000);
-  const publication = reopened.catalogUpdate.publicationPage(update.batchId)[0];
+  const publication = reopened.catalogUpdate.reader.publicationPage(update.batchId)[0];
   assert.equal(publication.tokenId, '1');
   assert.equal(publication.assetId, 59);
   reopened.catalogUpdate.acknowledgePublication(update.batchId, publication.tokenId, publication.metadataRevision, publication.targetSha256);
   reopened.catalogUpdate.finalize(update.batchId);
-  assert.equal(reopened.catalogUpdate.verify(sparse.batchId).targetRevision, 1);
-  assert.equal(f.open().catalogUpdate.verify(update.batchId).targetRevision, 3);
-  assert.deepEqual(reopened.catalogUpdate.resolveUnit({ category: 'egg', assetId: 1 }), { category: 'video', assetId: 59, assignmentRevision: 3 });
-  assert.equal(reopened.catalogUpdate.pools().reduce((sum, pool) => sum + pool.available, 0), 111091);
+  assert.equal(reopened.catalogUpdate.reader.verify(sparse.batchId).targetRevision, 1);
+  assert.equal(f.open().catalogUpdate.reader.verify(update.batchId).targetRevision, 3);
+  assert.deepEqual(reopened.catalogUpdate.reader.resolveUnit({ category: 'egg', assetId: 1 }), { category: 'video', assetId: 59, assignmentRevision: 3 });
+  assert.equal(reopened.catalogUpdate.reader.pools().reduce((sum, pool) => sum + pool.available, 0), 111091);
 });
 
 test('empty rebuild resumes bounded atomic seeding and retains immutable origin and cancelled evidence', t => {
@@ -174,7 +174,7 @@ test('empty rebuild resumes bounded atomic seeding and retains immutable origin 
   f.fail('UPDATE reveal_catalog_pools SET seeded=seeded+?');
   assert.throws(() => f.store.catalogUpdate.stageEmptyRebuild(operationId), /injected failure/);
   f.fail();
-  assert.equal(f.store.catalogUpdate.status(operationId)!.generationSeeded, 0);
+  assert.equal(f.store.catalogUpdate.reader.status(operationId)!.generationSeeded, 0);
   assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM reveal_catalog_free WHERE generation=?').get(operationId)!.n, 0);
   assert.equal(f.store.catalogUpdate.stageEmptyRebuild(operationId).generationSeeded, 4096);
   const reopened = f.open();
@@ -185,7 +185,7 @@ test('empty rebuild resumes bounded atomic seeding and retains immutable origin 
   assert.equal(active.targetRevision, 1);
   assert.equal(active.frozen, 0);
   assert.equal(active.metadataStaged, 0);
-  assert.equal(reopened.catalogUpdate.verifyEmptyRebuild(operationId).generationSeeded, 111111);
+  assert.equal(reopened.catalogUpdate.reader.verifyEmptyRebuild(operationId).generationSeeded, 111111);
   assert.equal(f.database.prepare('SELECT deployment_json FROM settings').get()!.deployment_json, origin);
   assert.equal(f.database.prepare('SELECT allocation_base_generation FROM settings').get()!.allocation_base_generation, operationId);
   assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM reveal_catalog_mappings WHERE batch_id=?').get(operationId)!.n, 0);
@@ -200,7 +200,7 @@ test('empty rebuild resumes bounded atomic seeding and retains immutable origin 
   assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM free_slots').get()!.n, 0);
   assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM pools').get()!.n, 0);
   assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM reveal_catalog_mappings WHERE batch_id=?').get(batch.batchId)!.n, 256);
-  assert.equal(reopened.catalogUpdate.status(batch.batchId)!.phase, 'cancelled');
+  assert.equal(reopened.catalogUpdate.reader.status(batch.batchId)!.phase, 'cancelled');
   assert.throws(() => f.database.prepare("UPDATE reveal_catalog_generations SET mode='online' WHERE batch_id=?").run(operationId), /immutable/);
 });
 
@@ -222,7 +222,7 @@ test('empty rebuild rejects testnet, existing reservations, changed replay, and 
   stage(f.store);
   f.database.prepare("UPDATE reveal_catalog_free SET origin_asset_id=111112,asset_id=111112 WHERE generation=? AND category='painting' AND slot=0").run(operationId);
   assert.throws(() => f.store.catalogUpdate.activateEmptyRebuild(operationId), /asset identities/);
-  assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogVersion, '111k-v8');
+  assert.equal(f.store.catalogUpdate.reader.effectiveCatalog()!.catalogVersion, '111k-v8');
 });
 
 test('an existing store refreshes cached allocation counts after another store rebuilds the base', { timeout: 60_000 }, t => {
@@ -240,7 +240,7 @@ test('an existing store refreshes cached allocation counts after another store r
   f.random.push(target.categories['3d'].count + target.categories.animated.count + target.categories.eggs.count, target.categories.paintings.count - 1);
   store.freeze(f.deployment, { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 },
     [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }], 3000);
-  const before = store.catalogUpdate.canonicalMetadata(['1'])[0];
+  const before = store.catalogUpdate.reader.canonicalMetadata(['1'])[0];
   assert.equal(before.category, 'painting');
   assert.equal(before.assetId, 68980);
   assert.equal(before.assignmentRevision, 1);
@@ -258,12 +258,12 @@ test('an existing store refreshes cached allocation counts after another store r
   store.catalogUpdate.sealMappings(update.batchId);
   const attributesJson = JSON.stringify([{ trait_type: 'collection block', value: 'future' }]);
   store.catalogUpdate.metadataStage(update.batchId, [{ category: 'video', assetId: 59, attributesJson, sha256: digest(attributesJson) }]);
-  while (store.catalogUpdate.status(update.batchId)!.generationSeeded < 111111) store.catalogUpdate.generationStage(update.batchId);
+  while (store.catalogUpdate.reader.status(update.batchId)!.generationSeeded < 111111) store.catalogUpdate.generationStage(update.batchId);
   store.catalogUpdate.seal(update.batchId);
   store.catalogUpdate.activate(update.batchId, 5000);
-  assert.equal(store.catalogUpdate.verify(update.batchId).targetRevision, 2);
-  assert.equal(store.catalogUpdate.canonicalMetadata(['1'])[0].metadataJson, before.metadataJson);
-  assert.deepEqual(store.catalogUpdate.resolveUnit({ category: 'egg', assetId: target.categories.eggs.count }),
+  assert.equal(store.catalogUpdate.reader.verify(update.batchId).targetRevision, 2);
+  assert.equal(store.catalogUpdate.reader.canonicalMetadata(['1'])[0].metadataJson, before.metadataJson);
+  assert.deepEqual(store.catalogUpdate.reader.resolveUnit({ category: 'egg', assetId: target.categories.eggs.count }),
     { category: 'video', assetId: 59, assignmentRevision: 2 });
-  assert.equal(store.catalogUpdate.pools().reduce((sum, pool) => sum + pool.available, 0), 111091);
+  assert.equal(store.catalogUpdate.reader.pools().reduce((sum, pool) => sum + pool.available, 0), 111091);
 });

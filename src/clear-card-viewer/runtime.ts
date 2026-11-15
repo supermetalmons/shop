@@ -1,7 +1,10 @@
 import * as THREE from 'three';
+import { disposeObject3D } from './resources';
+import { createClearCardModelLoads } from './modelLoads';
+import { createClearCardFrameLoop } from './frameLoop';
+import { createClearCardInteraction } from './interaction';
+import { stepSpringValue, isSpringValueSettled, snapSpringValue, type SpringValue } from './motion';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type {
   ClearCardLightingConfig,
   LightStage,
@@ -14,35 +17,14 @@ import {
   resolveSnapshotOutputSize,
 } from '../lib/clearCardSnapshot';
 import {
-  createSnapBackState,
-  releaseSnapBack,
-  resetSnapBackTracking,
-  settleSnapBackInstantly,
-  stepSnapBackSpring,
-  trackSnapBackVelocity,
-} from '../lib/clearCardSnapBack';
-import {
-  createAdaptiveFrameRateMonitor,
-  resolveMedianFrameInterval,
-  resolveAdaptiveSlowFrameThreshold,
-} from '../lib/adaptiveFrameRate';
-import {
   advanceClearCardGatedHit,
-  canStartClearCardPointerInteraction,
   createClearCardGatedHitState,
   isClearCardInteractionPoint,
-  isClearCardImpactKey,
-  isClearCardImpactPointer,
   type ClearCardGatedHitState,
 } from '../lib/clearCardReveal';
 import { resolveClearCardRenderSize } from '../lib/clearCardCanvas';
-import {
-  releaseClearCardModelLoadResources,
-  type ClearCardModelLoadResources,
-} from '../lib/clearCardModelLoadResources';
 import { clearCardModelLoadDecision } from '../lib/clearCardModels';
 import { releaseObjectGeometryCpuBuffersAfterUpload } from '../lib/threeGpuOnlyGeometry';
-import { VIEWER_TAP_MAX_MOVEMENT_PX } from '../lib/miNoteCardInput';
 import { clearCardPreviewPixelBounds, type ClearCardPreviewModel } from '../lib/clearCardPreviewLayout';
 
 import type {
@@ -51,29 +33,11 @@ import type {
   ClearCardSnapshot,
   ClearCardSnapshotOptions,
   ClearCardThreeViewerProps,
-  ClearCardViewMode,
 } from './types';
 
-const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
 const CANVAS_OVERSCAN = 1.5;
-const INTERACTION_FRAME_INTERVAL_MS = 1_000 / 30;
-const ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY =
-  'mons.clear-card.interaction-throttle-required.v1';
-const ADAPTIVE_THROTTLE_REPROBE_MS = 60_000;
-const DISPLAY_CADENCE_SAMPLE_SIZE = 8;
-const DISPLAY_CADENCE_MAX_ATTEMPTS = 24;
-const DISPLAY_CADENCE_MAX_INTERVAL_MS = 100;
 const CAMERA_FIT_MARGIN = 1.06;
-const MAX_TILT_X = THREE.MathUtils.degToRad(25);
-const MAX_TILT_Y = THREE.MathUtils.degToRad(14);
-const SPRING_STIFFNESS = 60;
-const SPRING_DAMPING = 11;
-const SPRING_EPSILON = 0.0001;
-const UNRESTRICTED_ROTATION_SPEED = Math.PI / 300;
-const KEYBOARD_ROTATION_STEP = THREE.MathUtils.degToRad(12);
-const UNRESTRICTED_DRAG_THRESHOLD_SQ = VIEWER_TAP_MAX_MOVEMENT_PX ** 2;
-const MAX_VERTICAL_ORBIT = THREE.MathUtils.degToRad(45);
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 const HITS_TO_BREAK = 9;
@@ -222,34 +186,6 @@ function lightMatchesStage(scope: LightStage, stage: ClearCardDisplayStage) {
   return scope === 'pack' ? stage === 'pack' : stage !== 'pack';
 }
 
-type TiltState = {
-  currentX: number;
-  currentY: number;
-  targetX: number;
-  targetY: number;
-  velocityX: number;
-  velocityY: number;
-};
-
-type UnrestrictedRotationState = {
-  quaternion: THREE.Quaternion;
-  deltaQuaternion: THREE.Quaternion;
-  deltaEuler: THREE.Euler;
-  pointerId: number | null;
-  startX: number;
-  startY: number;
-  lastX: number;
-  lastY: number;
-  dragged: boolean;
-  lockedAxis: 'horizontal' | 'vertical' | null;
-};
-
-type SpringValue = {
-  current: number;
-  target: number;
-  velocity: number;
-};
-
 type PackShard = {
   holder: THREE.Group;
   home: THREE.Vector3;
@@ -280,74 +216,6 @@ type Sparkle = {
   green: number;
   blue: number;
 };
-
-function resolveViewMode(
-  unrestrictedMovement: boolean,
-  axisLockedOrbit: boolean,
-): ClearCardViewMode {
-  if (axisLockedOrbit) return 'orbit';
-  return unrestrictedMovement ? 'free' : 'tilt';
-}
-
-function disposeObject3D(root: THREE.Object3D) {
-  const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
-  const textures = new Set<THREE.Texture>();
-
-  root.traverse((object) => {
-    if (!(object instanceof THREE.Mesh) && !(object instanceof THREE.Points)) return;
-    geometries.add(object.geometry);
-    const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
-    objectMaterials.forEach((material) => {
-      materials.add(material);
-      Object.values(material as unknown as Record<string, unknown>).forEach((value) => {
-        if (value instanceof THREE.Texture) textures.add(value);
-      });
-    });
-  });
-
-  textures.forEach((texture) => {
-    const image = texture.source.data as { close?: () => void } | null;
-    image?.close?.();
-    texture.dispose();
-  });
-  materials.forEach((material) => material.dispose());
-  geometries.forEach((geometry) => geometry.dispose());
-}
-
-function stepSpringAxis(
-  current: number,
-  target: number,
-  velocity: number,
-  deltaSeconds: number,
-  stiffness: number,
-  damping: number,
-): { current: number; velocity: number } {
-  const acceleration = (target - current) * stiffness - velocity * damping;
-  const nextVelocity = velocity + acceleration * deltaSeconds;
-  return {
-    current: current + nextVelocity * deltaSeconds,
-    velocity: nextVelocity,
-  };
-}
-
-function stepSpringValue(spring: SpringValue, deltaSeconds: number, stiffness: number, damping: number) {
-  const stepped = stepSpringAxis(spring.current, spring.target, spring.velocity, deltaSeconds, stiffness, damping);
-  spring.current = stepped.current;
-  spring.velocity = stepped.velocity;
-}
-
-function isSpringValueSettled(spring: SpringValue) {
-  return (
-    Math.abs(spring.target - spring.current) <= SPRING_EPSILON &&
-    Math.abs(spring.velocity) <= SPRING_EPSILON
-  );
-}
-
-function snapSpringValue(spring: SpringValue) {
-  spring.current = spring.target;
-  spring.velocity = 0;
-}
 
 function partitionGeometryIntoQuadrants(geometry: THREE.BufferGeometry): THREE.BufferGeometry[] {
   geometry.computeBoundingBox();
@@ -547,19 +415,6 @@ function copyCanvasToPngBlob(source: HTMLCanvasElement) {
   return canvasToPngBlob(canvas);
 }
 
-type ClearCardPointerInput = Pick<
-  PointerEvent,
-  'clientX' | 'clientY' | 'pointerId' | 'pointerType' | 'isPrimary' | 'button' | 'timeStamp' | 'preventDefault'
-> & { currentTarget: HTMLCanvasElement };
-type ClearCardKeyboardInput = Pick<
-  KeyboardEvent,
-  'defaultPrevented' | 'key' | 'repeat' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey' |
-  'timeStamp' | 'preventDefault' | 'stopPropagation'
->;
-type ClearCardClickInput = Pick<
-  MouseEvent,
-  'defaultPrevented' | 'detail' | 'preventDefault' | 'stopPropagation'
->;
 type RendererOptions = Pick<
   ClearCardThreeViewerProps,
   'packModelUrl' | 'interactionFrameRateMode' | 'onStatusChange'
@@ -571,9 +426,6 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
     cardModelUrl,
     lightingConfig,
     renderQualityByStage,
-    unrestrictedMovement,
-    axisLockedOrbit,
-    snapBackOnRelease = false,
     interactionEnabled = true,
     hitProgressionMode = 'fixed',
     revealReady = true,
@@ -585,7 +437,6 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
     onPackHit,
     onPackBreak,
   } = initialOptions;
-  let currentCanvas: HTMLCanvasElement | null = null;
   let currentReady = ready;
   let currentOnFrameRendered = onFrameRendered;
   let currentOnPreviewFrame = onPreviewFrame;
@@ -598,9 +449,6 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
   let currentTransmissionResolutionScale = renderQualityByStage?.pack.transmissionResolutionScale ??
     TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
   let currentReducedMotion = false;
-  let currentAxisLockedOrbit = axisLockedOrbit;
-  let currentSnapBackOnRelease = snapBackOnRelease;
-  let currentViewMode: ClearCardViewMode = resolveViewMode(unrestrictedMovement, axisLockedOrbit);
   let currentViewerReady = false;
   let currentStage: ClearCardDisplayStage = 'pack';
   let currentCardModelUrl = cardModelUrl;
@@ -621,353 +469,17 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
   let currentOnPackHit = onPackHit;
   let currentOnPackBreak = onPackBreak;
   let currentOnCardModelLoadStatusChange = onCardModelLoadStatusChange;
-  const currentTilt: TiltState = {
-    currentX: 0,
-    currentY: 0,
-    targetX: 0,
-    targetY: 0,
-    velocityX: 0,
-    velocityY: 0,
-  };
-  const currentUnrestrictedRotation: UnrestrictedRotationState = {
-    quaternion: new THREE.Quaternion(),
-    deltaQuaternion: new THREE.Quaternion(),
-    deltaEuler: new THREE.Euler(),
-    pointerId: null,
-    startX: 0,
-    startY: 0,
-    lastX: 0,
-    lastY: 0,
-    dragged: false,
-    lockedAxis: null,
-  };
-  const currentSnapBack = createSnapBackState();
-  let currentSuppressNextCanvasClick = false;
-  let currentOrbitYaw = 0;
-  let currentOrbitElevation = 0;
+  const interaction = createClearCardInteraction(initialOptions, {
+    presentation: () => ({ ready: currentViewerReady, reducedMotion: currentReducedMotion, stage: currentStage }),
+    requestRender: () => currentRequestRender?.(),
+    beginInteraction: () => currentBeginInteractionThrottle?.(),
+    releaseInteraction: () => currentReleaseInteractionThrottle?.(),
+    updateCameraView: () => currentUpdateCameraView?.(),
+    applyAxisLockedOrbit: () => currentApplyAxisLockedOrbit?.(),
+    objectHitTest: (clientX, clientY) => currentObjectHitTest?.(clientX, clientY),
+    triggerHit: (clientX, clientY) => currentTriggerHit?.(clientX, clientY),
+  });
   let previousOptions = initialOptions;
-
-  const resetTilt = () => {
-    currentTilt.targetX = 0;
-    currentTilt.targetY = 0;
-    currentRequestRender?.();
-  };
-
-  const cancelUnrestrictedDrag = () => {
-    const rotation = currentUnrestrictedRotation;
-    const pointerId = rotation.pointerId;
-    rotation.pointerId = null;
-    rotation.dragged = false;
-    rotation.lockedAxis = null;
-    const canvas = currentCanvas;
-    if (pointerId !== null && canvas?.hasPointerCapture(pointerId)) {
-      canvas.releasePointerCapture(pointerId);
-    }
-  };
-
-  const startSnapBack = (timeStampMs: number) => {
-    if (!currentSnapBackOnRelease || currentViewMode !== 'free') return;
-    releaseSnapBack(currentSnapBack, timeStampMs);
-    currentRequestRender?.();
-  };
-
-  const resetViewOrientation = () => {
-    cancelUnrestrictedDrag();
-    resetSnapBackTracking(currentSnapBack, 0);
-    currentReleaseInteractionThrottle?.();
-    currentUnrestrictedRotation.quaternion.identity();
-    currentOrbitYaw = 0;
-    currentOrbitElevation = 0;
-    const tilt = currentTilt;
-    tilt.currentX = 0;
-    tilt.currentY = 0;
-    tilt.targetX = 0;
-    tilt.targetY = 0;
-    tilt.velocityX = 0;
-    tilt.velocityY = 0;
-    currentUpdateCameraView?.();
-    currentRequestRender?.();
-  };
-
-  const getInteractionBounds = (canvas: HTMLCanvasElement, interactionBounds: ClearCardThreeViewerProps['interactionBounds']) =>
-    interactionBounds === 'parent'
-      ? canvas.parentElement?.getBoundingClientRect() ?? canvas.getBoundingClientRect()
-      : canvas.getBoundingClientRect();
-
-  const pointerIsWithinInteractionBounds = (event: ClearCardPointerInput, interactionBounds: ClearCardThreeViewerProps['interactionBounds']) =>
-    isClearCardInteractionPoint(event, getInteractionBounds(event.currentTarget, interactionBounds));
-
-  const updateTilt = (event: ClearCardPointerInput, interactionBounds: ClearCardThreeViewerProps['interactionBounds']) => {
-    if (currentViewMode !== 'tilt') return;
-    if (!currentViewerReady || currentReducedMotion) return;
-    if (!event.isPrimary) return;
-    if (currentStage === 'breaking') return;
-    const bounds = getInteractionBounds(event.currentTarget, interactionBounds);
-    if (!bounds.width || !bounds.height) return;
-    if (!isClearCardInteractionPoint(event, bounds)) {
-      currentReleaseInteractionThrottle?.();
-      resetTilt();
-      return;
-    }
-    currentBeginInteractionThrottle?.();
-    const pointerX = THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
-    const pointerY = THREE.MathUtils.clamp((event.clientY - bounds.top) / bounds.height, 0, 1);
-    currentTilt.targetX = -(pointerY * 2 - 1) * MAX_TILT_X;
-    currentTilt.targetY = -(pointerX * 2 - 1) * MAX_TILT_Y;
-    currentRequestRender?.();
-  };
-
-  const handlePointerMove = (event: ClearCardPointerInput, interactionBounds: ClearCardThreeViewerProps['interactionBounds']) => {
-    if (currentViewMode === 'tilt') {
-      updateTilt(event, interactionBounds);
-      return;
-    }
-    const rotation = currentUnrestrictedRotation;
-    if (rotation.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - rotation.lastX;
-    const deltaY = event.clientY - rotation.lastY;
-    rotation.lastX = event.clientX;
-    rotation.lastY = event.clientY;
-    const totalX = event.clientX - rotation.startX;
-    const totalY = event.clientY - rotation.startY;
-    if (!rotation.dragged) {
-      if (totalX * totalX + totalY * totalY <= UNRESTRICTED_DRAG_THRESHOLD_SQ) return;
-      rotation.dragged = true;
-      currentBeginInteractionThrottle?.();
-      if (currentViewMode === 'orbit') {
-        rotation.lockedAxis =
-          Math.abs(totalX) >= Math.abs(totalY) ? 'horizontal' : 'vertical';
-      }
-    }
-    if (!deltaX && !deltaY) return;
-    if (currentViewMode === 'orbit') {
-      if (rotation.lockedAxis === 'horizontal') {
-        currentOrbitYaw += deltaX * UNRESTRICTED_ROTATION_SPEED;
-        rotation.quaternion.setFromAxisAngle(WORLD_UP, currentOrbitYaw);
-      } else if (rotation.lockedAxis === 'vertical') {
-        currentOrbitElevation = THREE.MathUtils.clamp(
-          currentOrbitElevation + deltaY * UNRESTRICTED_ROTATION_SPEED,
-          -MAX_VERTICAL_ORBIT,
-          MAX_VERTICAL_ORBIT,
-        );
-      }
-      currentUpdateCameraView?.();
-    } else {
-      rotation.deltaEuler.set(
-        deltaY * UNRESTRICTED_ROTATION_SPEED,
-        deltaX * UNRESTRICTED_ROTATION_SPEED,
-        0,
-      );
-      rotation.deltaQuaternion.setFromEuler(rotation.deltaEuler);
-      rotation.quaternion.premultiply(rotation.deltaQuaternion).normalize();
-      if (currentSnapBackOnRelease) {
-        trackSnapBackVelocity(
-          currentSnapBack,
-          deltaX,
-          deltaY,
-          UNRESTRICTED_ROTATION_SPEED,
-          event.timeStamp,
-        );
-      }
-    }
-    currentRequestRender?.();
-  };
-
-  const handleKeyDown = (event: ClearCardKeyboardInput, keyboardActivationEnabled: boolean, keyboardRotationEnabled: boolean) => {
-    if (event.defaultPrevented) return;
-
-    if (keyboardRotationEnabled) {
-      const pitch =
-        event.key === 'ArrowUp'
-          ? -KEYBOARD_ROTATION_STEP
-          : event.key === 'ArrowDown'
-            ? KEYBOARD_ROTATION_STEP
-            : 0;
-      const yaw =
-        event.key === 'ArrowLeft'
-          ? -KEYBOARD_ROTATION_STEP
-          : event.key === 'ArrowRight'
-            ? KEYBOARD_ROTATION_STEP
-            : 0;
-      if (
-        (pitch || yaw) &&
-        currentViewerReady &&
-        currentInteractionEnabled &&
-        currentStage !== 'breaking'
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        const rotation = currentUnrestrictedRotation;
-        resetSnapBackTracking(currentSnapBack, event.timeStamp);
-        rotation.deltaEuler.set(pitch, yaw, 0);
-        rotation.deltaQuaternion.setFromEuler(rotation.deltaEuler);
-        rotation.quaternion.premultiply(rotation.deltaQuaternion).normalize();
-        currentRequestRender?.();
-        return;
-      }
-    }
-
-    if (!keyboardActivationEnabled || !isClearCardImpactKey(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    currentTriggerHit?.();
-  };
-
-  const handleSyntheticClick = (event: ClearCardClickInput, keyboardActivationEnabled: boolean) => {
-    if (currentSuppressNextCanvasClick) {
-      currentSuppressNextCanvasClick = false;
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (event.defaultPrevented || !keyboardActivationEnabled || event.detail !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    currentTriggerHit?.();
-  };
-
-  const handlePointerDown = (
-    event: ClearCardPointerInput,
-    pointerActivationEnabled: boolean,
-    interactionBounds: ClearCardThreeViewerProps['interactionBounds'],
-  ) => {
-    currentSuppressNextCanvasClick = false;
-    const withinBounds = pointerIsWithinInteractionBounds(event, interactionBounds);
-    if (
-      !canStartClearCardPointerInteraction({
-        withinBounds,
-        objectHit: withinBounds
-          ? undefined
-          : currentObjectHitTest?.(event.clientX, event.clientY),
-      })
-    ) {
-      return;
-    }
-    if (currentViewMode !== 'tilt') {
-      if (!currentViewerReady || currentStage === 'breaking') return;
-      if (!isClearCardImpactPointer(event)) return;
-      const rotation = currentUnrestrictedRotation;
-      if (rotation.pointerId !== null) return;
-      rotation.pointerId = event.pointerId;
-      rotation.startX = event.clientX;
-      rotation.startY = event.clientY;
-      rotation.lastX = event.clientX;
-      rotation.lastY = event.clientY;
-      rotation.dragged = false;
-      rotation.lockedAxis = null;
-      resetSnapBackTracking(currentSnapBack, event.timeStamp);
-      event.currentTarget.setPointerCapture(event.pointerId);
-      event.preventDefault();
-      return;
-    }
-    if (
-      pointerActivationEnabled &&
-      currentStage === 'pack' &&
-      isClearCardImpactPointer(event)
-    ) {
-      currentTriggerHit?.(event.clientX, event.clientY);
-    }
-    updateTilt(event, interactionBounds);
-  };
-
-  const handlePointerUp = (event: ClearCardPointerInput, pointerActivationEnabled: boolean) => {
-    if (currentViewMode !== 'tilt') {
-      const rotation = currentUnrestrictedRotation;
-      if (rotation.pointerId !== event.pointerId) return;
-      const totalX = event.clientX - rotation.startX;
-      const totalY = event.clientY - rotation.startY;
-      const dragged =
-        rotation.dragged ||
-        totalX * totalX + totalY * totalY > UNRESTRICTED_DRAG_THRESHOLD_SQ;
-      currentSuppressNextCanvasClick = dragged;
-      rotation.pointerId = null;
-      rotation.dragged = false;
-      rotation.lockedAxis = null;
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      startSnapBack(event.timeStamp);
-      currentReleaseInteractionThrottle?.();
-      if (pointerActivationEnabled && !dragged && currentStage === 'pack') {
-        currentTriggerHit?.(event.clientX, event.clientY);
-      }
-      return;
-    }
-    if (event.pointerType === 'mouse') return;
-    currentReleaseInteractionThrottle?.();
-    resetTilt();
-  };
-
-  const handlePointerLeave = () => {
-    if (currentViewMode === 'tilt') {
-      currentReleaseInteractionThrottle?.();
-      resetTilt();
-    }
-  };
-
-  const handlePointerCancel = (event: ClearCardPointerInput) => {
-    if (currentViewMode !== 'tilt') {
-      const hadActiveDrag = currentUnrestrictedRotation.pointerId !== null;
-      cancelUnrestrictedDrag();
-      if (hadActiveDrag) startSnapBack(event.timeStamp);
-      currentReleaseInteractionThrottle?.();
-    } else {
-      currentReleaseInteractionThrottle?.();
-      resetTilt();
-    }
-  };
-
-  const handleLostPointerCapture = (event: ClearCardPointerInput) => {
-    if (currentUnrestrictedRotation.pointerId === event.pointerId) {
-      currentUnrestrictedRotation.pointerId = null;
-      currentUnrestrictedRotation.dragged = false;
-      currentUnrestrictedRotation.lockedAxis = null;
-      startSnapBack(event.timeStamp);
-      currentReleaseInteractionThrottle?.();
-    }
-  };
-
-  const updateViewMode = (unrestrictedMovement: boolean, axisLockedOrbit: boolean) => {
-    const previousMode = currentViewMode;
-    currentAxisLockedOrbit = axisLockedOrbit;
-    const nextMode = resolveViewMode(unrestrictedMovement, axisLockedOrbit);
-    currentApplyAxisLockedOrbit?.();
-    if (previousMode === nextMode) return;
-
-    cancelUnrestrictedDrag();
-    resetSnapBackTracking(currentSnapBack, 0);
-    currentReleaseInteractionThrottle?.();
-    const rotation = currentUnrestrictedRotation;
-    const tilt = currentTilt;
-    if (nextMode === 'orbit') {
-      if (previousMode === 'free') {
-        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation.quaternion);
-        currentOrbitYaw = Math.atan2(forward.x, forward.z);
-      } else if (previousMode === 'tilt') {
-        currentOrbitYaw = tilt.currentY;
-      }
-      rotation.quaternion.setFromAxisAngle(WORLD_UP, currentOrbitYaw);
-    } else if (nextMode === 'free' && previousMode === 'tilt') {
-      rotation.deltaEuler.set(tilt.currentX, tilt.currentY, 0);
-      rotation.quaternion.setFromEuler(rotation.deltaEuler);
-    } else if (nextMode === 'tilt') {
-      rotation.quaternion.identity();
-      currentOrbitYaw = 0;
-    }
-    if (nextMode !== 'orbit') {
-      currentOrbitElevation = 0;
-    }
-
-    tilt.currentX = 0;
-    tilt.currentY = 0;
-    tilt.targetX = 0;
-    tilt.targetY = 0;
-    tilt.velocityX = 0;
-    tilt.velocityY = 0;
-    currentViewMode = nextMode;
-    currentUpdateCameraView?.();
-    currentRequestRender?.();
-  };
 
   const update = (options: ClearCardThreeViewerProps) => {
     const {
@@ -993,7 +505,7 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
     currentOnStageChange = onStageChange;
     currentOnCardModelLoadStatusChange = onCardModelLoadStatusChange;
     currentOnPreviewFrame = onPreviewFrame;
-    currentSnapBackOnRelease = snapBackOnRelease;
+    interaction.setInputOptions({ snapBackOnRelease, interactionEnabled });
     currentCardModelUrl = cardModelUrl;
     currentInteractionEnabled = interactionEnabled;
     currentHitProgressionMode = hitProgressionMode;
@@ -1017,22 +529,10 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       currentLoadCardModel?.(cardModelUrl);
     }
     if (previousOptions.axisLockedOrbit !== axisLockedOrbit || previousOptions.unrestrictedMovement !== unrestrictedMovement) {
-      updateViewMode(unrestrictedMovement, axisLockedOrbit);
+      interaction.updateViewMode(unrestrictedMovement, axisLockedOrbit);
     }
     previousOptions = options;
   };
-
-
-  const handleWindowBlur = () => {
-    const hadActiveDrag = currentUnrestrictedRotation.pointerId !== null;
-    cancelUnrestrictedDrag();
-    if (hadActiveDrag) startSnapBack(performance.now());
-    currentReleaseInteractionThrottle?.();
-    if (currentViewMode === 'tilt') {
-      resetTilt();
-    }
-  };
-
 
   const mountRenderer = (
     canvas: HTMLCanvasElement,
@@ -1046,28 +546,13 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
     let packReady = false;
     let cardLoadFailed = false;
     let cardReady = false;
-    let cardLoadGeneration = 0;
     let loadedCardModelUrl: string | undefined;
     let activeCardModelUrl: string | undefined;
-    let initializationFrameId: number | null = null;
-    let frameId: number | null = null;
-    let displayCadenceFrameId: number | null = null;
-    let lastFrameTime = 0;
-    let lastInteractionFrameTime = 0;
-    let interactionActive = false;
-    let interactionProbeActive = false;
-    let interactionThrottleActive = false;
-    let interactionThrottleReleasePending = false;
-    let adaptiveInteractionThrottleRequired = false;
-    let adaptiveThrottleActivatedAt = 0;
-    let displayFrameIntervalMs = 1_000 / 60;
-    let adaptiveFrameRateMonitor = createAdaptiveFrameRateMonitor();
     let renderer: THREE.WebGLRenderer | null = null;
     let snapshotOutputTarget: THREE.WebGLRenderTarget | null = null;
     let snapshotInFlight = false;
     let previewFrameKey: string | null = null;
-    let activePackLoad: ClearCardModelLoadResources | null = null;
-    let activeCardLoad: ClearCardModelLoadResources | null = null;
+    const modelLoads = createClearCardModelLoads();
     let environmentRenderTarget: THREE.WebGLRenderTarget | null = null;
     let environmentUpdateTimer: number | null = null;
     let environmentSignature = '';
@@ -1354,13 +839,13 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       let projectedDepth = fitSize.z;
       let projectedHeight = fitSize.y;
       let viewDepth = fitSize.z;
-      const elevation = currentAxisLockedOrbit ? currentOrbitElevation : 0;
-      if (currentAxisLockedOrbit) {
+      const elevation = interaction.axisLockedOrbit ? interaction.orbitElevation : 0;
+      if (interaction.axisLockedOrbit) {
         const baseYaw =
           currentStage === 'pack' && packUsesTransmission
             ? TRANSMISSIVE_PACK_ROTATION_Y
             : 0;
-        const yaw = currentOrbitYaw + baseYaw;
+        const yaw = interaction.orbitYaw + baseYaw;
         const absCosYaw = Math.abs(Math.cos(yaw));
         const absSinYaw = Math.abs(Math.sin(yaw));
         projectedWidth = fitSize.x * absCosYaw + fitSize.z * absSinYaw;
@@ -1400,7 +885,7 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
         return;
       }
       packGroup.rotation.set(
-        currentAxisLockedOrbit ? 0 : TRANSMISSIVE_PACK_ROTATION_X,
+        interaction.axisLockedOrbit ? 0 : TRANSMISSIVE_PACK_ROTATION_X,
         TRANSMISSIVE_PACK_ROTATION_Y,
         0,
       );
@@ -1830,7 +1315,7 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
 
     const startBreak = (hit: HitSample) => {
       if (!cardReady) return;
-      cancelUnrestrictedDrag();
+      interaction.cancelDrag();
       currentOnPackBreak?.();
       if (currentReducedMotion || shards.length === 0 || !fragmentsGroup) {
         finishBreakInstant();
@@ -1839,7 +1324,7 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       }
       setStage('breaking');
       breakElapsed = 0;
-      resetTilt();
+      interaction.resetTilt();
       punchSpring.target = 1;
       spawnCrack(hit, false, true);
       attachCracksToShards();
@@ -1862,9 +1347,10 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
         );
         const intensity = HIT_INTENSITIES[rampIndex] ?? HIT_INTENSITIES[0];
         punchSpring.velocity -= PUNCH_SCALE_IMPULSE * intensity;
-        const tilt = currentTilt;
-        tilt.velocityX += (Math.random() - 0.35) * HIT_TILT_JOLT * intensity;
-        tilt.velocityY += (Math.random() - 0.5) * HIT_TILT_JOLT * 1.2 * intensity;
+        interaction.addTiltImpulse(
+          (Math.random() - 0.35) * HIT_TILT_JOLT * intensity,
+          (Math.random() - 0.5) * HIT_TILT_JOLT * 1.2 * intensity,
+        );
         spawnSparkles(hit.point, healable ? HIT_SPARKLE_COUNT : HIT_SPARKLE_COUNT + 6);
         spawnCrack(hit, healable);
       } else if (!healable) {
@@ -1935,10 +1421,10 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       punchSpring.target = 1;
       punchSpring.velocity = 0;
       clearSparkles();
-      if (currentViewMode !== 'tilt') {
-        resetViewOrientation();
+      if (interaction.viewMode !== 'tilt') {
+        interaction.resetViewOrientation();
       } else {
-        resetTilt();
+        interaction.resetTilt();
       }
       fitSize.copy(packSize);
       fitCamera();
@@ -2143,107 +1629,16 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       currentOnPreviewFrame(previewFrame);
     };
 
-    const renderFrame = (now: number) => {
-      frameId = null;
-      if (
-        disposed ||
-        !renderer ||
-        contextLost ||
-        document.visibilityState !== 'visible'
-      ) {
-        return;
-      }
-      if (interactionThrottleReleasePending && !currentSnapBack.active) {
-        interactionThrottleReleasePending = false;
-        interactionActive = false;
-        interactionProbeActive = false;
-        setInteractionThrottle(false);
-        startDisplayCadenceCalibration();
-      }
-      if (
-        interactionThrottleActive &&
-        lastInteractionFrameTime > 0 &&
-        now - lastInteractionFrameTime < INTERACTION_FRAME_INTERVAL_MS
-      ) {
-        frameId = window.requestAnimationFrame(renderFrame);
-        return;
-      }
-      if (interactionThrottleActive) lastInteractionFrameTime = now;
-      if (interactionProbeActive) {
-        const decision = adaptiveFrameRateMonitor.addFrame(now);
-        if (decision !== 'sampling') interactionProbeActive = false;
-        if (decision === 'throttle') {
-          adaptiveInteractionThrottleRequired = true;
-          adaptiveThrottleActivatedAt = Date.now();
-          try {
-            window.sessionStorage.setItem(
-              ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY,
-              String(adaptiveThrottleActivatedAt),
-            );
-          } catch { }
-          setInteractionThrottle(true);
-        }
-      }
-
-      const deltaSeconds = lastFrameTime
-        ? Math.min((now - lastFrameTime) / 1_000, 1 / 30)
-        : 1 / 60;
-      lastFrameTime = now;
-      const tilt = currentTilt;
-
-      const rotationInteractionActive = currentViewMode !== 'tilt';
+    const renderFrame = (deltaSeconds: number) => {
+      if (!renderer) return false;
+      const rotationInteractionActive = interaction.stepTilt(deltaSeconds);
       if (currentReducedMotion) {
-        tilt.currentX = 0;
-        tilt.currentY = 0;
-        tilt.targetX = 0;
-        tilt.targetY = 0;
-        tilt.velocityX = 0;
-        tilt.velocityY = 0;
         snapSpringValue(punchSpring);
         clearSparkles();
         settleCracksInstantly();
         if (currentStage === 'breaking') finishBreakInstant();
-      } else if (!rotationInteractionActive) {
-        const nextX = stepSpringAxis(
-          tilt.currentX,
-          tilt.targetX,
-          tilt.velocityX,
-          deltaSeconds,
-          SPRING_STIFFNESS,
-          SPRING_DAMPING,
-        );
-        const nextY = stepSpringAxis(
-          tilt.currentY,
-          tilt.targetY,
-          tilt.velocityY,
-          deltaSeconds,
-          SPRING_STIFFNESS,
-          SPRING_DAMPING,
-        );
-        tilt.currentX = nextX.current;
-        tilt.currentY = nextY.current;
-        tilt.velocityX = nextX.velocity;
-        tilt.velocityY = nextY.velocity;
-      } else {
-        tilt.currentX = 0;
-        tilt.currentY = 0;
-        tilt.targetX = 0;
-        tilt.targetY = 0;
-        tilt.velocityX = 0;
-        tilt.velocityY = 0;
       }
-
-      const snapBack = currentSnapBack;
-      if (snapBack.active) {
-        const rotationState = currentUnrestrictedRotation;
-        if (rotationState.pointerId !== null) {
-          snapBack.active = false;
-        } else if (currentReducedMotion) {
-          settleSnapBackInstantly(rotationState.quaternion, snapBack);
-        } else {
-          stepSnapBackSpring(rotationState.quaternion, snapBack, deltaSeconds);
-        }
-      }
+      interaction.stepSnapBack(deltaSeconds);
 
       if (!isSpringValueSettled(punchSpring)) {
         stepSpringValue(punchSpring, deltaSeconds, PUNCH_SPRING_STIFFNESS, PUNCH_SPRING_DAMPING);
@@ -2283,11 +1678,7 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       if (!currentReducedMotion) updateCracks(deltaSeconds);
       updateSparkles(deltaSeconds);
 
-      if (rotationInteractionActive) {
-        pivot.quaternion.copy(currentUnrestrictedRotation.quaternion);
-      } else {
-        pivot.rotation.set(tilt.currentX, tilt.currentY, 0);
-      }
+      interaction.applyOrientation(pivot, rotationInteractionActive);
       measurePreviewFrame();
       if (
         !shardTransmissionWarmed &&
@@ -2346,125 +1737,28 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
         currentOnFrameRendered?.();
       }
 
-      const tiltUnsettled =
-        !rotationInteractionActive &&
-        (Math.abs(tilt.targetX - tilt.currentX) > SPRING_EPSILON ||
-          Math.abs(tilt.targetY - tilt.currentY) > SPRING_EPSILON ||
-          Math.abs(tilt.velocityX) > SPRING_EPSILON ||
-          Math.abs(tilt.velocityY) > SPRING_EPSILON);
       const effectsActive =
         sparkles.length > 0 ||
         cracks.some((crack) => !crack.settled) ||
         currentStage === 'breaking' ||
         !isSpringValueSettled(punchSpring);
-      if (
-        tiltUnsettled ||
-        effectsActive ||
-        currentSnapBack.active ||
-        interactionThrottleReleasePending ||
-        interactionProbeActive
-      ) {
-        if (frameId === null) frameId = window.requestAnimationFrame(renderFrame);
-      } else {
-        tilt.currentX = tilt.targetX;
-        tilt.currentY = tilt.targetY;
-        tilt.velocityX = 0;
-        tilt.velocityY = 0;
+      return interaction.isUnsettled(rotationInteractionActive) || effectsActive;
+    };
+
+    const frameLoop = createClearCardFrameLoop({
+      interactionFrameRateMode,
+      canRequestRender: () => !contextLost,
+      canRender: () => renderer !== null && !contextLost && document.visibilityState === 'visible',
+      isSnapBackActive: () => interaction.snapBackActive,
+      render: renderFrame,
+      onIdle() {
+        interaction.settleTilt();
         snapSpringValue(punchSpring);
-        lastFrameTime = 0;
-      }
-    };
-
-    const requestRender = () => {
-      if (disposed || contextLost || frameId !== null) return;
-      lastFrameTime = 0;
-      frameId = window.requestAnimationFrame(renderFrame);
-    };
-
-    const setInteractionThrottle = (active: boolean) => {
-      if (interactionFrameRateMode === 'unrestricted' || interactionThrottleActive === active) {
-        return;
-      }
-      interactionThrottleActive = active;
-      lastInteractionFrameTime = 0;
-    };
-
-    const stopDisplayCadenceCalibration = () => {
-      if (displayCadenceFrameId === null) return;
-      window.cancelAnimationFrame(displayCadenceFrameId);
-      displayCadenceFrameId = null;
-    };
-
-    const startDisplayCadenceCalibration = () => {
-      if (interactionFrameRateMode !== 'adaptive' || disposed || interactionActive) return;
-      stopDisplayCadenceCalibration();
-      let previousFrameTime: number | null = null;
-      const frameIntervals: number[] = [];
-      let attemptCount = 0;
-
-      const sampleDisplayCadence = (now: number) => {
-        displayCadenceFrameId = null;
-        if (disposed || interactionActive) return;
-        attemptCount += 1;
-        if (previousFrameTime !== null) {
-          const intervalMs = now - previousFrameTime;
-          if (intervalMs > 0 && intervalMs <= DISPLAY_CADENCE_MAX_INTERVAL_MS) {
-            frameIntervals.push(intervalMs);
-          }
-        }
-        previousFrameTime = now;
-        if (frameIntervals.length >= DISPLAY_CADENCE_SAMPLE_SIZE) {
-          displayFrameIntervalMs = resolveMedianFrameInterval(frameIntervals);
-          return;
-        }
-        if (attemptCount >= DISPLAY_CADENCE_MAX_ATTEMPTS) return;
-        displayCadenceFrameId = window.requestAnimationFrame(sampleDisplayCadence);
-      };
-
-      displayCadenceFrameId = window.requestAnimationFrame(sampleDisplayCadence);
-    };
-
-    const startAdaptiveInteractionProbe = () => {
-      interactionProbeActive =
-        interactionFrameRateMode === 'adaptive' && !adaptiveInteractionThrottleRequired;
-      if (!interactionProbeActive) return;
-      adaptiveFrameRateMonitor = createAdaptiveFrameRateMonitor({
-        slowFrameThresholdMs: resolveAdaptiveSlowFrameThreshold(displayFrameIntervalMs),
-      });
-    };
-
-    const beginInteractionThrottle = () => {
-      if (interactionFrameRateMode === 'unrestricted') return;
-      if (interactionActive) {
-        interactionThrottleReleasePending = false;
-        return;
-      }
-      stopDisplayCadenceCalibration();
-      interactionActive = true;
-      interactionThrottleReleasePending = false;
-      if (interactionFrameRateMode === 'adaptive' && adaptiveInteractionThrottleRequired) {
-        const throttleAge = Date.now() - adaptiveThrottleActivatedAt;
-        if (throttleAge < 0 || throttleAge >= ADAPTIVE_THROTTLE_REPROBE_MS) {
-          adaptiveInteractionThrottleRequired = false;
-          adaptiveThrottleActivatedAt = 0;
-          try {
-            window.sessionStorage.removeItem(ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY);
-          } catch { }
-        }
-      }
-      startAdaptiveInteractionProbe();
-      setInteractionThrottle(
-        interactionFrameRateMode === 'throttled' || adaptiveInteractionThrottleRequired,
-      );
-      requestRender();
-    };
-
-    const releaseInteractionThrottle = () => {
-      if (!interactionActive) return;
-      if (!interactionProbeActive) startAdaptiveInteractionProbe();
-      interactionThrottleReleasePending = true;
-      requestRender();
-    };
+      },
+    });
+    const requestRender = frameLoop.requestRender;
+    const beginInteractionThrottle = frameLoop.beginInteraction;
+    const releaseInteractionThrottle = frameLoop.releaseInteraction;
 
     const getEnvironmentSignature = (config: ClearCardLightingConfig) => {
       return config.environment.mode === 'sky'
@@ -2675,20 +1969,6 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       cardRoot = null;
     };
 
-    const releaseModelLoad = (load: ClearCardModelLoadResources, abort = false) => {
-      if (activePackLoad === load) activePackLoad = null;
-      if (activeCardLoad === load) activeCardLoad = null;
-      releaseClearCardModelLoadResources(load, abort);
-    };
-
-    const abortActivePackLoad = () => {
-      if (activePackLoad) releaseModelLoad(activePackLoad, true);
-    };
-
-    const abortActiveCardLoad = () => {
-      if (activeCardLoad) releaseModelLoad(activeCardLoad, true);
-    };
-
     const loadCardModel = (modelUrl: string | undefined, force = false) => {
       if (disposed || !renderer || contextLost) return;
       if (!force && modelUrl && loadedCardModelUrl === modelUrl && cardReady) return;
@@ -2699,10 +1979,8 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
         packReady,
       });
 
-      cardLoadGeneration += 1;
-      const generation = cardLoadGeneration;
       activeCardModelUrl = modelUrl;
-      abortActiveCardLoad();
+      const request = modelLoads.createRequest('card');
       clearLoadedCard();
       loadedCardModelUrl = undefined;
       cardReady = false;
@@ -2721,27 +1999,9 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
         requestRender();
         return;
       }
-      const loadingManager = new THREE.LoadingManager();
-      const dracoLoader = new DRACOLoader(loadingManager);
-      const load: ClearCardModelLoadResources = {
-        loadingManager,
-        dracoLoader,
-        abortRequested: false,
-      };
-      activeCardLoad = load;
-      dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
-      dracoLoader.setWorkerLimit(1);
-      const loader = new GLTFLoader(loadingManager);
-      loader.setDRACOLoader(dracoLoader);
-
-      void loader.loadAsync(modelUrl)
-        .then((cardGltf) => {
-          releaseModelLoad(load);
-          if (disposed || generation !== cardLoadGeneration) {
-            disposeObject3D(cardGltf.scene);
-            return;
-          }
-          cardRoot = cardGltf.scene;
+      request.load(modelUrl, {
+        onLoad(scene) {
+          cardRoot = scene;
           const rawCardSize = new THREE.Box3().setFromObject(cardRoot).getSize(new THREE.Vector3());
           const embedScale =
             packReady && rawCardSize.x > 0 && rawCardSize.y > 0
@@ -2771,46 +2031,20 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
           }
           updateViewerStatus();
           requestRender();
-        })
-        .catch((error: unknown) => {
-          if (disposed || generation !== cardLoadGeneration) return;
+        },
+        onError(error) {
           clearLoadedCard();
           cardReady = false;
           cardLoadFailed = true;
           console.error('[mons] failed to load the clear-card model', error);
           reportCardModelLoadStatus('error');
           updateViewerStatus();
-        })
-        .finally(() => {
-          releaseModelLoad(load);
-        });
+        },
+      });
     };
 
     const initializeViewer = () => {
-      initializationFrameId = null;
       if (disposed) return;
-      if (interactionFrameRateMode === 'adaptive') {
-        try {
-          const storedActivationTime = Number(
-            window.sessionStorage.getItem(ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY),
-          );
-          const throttleAge = Date.now() - storedActivationTime;
-          if (
-            Number.isFinite(storedActivationTime) &&
-            storedActivationTime > 0 &&
-            throttleAge >= 0 &&
-            throttleAge < ADAPTIVE_THROTTLE_REPROBE_MS
-          ) {
-            adaptiveInteractionThrottleRequired = true;
-            adaptiveThrottleActivatedAt = storedActivationTime;
-          } else {
-            window.sessionStorage.removeItem(ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY);
-          }
-        } catch {
-          adaptiveInteractionThrottleRequired = false;
-          adaptiveThrottleActivatedAt = 0;
-        }
-      }
       currentRequestRender = requestRender;
       currentBeginInteractionThrottle = beginInteractionThrottle;
       currentReleaseInteractionThrottle = releaseInteractionThrottle;
@@ -2882,16 +2116,10 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       handleContextLost = (event) => {
         event.preventDefault();
         if (disposed) return;
-        cancelUnrestrictedDrag();
+        interaction.cancelDrag();
         contextLost = true;
-        cardLoadGeneration += 1;
-        abortActivePackLoad();
-        abortActiveCardLoad();
-        stopDisplayCadenceCalibration();
-        if (frameId !== null) {
-          window.cancelAnimationFrame(frameId);
-          frameId = null;
-        }
+        modelLoads.dispose();
+        frameLoop.stop();
         if (environmentUpdateTimer !== null) {
           window.clearTimeout(environmentUpdateTimer);
           environmentUpdateTimer = null;
@@ -2907,14 +2135,8 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
         if (!motionQuery) return;
         currentReducedMotion = motionQuery.matches;
         if (motionQuery.matches) {
-          cancelUnrestrictedDrag();
-          const tilt = currentTilt;
-          tilt.currentX = 0;
-          tilt.currentY = 0;
-          tilt.targetX = 0;
-          tilt.targetY = 0;
-          tilt.velocityX = 0;
-          tilt.velocityY = 0;
+          interaction.cancelDrag();
+          interaction.clearTilt();
         }
         requestRender();
       };
@@ -2931,34 +2153,15 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
         resizeObserver.observe(viewport);
       }
       resize();
-      startDisplayCadenceCalibration();
+      frameLoop.startCalibration();
 
       if (!packModelUrl) {
         loadCardModel(currentCardModelUrl);
         return;
       }
 
-      const loadingManager = new THREE.LoadingManager();
-      const dracoLoader = new DRACOLoader(loadingManager);
-      const load: ClearCardModelLoadResources = {
-        loadingManager,
-        dracoLoader,
-        abortRequested: false,
-      };
-      activePackLoad = load;
-      dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
-      dracoLoader.setWorkerLimit(1);
-      const packLoader = new GLTFLoader(loadingManager);
-      packLoader.setDRACOLoader(dracoLoader);
-
-      void packLoader.loadAsync(packModelUrl)
-        .then((packGltf) => {
-          releaseModelLoad(load);
-          if (disposed || contextLost) {
-            disposeObject3D(packGltf.scene);
-            return;
-          }
-          const packRoot = packGltf.scene;
+      modelLoads.createRequest('pack').load(packModelUrl, {
+        onLoad(packRoot) {
           centerObject(packRoot, packSize);
           syncSparkleScale(packSize);
           packGroup.add(packRoot);
@@ -2994,23 +2197,20 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
           updateViewerStatus();
           requestRender();
           loadCardModel(currentCardModelUrl);
-        })
-        .catch((error: unknown) => {
-          if (disposed || contextLost) return;
+        },
+        onError(error) {
           packReady = false;
           packLoadFailed = true;
           console.error('[mons] failed to load the clear-card pack model', error);
           updateViewerStatus();
-        })
-        .finally(() => {
-          releaseModelLoad(load);
-        });
+        },
+      });
     };
 
-    initializationFrameId = window.requestAnimationFrame(initializeViewer);
+    frameLoop.scheduleInitialization(initializeViewer);
 
     return () => {
-      cancelUnrestrictedDrag();
+      interaction.cancelDrag();
       disposed = true;
       currentViewerReady = false;
       currentRequestRender = null;
@@ -3026,13 +2226,8 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       currentLoadCardModel = null;
       currentRetryCardModel = null;
       currentCaptureSnapshot = null;
-      cardLoadGeneration += 1;
-      abortActivePackLoad();
-      abortActiveCardLoad();
-      if (initializationFrameId !== null) {
-        window.cancelAnimationFrame(initializationFrameId);
-      }
-      stopDisplayCadenceCalibration();
+      modelLoads.dispose();
+      frameLoop.dispose();
       if (motionQuery && handleMotionPreference) {
         motionQuery.removeEventListener('change', handleMotionPreference);
       }
@@ -3045,7 +2240,6 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       if (resize) window.removeEventListener('resize', resize);
       resizeObserver?.disconnect();
       syncRendererSize = null;
-      if (frameId !== null) window.cancelAnimationFrame(frameId);
       if (environmentUpdateTimer !== null) {
         window.clearTimeout(environmentUpdateTimer);
         environmentUpdateTimer = null;
@@ -3062,16 +2256,16 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
 
   let disposeRenderer: (() => void) | null = null;
   const dispose = () => {
-    window.removeEventListener('blur', handleWindowBlur);
+    window.removeEventListener('blur', interaction.handleWindowBlur);
     disposeRenderer?.();
     disposeRenderer = null;
-    currentCanvas = null;
+    interaction.setCanvas(null);
   };
   return {
     update,
     mount(canvas: HTMLCanvasElement, options: RendererOptions) {
-      currentCanvas = canvas;
-      window.addEventListener('blur', handleWindowBlur);
+      interaction.setCanvas(canvas);
+      window.addEventListener('blur', interaction.handleWindowBlur);
       const viewport = canvas.parentElement;
       if (viewport) disposeRenderer = mountRenderer(canvas, viewport, options);
     },
@@ -3085,14 +2279,14 @@ export function createClearCardViewerRuntime(initialOptions: ClearCardThreeViewe
       if (!captureSnapshot) return Promise.reject(new Error('Snapshot rendering is unavailable.'));
       return captureSnapshot(options);
     },
-    handleKeyDown,
-    handleSyntheticClick,
-    handlePointerMove,
-    handlePointerDown,
-    handlePointerUp,
-    handlePointerLeave,
-    handlePointerCancel,
-    handleLostPointerCapture,
+    handleKeyDown: interaction.handleKeyDown,
+    handleSyntheticClick: interaction.handleSyntheticClick,
+    handlePointerMove: interaction.handlePointerMove,
+    handlePointerDown: interaction.handlePointerDown,
+    handlePointerUp: interaction.handlePointerUp,
+    handlePointerLeave: interaction.handlePointerLeave,
+    handlePointerCancel: interaction.handlePointerCancel,
+    handleLostPointerCapture: interaction.handleLostPointerCapture,
   };
 }
 

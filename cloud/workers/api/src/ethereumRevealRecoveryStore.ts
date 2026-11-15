@@ -1,6 +1,6 @@
 import { initializeRevealRecoverySchemaV1, LIFECYCLE_REPAIR } from './ethereumRevealSchema/recovery.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
-import type { RevealArtworkReadOptions } from './ethereumRevealCatalogUpdateStore.js';
+import type { RevealArtworkReadOptions } from './ethereumRevealCatalogTypes.js';
 import type { EthereumRevealedArtwork, EthereumRevealObservation, EthereumRevealTokensResponse } from '../../../../shared/ethereum/reveal.js';
 import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, EthereumRevealTransactionInspection } from './ethereumRevealChain.js';
 import type { RevealCrate, RevealSearchRange, RevealSql } from './ethereumRevealStore.js';

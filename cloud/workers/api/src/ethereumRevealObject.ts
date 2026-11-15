@@ -21,6 +21,7 @@ import { parseRevealAttributeBackfillRequest, parseRevealMaintenanceRequest, par
   revealMaintenanceIdentity } from './ethereumRevealMaintenanceSupport.js';
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import { EthereumRevealCatalogUpdate, parseCatalogUpdateRequest } from './ethereumRevealCatalogUpdate.js';
+import { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
 import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
 import type { PublicationScope, MetadataWrite } from './ethereumRevealPublisherObject.js';
 import type { EthereumRevealCatalogUpdateResult } from '../../../../shared/ethereum/revealMaintenance.js';
@@ -31,7 +32,7 @@ import type { EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/
 import type { EthereumOwnerHatchRequest, EthereumOwnerHatchingReadyResponse } from '../../../../shared/ethereum/ownerHatching.js';
 import { authorizeOwnerHatch, ownerHatchingRpcError } from './ethereumOwnerHatching.js';
 import { EthereumOwnerHatchingOperations } from './ethereumOwnerHatchingOperations.js';
-import type { OwnerHatchingEnrichmentError } from './ethereumOwnerHatchingStore.js';
+import type { OwnerHatchingEnrichmentError } from './ethereumOwnerHatchingTypes.js';
 import { parseOwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceResult } from '../../../../shared/ethereum/ownerHatchingMaintenance.js';
 
 function unavailable(): EthereumApiError { return new EthereumApiError('unavailable', 'Artwork reveal is temporarily unavailable.'); }
@@ -78,7 +79,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
       this.requireReady(deployment);
       return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,
         contractAddress: deployment.contractAddress, catalogRevision: deployment.catalogRevision,
-        tokenIds: this.store.catalogUpdate.ownerHatching.readyTokenIds() };
+        tokenIds: this.store.catalogUpdate.ownerHatching.reader.readyTokenIds() };
     } catch (error) { throw ownerHatchingRpcError(error); }
   }
 
@@ -150,7 +151,8 @@ export class EthereumRevealObject extends DurableObject<Env> {
         this.configuredStore ??= new EthereumRevealStore(this.ctx.storage.sql, action => this.transaction(action));
         return this.configuredStore.catalogUpdate;
       },
-      readStore: () => new EthereumRevealCatalogUpdateStore(this.ctx.storage.sql, action => this.transaction(action)),
+      readStore: () => new EthereumRevealCatalogReader(this.ctx.storage.sql),
+      writeStore: () => new EthereumRevealCatalogUpdateStore(this.ctx.storage.sql, action => this.transaction(action)),
       quiescent: () => this.receipts.size === 0 && this.scans.size === 0 && this.overflow.size === 0 &&
         this.enrichmentLanes.size === 0 && !this.migrationRun && !this.publicationRun && !this.ownerEnrichmentRun && !this.alarmUpdate && !this.alarmPending,
       wake: async current => { this.configure(current); await this.startBackground(current); await this.arm(); },
@@ -181,7 +183,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
     if (!deployment || deployment.retiredAtMs != null || deployment.deploymentId !== scope.deploymentId ||
       deployment.metadataBaseUri !== scope.metadataBaseUri) return false;
     this.configure(deployment);
-    return this.store.catalogUpdate.validateMetadataWrite(job);
+    return this.store.catalogUpdate.reader.validateMetadataWrite(job);
   }
 
   async catalogSnapshot(deployment: EthereumRevealDeployment, tokenIds: string[] = []): Promise<EthereumRevealCatalogSnapshot> {
@@ -189,8 +191,8 @@ export class EthereumRevealObject extends DurableObject<Env> {
       throw new Error('Invalid catalog snapshot token IDs.');
     }
     deployment = await this.authorize(deployment);
-    return { deploymentId: deployment.deploymentId, catalogRevision: this.store.catalogUpdate.effectiveCatalog()?.catalogRevision ?? 0,
-      artworks: this.store.catalogUpdate.canonicalMetadata(tokenIds).map(value => ({ tokenId: value.tokenId,
+    return { deploymentId: deployment.deploymentId, catalogRevision: this.store.catalogUpdate.reader.effectiveCatalog()?.catalogRevision ?? 0,
+      artworks: this.store.catalogUpdate.reader.canonicalMetadata(tokenIds).map(value => ({ tokenId: value.tokenId,
         metadataJson: value.metadataJson, metadataRevision: value.metadataRevision })) };
   }
 
@@ -222,7 +224,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
       throw unavailable();
     }
     this.configure(canonical);
-    return this.store.catalogUpdate.effectiveDeployment(canonical);
+    return this.store.catalogUpdate.reader.effectiveDeployment(canonical);
   }
 
   private async canContinue(scope: Pick<EthereumRevealDeployment, 'chainId' | 'contractAddress'>): Promise<boolean> {
@@ -642,8 +644,8 @@ export class EthereumRevealObject extends DurableObject<Env> {
         try {
           const writer = this.env.ETHEREUM_REVEAL_PUBLISHER.getByName(attributePublisherName(deployment));
           const result = await writer.prepareAttributes(deployment, { category: job.category, assetId: job.assetId,
-            baseJson: job.baseJson, catalogVersion: this.store.catalogUpdate.effectiveCatalog()?.catalogVersion,
-            catalogSha256: this.store.catalogUpdate.effectiveCatalog()?.manifestSha256 }, Date.now() + 25_000);
+            baseJson: job.baseJson, catalogVersion: this.store.catalogUpdate.reader.effectiveCatalog()?.catalogVersion,
+            catalogSha256: this.store.catalogUpdate.reader.effectiveCatalog()?.manifestSha256 }, Date.now() + 25_000);
           if (!await this.canContinue(deployment)) return;
           if (result.status === 'prepared') {
             this.store.catalogUpdate.ownerHatching.acceptEnrichment(job.tokenId, job.metadataRevision, result.metadataJson, result.metadataSha256);
@@ -749,8 +751,8 @@ export class EthereumRevealObject extends DurableObject<Env> {
           job.last_error === 'conflict-recheck' || job.last_error === 'publication-unavailable') return 'conflict';
         const target = await raceWithSignal<PreparedAttributes>(writer.prepareAttributes(scope, {
           category: job.category, assetId: job.asset_id, baseJson: job.metadata_json,
-          catalogVersion: this.store.catalogUpdate.effectiveCatalog()?.catalogVersion,
-          catalogSha256: this.store.catalogUpdate.effectiveCatalog()?.manifestSha256,
+          catalogVersion: this.store.catalogUpdate.reader.effectiveCatalog()?.catalogVersion,
+          catalogSha256: this.store.catalogUpdate.reader.effectiveCatalog()?.manifestSha256,
         }, deadlineMs), timeout.signal);
         if (target.status !== 'prepared') return target.status;
         await this.authorize(deployment, deadlineMs);
@@ -919,7 +921,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
     const frozenThroughMs = request.frozenThroughMs ?? Math.max(0, Date.now() - 1);
     const digest = createHash('sha256');
     const frozenSamples: EthereumRevealReplacementInspection['frozenSamples'] = [];
-    const catalogs = new EthereumRevealCatalogUpdateStore(this.ctx.storage.sql, action => this.ctx.storage.transactionSync(action));
+    const catalogs = new EthereumRevealCatalogReader(this.ctx.storage.sql);
     const amended = (catalogs.effectiveCatalog()?.catalogRevision ?? 0) > 0;
     let frozenArtworks = 0;
     for (const row of this.ctx.storage.sql.exec<{ token_id: string; category: string; metadata_json: string }>(`SELECT token_id,category,metadata_json

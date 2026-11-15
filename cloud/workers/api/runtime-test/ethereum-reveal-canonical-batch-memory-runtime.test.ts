@@ -9,7 +9,7 @@ test('native canonical scans preserve complete large mapped and enriched records
   const source = `
     import { DurableObject } from 'cloudflare:workers';
     import { createHash } from 'node:crypto';
-    import { EthereumRevealCatalogUpdateStore } from ${path('cloud/workers/api/src/ethereumRevealCatalogUpdateStore.ts')};
+    import { EthereumRevealCatalogReader } from ${path('cloud/workers/api/src/ethereumRevealCatalogReader.ts')};
     import { buildRevealedArtwork, buildNewRevealedArtwork } from ${path('cloud/workers/api/src/ethereumRevealCatalog.ts')};
     import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from ${path('cloud/workers/api/src/ethereumRevealAttributes.ts')};
     import { getRevealCatalog } from ${path('shared/ethereum/revealCatalogRegistry.ts')};
@@ -28,7 +28,7 @@ test('native canonical scans preserve complete large mapped and enriched records
         sql.exec("INSERT OR IGNORE INTO reveal_catalog_generations VALUES('mapping',1,1)");
         sql.exec('CREATE TABLE IF NOT EXISTS reveal_catalog_mappings(batch_id TEXT,egg_id INTEGER,category TEXT,asset_id INTEGER,attributes_json TEXT,attributes_sha256 TEXT,origin_category TEXT,origin_asset_id INTEGER)');
         sql.exec('CREATE TABLE IF NOT EXISTS reveal_enrichment(token_id TEXT PRIMARY KEY,version INTEGER,target_json TEXT,target_sha256 TEXT,assignment_revision INTEGER)');
-        this.store=new EthereumRevealCatalogUpdateStore(sql,work=>ctx.storage.transactionSync(work));
+        this.store=new EthereumRevealCatalogReader(sql);
       }
       seed(start,unicode,enriched) {
         const sql=this.ctx.storage.sql;

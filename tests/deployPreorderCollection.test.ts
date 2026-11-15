@@ -1,6 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Keypair, PublicKey, SystemProgram, VersionedTransaction, type AccountInfo, type Connection } from '@solana/web3.js';
@@ -168,7 +168,7 @@ function fixture(t: TestContext) {
   };
   writeConfig();
   const recordPath = path.join(root, 'scripts/preorderCollectionDeployments/mainnet-beta/mi_note_cards.json');
-  const journalPath = path.join(root, '.cache/preorder-collection-deployments/mainnet-beta/mi_note_cards.json');
+  const journalPath = path.join(root, '.operations/preorder-collection-deployments/mainnet-beta/mi_note_cards.json');
   const lockPath = journalPath.replace(/\.json$/, '.lock');
   const account = collectionAccount(config);
   const state = {
@@ -449,6 +449,53 @@ test('post-send timeout preserves only a public recovery journal', async (t) => 
   assert.equal(serialized.includes('private-api-key'), false);
   assert.equal(serialized.includes(bs58.encode(f.payer.secretKey)), false);
   assert.equal(serialized.includes(bs58.encode(f.collection.secretKey)), false);
+  assert.equal(statSync(path.join(f.root, '.operations')).mode & 0o777, 0o700);
+});
+
+test('legacy preorder deployment journals recover their original collection without replacement evidence', async t => {
+  const f = fixture(t);
+  f.state.confirmationError = new Error('confirmation timed out');
+  await assert.rejects(f.run, /timed out/);
+  const legacy = f.journalPath.replace('/.operations/', '/.cache/');
+  mkdirSync(path.dirname(legacy), { recursive: true });
+  renameSync(f.journalPath, legacy);
+  const result = await f.run({ promptPrivateKey: async () => { throw new Error('Legacy recovery must not request a key'); } });
+  assert.equal(result?.collectionMint, f.collection.publicKey.toBase58());
+  assert.equal(result?.transactionSignature, f.state.signature);
+  assert.equal(f.state.sends, 1);
+  assert.equal(existsSync(f.journalPath), false);
+  assert.equal(existsSync(legacy), false);
+  assert.ok(existsSync(f.recordPath));
+});
+
+test('duplicate preorder journals remain untouched before recovery or signing', async t => {
+  const f = fixture(t);
+  f.state.confirmationError = new Error('confirmation timed out');
+  await assert.rejects(f.run, /timed out/);
+  const before = readFileSync(f.journalPath, 'utf8');
+  const legacy = f.journalPath.replace('/.operations/', '/.cache/');
+  mkdirSync(path.dirname(legacy), { recursive: true });
+  writeFileSync(legacy, before);
+  await assert.rejects(f.run, /both .operations and .cache/);
+  assert.equal(readFileSync(f.journalPath, 'utf8'), before);
+  assert.equal(readFileSync(legacy, 'utf8'), before);
+  assert.equal(f.state.sends, 1);
+  assert.equal(f.state.prompts, 1);
+  assert.equal(existsSync(f.recordPath), false);
+});
+
+test('preorder deployment respects locks in both roots and releases partial acquisition', async t => {
+  for (const legacy of [false, true]) {
+    const f = fixture(t);
+    const held = legacy ? f.lockPath.replace('/.operations/', '/.cache/') : f.lockPath;
+    const other = legacy ? f.lockPath : f.lockPath.replace('/.operations/', '/.cache/');
+    mkdirSync(path.dirname(held), { recursive: true, mode: 0o700 });
+    writeFileSync(held, 'held');
+    await assert.rejects(f.run, /locked|running|Lock/);
+    assert.equal(readFileSync(held, 'utf8'), 'held');
+    assert.equal(existsSync(other), false);
+    assert.equal(f.state.prompts, 0); assert.equal(f.state.sends, 0);
+  }
 });
 
 test('an interrupted finalized mint recovers its original address without keys or another send', async (t) => {

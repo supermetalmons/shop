@@ -4,7 +4,7 @@ import {
   STRIPE_RECEIPT_CLAIM_START_PATH,
   STRIPE_RECEIPT_CLAIM_STATUS_PATH,
 } from '../../../../shared/stripeReceiptClaimWorkflow.js';
-import { ADMIN_IRL_REDEEM_FINALIZE_PATH } from './adminIrlRedeemFinalize.js';
+import { ADMIN_IRL_REDEEM_FINALIZE_PATH } from './adminIrlRedeemFinalizeRequest.js';
 import { ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH } from './adminIrlRedeemFinalizeWorkflowRoutes.js';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,

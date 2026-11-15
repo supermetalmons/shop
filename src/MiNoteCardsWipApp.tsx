@@ -18,6 +18,7 @@ import { MI_NOTE_PACK_STARS, type MiNotePackStar } from './lib/miNotePackStars';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS } from './lib/miNoteStickerEffects';
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from './lib/miNoteStarFolds';
 import { navigate } from './navigation';
+import './styles/mi-note-pack.css';
 import './styles/mi-note-wip.css';
 
 function MiNotePackOpening({
@@ -70,7 +71,7 @@ function MiNotePackOpening({
       data-variant={selection.variant.id}
       data-star={star.id}
     >
-      <div className="mi-note-wip__stage">
+      <div className="mi-note-pack__stage">
         <MiNotePackViewer
           color={selection.variant.color}
           star={star}
@@ -93,7 +94,7 @@ function MiNotePackOpening({
         />
       </div>
       <div
-        className="mi-note-wip__actions"
+        className="mi-note-pack__actions"
         role="group"
         aria-label="Folder actions"
         onKeyDown={(event) => {

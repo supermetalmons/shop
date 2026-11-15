@@ -32,6 +32,7 @@ import { validatePreorderCollectionAccount } from './shared/preorderCollectionVa
 import { assertReceiptPoolRpcGenesisHash } from './shared/receiptPoolConfig.ts';
 import { normalizeAndValidateDropId, resolveDropAssetUrl } from './shared/deploymentRegistry.ts';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
+import { operationPathCandidates, prepareOperationPath, resolveOperationPath } from './shared/operationLocations.ts';
 import {
   loadPreorderCollectionConfig,
   preparePreorderCollectionConfig,
@@ -252,11 +253,17 @@ export async function runPreorderCollectionDeployment(
   };
   const { config, configPath } = await loadPreorderCollectionConfig(args);
   const configuration = snapshot(config);
-  const stateDirectory = path.join(args.root, '.cache', 'preorder-collection-deployments', config.solanaCluster);
-  const journalPath = path.join(stateDirectory, `${config.collectionId}.json`);
+  const relativeJournal = `preorder-collection-deployments/${config.solanaCluster}/${config.collectionId}.json`;
+  const relativeLock = relativeJournal.replace(/\.json$/, '.lock');
+  const journalPath = resolveOperationPath(args.root, relativeJournal);
   const recordPath = path.join(args.root, 'scripts', 'preorderCollectionDeployments', config.solanaCluster, `${config.collectionId}.json`);
-  const release = acquireLock(path.join(stateDirectory, `${config.collectionId}.lock`));
+  const releases: Array<() => void> = [];
   try {
+    for (const lockPath of operationPathCandidates(args.root, relativeLock).reverse()) {
+      prepareOperationPath(args.root, lockPath);
+      releases.push(acquireLock(lockPath));
+    }
+    if (resolveOperationPath(args.root, relativeJournal) !== journalPath) throw new Error('Preorder operation evidence location changed; preserve its journal and retry.');
     const connection = deps.createConnection(config.solanaRpcUrl || clusterApiUrl(config.solanaCluster));
     assertReceiptPoolRpcGenesisHash({ solanaCluster: config.solanaCluster, genesisHash: await connection.getGenesisHash() });
     const program = await connection.getAccountInfo(CORE_PROGRAM, 'finalized');
@@ -411,7 +418,7 @@ export async function runPreorderCollectionDeployment(
       throw error;
     }
   } finally {
-    release();
+    for (const release of releases.reverse()) release();
   }
 }
 

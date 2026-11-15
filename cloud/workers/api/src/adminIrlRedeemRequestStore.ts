@@ -203,7 +203,7 @@ export async function persistPendingFinalizeSubmission(
   });
 }
 
-export function pendingFinalizeSubmissionAlreadySettled(
+function pendingFinalizeSubmissionAlreadySettled(
   document: Record<string, unknown>,
   pending: PendingFinalizeSubmission,
   outcome: 'confirmed' | 'expired',

@@ -1,73 +1,28 @@
 import { initializeOwnerHatchingSchemaV1 } from './ethereumRevealSchema/ownerHatching.js';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
-import type { EthereumArtworkCategory, EthereumRevealedArtwork } from '../../../../shared/ethereum/reveal.js';
 import { MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import { parseMetadataJson } from './ethereumMetadataJson.js';
 import { revealRandomInteger } from './ethereumRevealCatalog.js';
-import type { RevealCanonicalMetadata, RevealOriginUnit } from './ethereumRevealCatalogUpdateStore.js';
+import type { RevealOriginUnit } from './ethereumRevealCatalogTypes.js';
 import type { RevealPublicationJob, RevealPublicationResult, RevealSql } from './ethereumRevealStore.js';
-
-export type OwnerHatchingCanonical = RevealCanonicalMetadata;
-export type OwnerHatchingAsset = {
-  category: Exclude<EthereumArtworkCategory, 'egg'>;
-  assetId: number;
-  attributesJson?: string;
-};
-export type OwnerHatchingHooks = {
-  canonical(tokenId: string): OwnerHatchingCanonical | null;
-  build(tokenId: string, asset: OwnerHatchingAsset, original: OwnerHatchingCanonical): {
-    artwork: EthereumRevealedArtwork; metadataJson: string;
-  };
-  takeOrdinary(): { origin: RevealOriginUnit; effective: OwnerHatchingAsset } | null;
-  originForToken(tokenId: string): RevealOriginUnit;
-  transitionSlot(origin: RevealOriginUnit, before: RevealOriginUnit, after: RevealOriginUnit): void;
-  releaseReplacement(origin: RevealOriginUnit, freshEggId: number): void;
-  freshEggAvailable(eggId: number): boolean;
-  eligibleEgg(tokenId: string, eggId: number): boolean;
-};
-export type OwnerHatchingBatchInput = {
-  batchId: string;
-  sourceSha256: string;
-  candidateTokenIds: string[];
-  readyCount: number;
-  grails: OwnerHatchingAsset[];
-  freshEggIds: number[];
-};
-export type OwnerHatchingBatchStatus = {
-  batchId: string; sourceSha256: string; phase: 'publishing' | 'complete'; prepared: true;
-  readyCount: number; grailCount: number; freshEggCount: number; ready: number; hatched: number;
-  published: number; pendingPublication: number; conflicts: number; pendingEnrichment: number; failedEnrichment: number;
-};
-export type OwnerHatchingResult =
-  | { kind: 'hatched'; artwork: EthereumRevealedArtwork }
-  | { kind: 'unavailable' | 'not-ready' };
-export type OwnerHatchingEnrichmentError = 'invalid' | 'source-unavailable' | 'enrichment-failed';
-export type OwnerHatchingEnrichment = {
-  tokenId: string; category: OwnerHatchingAsset['category']; assetId: number; metadataRevision: number;
-  baseJson: string; attempts: number; lastError: OwnerHatchingEnrichmentError | null;
-};
-export type OwnerHatchingEnrichmentSummary = {
-  pending: number; failed: number; completed: number; errors: Partial<Record<OwnerHatchingEnrichmentError, number>>;
-};
-
-type BatchRow = {
-  batch_id: string; source_sha256: string; input_sha256: string; ready_count: number; grail_count: number;
-  fresh_egg_count: number; created_at_ms: number;
-};
-type TokenRow = {
-  token_id: string; batch_id: string; egg_id: number; original_json: string;
-  grail_category: OwnerHatchingAsset['category'] | null; grail_asset_id: number | null;
-  status: 'ready' | 'hatched'; canonical_json: string; metadata_revision: number; hatched_at_ms: number | null;
-};
-type PublicationRow = {
-  token_id: string; metadata_revision: number; status: 'pending' | 'published' | 'conflict';
-  attempts: number; next_check_ms: number; claim_id: string | null;
-};
+import { EthereumOwnerHatchingReader } from './ethereumOwnerHatchingReader.js';
+import {
+  OWNER_HATCHING_ENRICHMENT_CLAIM_MS,
+  type OwnerHatchingAsset,
+  type OwnerHatchingBatchInput,
+  type OwnerHatchingBatchRow,
+  type OwnerHatchingBatchStatus,
+  type OwnerHatchingCanonical,
+  type OwnerHatchingEnrichment,
+  type OwnerHatchingEnrichmentError,
+  type OwnerHatchingHooks,
+  type OwnerHatchingPublicationRow,
+  type OwnerHatchingResult,
+} from './ethereumOwnerHatchingTypes.js';
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const CATEGORIES = new Set(['painting', 'video', '3d', 'animated']);
-const ENRICHMENT_CLAIM_MS = 60_000;
 const hash = (value: string) => bytesToHex(sha256(value));
 
 function integer(value: number, maximum = 111_111): boolean {
@@ -96,12 +51,11 @@ function predecessors(...values: string[]): string[] {
 
 export class EthereumOwnerHatchingStore {
   initialized = false;
-  private schemaAvailable: boolean;
   private readonly transaction: <T>(action: () => T) => T;
 
   constructor(private readonly sql: RevealSql, transaction: <T>(action: () => T) => T,
-    private readonly hooks: OwnerHatchingHooks, private readonly randomInteger = revealRandomInteger) {
-    this.schemaAvailable = this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_tokens'").toArray().length > 0;
+    private readonly hooks: OwnerHatchingHooks, private readonly randomInteger = revealRandomInteger,
+    readonly reader = new EthereumOwnerHatchingReader(sql)) {
     let depth = 0;
     this.transaction = <T>(action: () => T): T => {
       if (depth) return action();
@@ -112,74 +66,11 @@ export class EthereumOwnerHatchingStore {
     };
   }
 
-  get available(): boolean {
-    if (!this.schemaAvailable) this.schemaAvailable = this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_tokens'").toArray().length > 0;
-    return this.schemaAvailable;
-  }
-
   initialize(): void {
     if (this.initialized) return;
     initializeOwnerHatchingSchemaV1(this.sql, this.transaction);
-    this.schemaAvailable = true;
+    this.reader.noteSchemaInitialized();
     this.initialized = true;
-  }
-
-  private token(tokenId: string): TokenRow | undefined {
-    if (!this.available) return;
-    return this.sql.exec<TokenRow>('SELECT * FROM owner_hatching_tokens WHERE token_id=?', tokenId).toArray()[0];
-  }
-
-  hasBatch(): boolean {
-    if (!this.available) return false;
-    return this.sql.exec('SELECT 1 FROM owner_hatching_batches LIMIT 1').toArray().length > 0;
-  }
-
-  isRetiredEgg(eggId: number): boolean {
-    if (!this.available) return false;
-    return this.sql.exec('SELECT 1 FROM owner_hatching_retired_eggs WHERE egg_id=?', eggId).toArray().length > 0;
-  }
-
-  hasProtectedEgg(eggId: number): boolean {
-    if (!this.available) return false;
-    return this.sql.exec('SELECT 1 FROM owner_hatching_tokens WHERE egg_id=?', eggId).toArray().length > 0 || this.isRetiredEgg(eggId);
-  }
-
-  usedFreshEgg(eggId: number): boolean {
-    if (!this.available) return false;
-    return this.sql.exec('SELECT 1 FROM owner_hatching_fresh_eggs WHERE egg_id=?', eggId).toArray().length > 0;
-  }
-
-  reservedGrail(asset: RevealOriginUnit): boolean {
-    if (!this.available) return false;
-    return this.sql.exec('SELECT 1 FROM owner_hatching_grails WHERE category=? AND asset_id=?', asset.category, asset.assetId).toArray().length > 0;
-  }
-
-  claimedArtwork(asset: RevealOriginUnit): boolean {
-    if (!this.available) return false;
-    return this.sql.exec('SELECT 1 FROM owner_hatching_artwork_claims WHERE category=? AND asset_id=?', asset.category, asset.assetId).toArray().length > 0;
-  }
-
-  slotOverride(origin: RevealOriginUnit): RevealOriginUnit | null {
-    if (!this.available) return null;
-    const row = this.sql.exec<{ category: EthereumArtworkCategory; asset_id: number }>(
-      'SELECT category,asset_id FROM owner_hatching_slot_overrides WHERE origin_category=? AND origin_asset_id=?', origin.category, origin.assetId).toArray()[0];
-    return row ? { category: row.category, assetId: row.asset_id } : null;
-  }
-
-  slotOverrides(origins: readonly RevealOriginUnit[]): Array<RevealOriginUnit | null> {
-    if (!origins.length || !this.available) return origins.map(() => null);
-    const values = new Map<string, RevealOriginUnit>();
-    const unique = [...new Map(origins.map(origin => [`${origin.category}:${origin.assetId}`, origin])).values()];
-    for (let offset = 0; offset < unique.length; offset += 50) {
-      const page = unique.slice(offset, offset + 50);
-      const rows = this.sql.exec<{ origin_category: EthereumArtworkCategory; origin_asset_id: number;
-        category: EthereumArtworkCategory; asset_id: number }>(
-        `SELECT * FROM owner_hatching_slot_overrides
-          WHERE (origin_category,origin_asset_id) IN (${page.map(() => '(?,?)').join(',')})`,
-        ...page.flatMap(origin => [origin.category, origin.assetId])).toArray();
-      for (const row of rows) values.set(`${row.origin_category}:${row.origin_asset_id}`, { category: row.category, assetId: row.asset_id });
-    }
-    return origins.map(origin => values.get(`${origin.category}:${origin.assetId}`) ?? null);
   }
 
   private overrideSlot(origin: RevealOriginUnit, asset: RevealOriginUnit, tokenId: string, now: number): void {
@@ -191,61 +82,10 @@ export class EthereumOwnerHatchingStore {
       origin.category, origin.assetId, asset.category, asset.assetId, tokenId);
   }
 
-  canonical(tokenId: string): OwnerHatchingCanonical | null {
-    const row = this.token(tokenId);
-    return row ? parseMetadataJson(row.canonical_json) as OwnerHatchingCanonical : null;
-  }
-
-  canonicals(tokenIds: readonly string[]): Map<string, OwnerHatchingCanonical> {
-    const values = new Map<string, OwnerHatchingCanonical>();
-    if (!tokenIds.length || !this.available) return values;
-    const unique = [...new Set(tokenIds)];
-    for (let offset = 0; offset < unique.length; offset += 100) {
-      const page = unique.slice(offset, offset + 100);
-      const sizes = this.sql.exec<{ token_id: string; bytes: number }>(
-        `SELECT token_id,length(CAST(canonical_json AS BLOB)) AS bytes FROM owner_hatching_tokens
-          WHERE token_id IN (${page.map(() => '?').join(',')})`, ...page).toArray();
-      for (let start = 0; start < sizes.length;) {
-        let end = start + 1, bytes = sizes[start].bytes;
-        while (end < sizes.length && bytes + sizes[end].bytes <= 1024 * 1024) bytes += sizes[end++].bytes;
-        const ids = sizes.slice(start, end).map(row => row.token_id);
-        const rows = this.sql.exec<Pick<TokenRow, 'token_id' | 'canonical_json'>>(
-          `SELECT token_id,canonical_json FROM owner_hatching_tokens WHERE token_id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray();
-        for (const row of rows) values.set(row.token_id, parseMetadataJson(row.canonical_json) as OwnerHatchingCanonical);
-        start = end;
-      }
-    }
-    return values;
-  }
-
-  readyTokenIds(): string[] {
-    if (!this.available) return [];
-    return this.sql.exec<{ token_id: string }>("SELECT token_id FROM owner_hatching_tokens WHERE status='ready' ORDER BY CAST(token_id AS INTEGER)")
-      .toArray().map(row => row.token_id);
-  }
-
-  batchStatus(batchId?: string): OwnerHatchingBatchStatus | null {
-    if (!this.available) return null;
-    const batch = (batchId === undefined
-      ? this.sql.exec<BatchRow>('SELECT * FROM owner_hatching_batches ORDER BY created_at_ms DESC,batch_id DESC LIMIT 1')
-      : this.sql.exec<BatchRow>('SELECT * FROM owner_hatching_batches WHERE batch_id=?', batchId)).toArray()[0];
-    if (!batch) return null;
-    const counts = this.sql.exec<{ ready: number; hatched: number; published: number; pending: number; conflicts: number }>(
-      `SELECT COALESCE(SUM(t.status='ready'),0) AS ready,COALESCE(SUM(t.status='hatched'),0) AS hatched,
-        COALESCE(SUM(p.status='published'),0) AS published,COALESCE(SUM(p.status='pending'),0) AS pending,
-        COALESCE(SUM(p.status='conflict'),0) AS conflicts FROM owner_hatching_tokens t
-        JOIN owner_hatching_publication p ON p.token_id=t.token_id WHERE t.batch_id=?`, batch.batch_id).toArray()[0];
-    const enrichment = this.enrichmentSummary(batch.batch_id);
-    return { batchId: batch.batch_id, sourceSha256: batch.source_sha256, phase: counts.pending || counts.conflicts ? 'publishing' : 'complete',
-      prepared: true, readyCount: batch.ready_count, grailCount: batch.grail_count, freshEggCount: batch.fresh_egg_count,
-      ready: counts.ready, hatched: counts.hatched, published: counts.published, pendingPublication: counts.pending, conflicts: counts.conflicts,
-      pendingEnrichment: enrichment.pending, failedEnrichment: enrichment.failed };
-  }
-
   eligibleCandidate(tokenId: string): OwnerHatchingCanonical | null {
-    if (this.token(tokenId)) return null;
+    if (this.reader.token(tokenId)) return null;
     const canonical = this.hooks.canonical(tokenId);
-    return canonical?.category === 'egg' && !this.hasProtectedEgg(canonical.assetId) &&
+    return canonical?.category === 'egg' && !this.reader.hasProtectedEgg(canonical.assetId) &&
       this.hooks.eligibleEgg(tokenId, canonical.assetId) ? canonical : null;
   }
 
@@ -265,13 +105,13 @@ export class EthereumOwnerHatchingStore {
       grails: [...input.grails].sort((a, b) => a.category.localeCompare(b.category) || a.assetId - b.assetId),
       freshEggIds: [...input.freshEggIds].sort((a, b) => a - b) }));
     return this.transaction(() => {
-      const existing = this.sql.exec<BatchRow>('SELECT * FROM owner_hatching_batches WHERE batch_id=?', input.batchId).toArray()[0];
+      const existing = this.sql.exec<OwnerHatchingBatchRow>('SELECT * FROM owner_hatching_batches WHERE batch_id=?', input.batchId).toArray()[0];
       if (existing) {
         if (existing.input_sha256 !== inputSha256) throw new Error('Owner hatching batch replay changed.');
-        return this.batchStatus(input.batchId)!;
+        return this.reader.batchStatus(input.batchId)!;
       }
-      if (input.grails.some(asset => this.reservedGrail(asset) || this.claimedArtwork(asset)) ||
-        input.freshEggIds.some(id => this.usedFreshEgg(id) || this.hasProtectedEgg(id) || !this.hooks.freshEggAvailable(id))) {
+      if (input.grails.some(asset => this.reader.reservedGrail(asset) || this.reader.claimedArtwork(asset)) ||
+        input.freshEggIds.some(id => this.reader.usedFreshEgg(id) || this.reader.hasProtectedEgg(id) || !this.hooks.freshEggAvailable(id))) {
         throw new Error('Owner hatching batch contains unavailable assets.');
       }
       const candidates = [...input.candidateTokenIds];
@@ -308,13 +148,13 @@ export class EthereumOwnerHatchingStore {
           JSON.stringify(original), grail?.category ?? null, grail?.assetId ?? null, JSON.stringify(canonical), metadataRevision);
         this.sql.exec('INSERT INTO owner_hatching_publication(token_id,metadata_revision) VALUES(?,?)', original.tokenId, metadataRevision);
       }
-      return this.batchStatus(input.batchId)!;
+      return this.reader.batchStatus(input.batchId)!;
     });
   }
 
   hatch(tokenId: string, now = Date.now()): OwnerHatchingResult {
     return this.transaction(() => {
-      const token = this.token(tokenId);
+      const token = this.reader.token(tokenId);
       if (!token) return { kind: 'not-ready' };
       const previous = parseMetadataJson(token.canonical_json) as OwnerHatchingCanonical;
       if (token.status === 'hatched') return { kind: 'hatched', artwork: previous.artwork };
@@ -335,7 +175,7 @@ export class EthereumOwnerHatchingStore {
         const chosen = this.hooks.takeOrdinary();
         if (!chosen) return { kind: 'unavailable' };
         asset = chosen.effective;
-        if (!validAsset(asset) || this.reservedGrail(asset) || this.claimedArtwork(asset)) throw new Error('Ordinary hatch selected unavailable artwork.');
+        if (!validAsset(asset) || this.reader.reservedGrail(asset) || this.reader.claimedArtwork(asset)) throw new Error('Ordinary hatch selected unavailable artwork.');
         this.sql.exec('UPDATE owner_hatching_fresh_eggs SET token_id=? WHERE egg_id=? AND token_id IS NULL', tokenId, fresh.egg_id);
         this.overrideSlot(chosen.origin, { category: 'egg', assetId: fresh.egg_id }, tokenId, now);
         this.hooks.transitionSlot(chosen.origin, chosen.effective, { category: 'egg', assetId: fresh.egg_id });
@@ -373,11 +213,11 @@ export class EthereumOwnerHatchingStore {
   claimPublications(now: number, limit = 8): RevealPublicationJob[] {
     if (!integer(limit, 64)) throw new Error('Invalid owner publication batch size.');
     return this.transaction(() => {
-      const rows = this.sql.exec<PublicationRow>(`SELECT * FROM owner_hatching_publication
+      const rows = this.sql.exec<OwnerHatchingPublicationRow>(`SELECT * FROM owner_hatching_publication
         WHERE status='pending' AND next_check_ms<=? ORDER BY next_check_ms,CAST(token_id AS INTEGER) LIMIT ?`, now, limit).toArray();
       const claimId = crypto.randomUUID();
       return rows.map(row => {
-        const canonical = this.canonical(row.token_id)!;
+        const canonical = this.reader.canonical(row.token_id)!;
         this.sql.exec(`UPDATE owner_hatching_publication SET next_check_ms=?,attempts=attempts+1,claim_id=? WHERE token_id=?`, now + 60_000, claimId, row.token_id);
         return { token_id: row.token_id, metadata_json: canonical.metadataJson, placeholder_json: canonical.expectedJsons[0],
           attempts: row.attempts, claim_id: claimId, metadata_revision: canonical.metadataRevision,
@@ -391,7 +231,7 @@ export class EthereumOwnerHatchingStore {
       const applied: RevealPublicationResult[] = [];
       for (const result of results) {
         const { job, status } = result;
-        const current = this.canonical(job.token_id);
+        const current = this.reader.canonical(job.token_id);
         if (!current || current.metadataRevision !== job.metadata_revision || current.metadataJson !== job.metadata_json) continue;
         const next = status === 'superseded' ? now : now + Math.min(300_000, 1_000 * 2 ** Math.min(job.attempts + 1, 8));
         const updated = this.sql.exec(`UPDATE owner_hatching_publication SET status=?,next_check_ms=?,claim_id=NULL,
@@ -417,9 +257,9 @@ export class EthereumOwnerHatchingStore {
           JOIN owner_hatching_tokens t ON t.token_id=e.token_id WHERE e.status='pending' AND t.status='hatched'
           AND e.metadata_revision=t.metadata_revision AND e.next_check_ms<=? ORDER BY e.next_check_ms,e.token_id LIMIT ?`, now, limit).toArray();
       return rows.map(row => {
-        const canonical = this.canonical(row.token_id)!;
+        const canonical = this.reader.canonical(row.token_id)!;
         if (canonical.category === 'egg') throw new Error('Hatched artwork cannot be an egg.');
-        this.sql.exec('UPDATE owner_hatching_enrichment SET next_check_ms=?,attempts=attempts+1 WHERE token_id=?', now + ENRICHMENT_CLAIM_MS, row.token_id);
+        this.sql.exec('UPDATE owner_hatching_enrichment SET next_check_ms=?,attempts=attempts+1 WHERE token_id=?', now + OWNER_HATCHING_ENRICHMENT_CLAIM_MS, row.token_id);
         return { tokenId: row.token_id, category: canonical.category, assetId: canonical.assetId,
           metadataRevision: row.metadata_revision, baseJson: canonical.metadataJson, attempts: row.attempts + 1, lastError: row.last_error };
       });
@@ -428,7 +268,7 @@ export class EthereumOwnerHatchingStore {
 
   acceptEnrichment(tokenId: string, expectedRevision: number, metadataJson: string, metadataSha256 = hash(metadataJson)): boolean {
     return this.transaction(() => {
-      const token = this.token(tokenId);
+      const token = this.reader.token(tokenId);
       const pending = this.sql.exec<{ metadata_revision: number }>(
         "SELECT metadata_revision FROM owner_hatching_enrichment WHERE token_id=? AND status='pending'", tokenId).toArray()[0];
       if (!token || token.status !== 'hatched' || token.metadata_revision !== expectedRevision || pending?.metadata_revision !== expectedRevision) return false;
@@ -460,44 +300,5 @@ export class EthereumOwnerHatchingStore {
   failEnrichment(tokenId: string, expectedRevision: number, now: number, reason: OwnerHatchingEnrichmentError): boolean {
     return this.sql.exec(`UPDATE owner_hatching_enrichment SET last_error=?,next_check_ms=?+MIN(300000,1000*(1<<MIN(attempts,8)))
       WHERE token_id=? AND status='pending' AND metadata_revision=? RETURNING token_id`, reason, now, tokenId, expectedRevision).toArray().length > 0;
-  }
-
-  enrichmentSummary(batchId?: string): OwnerHatchingEnrichmentSummary {
-    const summary: OwnerHatchingEnrichmentSummary = { pending: 0, failed: 0, completed: 0, errors: {} };
-    if (!this.available) return summary;
-    const lastError = this.initialized || this.sql.exec<{ name: string }>('PRAGMA table_info(owner_hatching_enrichment)')
-      .toArray().some(row => row.name === 'last_error') ? 'e.last_error' : 'NULL';
-    const rows = this.sql.exec<{ status: 'pending' | 'complete'; last_error: OwnerHatchingEnrichmentError | null; count: number }>(
-      `SELECT e.status,${lastError} AS last_error,COUNT(*) AS count FROM owner_hatching_enrichment e
-        JOIN owner_hatching_tokens t ON t.token_id=e.token_id ${batchId === undefined ? '' : 'WHERE t.batch_id=?'}
-        GROUP BY e.status,${lastError}`, ...(batchId === undefined ? [] : [batchId])).toArray();
-    for (const row of rows) {
-      if (row.status === 'complete') summary.completed += row.count;
-      else {
-        summary.pending += row.count;
-        if (row.last_error !== null) {
-          summary.failed += row.count;
-          summary.errors[row.last_error] = row.count;
-        }
-      }
-    }
-    return summary;
-  }
-
-  nextWake(now: number, enrichmentBusy = false): number | null {
-    if (!this.available) return null;
-    const row = this.sql.exec<{ publication: number | null; enrichment: number | null }>(`SELECT
-      (SELECT MIN(next_check_ms) FROM owner_hatching_publication WHERE status='pending') AS publication,
-      (SELECT MIN(next_check_ms) FROM owner_hatching_enrichment WHERE status='pending') AS enrichment`).toArray()[0];
-    const enrichment = row.enrichment === null ? null : Math.max(row.enrichment, enrichmentBusy ? now + ENRICHMENT_CLAIM_MS : now);
-    const times = [row.publication, enrichment].filter((value): value is number => value !== null);
-    return times.length ? Math.max(now, Math.min(...times)) : null;
-  }
-
-  publicationError(): 'metadata-conflict' | 'publication-unavailable' | null {
-    if (!this.available) return null;
-    if (this.sql.exec("SELECT 1 FROM owner_hatching_publication WHERE status='conflict' LIMIT 1").toArray().length) return 'metadata-conflict';
-    if (this.sql.exec("SELECT 1 FROM owner_hatching_publication WHERE status='pending' AND attempts>0 LIMIT 1").toArray().length) return 'publication-unavailable';
-    return null;
   }
 }

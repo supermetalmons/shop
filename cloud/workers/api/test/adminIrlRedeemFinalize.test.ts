@@ -34,7 +34,6 @@ import {
   type CommerceDocumentData,
 } from '../src/commerceRepository.ts';
 import {
-  adminIrlRedeemFinalizeTestHooks,
   cleanupAdminIrlRedeemFinalizeWorkflow,
   loadAdminIrlRedeemFinalizeWorkflowResult,
   prepareAdminIrlRedeemFinalizeWorkflowDraft,
@@ -42,7 +41,30 @@ import {
   reserveAdminIrlRedeemFinalizeWorkflow,
   resumeAndReconcileAdminIrlRedeemFinalizeWorkflow,
   validateAdminIrlRedeemFinalizeWorkflow,
-} from '../src/adminIrlRedeemFinalize.ts';
+} from '../src/adminIrlRedeemFinalizeWorkflowStages.ts';
+import {
+  createConnection,
+  findReceiptAssets,
+  scanAssetsByOwner,
+  verifyCardTransfer,
+  verifyPackTransfer,
+  waitForCardReceipt,
+} from '../src/adminIrlRedeemFinalizeOnchainReads.ts';
+import {
+  clearDefinitiveFinalizeSubmission,
+  isDefinitiveTransactionFailure,
+  probePendingFinalizeSubmission,
+  receiptBatchConfirmedByPostState,
+  rethrowUnbroadcastFinalizeCancellation,
+} from '../src/adminIrlRedeemFinalizeSubmission.ts';
+import { ensureInternalDelivery, mintPackReceipts } from '../src/adminIrlRedeemFinalizeReceiptActions.ts';
+import { completeResponse, normalizeItems } from '../src/adminIrlRedeemRequestState.ts';
+import {
+  persistPendingFinalizeSubmission,
+  persistWorkflowOnchain,
+  settlePendingFinalizeSubmission,
+  startFinalize,
+} from '../src/adminIrlRedeemRequestStore.ts';
 import {
   AdminIrlRedeemFinalizeError,
   adminIrlRedeemFinalizeWorkflowError,
@@ -62,7 +84,7 @@ const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
 for (const method of ['getAccountInfoAndContext', 'getLatestBlockhashAndContext'] as const) {
   test(`Admin IRL ${method} keeps transport timeouts retryable`, async (context) => {
     context.mock.timers.enable({ apis: ['setTimeout'] });
-    const connection = adminIrlRedeemFinalizeTestHooks.createConnection({
+    const connection = createConnection({
       apiKey: 'test-key',
       providerFetch: async () => new Promise<Response>(() => undefined),
       signal: new AbortController().signal,
@@ -81,7 +103,7 @@ for (const method of ['getAccountInfoAndContext', 'getLatestBlockhashAndContext'
   test(`Admin IRL ${method} preserves exact workflow cancellation`, async () => {
     const controller = new AbortController();
     const reason = new Error('Admin IRL step cancelled');
-    const connection = adminIrlRedeemFinalizeTestHooks.createConnection({
+    const connection = createConnection({
       apiKey: 'test-key',
       providerFetch: async () => new Promise<Response>(() => undefined),
       signal: controller.signal,
@@ -1077,7 +1099,7 @@ test('Admin IRL Workflow on-chain pinning preserves concurrent execution field d
     coreCollection: Keypair.generate().publicKey.toBase58(),
     treasury: Keypair.generate().publicKey.toBase58(),
   };
-  await adminIrlRedeemFinalizeTestHooks.persistWorkflowOnchain({
+  await persistWorkflowOnchain({
     status: 'started',
     body,
     commerce: {
@@ -1541,9 +1563,9 @@ test('Admin IRL receipt owner scans finish pagination before checking uniqueness
       },
     });
   };
-  await adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner(
+  await scanAssetsByOwner(
     { apiKey: 'helius', providerFetch, signal: new AbortController().signal },
-    { cluster: 'devnet' } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner>[1],
+    { cluster: 'devnet' } as Parameters<typeof scanAssetsByOwner>[1],
     OWNER,
     (asset) => {
       if (asset && typeof asset === 'object' && 'id' in asset) visited.push(String(asset.id));
@@ -1553,7 +1575,7 @@ test('Admin IRL receipt owner scans finish pagination before checking uniqueness
   assert.deepEqual(visited, ['first-match', 'later-duplicate']);
 
   let callsAfterDeadline = 0;
-  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner(
+  await assert.rejects(() => scanAssetsByOwner(
     {
       apiKey: 'helius',
       providerFetch: async () => {
@@ -1562,7 +1584,7 @@ test('Admin IRL receipt owner scans finish pagination before checking uniqueness
       },
       signal: new AbortController().signal,
     },
-    { cluster: 'devnet' } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner>[1],
+    { cluster: 'devnet' } as Parameters<typeof scanAssetsByOwner>[1],
     OWNER,
     () => undefined,
     undefined,
@@ -1575,7 +1597,7 @@ test('Admin IRL card receipt indexing rejects malformed proofs without retrying'
   const runtime = buildRuntime(API_DROPS[DROP_ID]);
   const hash = bs58.encode(new Uint8Array(32).fill(7));
   const methods: string[] = [];
-  await assert.rejects(adminIrlRedeemFinalizeTestHooks.waitForCardReceipt({
+  await assert.rejects(waitForCardReceipt({
     apiKey: 'helius',
     signal: new AbortController().signal,
     providerFetch: async (_input, init) => {
@@ -1614,7 +1636,7 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
   const cardController = new AbortController();
   const cardReason = new Error('card receipt lookup cancelled');
   await assert.rejects(
-    adminIrlRedeemFinalizeTestHooks.waitForCardReceipt(
+    waitForCardReceipt(
       {
         apiKey: 'helius',
         providerFetch: async () => {
@@ -1623,7 +1645,7 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
         },
         signal: cardController.signal,
       },
-      { cluster: 'devnet' } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.waitForCardReceipt>[1],
+      { cluster: 'devnet' } as Parameters<typeof waitForCardReceipt>[1],
       OWNER,
       9,
       OWNER,
@@ -1634,7 +1656,7 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
   const packController = new AbortController();
   const packReason = new Error('pack receipt transaction lookup cancelled');
   await assert.rejects(
-    adminIrlRedeemFinalizeTestHooks.findReceiptAssets(
+    findReceiptAssets(
       {
         getTransactions: async () => {
           packController.abort(packReason);
@@ -1646,7 +1668,7 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
         providerFetch: async () => assert.fail('cancelled lookup reached owner scan'),
         signal: packController.signal,
       },
-      { dropId: DROP_ID } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.findReceiptAssets>[2],
+      { dropId: DROP_ID } as Parameters<typeof findReceiptAssets>[2],
       OWNER,
       [{ assetId: OWNER, kind: 'box', refId: 7 }],
       [SIGNATURE],
@@ -1655,7 +1677,7 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
   );
 
   await assert.rejects(
-    adminIrlRedeemFinalizeTestHooks.findReceiptAssets(
+    findReceiptAssets(
       {
         getTransactions: async () => [confirmedTransaction(new PublicKey(OWNER), [])],
       } as unknown as Connection,
@@ -1664,7 +1686,7 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
         providerFetch: async () => assert.fail('mismatched transaction reached owner scan'),
         signal: new AbortController().signal,
       },
-      { dropId: DROP_ID } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.findReceiptAssets>[2],
+      { dropId: DROP_ID } as Parameters<typeof findReceiptAssets>[2],
       OWNER,
       [{ assetId: OWNER, kind: 'box', refId: 7 }],
       [SIGNATURE],
@@ -1708,7 +1730,7 @@ for (const cancelCaller of [false, true]) {
     let failedAssetReads = 0;
     let siblingAborted = 0;
     let ownerScans = 0;
-    const pending = adminIrlRedeemFinalizeTestHooks.findReceiptAssets({
+    const pending = findReceiptAssets({
       getTransactions: async () => [transaction],
     } as unknown as Connection, {
       apiKey: 'helius',
@@ -1761,7 +1783,7 @@ for (const cancelCaller of [false, true]) {
 }
 
 test('Admin IRL finalization normalizes prepared pack and card requests strictly', () => {
-  assert.deepEqual(adminIrlRedeemFinalizeTestHooks.normalizeItems({
+  assert.deepEqual(normalizeItems({
     targetKind: 'pack',
     itemIds: [OWNER],
     items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
@@ -1770,12 +1792,12 @@ test('Admin IRL finalization normalizes prepared pack and card requests strictly
     itemIds: [OWNER],
     items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
   });
-  assert.deepEqual(adminIrlRedeemFinalizeTestHooks.normalizeItems({
+  assert.deepEqual(normalizeItems({
     targetKind: 'card_receipt',
     itemIds: [OWNER],
     items: [{ assetId: OWNER, kind: 'card_receipt', refId: 9 }],
   }).targetKind, 'card_receipt');
-  assert.throws(() => adminIrlRedeemFinalizeTestHooks.normalizeItems({
+  assert.throws(() => normalizeItems({
     targetKind: 'pack',
     itemIds: [OWNER, OWNER],
     items: [
@@ -1783,7 +1805,7 @@ test('Admin IRL finalization normalizes prepared pack and card requests strictly
       { assetId: OWNER, kind: 'box', refId: 8 },
     ],
   }), /duplicate/);
-  assert.throws(() => adminIrlRedeemFinalizeTestHooks.normalizeItems({
+  assert.throws(() => normalizeItems({
     targetKind: 'pack',
     itemIds: [OWNER],
     items: [{ assetId: OWNER, kind: 'card_receipt', refId: 9 }],
@@ -1803,7 +1825,7 @@ test('Admin IRL finalization acquires, rejects, and recovers processing leases',
     receiptTxs: [],
   };
   const startedContext = commerceContext(prepared);
-  const started = await adminIrlRedeemFinalizeTestHooks.startFinalize(
+  const started = await startFinalize(
     startedContext,
     body,
     OWNER,
@@ -1815,7 +1837,7 @@ test('Admin IRL finalization acquires, rejects, and recovers processing leases',
   assert.equal(startedDocument?.data.status, 'processing');
   assert.equal(startedDocument?.data.processingAttemptId, 'attempt');
 
-  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.startFinalize(
+  await assert.rejects(() => startFinalize(
     commerceContext({
       ...prepared,
       status: 'processing',
@@ -1827,7 +1849,7 @@ test('Admin IRL finalization acquires, rejects, and recovers processing leases',
     1_700_000_000_000,
   ), /already being finalized/);
 
-  const recovered = await adminIrlRedeemFinalizeTestHooks.startFinalize(
+  const recovered = await startFinalize(
     commerceContext({
       ...prepared,
       status: 'processing',
@@ -1865,7 +1887,7 @@ test('Admin IRL finalization reconciles an applied processing lease whose acknow
   });
   loseAcknowledgement = true;
 
-  const started = await adminIrlRedeemFinalizeTestHooks.startFinalize(
+  const started = await startFinalize(
     context,
     { requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE },
     OWNER,
@@ -1896,9 +1918,9 @@ test('Admin IRL finalization writes submission intent before broadcast and keeps
     deliveryId: 7,
     deliveryPda: Keypair.generate().publicKey.toBase58(),
   };
-  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(
+  await persistPendingFinalizeSubmission(
     context,
-    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     'attempt',
     pending,
   );
@@ -1970,9 +1992,9 @@ test('Admin IRL submission intent recovers a lost D1 commit acknowledgement', as
   };
 
   armed = true;
-  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(
+  await persistPendingFinalizeSubmission(
     context,
-    path,
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     'attempt',
     pending,
   );
@@ -2002,19 +2024,19 @@ test('Admin IRL submission settlement survives a lost D1 acknowledgement', async
     blockhash: Keypair.generate().publicKey.toBase58(),
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
-  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, path, 'attempt', pending);
+  await persistPendingFinalizeSubmission(context, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID), 'attempt', pending);
 
   armed = true;
-  await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
+  await settlePendingFinalizeSubmission(
     context,
-    path,
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     'attempt',
     pending,
     'confirmed',
   );
-  await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
+  await settlePendingFinalizeSubmission(
     context,
-    path,
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     'attempt',
     pending,
     'confirmed',
@@ -2050,20 +2072,20 @@ test('Admin IRL internal delivery settlement survives a lost D1 acknowledgement 
     deliveryId: 7,
     deliveryPda: Keypair.generate().publicKey.toBase58(),
   };
-  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, path, 'attempt', pending);
+  await persistPendingFinalizeSubmission(context, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID), 'attempt', pending);
 
   armed = true;
-  await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
+  await settlePendingFinalizeSubmission(
     context,
-    path,
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     'attempt',
     pending,
     'confirmed',
   );
   assert.equal(lostAcknowledgement, true);
-  await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
+  await settlePendingFinalizeSubmission(
     context,
-    path,
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     'attempt',
     pending,
     'confirmed',
@@ -2133,8 +2155,8 @@ for (const phase of ['persist', 'settle'] as const) {
     armed = true;
     await assert.rejects(
       phase === 'persist'
-        ? adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, key.path, 'attempt', pending)
-        : adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(context, key.path, 'attempt', pending, 'confirmed'),
+        ? persistPendingFinalizeSubmission(context, key, 'attempt', pending)
+        : settlePendingFinalizeSubmission(context, key, 'attempt', pending, 'confirmed'),
       (error) => error === lostAcknowledgement,
     );
 
@@ -2162,11 +2184,11 @@ test('Admin IRL pre-broadcast cancellation clears only its exact submission inte
     blockhash: Keypair.generate().publicKey.toBase58(),
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
-  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, path, 'attempt', pending);
+  await persistPendingFinalizeSubmission(context, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID), 'attempt', pending);
   controller.abort(reason);
 
   await assert.rejects(
-    adminIrlRedeemFinalizeTestHooks.rethrowUnbroadcastFinalizeCancellation({
+    rethrowUnbroadcastFinalizeCancellation({
       broadcastStarted: false,
       commerce: context,
       error: reason,
@@ -2212,7 +2234,7 @@ for (const kind of ['receipt_mint', 'internal_delivery'] as const) {
       const asset = Keypair.generate().publicKey;
       const blockhash = Keypair.generate().publicKey.toBase58();
       const [deliveryPda] = deriveDeliveryPda(runtime, 7);
-      const onchain: Parameters<typeof adminIrlRedeemFinalizeTestHooks.ensureInternalDelivery>[4] = {
+      const onchain: Parameters<typeof ensureInternalDelivery>[4] = {
         admin: signer.publicKey,
         coreCollection: collection,
         decoded: {
@@ -2290,12 +2312,12 @@ for (const kind of ['receipt_mint', 'internal_delivery'] as const) {
         },
       };
       const execute = () => kind === 'receipt_mint'
-        ? adminIrlRedeemFinalizeTestHooks.mintPackReceipts(
+        ? mintPackReceipts(
           connection, provider, runtime, signer, collection,
           [{ assetId: asset.toBase58(), kind: 'box', refId: 7 }],
           context, key.path, 'attempt', [],
         )
-        : adminIrlRedeemFinalizeTestHooks.ensureInternalDelivery(
+        : ensureInternalDelivery(
           connection, provider, runtime, signer, onchain,
           context, key.path, 'attempt', {
             adminWallet: OWNER,
@@ -2371,7 +2393,7 @@ test('Admin IRL receipt mint rethrows cancellation on its final retry', { timeou
   const runtime = buildRuntime(API_DROPS[DROP_ID]);
 
   await assert.rejects(
-    adminIrlRedeemFinalizeTestHooks.mintPackReceipts(
+    mintPackReceipts(
       connection,
       { apiKey: 'helius', providerFetch: async () => assert.fail('unexpected provider fetch'), signal: controller.signal },
       runtime,
@@ -2402,7 +2424,7 @@ test('Admin IRL finalization clears definitive preflight submissions without tom
     blockhash: Keypair.generate().publicKey.toBase58(),
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
-  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, path, 'attempt', pending);
+  await persistPendingFinalizeSubmission(context, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID), 'attempt', pending);
   const signer = Keypair.generate();
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: signer.publicKey,
@@ -2420,9 +2442,9 @@ test('Admin IRL finalization clears definitive preflight submissions without tom
   } catch (error) {
     failure = error;
   }
-  assert.equal(adminIrlRedeemFinalizeTestHooks.isDefinitiveTransactionFailure(failure), true);
+  assert.equal(isDefinitiveTransactionFailure(failure), true);
   let postStateChecked = false;
-  assert.equal(await adminIrlRedeemFinalizeTestHooks.receiptBatchConfirmedByPostState(
+  assert.equal(await receiptBatchConfirmedByPostState(
     failure,
     {
       getMultipleAccountsInfo: async () => {
@@ -2434,7 +2456,7 @@ test('Admin IRL finalization clears definitive preflight submissions without tom
   ), false);
   assert.equal(postStateChecked, false);
 
-  await adminIrlRedeemFinalizeTestHooks.clearDefinitiveFinalizeSubmission({
+  await clearDefinitiveFinalizeSubmission({
     commerce: context,
     path,
     attemptId: 'attempt',
@@ -2462,12 +2484,12 @@ test('Admin IRL finalization promotes only confirmed pending submissions', async
     blockhash: Keypair.generate().publicKey.toBase58(),
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
-  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, path, 'attempt', pending);
+  await persistPendingFinalizeSubmission(context, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID), 'attempt', pending);
   let document = await readCommerceRecord(context, requireCommerceKey(path));
   assert.deepEqual(document?.data.receiptTxs, [SIGNATURE]);
-  await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
+  await settlePendingFinalizeSubmission(
     context,
-    path,
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     'attempt',
     pending,
     'confirmed',
@@ -2498,7 +2520,7 @@ test('Admin IRL internal delivery recovery confirms only when the delivery PDA e
       isBlockhashValid: async () => ({ context: { slot: 1 }, value: true }),
     } satisfies Pick<Connection, 'getAccountInfoAndContext' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
     assert.equal(
-      await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(connection, pending),
+      await probePendingFinalizeSubmission(connection, pending),
       account ? 'confirmed' : 'unresolved',
     );
   }
@@ -2528,12 +2550,12 @@ test('Admin IRL receipt recovery confirms only when every asset is absent or a t
       getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
       isBlockhashValid: async () => ({ context: { slot: 1 }, value: true }),
     } satisfies Pick<Connection, 'getAccountInfoAndContext' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
-    assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(connection, pending), expected);
+    assert.equal(await probePendingFinalizeSubmission(connection, pending), expected);
   }
 });
 
 test('Admin IRL finalization rebuilds completed responses idempotently', () => {
-  const response = adminIrlRedeemFinalizeTestHooks.completeResponse(DROP_ID, REQUEST_ID, {
+  const response = completeResponse(DROP_ID, REQUEST_ID, {
     deliveryId: 7,
     receiptTxs: [SIGNATURE, SIGNATURE],
     claimCodes: ['ABCDEF-1234567890'],
@@ -2566,7 +2588,7 @@ test('Admin IRL finalization verifies the exact ordered Core transfer', async ()
   const connection: Pick<Connection, 'getTransaction'> = {
     getTransaction: (async () => transaction) as Connection['getTransaction'],
   };
-  await adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(
+  await verifyPackTransfer(
     connection,
     SIGNATURE,
     owner.toBase58(),
@@ -2574,7 +2596,7 @@ test('Admin IRL finalization verifies the exact ordered Core transfer', async ()
     collection,
     [asset.toBase58()],
   );
-  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(
+  await assert.rejects(() => verifyPackTransfer(
     connection,
     SIGNATURE,
     owner.toBase58(),
@@ -2597,7 +2619,7 @@ test('Admin IRL finalization verifies the exact ordered Core transfer', async ()
     ],
     data: Buffer.from([14, 0]),
   })));
-  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(
+  await assert.rejects(() => verifyPackTransfer(
     { getTransaction: (async () => secondTransaction) as Connection['getTransaction'] },
     SIGNATURE,
     owner.toBase58(),
@@ -2656,8 +2678,8 @@ test('Admin IRL finalization verifies the exact Bubblegum receipt leaf transfer'
   const connection: Pick<Connection, 'getTransaction'> = {
     getTransaction: (async () => base) as Connection['getTransaction'],
   };
-  const runtime = { receiptsMerkleTree: merkleTree } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.verifyCardTransfer>[1];
-  await adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(
+  const runtime = { receiptsMerkleTree: merkleTree } as Parameters<typeof verifyCardTransfer>[1];
+  await verifyCardTransfer(
     connection,
     runtime,
     SIGNATURE,
@@ -2668,7 +2690,7 @@ test('Admin IRL finalization verifies the exact Bubblegum receipt leaf transfer'
   );
 
   base.transaction.message.compiledInstructions.push(base.transaction.message.compiledInstructions[0]);
-  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(
+  await assert.rejects(() => verifyCardTransfer(
     connection,
     runtime,
     SIGNATURE,
@@ -2685,7 +2707,7 @@ test('Admin IRL finalization verifies the exact Bubblegum receipt leaf transfer'
   });
 
   base.meta!.innerInstructions![0].instructions[0].data = '0';
-  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(
+  await assert.rejects(() => verifyCardTransfer(
     connection,
     runtime,
     SIGNATURE,
@@ -2706,11 +2728,11 @@ test('Admin transfer verification preserves RPC errors and fee-payer errors', as
   const admin = Keypair.generate().publicKey;
   const collection = Keypair.generate().publicKey;
   const receipt = Keypair.generate().publicKey.toBase58();
-  const runtime = { receiptsMerkleTree: Keypair.generate().publicKey } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.verifyCardTransfer>[1];
+  const runtime = { receiptsMerkleTree: Keypair.generate().publicKey } as Parameters<typeof verifyCardTransfer>[1];
   for (const kind of ['pack', 'card'] as const) {
     const verify = (connection: Pick<Connection, 'getTransaction'>) => kind === 'pack'
-      ? adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(connection, SIGNATURE, OWNER, admin.toBase58(), collection, [receipt])
-      : adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(connection, runtime, SIGNATURE, OWNER, admin.toBase58(), collection, receipt);
+      ? verifyPackTransfer(connection, SIGNATURE, OWNER, admin.toBase58(), collection, [receipt])
+      : verifyCardTransfer(connection, runtime, SIGNATURE, OWNER, admin.toBase58(), collection, receipt);
     await assert.rejects(() => verify({
       getTransaction: async (signature, config) => {
         assert.equal(signature, SIGNATURE);

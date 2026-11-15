@@ -92,7 +92,7 @@ function fixture(t: TestContext, frozen = 0) {
   const freezeEggs = (eggIds: number[], firstToken = 1, crateTokenId = '111112') => {
     database.prepare('INSERT INTO crates(crate_token_id) VALUES(?)').run(crateTokenId);
     for (const [slot, eggId] of eggIds.entries()) {
-      const generation = store.catalogUpdate.effectiveCatalog()!.generation;
+      const generation = store.catalogUpdate.reader.effectiveCatalog()!.generation;
       const row = generation ? database.prepare(`SELECT category,slot FROM reveal_catalog_free
         WHERE generation=? AND origin_category='egg' AND origin_asset_id=?`).get(generation, eggId)
         : database.prepare("SELECT category,slot FROM free_slots WHERE category='egg' AND asset_id=?").get(eggId);
@@ -107,7 +107,7 @@ function fixture(t: TestContext, frozen = 0) {
     for (let index = 0; index < eggIds.length; index++) {
       const tokenId = String(firstToken + index);
       store.publicationComplete(tokenId);
-      objects.set(objectKey(tokenId), { body: store.catalogUpdate.canonicalMetadata([tokenId])[0].metadataJson, headersValid: true });
+      objects.set(objectKey(tokenId), { body: store.catalogUpdate.reader.canonicalMetadata([tokenId])[0].metadataJson, headersValid: true });
     }
   };
   if (frozen) freezeEggs(Array.from({ length: frozen }, (_, index) => source.categories.eggs.count - index));
@@ -154,7 +154,7 @@ function fixture(t: TestContext, frozen = 0) {
     for (const job of jobs) {
       counters.publications++;
       const expectedJsons = JSON.parse(job.expected_jsons_json!) as string[];
-      assert.equal(store.catalogUpdate.validateMetadataWrite({ tokenId: job.token_id, metadataRevision: job.metadata_revision!,
+      assert.equal(store.catalogUpdate.reader.validateMetadataWrite({ tokenId: job.token_id, metadataRevision: job.metadata_revision!,
         metadataJson: job.metadata_json, expectedJsons, allowMissing: Boolean(job.allow_missing) }), true);
       const outcome = faults.outcomes.get(job.token_id);
       if (outcome) { results.push({ tokenId: job.token_id, status: outcome }); continue; }
@@ -301,12 +301,12 @@ test('trait failures do not activate a candidate or stop ordinary reveals', asyn
   f.faults.traitFailure = true;
   await assert.rejects(f.run('advance'), /http-503/);
   assert.equal(f.current().state, 'active');
-  assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 0);
+  assert.equal(f.store.catalogUpdate.reader.effectiveCatalog()!.catalogRevision, 0);
   f.freezeEggs([source.categories.eggs.count]);
   assert.equal(f.store.frozen(['1'])[0].category, 'egg');
   f.faults.traitFailure = false;
   await f.run('advance');
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.metadataStaged, 3);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.metadataStaged, 3);
   await f.run('cancel');
 });
 
@@ -315,7 +315,7 @@ test('a legacy activating catalog revalidates stored traits across restart witho
   await f.run('begin');
   await f.run('advance');
   await f.run('advance');
-  while (f.store.catalogUpdate.status(f.update.batchId)!.generationSeeded < 111111) f.store.catalogUpdate.generationStage(f.update.batchId);
+  while (f.store.catalogUpdate.reader.status(f.update.batchId)!.generationSeeded < 111111) f.store.catalogUpdate.generationStage(f.update.batchId);
   f.store.catalogUpdate.seal(f.update.batchId);
   const key = `catalog-update:${f.update.batchId}`;
   f.kv.set(key, { ...f.kv.get(key) as object, phase: 'activating' });
@@ -330,7 +330,7 @@ test('a legacy activating catalog revalidates stored traits across restart witho
   const validated = await f.run('advance');
   assert.equal(validated.phase, 'activating');
   assert.equal(validated.staged, 3);
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.activatedAtMs, null);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.activatedAtMs, null);
   f.reopen();
   assert.equal((await f.run('advance')).phase, 'publishing');
   assert.equal(f.current().catalogRevision, 1);
@@ -338,7 +338,7 @@ test('a legacy activating catalog revalidates stored traits across restart witho
   assert.deepEqual(f.database.prepare('SELECT attributes_json,attributes_sha256 FROM reveal_catalog_mappings ORDER BY egg_id').all(), saved);
   f.database.exec('UPDATE reveal_catalog_mappings SET collection_block_validated=0; PRAGMA query_only=ON;');
   assert.equal((await f.run('inspect')).staged, 3);
-  assert.deepEqual(f.store.catalogUpdate.metadataPreparationPage(f.update.batchId), []);
+  assert.deepEqual(f.store.catalogUpdate.reader.metadataPreparationPage(f.update.batchId), []);
 });
 
 test('a legacy activating catalog rejects invalid stored traits before cutover instead of fetching replacements', async t => {
@@ -357,8 +357,8 @@ test('a legacy activating catalog rejects invalid stored traits before cutover i
   assert.equal(f.traits.length, 0);
   assert.equal(f.counters.writes, 0);
   assert.equal(f.current().catalogRevision, 0);
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.activatedAtMs, null);
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.metadataStaged, 0);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.activatedAtMs, null);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.metadataStaged, 0);
 });
 
 test('activation remains readable across registry mirror failure and publication acknowledgments lost on restart', async t => {
@@ -388,14 +388,14 @@ test('activation remains readable across registry mirror failure and publication
   f.reopen();
   f.faults.afterWrite = true;
   await assert.rejects(f.run('advance'), /crash after metadata write/);
-  const target = f.store.catalogUpdate.canonicalMetadata(['1'])[0];
+  const target = f.store.catalogUpdate.reader.canonicalMetadata(['1'])[0];
   assert.equal(f.objects.get(f.objectKey('1'))!.body, target.metadataJson);
   assert.equal(f.current().catalogVersion, source.catalogVersion);
   assert.equal(f.current().catalogRevision, 1);
   f.reopen();
   await f.reach('observing');
   assert.match(target.metadataJson, /new videos/);
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.published, 1);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.published, 1);
   f.clock.now += 300_000;
   const cleanup = await f.run('advance');
   assert.equal(cleanup.phase, 'observing');
@@ -418,11 +418,11 @@ test('a token publication conflict leaves other replacements and new reveals onl
   await f.run('begin');
   await f.reach('activating');
   await f.run('advance');
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.frozen, 2);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.frozen, 2);
   f.freezeEggs([source.categories.eggs.count - 2], 21, '111113');
   assert.equal(f.store.frozen(['21'])[0].category, 'video');
-  assert.equal(f.store.catalogUpdate.canonicalMetadata(['21'])[0].migration, false);
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.frozen, 2);
+  assert.equal(f.store.catalogUpdate.reader.canonicalMetadata(['21'])[0].migration, false);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.frozen, 2);
   const original = f.objects.get(f.objectKey('1'))!.body;
   f.objects.set(f.objectKey('1'), { body: '{"foreign":true}', headersValid: true });
   const progress = await f.run('advance');
@@ -444,7 +444,7 @@ test('a token publication conflict leaves other replacements and new reveals onl
   await f.reach('observing');
   f.clock.now += 300_000;
   await f.reach('complete');
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.frozen, 2);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.frozen, 2);
 });
 
 test('lost activation progress saves resume the same mapping without rolling back live reads', async t => {
@@ -453,13 +453,13 @@ test('lost activation progress saves resume the same mapping without rolling bac
   await f.reach('activating');
   f.faults.afterSavePhase = 'publishing';
   await assert.rejects(f.run('advance'), /lost phase-save acknowledgment/);
-  assert.equal(f.store.catalogUpdate.effectiveCatalog()!.catalogRevision, 1);
+  assert.equal(f.store.catalogUpdate.reader.effectiveCatalog()!.catalogRevision, 1);
   assert.equal(f.current().state, 'active');
   f.store.reserve(['111112']);
   f.reopen();
   await f.reach('observing');
   assert.equal(f.current().catalogRevision, 1);
-  assert.equal(f.store.catalogUpdate.status(f.update.batchId)!.frozen, 0);
+  assert.equal(f.store.catalogUpdate.reader.status(f.update.batchId)!.frozen, 0);
   f.clock.now += 300_000;
   f.faults.beforeSavePhase = 'complete';
   await assert.rejects(f.reach('complete'), /lost phase-save acknowledgment/);

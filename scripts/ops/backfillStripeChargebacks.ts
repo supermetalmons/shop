@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { constants, lstatSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, unlinkSync, writeFileSync, fsyncSync, fchmodSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { constants, openSync, closeSync, readFileSync, renameSync, unlinkSync, writeFileSync, fsyncSync, fchmodSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { STRIPE_DISPUTE_EVENT_TYPES, isStripeDisputeId, type StripeChargebackMode, type StripeChargebackBackfillResult, type StripeChargebackWebhookConfigurationResult } from '../../shared/stripeChargebacks.ts';
 import {
@@ -10,6 +10,7 @@ import {
   withStripeChargebackMaintenance,
   type StripeChargebackMaintenanceTransport,
 } from '../shared/stripeChargebackMaintenance.ts';
+import { prepareOperationPath, resolveOperationPath } from '../shared/operationLocations.ts';
 
 const ENDPOINT = 'https://api.mons.shop/admin/stripe-chargebacks/backfill';
 const MODES = ['live', 'test'] as const;
@@ -173,22 +174,22 @@ function parseCheckpoint(value: unknown, mode: Mode, write: boolean): Checkpoint
   };
 }
 
-export function createStripeChargebackCheckpointStore(directory: string): CheckpointStore {
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const dir = lstatSync(directory);
-  if (!dir.isDirectory() || dir.isSymbolicLink()) return fail('Unsafe backfill checkpoint directory.');
-  const dirFd = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    fchmodSync(dirFd, 0o700);
-  } finally {
-    closeSync(dirFd);
-  }
-  const pathFor = (mode: Mode, write: boolean) => join(directory, `${mode}-${write ? 'write' : 'dry-run'}.json`);
+export function createStripeChargebackCheckpointStore(repositoryRoot: string): CheckpointStore {
+  const locations = new Map<string, string>();
+  const pathFor = (mode: Mode, write: boolean) => {
+    const relative = `stripe-chargebacks/${mode}-${write ? 'write' : 'dry-run'}.json`;
+    const filename = resolveOperationPath(repositoryRoot, relative);
+    const recorded = locations.get(relative);
+    if (recorded && recorded !== filename) return fail('Backfill checkpoint location changed; preserve its progress and retry.');
+    locations.set(relative, filename);
+    return filename;
+  };
   return {
     load(mode, write) {
+      const filename = pathFor(mode, write);
       let fd: number;
       try {
-        fd = openSync(pathFor(mode, write), constants.O_RDONLY | constants.O_NOFOLLOW);
+        fd = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
         return fail('Unable to read backfill checkpoint safely.');
@@ -203,6 +204,9 @@ export function createStripeChargebackCheckpointStore(directory: string): Checkp
     },
     save(checkpoint) {
       const path = pathFor(checkpoint.mode, checkpoint.write);
+      prepareOperationPath(repositoryRoot, path);
+      const dirFd = openSync(dirname(path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { fchmodSync(dirFd, 0o700); } finally { closeSync(dirFd); }
       const temp = `${path}.${randomUUID()}.tmp`;
       const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       try {
@@ -426,7 +430,7 @@ async function main(): Promise<void> {
     sleep: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
     nowMs: Date.now,
     log: console.log,
-    store: createStripeChargebackCheckpointStore(resolve(dirname(fileURLToPath(import.meta.url)), '../../.cache/stripe-chargebacks')),
+    store: createStripeChargebackCheckpointStore(resolve(dirname(fileURLToPath(import.meta.url)), '../..')),
   };
   const run = async (maintenance?: StripeChargebackMaintenanceTransport) => {
     if (args.configureWebhooks) {

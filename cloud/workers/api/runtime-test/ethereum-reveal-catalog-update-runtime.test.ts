@@ -116,14 +116,14 @@ test('native online catalog update preserves live reads and allocations through 
         const sql = this.ctx.storage.sql;
         const store = new EthereumRevealStore(sql, action => this.ctx.storage.transactionSync(action));
         store.configure(await current(this.env));
-        const pools = store.catalogUpdate.pools();
-        const effective = store.catalogUpdate.effectiveCatalog();
+        const pools = store.catalogUpdate.reader.pools();
+        const effective = store.catalogUpdate.reader.effectiveCatalog();
         const assignments = sql.exec('SELECT category,asset_id,token_id,metadata_json FROM assignments ORDER BY CAST(token_id AS INTEGER)').toArray();
-        const canonical = store.catalogUpdate.canonicalMetadata(assignments.filter(row => row.token_id).map(row => row.token_id))
+        const canonical = store.catalogUpdate.reader.canonicalMetadata(assignments.filter(row => row.token_id).map(row => row.token_id))
           .map(({ tokenId, category, assetId, metadataRevision }) => ({ tokenId, category, assetId, metadataRevision }));
         return { pools, assignments, canonical, effective,
           settings: sql.exec('SELECT * FROM settings WHERE id=1').toArray()[0],
-          generationSeeded: store.catalogUpdate.status(${JSON.stringify(batch.batchId)})?.generationSeeded ?? 0,
+          generationSeeded: store.catalogUpdate.reader.status(${JSON.stringify(batch.batchId)})?.generationSeeded ?? 0,
           free: pools.reduce((total, row) => total + row.available, 0),
           legacyFree: sql.exec('SELECT COUNT(*) AS count FROM free_slots').toArray()[0].count,
           cutoff: effective.generation

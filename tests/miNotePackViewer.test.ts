@@ -207,7 +207,7 @@ Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: {
 } });
 const imports = registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (context.parentURL?.endsWith('/components/MiNotePackViewer.tsx')) {
+    if (context.parentURL?.includes('/mi-note-pack-viewer/')) {
       if (specifier === 'three') return { url: 'test:mi-note-viewer-three', shortCircuit: true };
       if (specifier.endsWith('/miNoteCardMaterial')) return { url: 'test:mi-note-card-material', shortCircuit: true };
       if (specifier.endsWith('/miNotePackModel')) return { url: 'test:mi-note-viewer-model', shortCircuit: true };
@@ -556,7 +556,6 @@ function assertRendererViewport(run: ReturnType<typeof harness>, renderer: FakeW
   const projection = renderer.camera!.projectionMatrix.elements;
   assert.ok(Math.abs(projection[0] - projection[5] / renderer.camera!.aspect) < 1e-8);
   assert.equal(run.view.container.querySelectorAll('canvas').length, 1);
-  assert.equal(run.view.container.querySelectorAll('.mi-note-wip__css-scene').length, 0);
 }
 
 function assertInspectionFits(anchor: THREE.Object3D, camera: THREE.PerspectiveCamera) {

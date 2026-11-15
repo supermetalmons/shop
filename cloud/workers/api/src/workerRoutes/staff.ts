@@ -4,7 +4,7 @@ import {
 } from '../stripeChargebackBackfill.js';
 import { handleStaffReadRequest, STAFF_READ_PATHS, type StaffReadPath } from '../staffReads.js';
 import { ADMIN_IRL_REDEEM_PREPARE_PATH, handleAdminIrlRedeemPrepare } from '../adminIrlRedeemPrepare.js';
-import { ADMIN_IRL_REDEEM_FINALIZE_PATH } from '../adminIrlRedeemFinalize.js';
+import { ADMIN_IRL_REDEEM_FINALIZE_PATH } from '../adminIrlRedeemFinalizeRequest.js';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
   handleAdminIrlRedeemFinalizeWorkflowStart,

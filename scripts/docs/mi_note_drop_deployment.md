@@ -67,9 +67,11 @@ or ignored project environment files, then public RPC. Managed worktrees can use
 the primary checkout's environment files. Diagnostics print the RPC hostname
 without credentials. No private key is needed for the read-only checks above.
 
-Preserve interrupted deployment journals in
-`.cache/two-config-deployments/<cluster>/`. Recover from the original command and
-journal; the tool reconciles signatures and account state before retrying.
+New deployment journals use `.operations/two-config-deployments/<cluster>/`.
+Existing journals under `.cache/two-config-deployments/<cluster>/` resume in
+place; duplicate journals in both roots stop the command. Read-only inspection
+creates no operation directories. Recover from the original command and journal;
+the tool reconciles signatures and account state before retrying.
 Activation similarly reconciles its saved public journal before signing another
 transaction. An unfinished smoke uses its recorded run ID:
 

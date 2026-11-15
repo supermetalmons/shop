@@ -10,6 +10,7 @@ import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '..
 import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/revealMaintenance.ts';
 import { EthereumRevealEmptyPool, parseEmptyPoolRequest } from '../src/ethereumRevealEmptyPool.ts';
 import { EthereumRevealEmptyPoolFence } from '../src/ethereumRevealEmptyPoolFence.ts';
+import { EthereumRevealCatalogReader } from '../src/ethereumRevealCatalogReader.ts';
 import { EthereumRevealCatalogUpdateStore } from '../src/ethereumRevealCatalogUpdateStore.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 import type { verifyEmptyRevealChain } from '../src/ethereumRevealChain.ts';
@@ -124,7 +125,8 @@ function fixture(t: TestContext, initial: Partial<EthereumRevealDeployment> = {}
   let fence = new EthereumRevealEmptyPoolFence(sql, transaction);
   const makeController = () => new EthereumRevealEmptyPool({ env, storage, fence,
     initializeStore: () => (store ??= new EthereumRevealStore(sql, transaction, () => 0)).catalogUpdate,
-    readStore: () => new EthereumRevealCatalogUpdateStore(sql, transaction),
+    readStore: () => new EthereumRevealCatalogReader(sql),
+    writeStore: () => new EthereumRevealCatalogUpdateStore(sql, transaction),
     quiescent: () => faults.quiescent,
     async wake() { counters.wakes++; },
   }, verifyChain);
@@ -145,7 +147,7 @@ function fixture(t: TestContext, initial: Partial<EthereumRevealDeployment> = {}
   const drain = () => { clock.now += 65_000; };
   return { ledger, ops, sql, transaction, clock, faults, counters, kv, current, request, run, reach, reopen, drain,
     fence: () => fence, controller: () => controller,
-    readStore: () => new EthereumRevealCatalogUpdateStore(sql, transaction) };
+    readStore: () => new EthereumRevealCatalogReader(sql) };
 }
 
 test('empty-pool requests require the exact action and frozen batch shape', () => {

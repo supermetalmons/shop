@@ -32,7 +32,7 @@ test('native owner hatching shares crate inventory, preserves provenance, and pu
     import { EthereumRevealObject as Coordinator } from ${importPath('cloud/workers/api/src/ethereumRevealObject.ts')};
     import { EthereumRevealPublisherObject as Publisher } from ${importPath('cloud/workers/api/src/ethereumRevealPublisherObject.ts')};
     import { EthereumRevealStore } from ${importPath('cloud/workers/api/src/ethereumRevealStore.ts')};
-    import { EthereumRevealCatalogUpdateStore } from ${importPath('cloud/workers/api/src/ethereumRevealCatalogUpdateStore.ts')};
+    import { EthereumRevealCatalogReader } from ${importPath('cloud/workers/api/src/ethereumRevealCatalogReader.ts')};
     import { parseEthereumRevealDeployment } from ${importPath('shared/ethereum/revealDeployment.ts')};
     import { handleEthereumRequest } from ${importPath('cloud/workers/api/src/ethereumHandler.ts')};
     import { decodeReturn, encodeAbi, encodeCall } from ${importPath('shared/ethereum/abi.ts')};
@@ -139,25 +139,25 @@ test('native owner hatching shares crate inventory, preserves provenance, and pu
         const store = await this.openStore();
         const sql=this.ctx.storage.sql;
         const ids=sql.exec('SELECT token_id FROM assignments WHERE token_id IS NOT NULL ORDER BY CAST(token_id AS INTEGER)').toArray().map(row=>row.token_id);
-        return { pools: store.catalogUpdate.pools(), health:store.publicationError(),
-          canonical: store.catalogUpdate.canonicalMetadata(ids).map(({tokenId,category,assetId,artwork,metadataRevision})=>({tokenId,category,assetId,artwork,metadataRevision})),
+        return { pools: store.catalogUpdate.reader.pools(), health:store.publicationError(),
+          canonical: store.catalogUpdate.reader.canonicalMetadata(ids).map(({tokenId,category,assetId,artwork,metadataRevision})=>({tokenId,category,assetId,artwork,metadataRevision})),
           free: sql.exec("SELECT COUNT(*) AS n FROM reveal_catalog_free WHERE generation='native-base'").toArray()[0].n,
           claimsFree: sql.exec("SELECT COUNT(*) AS n FROM reveal_catalog_free f JOIN owner_hatching_artwork_claims c ON c.category=f.category AND c.asset_id=f.asset_id WHERE f.generation='native-base'").toArray()[0].n,
           fresh: sql.exec("SELECT category,asset_id,origin_category,origin_asset_id FROM reveal_catalog_free WHERE generation='native-base' AND category='egg' AND asset_id=76700").toArray(),
-          status: store.catalogUpdate.ownerHatching.batchStatus(),
+          status: store.catalogUpdate.ownerHatching.reader.batchStatus(),
           immutable: sql.exec("SELECT token_id,category,asset_id,artwork_json FROM assignments WHERE token_id IN ('1','2') ORDER BY token_id").toArray() };
       }
       async readOnlySnapshot() {
         const sql=this.ctx.storage.sql;
         const changes=sql.exec('SELECT total_changes() AS n').toArray()[0].n;
-        const store=new EthereumRevealCatalogUpdateStore(sql,()=>{throw new Error('Read-only inspection must not mutate');});
+        const store=new EthereumRevealCatalogReader(sql);
         const canonical=store.canonicalMetadata(['1','2','41']).map(({tokenId,category,assetId})=>({tokenId,category,assetId}));
         return {canonical,changes:sql.exec('SELECT total_changes() AS n').toArray()[0].n-changes};
       }
       async freeze(firstTokenId, fresh = false) {
         const sql=this.ctx.storage.sql;
         const base=await this.openStore();
-        const pools=base.catalogUpdate.pools();
+        const pools=base.catalogUpdate.reader.pools();
         const eggOffset=pools.slice(0,pools.findIndex(pool=>pool.category==='egg')).reduce((sum,pool)=>sum+pool.total,0);
         const freshSlot=fresh ? sql.exec("SELECT slot FROM reveal_catalog_free WHERE generation='native-base' AND category='egg' AND asset_id=76700").toArray()[0].slot : 0;
         let draws=0;

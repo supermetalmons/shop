@@ -10,7 +10,7 @@ import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../../../../shared/fulfi
 import {
   cleanupAdminIrlRedeemFinalizeWorkflow,
   reserveAdminIrlRedeemFinalizeWorkflow,
-} from '../src/adminIrlRedeemFinalize.ts';
+} from '../src/adminIrlRedeemFinalizeWorkflowStages.ts';
 import {
   AdminIrlRedeemFinalizeError,
   type AdminIrlRedeemFinalizeWorkflowOutput,

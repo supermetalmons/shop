@@ -5,6 +5,20 @@ build caches. Initialize it with `npm run artifacts -- init`; the directory must
 have mode `0700` and is ignored by Git. Keep signing keys in their existing
 external keystores.
 
+Worker transactions, preorder collection deployments, two-config deployments,
+and Stripe chargeback checkpoints also select evidence locations per operation.
+New journals use the corresponding directory under `.operations`; an existing
+journal under `.cache` is resumed in place. Unrelated older operations do not
+change the destination of new work. If the same operation exists in both roots,
+the command stops and preserves both copies for reconciliation. Inspection does
+not create directories. Stripe dry-run scans still save their separate progress
+checkpoints when a page completes.
+
+Worker target locks and preorder collection locks are acquired under both roots
+so older commands cannot bypass an active operation. Worker cleanup discovery
+checks both roots before admitting new work. These temporary locks do not move
+or duplicate journal evidence.
+
 New Sepolia release preparations default to
 `.operations/111k-<deployment-id>-release/contract`. The containing release
 directory can retain its publication and recovery evidence. Release runners also

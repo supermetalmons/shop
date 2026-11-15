@@ -1,13 +1,7 @@
 import type { AdminIrlRedeemFinalizeOperationId } from '../../../../shared/contracts.js';
-import {
-  reserveAdminIrlRedeemFinalizeWorkflow,
-  type AdminIrlRedeemFinalizeRequest,
-  type AdminIrlRedeemFinalizeWorkflowReservation,
-} from './adminIrlRedeemFinalize.js';
-import {
-  AdminIrlRedeemFinalizeError,
-  adminIrlRedeemFinalizeWorkflowError,
-} from './adminIrlRedeemFinalizeWorkflowState.js';
+import { reserveAdminIrlRedeemFinalizeWorkflow } from './adminIrlRedeemFinalizeWorkflowStages.js';
+import type { AdminIrlRedeemFinalizeRequest, AdminIrlRedeemFinalizeWorkflowReservation } from './adminIrlRedeemFinalizeTypes.js';
+import { AdminIrlRedeemFinalizeError, adminIrlRedeemFinalizeWorkflowError } from './adminIrlRedeemFinalizeWorkflowState.js';
 import {
   claimAdminIrlRedeemFinalizeWorkflowEffect,
   dispatchAdminIrlRedeemFinalizeWorkflowRestart,

@@ -186,9 +186,12 @@ one mode. Each mode must finish successfully in the write run to complete the ba
 every reported failure. `matchedOrders` counts matched dispute-to-order records;
 multiple disputes may refer to the same order.
 
-Private local checkpoints in `.cache/stripe-chargebacks/` keep separate
+New private local checkpoints in `.operations/stripe-chargebacks/` keep separate
 live/test and dry-run/write cursors, successful-page totals, and failure details.
-They contain no credentials. Interrupted runs resume their current page; HTTP
+Each existing checkpoint under `.cache/stripe-chargebacks/` resumes in place;
+the same checkpoint in both roots stops the command. Loading progress creates
+no directories; both dry-run and write scans save progress after each page.
+Checkpoints contain no credentials. Interrupted runs resume their current page; HTTP
 429, 408, 5xx, and network failures retry the identical request up to five times,
 with a capped `Retry-After` delay. Pages containing only temporary Stripe,
 storage, or order-persistence failures use the same retry budget. RPC failures

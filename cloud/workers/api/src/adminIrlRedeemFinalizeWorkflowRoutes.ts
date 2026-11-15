@@ -10,21 +10,16 @@ import {
   type AdminIrlRedeemFinalizeRecovery,
 } from '../../../../shared/contracts.js';
 import { isMainnetOnlyStaffWallet } from '../../../../shared/fulfillmentAccess.js';
-import {
-  loadAdminIrlRedeemFinalizeWorkflowResult,
-  readAdminIrlRedeemFinalizeRequest,
-  resolveAdminIrlRedeemFinalizeStaffWallet,
-  type AdminIrlRedeemFinalizeWorkflowReservation,
-} from './adminIrlRedeemFinalize.js';
+import { loadAdminIrlRedeemFinalizeWorkflowResult } from './adminIrlRedeemFinalizeWorkflowStages.js';
+import { readAdminIrlRedeemFinalizeRequest, resolveAdminIrlRedeemFinalizeStaffWallet } from './adminIrlRedeemFinalizeRequest.js';
+import type { AdminIrlRedeemFinalizeWorkflowReservation } from './adminIrlRedeemFinalizeTypes.js';
 import {
   AdminIrlRedeemFinalizeError,
   adminIrlRedeemFinalizeWorkflowError,
   type AdminIrlRedeemFinalizeErrorCode,
   type AdminIrlRedeemFinalizeWorkflowOutput,
 } from './adminIrlRedeemFinalizeWorkflowState.js';
-import {
-  loadAdminIrlRedeemFinalizeWorkflowOperation,
-} from './adminIrlRedeemFinalizeWorkflowStore.js';
+import { loadAdminIrlRedeemFinalizeWorkflowOperation } from './adminIrlRedeemFinalizeWorkflowStore.js';
 import {
   inspectAndReconcileAdminIrlRedeemFinalizeWorkflow,
   loadAdminIrlRedeemFinalizeDurableState,

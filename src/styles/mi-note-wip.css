@@ -3,63 +3,6 @@
   inset: 0;
 }
 
-.mi-note-wip__stage {
-  position: absolute;
-  inset: 0;
-  isolation: isolate;
-}
-
-.mi-note-wip__renderer,
-.mi-note-wip__canvas {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-.mi-note-wip__renderer {
-  pointer-events: auto;
-  touch-action: none;
-  cursor: pointer;
-  outline: none;
-}
-
-.mi-note-wip__renderer:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
-  outline-offset: -12px;
-}
-
-.mi-note-wip__canvas {
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-}
-
-.mi-note-wip__actions {
-  position: absolute;
-  z-index: 3;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-
-.mi-note-wip__actions:focus-within {
-  top: 16px;
-  left: 50%;
-  display: flex;
-  gap: 8px;
-  width: max-content;
-  max-width: calc(100% - 100px);
-  height: auto;
-  overflow: visible;
-  clip-path: none;
-  transform: translateX(-50%);
-}
-
-.mi-note-wip__actions button {
-  font-size: 12px;
-}
-
 .mi-note-wip__card-controls {
   position: fixed;
   z-index: 1120;
@@ -113,7 +56,7 @@
 }
 
 @media (max-height: 700px) {
-  .mi-note-wip__stage {
+  .mi-note-wip-page .mi-note-pack__stage {
     bottom: 96px;
   }
 }

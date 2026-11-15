@@ -85,10 +85,10 @@ test('native owner hatching operations preserve private preparation through rest
       }
       open(){
         this.operations=new EthereumOwnerHatchingOperations({env:{...this.env,ALCHEMY_MI_NOTE_API_KEY:'fixture',ETHEREUM_PROVIDER_CONTROL_ENABLED:'false'},
-          sql:this.ctx.storage.sql,transaction:this.transaction,store:{catalogUpdate:{ownerHatching:this.owner,
+          sql:this.ctx.storage.sql,transaction:this.transaction,store:{catalogUpdate:{ownerHatching:this.owner,reader:{
             effectiveCatalog:()=>({...descriptor,generation:'v9-native',catalogRevision:1}),activeCatalog:()=>getRevealCatalog('111k-v9'),
             freshOwnerEggAvailable:id=>id>=55304&&id<=76700,canonicalMetadata:ids=>ids.map(this.original),
-            pools:()=>[{available:111111-240,total:111111}]}},recover:async()=>true,requireCurrent:async()=>{},wake:async()=>{},
+            pools:()=>[{available:111111-240,total:111111}]}}},recover:async()=>true,requireCurrent:async()=>{},wake:async()=>{},
           randomInteger:maximum=>randomCalls++%maximum});
       }
       async run(action){
@@ -113,7 +113,7 @@ test('native owner hatching operations preserve private preparation through rest
           const tokenId=this.ctx.storage.sql.exec('SELECT token_id FROM owner_hatching_tokens ORDER BY CAST(token_id AS INTEGER) LIMIT 1 OFFSET 16').one().token_id;
           const key='111k/'+tokenId+'.json';
           if(action==='remove-metadata')await this.env.ETHEREUM_REVEAL_METADATA.delete(key);
-          else await this.env.ETHEREUM_REVEAL_METADATA.put(key,this.owner.canonical(tokenId).metadataJson,
+          else await this.env.ETHEREUM_REVEAL_METADATA.put(key,this.owner.reader.canonical(tokenId).metadataJson,
             {httpMetadata:{contentType:'application/json; charset=utf-8',cacheControl:'no-store'}});
           action='status';
         }

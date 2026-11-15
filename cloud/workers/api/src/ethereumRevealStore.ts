@@ -6,7 +6,8 @@ import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, Ethereum
 export type { RevealDispatchState, RevealReceiptClaim, RevealScanClaim, RevealWorkLane } from './ethereumRevealRecoveryStore.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumRevealEnrichmentStore } from './ethereumRevealEnrichmentStore.js';
-import { EthereumRevealCatalogUpdateStore, type RevealArtworkReadOptions } from './ethereumRevealCatalogUpdateStore.js';
+import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import { type RevealArtworkReadOptions } from './ethereumRevealCatalogTypes.js';
 import { buildNewRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, revealCategoryCounts, revealDeploymentCatalog,
   revealCrateSize, revealRandomInteger } from './ethereumRevealCatalog.js';
 
@@ -110,7 +111,7 @@ export class EthereumRevealStore {
     });
   }
 
-  private pools(): PoolRow[] { return this.catalogUpdate.pools(); }
+  private pools(): PoolRow[] { return this.catalogUpdate.reader.pools(); }
 
   private privateSlot(crateTokenId: string, slot: number): ReservationRow | undefined {
     return this.sql.exec<ReservationRow>(`SELECT category,asset_id,crate_token_id,slot FROM assignments
@@ -134,7 +135,7 @@ export class EthereumRevealStore {
     if (!pools.length) return undefined;
     const privateEggs = this.sql.exec<ReservationRow>(`SELECT category,asset_id,crate_token_id,slot FROM assignments INDEXED BY assignments_crate
       WHERE crate_token_id=? AND token_id IS NULL`, crateTokenId).toArray().filter(row =>
-      this.catalogUpdate.resolveUnit({ category: row.category, assetId: row.asset_id }).category === 'egg').length;
+      this.catalogUpdate.reader.resolveUnit({ category: row.category, assetId: row.asset_id }).category === 'egg').length;
     if (privateEggs + frozenEggs >= REVEAL_CRATE_EGG_LIMIT && pools.some(pool => pool.category !== 'egg')) {
       pools = pools.filter(pool => pool.category !== 'egg');
     }
@@ -160,7 +161,7 @@ export class EthereumRevealStore {
   }
 
   frozen(tokenIds: string[], options?: RevealArtworkReadOptions): EthereumRevealedArtwork[] {
-    return this.catalogUpdate.canonicalArtworks(tokenIds, options);
+    return this.catalogUpdate.reader.canonicalArtworks(tokenIds, options);
   }
 
   private freezeRecords(deployment: EthereumRevealDeployment, observation: EthereumRevealObservation, crates: RevealCrate[], now: number,
@@ -172,8 +173,8 @@ export class EthereumRevealStore {
       tokens.some(id => !/^[1-9]\d*$/.test(id) || Number(id) > REVEAL_ARTWORK_COUNT) ||
       crates.some(crate => crate.tokenIds.length !== revealCrateSize(crate.crateTokenId))) throw new Error('Invalid verified reveal ranges.');
     return this.transaction(() => {
-      deployment = this.catalogUpdate.effectiveDeployment(deployment);
-      const catalog = this.catalogUpdate.activeCatalog();
+      deployment = this.catalogUpdate.reader.effectiveDeployment(deployment);
+      const catalog = this.catalogUpdate.reader.activeCatalog();
       const existing = new Map(this.frozen(tokens).map(artwork => [artwork.tokenId, artwork]));
       for (const crate of crates) {
         this.sql.exec('INSERT OR IGNORE INTO crates(crate_token_id) VALUES(?)', crate.crateTokenId);
@@ -190,10 +191,10 @@ export class EthereumRevealStore {
           if (existing.has(tokenId)) continue;
           const reservation = this.privateSlot(crate.crateTokenId, slot) || this.takeAsset(crate.crateTokenId, slot, true, frozenEggs);
           if (!reservation) throw new Error('Reveal inventory invariant failed.');
-          const effective = this.catalogUpdate.resolveUnit({ category: reservation.category, assetId: reservation.asset_id });
+          const effective = this.catalogUpdate.reader.resolveUnit({ category: reservation.category, assetId: reservation.asset_id });
           const value = buildNewRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: crate.crateTokenId,
             category: effective.category, assetId: effective.assetId, observation, catalog, allocatedEgg: effective.category === 'egg',
-            ownerHatching: this.catalogUpdate.ownerHatching.slotOverride({ category: reservation.category, assetId: reservation.asset_id }) !== null });
+            ownerHatching: this.catalogUpdate.ownerHatching.reader.slotOverride({ category: reservation.category, assetId: reservation.asset_id }) !== null });
           this.sql.exec(`UPDATE assignments SET token_id=?,artwork_json=?,metadata_json=?,placeholder_json=?,frozen_at_ms=?,assignment_revision=?
             WHERE category=? AND asset_id=? AND token_id IS NULL`, tokenId, JSON.stringify(value.artwork), value.metadataJson,
             value.placeholderJson, now, deployment.catalogRevision ?? 0, reservation.category, reservation.asset_id);
@@ -243,7 +244,7 @@ export class EthereumRevealStore {
       .map(value => ({ ...value, crateTokenId: cratesByToken.get(value.tokenId)! })) : [];
     const observation: EthereumRevealObservation | null = job?.observation_json ? JSON.parse(job.observation_json) : null;
     return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,
-      contractAddress: deployment.contractAddress, catalogRevision: this.catalogUpdate.effectiveCatalog()?.catalogRevision ?? 0, status, artworks,
+      contractAddress: deployment.contractAddress, catalogRevision: this.catalogUpdate.reader.effectiveCatalog()?.catalogRevision ?? 0, status, artworks,
       retryAfterMs: status === 'pending' ? 2_000 : 0,
       ...(observation ? { observedBlock: { number: observation.blockNumber, hash: observation.blockHash } } : {}) };
   }
@@ -256,7 +257,7 @@ export class EthereumRevealStore {
   admitTransaction(hash: string, fromBlock: number, now: number) { return this.recovery.admitTransaction(hash, fromBlock, now); }
   admitTokens(ids: string[], fromBlock: number, now: number): void { this.recovery.admitTokens(ids, fromBlock, now); }
   tokensResponse(deployment: EthereumRevealDeployment, ids: string[]) {
-    return { ...this.recovery.tokensResponse(deployment, ids), catalogRevision: this.catalogUpdate.effectiveCatalog()?.catalogRevision ?? 0 };
+    return { ...this.recovery.tokensResponse(deployment, ids), catalogRevision: this.catalogUpdate.reader.effectiveCatalog()?.catalogRevision ?? 0 };
   }
   opaqueCount(): number { return this.recovery.opaqueCount(); }
   dispatchState(now: number): RevealDispatchState { return this.recovery.dispatchState(now); }
@@ -311,7 +312,7 @@ export class EthereumRevealStore {
         ORDER BY p.next_check_ms,CAST(p.token_id AS INTEGER) LIMIT ?`, now, limit - ownerJobs.length).toArray();
       if (!rows.length) return ownerJobs;
       const claimId = crypto.randomUUID();
-      const canonical = new Map(this.catalogUpdate.canonicalMetadata(rows.map(row => row.token_id)).map(row => [row.tokenId, row]));
+      const canonical = new Map(this.catalogUpdate.reader.canonicalMetadata(rows.map(row => row.token_id)).map(row => [row.tokenId, row]));
       for (const row of rows) {
         const current = canonical.get(row.token_id)!;
         row.claim_id = claimId;
@@ -331,7 +332,7 @@ export class EthereumRevealStore {
     this.transaction(() => {
       this.catalogUpdate.ownerHatching.releasePublicationClaims(jobs, now);
       for (const job of jobs) {
-        if (this.catalogUpdate.ownerHatching.canonical(job.token_id)) continue;
+        if (this.catalogUpdate.ownerHatching.reader.canonical(job.token_id)) continue;
         this.sql.exec(`UPDATE publication SET attempts=?,next_check_ms=?,claim_id=NULL
           WHERE token_id=? AND status='pending' AND attempts=? AND claim_id IS ?`,
         job.attempts, now, job.token_id, job.attempts + 1, job.claim_id ?? null);
@@ -344,7 +345,7 @@ export class EthereumRevealStore {
       const applied = this.catalogUpdate.ownerHatching.completePublications(results, now);
       for (const result of results) {
         const { job, status } = result;
-        if (this.catalogUpdate.ownerHatching.canonical(job.token_id)) continue;
+        if (this.catalogUpdate.ownerHatching.reader.canonical(job.token_id)) continue;
         if (status === 'superseded') { this.releasePublicationClaims([job], now); continue; }
         const updated = status === 'published' ? this.publicationComplete(job.token_id, job.attempts + 1, job.claim_id, job.metadata_revision ?? 0)
           : this.publicationFailed(job.token_id, now, job.attempts, status === 'conflict', job.attempts + 1, job.claim_id, job.metadata_revision ?? 0);
@@ -354,12 +355,12 @@ export class EthereumRevealStore {
     });
   }
 
-  validateMetadataWrite(job: Parameters<EthereumRevealCatalogUpdateStore['validateMetadataWrite']>[0]): boolean {
-    return this.catalogUpdate.validateMetadataWrite(job);
+  validateMetadataWrite(job: Parameters<EthereumRevealCatalogUpdateStore['reader']['validateMetadataWrite']>[0]): boolean {
+    return this.catalogUpdate.reader.validateMetadataWrite(job);
   }
 
   publicationComplete(tokenId: string, expectedAttempts?: number, expectedClaimId?: string, metadataRevision?: number): boolean {
-    const current = this.catalogUpdate.canonicalMetadata([tokenId])[0];
+    const current = this.catalogUpdate.reader.canonicalMetadata([tokenId])[0];
     if (!current || metadataRevision !== undefined && current.metadataRevision !== metadataRevision) return false;
     return this.sql.exec(`UPDATE publication SET status='published',last_error=NULL,claim_id=NULL,metadata_revision=? WHERE token_id=?${
       expectedAttempts === undefined ? '' : " AND status='pending' AND attempts=? AND claim_id IS ?"} RETURNING token_id`,
@@ -367,7 +368,7 @@ export class EthereumRevealStore {
   }
 
   publicationFailed(tokenId: string, now: number, attempts: number, conflict = false, expectedAttempts?: number, expectedClaimId?: string, metadataRevision?: number): boolean {
-    if (metadataRevision !== undefined && this.catalogUpdate.canonicalMetadata([tokenId])[0]?.metadataRevision !== metadataRevision) return false;
+    if (metadataRevision !== undefined && this.catalogUpdate.reader.canonicalMetadata([tokenId])[0]?.metadataRevision !== metadataRevision) return false;
     return this.sql.exec(`UPDATE publication SET status=?,last_error=?,next_check_ms=?,claim_id=NULL WHERE token_id=?${
       expectedAttempts === undefined ? '' : " AND status='pending' AND attempts=? AND claim_id IS ?"} RETURNING token_id`,
       conflict ? 'conflict' : 'pending', conflict ? 'metadata-conflict' : 'publication-unavailable',
@@ -376,7 +377,7 @@ export class EthereumRevealStore {
   }
 
   publicationError(): 'metadata-conflict' | 'publication-unavailable' | null {
-    const ownerError = this.catalogUpdate.ownerHatching.publicationError();
+    const ownerError = this.catalogUpdate.ownerHatching.reader.publicationError();
     if (ownerError) return ownerError;
     if (this.sql.exec<{ found: number }>(`SELECT 1 AS found FROM publication p JOIN assignments a ON a.token_id=p.token_id
       WHERE p.status='conflict' AND ${NORMAL_PUBLICATION}
@@ -393,7 +394,7 @@ export class EthereumRevealStore {
       WHERE p.status='pending' AND ${NORMAL_PUBLICATION}
       AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens o WHERE o.token_id=p.token_id)`).toArray()[0]?.due;
     const times = [recovery, publication, this.enrichment.nextWake(now, busy.enrichment ?? false),
-      this.catalogUpdate.ownerHatching.nextWake(now, busy.ownerEnrichment)]
+      this.catalogUpdate.ownerHatching.reader.nextWake(now, busy.ownerEnrichment)]
       .filter((value): value is number => value != null);
     return times.length ? Math.max(now + 250, Math.min(...times)) : null;
   }
@@ -405,6 +406,6 @@ export class EthereumRevealStore {
     return { ready: this.ready(), seeded: this.pools().reduce((sum, pool) => sum + pool.seeded, 0),
       available: this.pools().reduce((sum, pool) => sum + pool.available, 0), ...row,
       publication: Object.fromEntries(publication.map(value => [value.status, value.count])), recovery: this.recovery.summary(),
-      enrichment: this.enrichment.summary(), ownerEnrichment: this.catalogUpdate.ownerHatching.enrichmentSummary() };
+      enrichment: this.enrichment.summary(), ownerEnrichment: this.catalogUpdate.ownerHatching.reader.enrichmentSummary() };
   }
 }

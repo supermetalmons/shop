@@ -10,6 +10,7 @@ import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import { cancelResponseBody, readBoundedResponseBytes } from './boundedResponse.js';
 import { fetchRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
+import { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
 import type { EthereumRevealStore } from './ethereumRevealStore.js';
 
 const OBSERVATION_MS = 300_000;
@@ -48,11 +49,17 @@ export function parseCatalogUpdateRequest(value: unknown): EthereumRevealCatalog
 }
 
 export class EthereumRevealCatalogUpdate {
-  private readonly updates: EthereumRevealCatalogUpdateStore;
+  private updates: EthereumRevealCatalogUpdateStore | undefined;
+  private readonly reader: EthereumRevealCatalogReader;
   private running: Promise<EthereumRevealCatalogUpdateResult> | null = null;
 
   constructor(private readonly host: CatalogUpdateHost, private readonly registry = { getCatalog: getRevealCatalog, getDescriptor: getRevealCatalogDescriptor }) {
-    this.updates = new EthereumRevealCatalogUpdateStore(host.storage.sql, action => host.storage.transactionSync(action));
+    this.reader = new EthereumRevealCatalogReader(host.storage.sql);
+  }
+
+  private get writer(): EthereumRevealCatalogUpdateStore {
+    return this.updates ??= new EthereumRevealCatalogUpdateStore(this.host.storage.sql,
+      action => this.host.storage.transactionSync(action), this.reader);
   }
 
   async run(request: EthereumRevealCatalogUpdateRequest, deployment: EthereumRevealDeployment): Promise<EthereumRevealCatalogUpdateResult> {
@@ -84,10 +91,10 @@ export class EthereumRevealCatalogUpdate {
   }
 
   private result(request: EthereumRevealCatalogUpdateRequest, deployment: EthereumRevealDeployment,
-    record?: UpdateRecord, status = this.updates.status(request.batchId)): EthereumRevealCatalogUpdateResult {
+    record?: UpdateRecord, status = this.reader.status(request.batchId)): EthereumRevealCatalogUpdateResult {
     const phase = record?.phase ?? 'unstarted';
     return { deploymentId: deployment.deploymentId, batchId: request.batchId, phase, complete: phase === 'complete',
-      catalogRevision: this.updates.effectiveCatalog()?.catalogRevision ?? deployment.catalogRevision ?? 0,
+      catalogRevision: this.reader.effectiveCatalog()?.catalogRevision ?? deployment.catalogRevision ?? 0,
       total: status?.total ?? record?.mappingCount ?? 0, staged: status?.metadataStaged ?? 0,
       applied: status?.activatedAtMs ? status.total : 0, published: status?.published ?? 0, frozen: status?.frozen ?? 0,
       conflicts: status?.conflicts ?? 0, retrying: status?.retrying ?? 0,
@@ -102,12 +109,12 @@ export class EthereumRevealCatalogUpdate {
     deployment = await this.current(deployment);
     if (request.eggCutoff !== undefined) {
       if (deployment.revision !== request.expectedRevision) throw new Error('Catalog deployment revision changed.');
-      const eligibleEggIds = this.updates.eligibleCutoffEggs(request.eggCutoff, request.afterEggId ?? request.eggCutoff);
+      const eligibleEggIds = this.reader.eligibleCutoffEggs(request.eggCutoff, request.afterEggId ?? request.eggCutoff);
       return { ...this.result(request, deployment, record), eligibleEggIds,
         nextEligibleEggId: eligibleEggIds.length === 256 ? eligibleEggIds.at(-1)! : null };
     }
     if (request.action !== 'verify') return this.result(request, deployment, record);
-    const status = this.updates.verify(request.batchId);
+    const status = this.reader.verify(request.batchId);
     if (!status.activatedAtMs || status.published !== status.frozen) throw new Error('Catalog replacement publication is incomplete.');
     const next = await this.verifyPublicationPage(deployment, request.batchId, request.verificationAfterEggId ?? 0);
     await this.current(deployment);
@@ -125,13 +132,13 @@ export class EthereumRevealCatalogUpdate {
       }
       if (record && record.batchSha256 !== batch.batchSha256) throw new Error('Frozen catalog batch changed.');
       if (record?.phase === 'cancelled') throw new Error('This operation was cancelled. Prepare a new attempt with the same mapping.');
-      if (record && this.updates.status(record.batchId)) return this.advance(request, deployment, record);
+      if (record && this.reader.status(record.batchId)) return this.advance(request, deployment, record);
       this.host.initializeStore();
       if (!record) {
         const activeId = await this.host.storage.get<string>('catalog-update-active');
         const active = activeId && await this.host.storage.get<UpdateRecord>(this.key(activeId));
         if (active && !['complete', 'cancelled'].includes(active.phase)) throw new Error('Finish the previous catalog operation first.');
-        const predecessor = this.updates.effectiveCatalog();
+        const predecessor = this.reader.effectiveCatalog();
         if (deployment.revision !== request.expectedRevision || deployment.catalogUpdateId != null ||
           !['active', 'paused'].includes(deployment.state) || deployment.provisionedAtMs === null ||
           predecessor?.catalogVersion !== batch.predecessor.descriptor.catalogVersion || predecessor.manifestSha256 !== batch.predecessor.descriptor.manifestSha256) {
@@ -157,7 +164,7 @@ export class EthereumRevealCatalogUpdate {
         if (!row) throw new Error('Catalog deployment changed before the operation was acquired.');
       }
       deployment = await this.requireOperation(deployment, record);
-      this.updates.begin(batch, record.startedAtMs);
+      this.writer.begin(batch, record.startedAtMs);
       return this.result(request, deployment, record);
     }
     if (!record) throw new Error('Begin this catalog operation using its frozen batch first.');
@@ -176,7 +183,7 @@ export class EthereumRevealCatalogUpdate {
   private async advance(request: EthereumRevealCatalogUpdateRequest, deployment: EthereumRevealDeployment, record: UpdateRecord): Promise<EthereumRevealCatalogUpdateResult> {
     if (record.phase === 'complete' || record.phase === 'cancelled') return this.result(request, deployment, record);
     this.host.initializeStore();
-    const status = this.updates.status(record.batchId);
+    const status = this.reader.status(record.batchId);
     if (!status) throw new Error('Retry begin with the frozen batch to resume preparation.');
     if (status.activatedAtMs !== null) {
       if (!['publishing', 'verifying', 'observing'].includes(record.phase)) {
@@ -191,18 +198,18 @@ export class EthereumRevealCatalogUpdate {
       if (status.phase === 'mapping') {
         const offset = status.mapped;
         if (offset === record.mappingCount) {
-          this.updates.sealMappings(record.batchId);
+          this.writer.sealMappings(record.batchId);
           return this.result(request, deployment, record);
         }
         const mappings = await this.host.storage.get<RevealCatalogUpdateMapping[]>(`catalog-update-mappings:${record.batchId}:${offset}`);
         if (!mappings || mappings.length !== Math.min(256, record.mappingCount - offset)) throw new Error('Retry begin with the frozen batch to restore mapping ingestion.');
-        this.updates.stageMappings(record.batchId, mappings);
-        if (offset + mappings.length === record.mappingCount) this.updates.sealMappings(record.batchId);
+        this.writer.stageMappings(record.batchId, mappings);
+        if (offset + mappings.length === record.mappingCount) this.writer.sealMappings(record.batchId);
         return this.result(request, deployment, record);
       }
       if (status.metadataStaged < status.total) {
         const catalog = this.registry.getCatalog(record.target.catalogVersion, record.target.manifestSha256)!;
-        const rows = this.updates.metadataPreparationPage(record.batchId, PAGE_SIZE);
+        const rows = this.reader.metadataPreparationPage(record.batchId, PAGE_SIZE);
         const payloads = await Promise.all(rows.map(async row => {
           if ('attributesJson' in row) return row;
           const timeout = createTimedAbortScope(undefined, { timeoutMs: 25_000, timeoutMessage: 'Artwork trait staging timed out.' });
@@ -212,28 +219,28 @@ export class EthereumRevealCatalogUpdate {
           } finally { timeout.dispose(); }
         }));
         await this.requireOperation(deployment, record);
-        this.updates.metadataStage(record.batchId, payloads);
+        this.writer.metadataStage(record.batchId, payloads);
         return this.result(request, deployment, record);
       }
       if (status.generationSeeded < 111_111) {
-        this.updates.generationStage(record.batchId, 256);
+        this.writer.generationStage(record.batchId, 256);
         return this.result(request, deployment, record);
       }
       if (record.phase === 'staging') {
-        this.updates.seal(record.batchId);
+        this.writer.seal(record.batchId);
         record.phase = 'activating';
         await this.save(record);
         return this.result(request, deployment, record);
       }
-      this.updates.activate(record.batchId);
+      this.writer.activate(record.batchId);
       record.phase = 'publishing';
       await this.save(record);
-      await this.host.wake(this.updates.effectiveDeployment(deployment));
+      await this.host.wake(this.reader.effectiveDeployment(deployment));
       await this.mirror(deployment, record);
       return this.result(request, deployment, record);
     }
     if (record.phase === 'publishing') {
-      const jobs = this.updates.pendingPublications(record.batchId, 2, Date.now());
+      const jobs = this.reader.pendingPublications(record.batchId, 2, Date.now());
       const scope = { deploymentId: deployment.deploymentId, chainId: deployment.chainId,
         contractAddress: deployment.contractAddress, metadataBaseUri: deployment.metadataBaseUri };
       const results = await this.host.env.ETHEREUM_REVEAL_PUBLISHER.getByName(`${deployment.chainId}:${deployment.contractAddress}`)
@@ -244,13 +251,13 @@ export class EthereumRevealCatalogUpdate {
       for (const result of results) {
         const job = jobs.find(value => value.tokenId === result.tokenId);
         if (!job) throw new Error('Unexpected catalog publication result.');
-        if (result.status === 'published') this.updates.acknowledgePublication(record.batchId, job.tokenId, job.metadataRevision, job.targetSha256);
-        else this.updates.failPublication(record.batchId, job.tokenId, job.metadataRevision, result.status === 'conflict' ? 'conflict' : 'retry', Date.now());
+        if (result.status === 'published') this.writer.acknowledgePublication(record.batchId, job.tokenId, job.metadataRevision, job.targetSha256);
+        else this.writer.failPublication(record.batchId, job.tokenId, job.metadataRevision, result.status === 'conflict' ? 'conflict' : 'retry', Date.now());
       }
-      const progress = this.updates.status(record.batchId)!;
+      const progress = this.reader.status(record.batchId)!;
       if (progress.published === progress.frozen) record.phase = 'verifying';
     } else if (record.phase === 'verifying') {
-      this.updates.verify(record.batchId);
+      this.reader.verify(record.batchId);
       const next = await this.verifyPublicationPage(deployment, record.batchId, record.verificationAfterEggId);
       record.verificationAfterEggId = next ?? 0;
       if (next === null) {
@@ -277,15 +284,15 @@ export class EthereumRevealCatalogUpdate {
   private async observe(request: EthereumRevealCatalogUpdateRequest, deployment: EthereumRevealDeployment, record: UpdateRecord): Promise<EthereumRevealCatalogUpdateResult> {
     if (Date.now() < record.observationUntilMs) return this.result(request, deployment, record);
     if (!record.verifiedAfterObservation) {
-      this.updates.verify(record.batchId);
+      this.reader.verify(record.batchId);
       const next = await this.verifyPublicationPage(deployment, record.batchId, record.verificationAfterEggId);
       record.verificationAfterEggId = next ?? 0;
       record.verifiedAfterObservation = next === null;
       await this.save(record);
     }
     if (record.verifiedAfterObservation) {
-      this.updates.finalize(record.batchId);
-      if (this.updates.prune(record.batchId, 256).remaining > 0) {
+      this.writer.finalize(record.batchId);
+      if (this.writer.prune(record.batchId, 256).remaining > 0) {
         await this.save(record);
         return this.result(request, await this.current(deployment), record);
       }
@@ -314,7 +321,7 @@ export class EthereumRevealCatalogUpdate {
   }
 
   private async verifyPublicationPage(deployment: EthereumRevealDeployment, batchId: string, afterEggId: number): Promise<number | null> {
-    const rows = this.updates.publicationPage(batchId, afterEggId, PAGE_SIZE);
+    const rows = this.reader.publicationPage(batchId, afterEggId, PAGE_SIZE);
     const timeout = createTimedAbortScope(undefined, { timeoutMs: 25_000, timeoutMessage: 'Catalog publication verification timed out.' });
     try {
       await Promise.all(rows.map(async row => {
@@ -344,11 +351,11 @@ export class EthereumRevealCatalogUpdate {
       await this.host.wake(deployment);
       return this.result(request, deployment, record);
     }
-    const status = this.updates.status(record.batchId);
+    const status = this.reader.status(record.batchId);
     if (status?.activatedAtMs != null) throw new Error('An activated catalog update must resume forward.');
     if (deployment.catalogUpdateId != null) {
       await this.requireOperation(deployment, record);
-      if (status) this.updates.cancel(record.batchId);
+      if (status) this.writer.cancel(record.batchId);
       const row = await this.host.env.OPS_DB.prepare(`UPDATE ethereum_reveal_deployments SET catalog_update_id=NULL,
         catalog_update_started_at_ms=NULL,revision=revision+1,updated_at_ms=? WHERE deployment_id=? AND revision=?
         AND catalog_update_id=? AND retired_at_ms IS NULL RETURNING deployment_id`)

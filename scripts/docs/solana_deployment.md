@@ -50,8 +50,11 @@ After finalized verification, the public result is saved in
 `scripts/preorderCollectionDeployments/<cluster>/<collectionId>.json`, and the
 command prints a ready-to-copy `coreCollectionPubkey` assignment. Rerunning the
 same command verifies and returns the existing collection instead of deploying
-another. Public pending journals and per-collection locks live under
-`.cache/preorder-collection-deployments`. Preserve pending journals during
+another. New pending journals live under
+`.operations/preorder-collection-deployments/<cluster>/`; existing journals under
+`.cache/preorder-collection-deployments/<cluster>/` resume in place. Duplicate
+journals in both roots stop the command. Per-collection locks are acquired under
+both roots to exclude older commands. Preserve pending journals during
 interrupted or ambiguous submissions and rerun the command for recovery. Remove
 a stale lock only after verifying that its owning process has stopped; keep the
 pending journal. Do not delete pending journals to bypass a recovery block.

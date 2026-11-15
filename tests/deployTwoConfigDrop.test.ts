@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import bs58 from 'bs58';
@@ -160,7 +160,7 @@ async function fixture(t: TestContext, mainnet = false) {
   const saved = path.join(root, 'scripts/preorderCollectionDeployments', plan.cluster, `${plan.dropId}.json`);
   mkdirSync(path.dirname(saved), { recursive: true });
   writeFileSync(saved, JSON.stringify({ collectionMint: plan.collection, config: { authority: plan.authority } }));
-  const journalPath = path.join(root, '.cache/two-config-deployments', plan.cluster, `${plan.dropId}.json`);
+  const journalPath = path.join(root, '.operations/two-config-deployments', plan.cluster, `${plan.dropId}.json`);
   const collectionConfig = preparePreorderCollectionConfig({
     ...(mainnet ? NEW_PREORDER_COLLECTION : DEVNET_COLLECTION), collectionId: plan.dropId, isMainnet: mainnet, authority: plan.authority,
   }, plan.dropId);
@@ -295,6 +295,41 @@ test('read-only deployment checks never prompt, simulate, write journals, or sen
   assert.equal(result.ready, false); assert.equal(f.state.prompts, 0); assert.equal(f.state.confirmations, 0);
   assert.equal(f.state.simulations, 0); assert.deepEqual(f.state.sends, []);
   assert.equal(existsSync(f.journalPath), false); assert.equal(readFileSync(f.registryPath, 'utf8'), before);
+  assert.equal(existsSync(path.join(f.root, '.operations')), false);
+});
+
+test('legacy two-config journals stay in place through read-only inspection and completed recovery', async t => {
+  const f = await fixture(t);
+  await f.run(true);
+  assert.equal(statSync(path.join(f.root, '.operations')).mode & 0o777, 0o700);
+  const legacy = f.journalPath.replace('/.operations/', '/.cache/');
+  mkdirSync(path.dirname(legacy), { recursive: true });
+  renameSync(f.journalPath, legacy);
+  rmSync(path.join(f.root, '.operations'), { recursive: true });
+  const before = readFileSync(legacy, 'utf8');
+  const signatures = [...f.state.sends];
+  assert.equal((await f.run(false)).ready, true);
+  assert.equal(readFileSync(legacy, 'utf8'), before);
+  assert.equal(existsSync(path.join(f.root, '.operations')), false);
+  assert.equal((await f.run(true)).ready, true);
+  assert.deepEqual(f.state.sends, signatures);
+  assert.deepEqual(JSON.parse(readFileSync(legacy, 'utf8')).transactions, JSON.parse(before).transactions);
+  assert.equal(existsSync(f.journalPath), false);
+});
+
+test('duplicate two-config journals stop before any additional transaction or evidence write', async t => {
+  const f = await fixture(t);
+  await f.run(true);
+  const before = readFileSync(f.journalPath, 'utf8');
+  const legacy = f.journalPath.replace('/.operations/', '/.cache/');
+  mkdirSync(path.dirname(legacy), { recursive: true });
+  writeFileSync(legacy, before);
+  const signatures = [...f.state.sends];
+  await assert.rejects(f.run(false), /both .operations and .cache/);
+  await assert.rejects(f.run(true), /both .operations and .cache/);
+  assert.deepEqual(f.state.sends, signatures);
+  assert.equal(readFileSync(f.journalPath, 'utf8'), before);
+  assert.equal(readFileSync(legacy, 'utf8'), before);
 });
 
 test('omitted and empty no-discount CSVs pass read-only preflight without any delegate mutation', async t => {

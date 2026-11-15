@@ -215,7 +215,7 @@ test('historical mapped targets retain exact bytes while fresh mapped assignment
     VALUES('egg',76641,'111112',1,'2',?,?,?,?,1)`).run(JSON.stringify(fresh.artwork), fresh.metadataJson, fresh.placeholderJson, 1002);
   const legacy = buildRevealedArtwork({ templateJson, tokenId: '1', crateTokenId: '111112', category: 'painting', assetId: 47128,
     observation, catalog });
-  const [historical, current] = f.store.catalogUpdate.canonicalMetadata(['1', '2']);
+  const [historical, current] = f.store.catalogUpdate.reader.canonicalMetadata(['1', '2']);
   assert.equal(historical.metadataJson, applyRevealAttributePayload(legacy.metadataJson, payload).metadataJson);
   assert.equal(JSON.parse(historical.metadataJson).attributes.filter((row: { trait_type: string }) => row.trait_type === 'collection block').length, 2);
   assert.equal(current.metadataJson, applyRevealAttributePayload(fresh.metadataJson, payload).metadataJson);

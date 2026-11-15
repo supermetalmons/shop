@@ -8,6 +8,7 @@ import { parseConfigFileTextToJson } from 'typescript';
 import { PublicKey, TransactionInstruction, VersionedTransaction, type Connection, type SimulatedTransactionResponse } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { createScriptSolanaConnection } from '../../shared/solanaRpcEnvironment.ts';
+import { operationPathCandidates, prepareOperationPath, resolveOperationPath } from '../../shared/operationLocations.ts';
 import { createWorkerVersionClient, type WorkerSnapshot, type TemporaryWorkerVersion, type SourceRestoration } from './cloudflare.ts';
 import { assertSignedTransaction, buildTransaction } from './transaction.ts';
 
@@ -117,11 +118,25 @@ function acquireWorkerTransactionLock(file: string): number {
   }
 }
 
+function workerOperationJournalPath(root: string, operationId: string): string {
+  const directory = `worker-transactions/${operationId}`;
+  return operationId === 'locks'
+    ? resolveOperationPath(root, `${directory}/journal.json`)
+    : path.join(resolveOperationPath(root, directory), 'journal.json');
+}
+
+function requireReservedOperationRecovery(operationId: string, journal: WorkerTransactionJournal | undefined): void {
+  if (operationId === 'locks' && (!journal || journal.version !== 1 || journal.operationId !== operationId)) {
+    throw new Error('Operation ID "locks" is reserved for target locks; only an existing operation journal can be resumed.');
+  }
+}
+
 function assertNoPendingWorkerCleanup(root: string, operationId: string, target: NonNullable<WorkerTransactionOptions['cloudflare']>): void {
-  const directory = path.join(root, '.cache/worker-transactions');
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name === operationId) continue;
-    const file = path.join(directory, entry.name, 'journal.json');
+  const names = new Set(operationPathCandidates(root, 'worker-transactions').flatMap(directory =>
+    existsSync(directory) ? readdirSync(directory, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name) : []));
+  for (const name of names) {
+    if (name === operationId) continue;
+    const file = workerOperationJournalPath(root, name);
     if (!existsSync(file)) continue;
     let pending: WorkerTransactionJournal;
     try { pending = JSON.parse(readFileSync(file, 'utf8')); }
@@ -132,7 +147,7 @@ function assertNoPendingWorkerCleanup(root: string, operationId: string, target:
     if (pending.target.accountId.toLowerCase() === target.accountId.toLowerCase() && pending.target.workerName === target.workerName &&
       pending.cleanup?.absent !== true &&
       (pending.uploadStarted !== false || pending.workerVersion || pending.signed || pending.restoration?.started)) {
-      throw new Error(`Operation ${entry.name} has unresolved Worker cleanup. Resume that operation before starting another for ${target.workerName}.`);
+      throw new Error(`Operation ${name} has unresolved Worker cleanup. Resume that operation before starting another for ${target.workerName}.`);
     }
   }
 }
@@ -230,9 +245,10 @@ export async function runWorkerTransaction(operation: WorkerTransactionOperation
   const intent = operationIntent(operation);
   const intentHash = hash(JSON.stringify(intent));
   const root = path.resolve(options.root ?? ROOT);
-  const directory = path.join(root, '.cache/worker-transactions', operation.id);
-  const journalPath = path.join(directory, 'journal.json');
+  const journalPath = workerOperationJournalPath(root, operation.id);
+  const directory = path.dirname(journalPath);
   let journal: WorkerTransactionJournal | undefined = existsSync(journalPath) ? JSON.parse(readFileSync(journalPath, 'utf8')) : undefined;
+  requireReservedOperationRecovery(operation.id, journal);
   const connect = () => dependencies.connection ?? createScriptSolanaConnection({ cluster: operation.cluster, root });
   if (!options.write) {
     const connection = connect();
@@ -251,22 +267,29 @@ export async function runWorkerTransaction(operation: WorkerTransactionOperation
     return { mode: 'preflight' as const, intent, ...(await prepare(operation, connection)).simulation, pendingAttempt: journal?.attemptId };
   }
   const operationLockPath = path.join(directory, 'operation.lock');
+  prepareOperationPath(root, operationLockPath);
   const operationLock = acquireWorkerTransactionLock(operationLockPath);
-  let lockPath: string | undefined;
-  let lock: number | undefined;
+  const locks: Array<{ path: string; descriptor: number }> = [];
+  let targetLocked = false;
   let client: Client | undefined;
   const persist = () => save(journalPath, journal);
   try {
     writeFileSync(operationLock, String(process.pid));
     journal = existsSync(journalPath) ? JSON.parse(readFileSync(journalPath, 'utf8')) : undefined;
+    requireReservedOperationRecovery(operation.id, journal);
     const selectedTarget = journal?.target ?? options.cloudflare ?? workerTarget(root);
     const target = { ...selectedTarget, accountId: selectedTarget.accountId.toLowerCase() };
     const signerBinding = journal?.signerBinding ?? options.signerBinding ?? 'COSIGNER_SECRET';
     if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(signerBinding)) throw new Error('Invalid signer binding name.');
     client = dependencies.client ?? createWorkerVersionClient({ token: cloudflareToken(root), target, signerBinding });
-    lockPath = path.join(root, '.cache/worker-transactions/locks', `${target.accountId}-${target.workerName}.lock`);
-    lock = acquireWorkerTransactionLock(lockPath);
-    writeFileSync(lock, String(process.pid));
+    for (const lockPath of operationPathCandidates(root, `worker-transactions/locks/${target.accountId}-${target.workerName}.lock`).reverse()) {
+      prepareOperationPath(root, lockPath);
+      const descriptor = acquireWorkerTransactionLock(lockPath);
+      locks.push({ path: lockPath, descriptor });
+      writeFileSync(descriptor, String(process.pid));
+    }
+    if (workerOperationJournalPath(root, operation.id) !== journalPath) throw new Error('Worker operation evidence location changed; preserve its journal and retry.');
+    targetLocked = true;
     if (journal) {
       if (journal.version !== 1 || journal.operationId !== operation.id) throw new Error('Invalid operation journal.');
       if (!journal.cleanup) await cleanupWorkerTransaction(client, journal, persist);
@@ -274,7 +297,9 @@ export async function runWorkerTransaction(operation: WorkerTransactionOperation
         (options.signerBinding && options.signerBinding !== signerBinding)) throw new Error('Worker target or signer binding differs from the recorded journal.');
       if (journal.intentHash !== intentHash) throw new Error('Operation input differs from its recorded journal; cleanup completed before refusing submission.');
       if (!journal.signed) {
-        renameSync(journalPath, path.join(directory, `${journal.attemptId}.json`));
+        const archive = path.join(directory, `${journal.attemptId}.json`);
+        if (operation.id === 'locks') save(archive, journal);
+        else renameSync(journalPath, archive);
         journal = undefined;
       }
     }
@@ -312,9 +337,9 @@ export async function runWorkerTransaction(operation: WorkerTransactionOperation
     save(path.join(directory, 'receipt.json'), receipt);
     return { mode: 'complete' as const, ...receipt };
   } finally {
-    try { if (journal && !journal.cleanup && client && lock !== undefined) await cleanupWorkerTransaction(client, journal, persist); }
+    try { if (journal && !journal.cleanup && client && targetLocked) await cleanupWorkerTransaction(client, journal, persist); }
     finally {
-      if (lock !== undefined) { closeSync(lock); rmSync(lockPath!, { force: true }); }
+      for (const lock of locks.reverse()) { closeSync(lock.descriptor); rmSync(lock.path, { force: true }); }
       closeSync(operationLock); rmSync(operationLockPath, { force: true });
     }
   }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { required } from './helpers/required.ts';
-import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -287,8 +287,9 @@ test('chargeback checkpoints are protected, atomic, resumable and contain no ses
   f.dependencies.store = createStripeChargebackCheckpointStore(directory);
   const args = parseStripeChargebackBackfillArgs(['--mode', 'live']);
   await assert.rejects(runStripeChargebackBackfill(args, TOKEN, f.dependencies));
-  const path = join(directory, 'live-dry-run.json');
+  const path = join(directory, '.operations/stripe-chargebacks/live-dry-run.json');
   assert.equal(statSync(directory).mode & 0o777, 0o700);
+  assert.equal(statSync(join(directory, '.operations')).mode & 0o777, 0o700);
   assert.equal(statSync(path).mode & 0o777, 0o600);
   assert.equal(readFileSync(path, 'utf8').includes(TOKEN), false);
   f.dependencies.store = createStripeChargebackCheckpointStore(directory);
@@ -305,12 +306,43 @@ test('chargeback checkpoint storage rejects directory and checkpoint symlinks', 
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const target = join(directory, 'target');
   writeFileSync(target, TOKEN);
-  symlinkSync(directory, join(directory, 'alias'));
-  assert.throws(() => createStripeChargebackCheckpointStore(join(directory, 'alias')), /Unsafe/);
+  symlinkSync(directory, join(directory, '.operations'));
+  assert.throws(() => createStripeChargebackCheckpointStore(directory).load('live', false), /symlink/);
+  rmSync(join(directory, '.operations'));
   const store = createStripeChargebackCheckpointStore(directory);
-  symlinkSync(target, join(directory, 'live-dry-run.json'));
-  assert.throws(() => store.load('live', false), /safely/);
+  mkdirSync(join(directory, '.operations/stripe-chargebacks'), { recursive: true, mode: 0o700 });
+  symlinkSync(target, join(directory, '.operations/stripe-chargebacks/live-dry-run.json'));
+  assert.throws(() => store.load('live', false), /symlink/);
   assert.equal(readFileSync(target, 'utf8'), TOKEN);
+});
+
+test('chargeback checkpoint discovery is read-only and resumes each legacy mode independently', t => {
+  const root = mkdtempSync(join(tmpdir(), 'stripe-chargeback-locations-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const store = createStripeChargebackCheckpointStore(root);
+  assert.equal(store.load('test', false), undefined);
+  assert.equal(existsSync(join(root, '.operations')), false);
+  assert.equal(existsSync(join(root, '.cache')), false);
+  const legacy = join(root, '.cache/stripe-chargebacks/live-write.json');
+  mkdirSync(join(root, '.cache/stripe-chargebacks'), { recursive: true, mode: 0o700 });
+  const checkpoint: Checkpoint = { version: 1, mode: 'live', write: true, cursor: 'du_saved', complete: false,
+    totals: { scanned: 2, matchedOrders: 1, inserted: 1, existing: 0, unrelated: 1 } };
+  writeFileSync(legacy, JSON.stringify(checkpoint));
+  assert.deepEqual(store.load('live', true), checkpoint);
+  assert.equal(existsSync(join(root, '.operations')), false);
+  store.save({ ...checkpoint, cursor: 'du_next' });
+  assert.equal(JSON.parse(readFileSync(legacy, 'utf8')).cursor, 'du_next');
+  assert.equal(existsSync(join(root, '.operations')), false);
+  store.save({ ...checkpoint, mode: 'test', write: false });
+  assert.ok(existsSync(join(root, '.operations/stripe-chargebacks/test-dry-run.json')));
+  assert.equal(existsSync(join(root, '.cache/stripe-chargebacks/test-dry-run.json')), false);
+  const current = join(root, '.operations/stripe-chargebacks/live-write.json');
+  const before = readFileSync(legacy, 'utf8');
+  writeFileSync(current, before);
+  assert.throws(() => store.load('live', true), /both .operations and .cache/);
+  assert.throws(() => store.save(checkpoint), /both .operations and .cache/);
+  assert.equal(readFileSync(legacy, 'utf8'), before);
+  assert.equal(readFileSync(current, 'utf8'), before);
 });
 
 function webhookConfiguration(mode: 'live' | 'test', write: boolean, complete: boolean) {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -170,6 +170,44 @@ test('collection block import recovers a partially committed pair without changi
   assert.deepEqual(await snapshot(options.rootDirectory), interrupted);
   assert.equal((await importRevealCollectionBlocks(options)).status, 'updated');
   assert.equal((await importRevealCollectionBlocks({ rootDirectory: options.rootDirectory, check: true })).status, 'checked');
+});
+
+test('collection blocks resume the original ordered journal and preserve intervening edits before rollback', async t => {
+  const options = await fixture(t);
+  const frozen = await snapshot(options.rootDirectory);
+  await importRevealCollectionBlocks(options);
+  const sourcePath = join(options.rootDirectory, ASSETS, 'collection-blocks.source.json');
+  const artifactPath = join(options.rootDirectory, ASSETS, 'collection-blocks.json');
+  const previousSource = await readFile(sourcePath);
+  const previousArtifact = await readFile(artifactPath);
+  const nextSource = `${JSON.stringify(sample(), null, 2)}\n`;
+  const nextArtifact = `${JSON.stringify(buildRevealCollectionBlocks({ source: nextSource,
+    frozenSource: JSON.stringify(dimensions()), catalog: catalog(dimensions()), previous: JSON.parse(previousArtifact.toString('utf8')) }), null, 2)}\n`;
+  const journal = [
+    { previous: previousSource.toString('base64'), nextSha256: digest(nextSource) },
+    { previous: previousArtifact.toString('base64'), nextSha256: digest(nextArtifact) },
+  ];
+  const stateDirectory = join(options.rootDirectory, '.cache/111k-collection-blocks');
+  const journalPath = join(stateDirectory, 'recovery.json');
+  await mkdir(stateDirectory, { recursive: true });
+  await writeFile(journalPath, JSON.stringify(journal));
+  await writeFile(sourcePath, nextSource);
+  await writeFile(options.sourcePath, nextSource);
+  const interrupted = await snapshot(options.rootDirectory);
+  await assert.rejects(importRevealCollectionBlocks({ ...options, check: true }), /Interrupted/);
+  assert.deepEqual(await snapshot(options.rootDirectory), interrupted);
+  await writeFile(artifactPath, 'intervening edit');
+  const conflicted = await snapshot(options.rootDirectory);
+  await assert.rejects(importRevealCollectionBlocks(options), /output changed after interruption/);
+  assert.deepEqual(await snapshot(options.rootDirectory), conflicted);
+  await writeFile(artifactPath, previousArtifact);
+  assert.equal((await importRevealCollectionBlocks(options)).status, 'updated');
+  assert.equal(await readFile(sourcePath, 'utf8'), nextSource);
+  assert.equal(await readFile(artifactPath, 'utf8'), nextArtifact);
+  assert.equal((await importRevealCollectionBlocks({ rootDirectory: options.rootDirectory, check: true })).status, 'checked');
+  const after = await snapshot(options.rootDirectory);
+  for (const [path, value] of Object.entries(frozen)) assert.deepEqual(after[path], value, path);
+  await assert.rejects(readFile(journalPath), { code: 'ENOENT' });
 });
 
 test('collection-blocks CLI accepts its own source/check options and rejects allocation changes', () => {

@@ -437,10 +437,6 @@
   overflow: visible;
 }
 
-.mi-note-pack-overlay .mi-note-wip__stage {
-  bottom: 0;
-}
-
 .mi-note-pack-overlay__fallback {
   position: absolute;
   pointer-events: none;

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   revealCatalogMedia, validateRevealAssetCatalog,
@@ -8,6 +8,7 @@ import {
 } from '../../shared/ethereum/revealAssetCatalog.ts';
 import type { EthereumArtworkCategory } from '../../shared/ethereum/reveal.ts';
 import { withMetadataLock } from './lock.ts';
+import { createRecoverableFileSet, readOptionalFile as readOptional, type FileSetRecoveryEntry } from '../shared/recoverableFileSet.ts';
 
 const ROOT_DIRECTORY = fileURLToPath(new URL('../../', import.meta.url));
 const ARTWORK_TEMPLATE = fileURLToPath(new URL('./templates/artwork.json', import.meta.url));
@@ -216,86 +217,33 @@ function referenceTemplates(manifest: RevealAssetCatalog, template: unknown): Re
   }));
 }
 
-async function readOptional(path: string): Promise<Buffer | null> {
-  try { return await readFile(path); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-type OutputFile = { path: string; bytes: Buffer; previous: Buffer | null };
-
-async function recoverOutputs(rootDirectory: string): Promise<void> {
-  const state = join(rootDirectory, IMPORT_STATE_DIRECTORY);
-  const journalPath = join(state, 'recovery.json');
-  const bytes = await readOptional(journalPath);
-  if (!bytes) return;
-  const journal: unknown = JSON.parse(bytes.toString('utf8'));
-  if (!Array.isArray(journal) || !journal.length || journal.length > OUTPUT_PATHS.length) {
-    throw new Error('Invalid asset import recovery journal');
-  }
-  const paths = new Set<string>();
-  const outputs = journal.map((entry: unknown) => {
-    if (!record(entry) || typeof entry.file !== 'string' || !OUTPUT_PATHS.includes(entry.file) || paths.has(entry.file) ||
-      entry.previous !== null && typeof entry.previous !== 'string' ||
-      typeof entry.nextSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.nextSha256)) {
-      throw new Error('Invalid asset import recovery entry');
-    }
-    paths.add(entry.file);
-    const previous = entry.previous === null ? null : Buffer.from(entry.previous as string, 'base64');
-    if (previous && previous.toString('base64') !== entry.previous) throw new Error('Invalid asset import recovery bytes');
-    return { path: join(rootDirectory, entry.file), previous, nextSha256: entry.nextSha256 };
-  });
-  const pending = [];
-  for (const output of outputs) {
-    const current = await readOptional(output.path);
-    if (current === null ? output.previous === null : output.previous !== null && current.equals(output.previous)) continue;
-    if (current === null || sha256(current) !== output.nextSha256) {
-      throw new Error(`Asset output changed since interrupted import: ${relative(rootDirectory, output.path)}`);
-    }
-    pending.push(output);
-  }
-  for (const output of pending) {
-    if (output.previous === null) await rm(output.path);
-    else {
-      const temporary = join(state, 'restore.tmp');
-      await writeFile(temporary, output.previous);
-      await rename(temporary, output.path);
-    }
-  }
-  await rm(journalPath);
-}
-
-async function writeOutputs(rootDirectory: string, outputs: OutputFile[]): Promise<void> {
-  const state = join(rootDirectory, IMPORT_STATE_DIRECTORY);
-  const stage = join(state, 'staging');
-  const journalPath = join(state, 'recovery.json');
-  await rm(stage, { recursive: true, force: true });
-  await mkdir(stage, { recursive: true });
-  try {
-    for (const [index, output] of outputs.entries()) {
-      await mkdir(dirname(output.path), { recursive: true });
-      await writeFile(join(stage, String(index)), output.bytes, { flag: 'wx' });
-      const current = await readOptional(output.path);
-      if (current === null ? output.previous !== null : output.previous === null || !current.equals(output.previous)) {
-        throw new Error(`Asset output changed during import: ${relative(rootDirectory, output.path)}`);
+function assetFileSet(rootDirectory: string) {
+  return createRecoverableFileSet({
+    stateDirectory: join(rootDirectory, IMPORT_STATE_DIRECTORY),
+    staging: 'directory',
+    decodeJournal(journal): FileSetRecoveryEntry[] {
+      if (!Array.isArray(journal) || !journal.length || journal.length > OUTPUT_PATHS.length) {
+        throw new Error('Invalid asset import recovery journal');
       }
-    }
-    const journal = outputs.map(output => ({ file: relative(rootDirectory, output.path),
-      previous: output.previous?.toString('base64') ?? null, nextSha256: sha256(output.bytes) }));
-    await writeFile(join(state, 'recovery.tmp'), JSON.stringify(journal));
-    await rename(join(state, 'recovery.tmp'), journalPath);
-    for (const [index, output] of outputs.entries()) {
-      await rename(join(stage, String(index)), output.path);
-    }
-    await rm(journalPath);
-  } catch (error) {
-    await recoverOutputs(rootDirectory);
-    throw error;
-  } finally {
-    await rm(stage, { recursive: true, force: true });
-  }
+      const paths = new Set<string>();
+      return journal.map((entry: unknown) => {
+        if (!record(entry) || typeof entry.file !== 'string' || !OUTPUT_PATHS.includes(entry.file) || paths.has(entry.file) ||
+          entry.previous !== null && typeof entry.previous !== 'string' ||
+          typeof entry.nextSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.nextSha256)) {
+          throw new Error('Invalid asset import recovery entry');
+        }
+        paths.add(entry.file);
+        const previous = entry.previous === null ? null : Buffer.from(entry.previous as string, 'base64');
+        if (previous && previous.toString('base64') !== entry.previous) throw new Error('Invalid asset import recovery bytes');
+        return { path: join(rootDirectory, entry.file), previous, nextSha256: entry.nextSha256 };
+      });
+    },
+    encodeJournal: entries => entries.map(entry => ({ file: relative(rootDirectory, entry.path),
+      previous: entry.previous?.toString('base64') ?? null, nextSha256: entry.nextSha256 })),
+    conflictMessage: (path, phase) => phase === 'write'
+      ? `Asset output changed during import: ${relative(rootDirectory, path)}`
+      : `Asset output changed since interrupted import: ${relative(rootDirectory, path)}`,
+  });
 }
 
 export async function importRevealAssets(options: RevealAssetImportOptions = {}): Promise<RevealAssetImportResult> {
@@ -314,7 +262,7 @@ export async function withRevealAssetImportLock<T>(root: string,
 ): Promise<T> {
   const rootDirectory = resolve(root);
   return withMetadataLock(join(rootDirectory, '.111k-assets.lock'), async () => {
-    await recoverOutputs(rootDirectory);
+    await assetFileSet(rootDirectory).recover();
     return work((options = {}) => runImport(rootDirectory, options));
   });
 }
@@ -382,6 +330,6 @@ async function runImport(rootDirectory: string, options: RevealAssetImportOption
     return { manifest, descriptor, status: 'checked', changedFiles };
   }
   if (outputs.length === 0) return { manifest, descriptor, status: 'unchanged', changedFiles };
-  await writeOutputs(rootDirectory, outputs);
+  await assetFileSet(rootDirectory).write(outputs);
   return { manifest, descriptor, status: 'updated', changedFiles };
 }

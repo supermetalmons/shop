@@ -27,6 +27,8 @@ checks the expected effects on the requested accounts. `verify` checks finalized
 state at or after the supplied slot. Keep these checks in the operation script;
 the helper does not infer whether a program's effects match the intended change.
 Transaction inputs are copied before callbacks run and remain fixed for the attempt.
+The ID `locks` is reserved for target locking. Existing operations with that ID
+can still resume from their original journal; new operations must use another ID.
 
 For a Metaplex Core collection URI change, `buildCollectionUriUpdate` from
 `scripts/ops/worker-transaction/transaction.ts` builds the instruction from
@@ -58,13 +60,19 @@ verified removal of the signer.
 The temporary signer uses its own tested runtime settings; restoration retains
 the source Worker's original compatibility date and flags.
 
-State is saved under `.cache/worker-transactions/<id>/`: `journal.json` retains
-recovery evidence and `receipt.json` records success. Locks live under
-`.cache/worker-transactions/locks` for each Worker, with an `operation.lock` in
-each operation directory. After completion, copy the public receipt to the
-relevant release folder when the operation needs lasting project history.
+New state is saved under `.operations/worker-transactions/<id>/`:
+`journal.json` retains recovery evidence and `receipt.json` records success.
+Existing `.cache/worker-transactions/<id>/` operations resume at their original
+location; duplicate operation directories in both roots are refused. For a retained
+`locks` operation, journal files determine its location because both target-lock
+directories normally exist; duplicate journals are refused. Inspection
+creates no directories. Each operation directory has an `operation.lock`, and
+the command acquires target locks under both `.operations/worker-transactions/locks`
+and `.cache/worker-transactions/locks` to exclude older commands. After completion,
+copy the public receipt to the relevant release folder when the operation needs
+lasting project history.
 
-Unresolved cleanup for a Worker blocks new operation IDs on that same Worker;
+Unresolved cleanup in either root blocks new operation IDs on that same Worker;
 resume the original operation to finish cleanup first. A definitively rejected
 upload that created no version does not block other operations. Temporary signer
 versions cannot serve as restoration sources, and Workers with Durable Object

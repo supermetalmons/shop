@@ -21,7 +21,7 @@ import type { RevealRequestStatus } from '../shop/reveal';
 import { ModalFocusScope } from './ModalFocusScope';
 import { useStaticToModelHandoff } from '../hooks/useStaticToModelHandoff';
 import { useViewerDismissInput } from '../hooks/useViewerDismissInput';
-import '../styles/mi-note-wip.css';
+import '../styles/mi-note-pack.css';
 
 function createViewer() {
   return lazy(() => import('./MiNotePackViewer'));
@@ -265,7 +265,7 @@ export default function MiNotePackRevealOverlay({
           {error && <button type="button" className="mi-note-pack-overlay__retry" aria-label="Retry loading pack"
             disabled={closing || suspended} onClick={retryViewer} />}
         </div>
-        {setup && star && <div className="mi-note-wip__stage static-to-model__model" aria-hidden={!modelVisible}>
+        {setup && star && <div className="mi-note-pack__stage static-to-model__model" aria-hidden={!modelVisible}>
           <MiNoteViewerBoundary key={attempt} onError={setViewerError}>
             <Suspense fallback={null}>
               <Viewer
@@ -295,7 +295,7 @@ export default function MiNotePackRevealOverlay({
             </Suspense>
           </MiNoteViewerBoundary>
         </div>}
-        <div className="mi-note-wip__actions" data-viewer-dismiss-ignore role="group" aria-label="Pack actions" onKeyDown={event => {
+        <div className="mi-note-pack__actions" data-viewer-dismiss-ignore role="group" aria-label="Pack actions" onKeyDown={event => {
           if (!(event.target instanceof HTMLElement) || !event.target.matches('button')) return;
           if (event.key === 'Enter' && event.repeat) event.preventDefault();
           if (event.key !== ' ') return;

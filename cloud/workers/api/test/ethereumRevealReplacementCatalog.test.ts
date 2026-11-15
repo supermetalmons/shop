@@ -119,7 +119,7 @@ test('replacement samples use amended artwork while retaining immutable original
   while (store.catalogUpdate.generationStage(batch.batchId).generationSeeded < 111111) {}
   store.catalogUpdate.seal(batch.batchId);
   store.catalogUpdate.activate(batch.batchId, 2001);
-  const canonical = store.catalogUpdate.canonicalMetadata(['21'])[0];
+  const canonical = store.catalogUpdate.reader.canonicalMetadata(['21'])[0];
   store.catalogUpdate.acknowledgePublication(batch.batchId, '21', canonical.metadataRevision, canonical.targetSha256);
   store.catalogUpdate.finalize(batch.batchId);
   database.exec("UPDATE ethereum_reveal_deployments SET catalog_update_id='catalog-update',catalog_update_started_at_ms=2000,revision=4");
@@ -135,7 +135,7 @@ test('replacement samples use amended artwork while retaining immutable original
   assert.equal(amended.frozenSamples[0].enrichment, undefined);
   freeze('111113', 1);
   const newlyFrozen = await inspect();
-  const newCanonical = store.catalogUpdate.canonicalMetadata(['1'])[0];
+  const newCanonical = store.catalogUpdate.reader.canonicalMetadata(['1'])[0];
   assert.equal(newCanonical.migration, false);
   assert.equal(newlyFrozen.frozenSamples[0].tokenId, '1');
   assert.equal(newlyFrozen.frozenSamples[0].metadataSha256, newCanonical.targetSha256);

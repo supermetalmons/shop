@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach } from 'node:test';
-import { createElement, createRef, StrictMode, type ComponentProps } from 'react';
+import { createElement, createRef, StrictMode, useState, type ComponentProps } from 'react';
+import { flushSync } from 'react-dom';
 import * as THREE from 'three';
 import type { ClearCardThreeViewerHandle } from '../src/ClearCardThreeViewer.tsx';
 import { createClearCardLightingPreset } from '../src/clearCardLighting.ts';
@@ -108,7 +109,7 @@ const bridge = '__clearCardThreeViewerTest';
 Object.defineProperty(globalThis, bridge, { configurable: true, value: { FakeRenderer, FakePMREMGenerator, FakeDracoLoader, FakeLoader } });
 const imports = registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (context.parentURL?.endsWith('/ClearCardThreeViewer.tsx') || context.parentURL?.endsWith('/clear-card-viewer/runtime.ts')) {
+    if (context.parentURL?.endsWith('/ClearCardThreeViewer.tsx') || context.parentURL?.includes('/clear-card-viewer/')) {
       if (specifier === 'three') return { url: 'test:clear-card-three', shortCircuit: true };
       if (specifier.endsWith('/DRACOLoader.js')) return { url: 'test:clear-card-draco', shortCircuit: true };
       if (specifier.endsWith('/GLTFLoader.js')) return { url: 'test:clear-card-loader', shortCircuit: true };
@@ -238,6 +239,80 @@ test('prop updates keep the renderer and discard replaced card loads without pub
   assert.deepEqual(current.disposed(), [1, 1, 1, 1]);
 });
 
+test('a loading callback can synchronously replace the selected card before its request starts', async () => {
+  let switched = false;
+  const cardStatuses: string[] = [];
+  const initial = props({ packModelUrl: undefined });
+  function Selector() {
+    const [cardModelUrl, selectCard] = useState('/card.glb');
+    return createElement(Viewer, {
+      ...initial,
+      cardModelUrl,
+      onCardModelLoadStatusChange(status) {
+        cardStatuses.push(status);
+        if (status !== 'loading' || switched) return;
+        switched = true;
+        flushSync(() => selectCard('/next.glb'));
+      },
+    });
+  }
+  const view = render(createElement(Selector));
+  flush();
+  assert.deepEqual(loads.map(load => load.url), ['/next.glb']);
+  const current = await resolveLoad(0);
+  assert.deepEqual(cardStatuses, ['loading', 'loading', 'ready']);
+  assert.deepEqual(current.disposed(), [0, 0, 0, 0]);
+  view.unmount();
+  assert.deepEqual(current.disposed(), [1, 1, 1, 1]);
+});
+
+test('a loading callback can synchronously remove the selected card without starting its request', () => {
+  const cardStatuses: string[] = [];
+  const initial = props({ packModelUrl: undefined });
+  function Selector() {
+    const [cardModelUrl, selectCard] = useState<string | undefined>('/card.glb');
+    return createElement(Viewer, {
+      ...initial,
+      cardModelUrl,
+      onCardModelLoadStatusChange(status) {
+        cardStatuses.push(status);
+        if (status === 'loading') flushSync(() => selectCard(undefined));
+      },
+    });
+  }
+  render(createElement(Selector));
+  flush();
+  assert.deepEqual(cardStatuses, ['loading', 'idle']);
+  assert.equal(loads.length, 0);
+  assert.equal(decoders.length, 0);
+});
+
+test('a loading callback can synchronously retry the same card without reviving the older request', async () => {
+  const ref = createRef<ClearCardThreeViewerHandle>();
+  const cardStatuses: string[] = [];
+  let retried = false;
+  const view = render(createElement(Viewer, {
+    ...props({
+      packModelUrl: undefined,
+      onCardModelLoadStatusChange(status) {
+        cardStatuses.push(status);
+        if (status !== 'loading' || retried) return;
+        retried = true;
+        ref.current!.retryCardModel();
+      },
+    }),
+    ref,
+  }));
+  flush();
+  assert.deepEqual(loads.map(load => load.url), ['/card.glb']);
+  assert.equal(decoders[0].workerLimit, 1);
+  const current = await resolveLoad(0);
+  assert.deepEqual(cardStatuses, ['loading', 'loading', 'ready']);
+  assert.deepEqual(current.disposed(), [0, 0, 0, 0]);
+  view.unmount();
+  assert.deepEqual(current.disposed(), [1, 1, 1, 1]);
+});
+
 test('pack replacement and Strict Mode cancel scheduled work and dispose late loads', async () => {
   const initial = props();
   const view = render(createElement(StrictMode, {}, createElement(Viewer, initial)));
@@ -363,10 +438,58 @@ test('throttled interaction skips early frames and releases the cap when draggin
   assert.equal(frames.size, 0);
 });
 
-test('adaptive interaction records slow-frame throttling and resumes uncapped rendering after release', async () => {
+test('interaction keeps its frame cap through snapback and releases it after orientation settles', async () => {
   const view = render(createElement(Viewer, props({
-    packModelUrl: undefined, unrestrictedMovement: true, interactionFrameRateMode: 'adaptive',
+    packModelUrl: undefined, unrestrictedMovement: true, snapBackOnRelease: true,
+    interactionFrameRateMode: 'throttled',
   })));
+  flush(); await resolveLoad(0); flush();
+  const renderer = renderers[0];
+  const canvas = view.container.querySelector('canvas')!;
+  pointer(canvas, 'pointerdown');
+  pointer(canvas, 'pointermove', { clientX: 250 });
+  flush(1);
+  const rotatedFrames = renderer.renders.length;
+  assert.ok(renderer.renders.at(-1)!.rotation.angleTo(new THREE.Quaternion()) > 0.1);
+  pointer(canvas, 'pointerup', { clientX: 250 });
+  flush(10);
+  assert.equal(renderer.renders.length, rotatedFrames);
+  for (let index = 0; index < 300 && renderer.renders.at(-1)!.rotation.angleTo(new THREE.Quaternion()) > 1e-8; index++) {
+    flush(34);
+  }
+  assert.ok(renderer.renders.at(-1)!.rotation.angleTo(new THREE.Quaternion()) < 1e-8);
+  assert.equal(frames.size, 1);
+  const settledFrames = renderer.renders.length;
+  flush(1);
+  assert.equal(renderer.renders.length, settledFrames + 1);
+  assert.equal(frames.size, 0);
+});
+
+test('tilt uses the same first step and bounded follow-up motion after a long frame delay', async () => {
+  const sampleTilt = async (firstDelay: number, nextDelay: number) => {
+    const view = render(createElement(Viewer, props({ packModelUrl: undefined })));
+    flush(); await resolveLoad(loads.length - 1); flush();
+    const renderer = renderers.at(-1)!;
+    pointer(view.container.querySelector('canvas')!, 'pointermove', { clientX: 300, clientY: 140 });
+    flush(firstDelay);
+    const first = renderer.renders.at(-1)!.rotation.clone();
+    flush(nextDelay);
+    const second = renderer.renders.at(-1)!.rotation.clone();
+    view.unmount();
+    return { first, second };
+  };
+  const ordinary = await sampleTilt(1_000 / 60, 1_000 / 30);
+  const delayed = await sampleTilt(1_000, 1_000);
+  assert.ok(ordinary.first.angleTo(new THREE.Quaternion()) > 0);
+  assert.ok(ordinary.first.angleTo(delayed.first) < 1e-6);
+  assert.ok(ordinary.second.angleTo(delayed.second) < 1e-6);
+});
+
+test('adaptive interaction records slow-frame throttling and resumes uncapped rendering after release', async () => {
+  const initial = props({
+    packModelUrl: undefined, unrestrictedMovement: true, interactionFrameRateMode: 'adaptive',
+  });
+  const view = render(createElement(Viewer, initial));
   flush(); await resolveLoad(0);
   for (let index = 0; index < 10; index++) flush();
   const renderer = renderers[0];
@@ -384,6 +507,18 @@ test('adaptive interaction records slow-frame throttling and resumes uncapped re
   pointer(canvas, 'pointerup', { clientX: 270 });
   flush(1);
   assert.equal(renderer.renders.length, count + 1);
+  view.rerender(createElement(Viewer, { ...initial, onStatusChange() {} }));
+  flush(); await resolveLoad(1); flush();
+  const replacement = renderers[1];
+  pointer(canvas, 'pointerdown');
+  pointer(canvas, 'pointermove', { clientX: 250 });
+  flush(1);
+  const replacementFrames = replacement.renders.length;
+  pointer(canvas, 'pointermove', { clientX: 260 });
+  flush(10);
+  assert.equal(replacement.renders.length, replacementFrames);
+  flush(24);
+  assert.equal(replacement.renders.length, replacementFrames + 1);
 });
 
 test('initial reveal remains latched while hit callbacks update without rebuilding the renderer', async () => {
