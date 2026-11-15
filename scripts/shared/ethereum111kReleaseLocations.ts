@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withMetadataLock } from '../ethereum-metadata/lock.ts';
+import { writeDurableFile } from './durableFile.ts';
 
 export type Ethereum111kReleaseScope = { chainId: number; deploymentId: string; contractAddress: string; metadataBaseUri: string };
 export type Ethereum111kReleaseLocation = Ethereum111kReleaseScope & { version: 1; directory: string; manifestSha256: string };
@@ -169,12 +170,8 @@ export async function record111kReleaseLocation(directory: string, expected: Eth
       assert.ok(absent, 'Another recorded release copy still exists; reconcile it before relocating');
     }
     const filename = registryPath(expected, options);
-    const temporary = `${filename}.${randomUUID()}.tmp`;
-    const handle = fs.openSync(temporary, 'wx', 0o600);
-    try { fs.writeFileSync(handle, serialized(current)); fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
-    fs.renameSync(temporary, filename);
-    const parent = fs.openSync(registry, 'r');
-    try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+    writeDurableFile({ filePath: filename, source: serialized(current), mode: 'replace',
+      verificationMessage: `Release location file verification failed: ${filename}` });
     return current;
   });
 }

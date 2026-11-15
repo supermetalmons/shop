@@ -71,6 +71,7 @@ import {
   parseSolanaRpcAccount,
   SolanaProviderError,
 } from './solanaProvider.js';
+import { translateSolanaProviderError } from './solanaProviderErrors.js';
 import {
   createSolanaReadProvider,
   SOLANA_READ_RETRY,
@@ -216,41 +217,26 @@ function translateProviderError(
   error: unknown,
   assetId?: string,
 ): ReceiptTransferError {
-  if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-  if (!(error instanceof SolanaProviderError)) {
-    return new ReceiptTransferError('unavailable', 'Receipt transfer provider is temporarily unavailable.');
-  }
-  if (error.kind === 'timeout') {
-    return new ReceiptTransferError('deadline-exceeded', 'Receipt transfer provider request timed out.');
-  }
-  if ((error.kind === 'network' || error.kind === 'body') && error.method?.endsWith('Rest')) {
-    return new ReceiptTransferError('unavailable', 'Receipt transfer provider returned an invalid response.');
-  }
-  if (error.kind === 'invalid-response') {
-    return new ReceiptTransferError('unavailable', 'Receipt transfer provider returned an invalid response.');
-  }
-  if (error.kind === 'rpc') {
-    return new ReceiptTransferError('unavailable', 'Receipt transfer provider is temporarily unavailable.', {
-      method: error.method,
-      ...(Number.isFinite(error.rpcCode) ? { upstreamCode: error.rpcCode } : {}),
-    });
-  }
-  if (error.kind === 'not-found') {
-    if (error.method === 'getAssetRest') {
-      return new ReceiptTransferError('not-found', 'Asset not found.');
-    }
-    if (error.method === 'getAssetProofRest') {
-      return new ReceiptTransferError('not-found', 'Asset proof not found');
-    }
-    if (error.resource === 'asset-proof') {
-      return new ReceiptTransferError('not-found', 'Asset proof not found', { assetId });
-    }
-    return new ReceiptTransferError(
-      'not-found',
-      'Asset not found. If you just transferred or minted it, wait a few seconds and try again.',
-    );
-  }
-  return new ReceiptTransferError('unavailable', 'Receipt transfer provider is temporarily unavailable.');
+  return translateSolanaProviderError(error, {
+    signal: context.signal,
+    providerName: 'Receipt transfer provider',
+    createError: (code, message, details) => new ReceiptTransferError(code, message, details),
+    notFound: (failure) => {
+      if (failure.method === 'getAssetRest') {
+        return new ReceiptTransferError('not-found', 'Asset not found.');
+      }
+      if (failure.method === 'getAssetProofRest') {
+        return new ReceiptTransferError('not-found', 'Asset proof not found');
+      }
+      if (failure.resource === 'asset-proof') {
+        return new ReceiptTransferError('not-found', 'Asset proof not found', { assetId });
+      }
+      return new ReceiptTransferError(
+        'not-found',
+        'Asset not found. If you just transferred or minted it, wait a few seconds and try again.',
+      );
+    },
+  });
 }
 
 async function rpcCall(

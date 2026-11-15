@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { link, open, readFile, rename, rm, type FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { writeDurableFile, type DurableFileIo } from './durableFile.ts';
 
-const DEFAULT_IO = { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync };
+const DEFAULT_IO = { existsSync, mkdirSync, readFileSync };
 
 export function writeDurableJsonJournal(args: {
   filePath: string;
@@ -11,7 +12,7 @@ export function writeDurableJsonJournal(args: {
   expectedSource?: string;
   changedMessage: string;
   verificationMessage: string;
-}, ioOverrides: Partial<typeof DEFAULT_IO> = {}): string {
+}, ioOverrides: Partial<DurableFileIo & typeof DEFAULT_IO> = {}): string {
   const io = { ...DEFAULT_IO, ...ioOverrides };
   const source = `${JSON.stringify(args.value, null, 2)}\n`;
   const directory = dirname(args.filePath);
@@ -20,19 +21,8 @@ export function writeDurableJsonJournal(args: {
     (!io.existsSync(args.filePath) || io.readFileSync(args.filePath, 'utf8') !== args.expectedSource)) {
     throw new Error(args.changedMessage);
   }
-  const temporary = `${args.filePath}.${randomUUID()}.tmp`;
-  const descriptor = io.openSync(temporary, 'wx', 0o600);
-  try {
-    try { io.writeFileSync(descriptor, source, 'utf8'); io.fsyncSync(descriptor); } finally { io.closeSync(descriptor); }
-    if (args.expectedSource === undefined) io.linkSync(temporary, args.filePath);
-    else io.renameSync(temporary, args.filePath);
-    const parent = io.openSync(directory, 'r');
-    try { io.fsyncSync(parent); } finally { io.closeSync(parent); }
-  } finally {
-    io.rmSync(temporary, { force: true });
-  }
-  if (io.readFileSync(args.filePath, 'utf8') !== source) throw new Error(args.verificationMessage);
-  return source;
+  return writeDurableFile({ filePath: args.filePath, source,
+    mode: args.expectedSource === undefined ? 'create' : 'replace', verificationMessage: args.verificationMessage }, io);
 }
 
 async function openJournalFile(path: string, flags: string, mode?: number): Promise<Pick<FileHandle, 'writeFile' | 'sync' | 'close'>> {

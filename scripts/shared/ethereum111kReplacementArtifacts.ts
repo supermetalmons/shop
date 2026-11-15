@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import { withMetadataLock } from '../ethereum-metadata/lock.ts';
 import { createAsyncD1MaintenanceQuery } from './asyncD1MaintenanceQuery.ts';
 import type { CommerceAuthorityQuery } from './commerceD1Maintenance.ts';
 import { inspect111kReleaseLocation, read111kReleaseLocation } from './ethereum111kReleaseLocations.ts';
+import { writeDurableFile } from './durableFile.ts';
 
 export type ReplacementArtifactScope = { deploymentId: string; chainId: number; contractAddress: string; metadataBaseUri: string };
 type Context = { oldDeployment: ReplacementArtifactScope; newDeployment: ReplacementArtifactScope; journalPath: string };
@@ -30,10 +31,8 @@ const serialized = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const inside = (filename: string, directory: string) => filename === directory || filename.startsWith(`${directory}${path.sep}`);
 
 function atomicWrite(filename: string, value: string, mode = 0o600) {
-  const temporary = `${filename}.${randomUUID()}.tmp`;
-  const handle = fs.openSync(temporary, 'wx', mode);
-  try { fs.writeFileSync(handle, value); fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
-  fs.renameSync(temporary, filename);
+  writeDurableFile({ filePath: filename, source: value, mode: 'replace', permissions: mode,
+    verificationMessage: `Replacement artifact file verification failed: ${filename}` });
 }
 
 function noSymlinks(filename: string, allowMissing = false): boolean {

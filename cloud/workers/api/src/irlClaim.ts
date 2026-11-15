@@ -79,6 +79,7 @@ import {
   parseSolanaRpcAccount,
   SolanaProviderError,
 } from './solanaProvider.js';
+import { translateSolanaProviderError } from './solanaProviderErrors.js';
 import {
   createSolanaReadProvider,
   SOLANA_READ_RETRY,
@@ -292,33 +293,16 @@ function translateProviderError(
   error: unknown,
   assetId?: string,
 ): IrlClaimError {
-  if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-  if (!(error instanceof SolanaProviderError)) {
-    return new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
-  }
-  if (error.kind === 'timeout') {
-    return new IrlClaimError('deadline-exceeded', 'Claim provider request timed out.');
-  }
-  if ((error.kind === 'network' || error.kind === 'body') && error.method?.endsWith('Rest')) {
-    return new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
-  }
-  if (error.kind === 'invalid-response') {
-    return new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
-  }
-  if (error.kind === 'rpc') {
-    return new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.', {
-      method: error.method,
-      ...(Number.isFinite(error.rpcCode) ? { upstreamCode: error.rpcCode } : {}),
-    });
-  }
-  if (error.kind === 'not-found') {
-    return new IrlClaimError(
+  return translateSolanaProviderError(error, {
+    signal: context.signal,
+    providerName: 'Claim provider',
+    createError: (code, message, details) => new IrlClaimError(code, message, details),
+    notFound: (failure) => new IrlClaimError(
       'not-found',
       'Asset proof not found',
-      error.resource === 'asset-proof' ? { assetId } : undefined,
-    );
-  }
-  return new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
+      failure.resource === 'asset-proof' ? { assetId } : undefined,
+    ),
+  });
 }
 
 async function rpcCall(

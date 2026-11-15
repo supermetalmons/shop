@@ -1,10 +1,6 @@
 import {
-  closeSync,
   existsSync,
-  fsyncSync,
-  linkSync,
   mkdirSync,
-  openSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -33,6 +29,7 @@ import { assertReceiptPoolRpcGenesisHash } from './shared/receiptPoolConfig.ts';
 import { normalizeAndValidateDropId, resolveDropAssetUrl } from './shared/deploymentRegistry.ts';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
 import { operationPathCandidates, prepareOperationPath, resolveOperationPath } from './shared/operationLocations.ts';
+import { writeDurableFile } from './shared/durableFile.ts';
 import {
   loadPreorderCollectionConfig,
   preparePreorderCollectionConfig,
@@ -129,11 +126,6 @@ async function validateHostedMetadata(config: PreparedPreorderCollectionConfig, 
   assertPreorderCollectionMetadata(config, await response.json());
 }
 
-function syncDirectory(directory: string): void {
-  const descriptor = openSync(directory, 'r');
-  try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
-}
-
 function writePublicRecord(filePath: string, record: unknown): void {
   const content = `${JSON.stringify(record, null, 2)}\n`;
   if (existsSync(filePath)) {
@@ -142,21 +134,8 @@ function writePublicRecord(filePath: string, record: unknown): void {
   }
   const directory = path.dirname(filePath);
   mkdirSync(directory, { recursive: true });
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
-  let descriptor: number | undefined;
-  try {
-    descriptor = openSync(temporaryPath, 'wx', 0o600);
-    writeFileSync(descriptor, content, 'utf8');
-    fsyncSync(descriptor);
-    closeSync(descriptor);
-    descriptor = undefined;
-    linkSync(temporaryPath, filePath);
-    syncDirectory(directory);
-    if (readFileSync(filePath, 'utf8') !== content) throw new Error(`Preorder deployment file verification failed: ${filePath}`);
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
-    rmSync(temporaryPath, { force: true });
-  }
+  writeDurableFile({ filePath, source: content, mode: 'create',
+    verificationMessage: `Preorder deployment file verification failed: ${filePath}` });
 }
 
 function acquireLock(lockPath: string): () => void {

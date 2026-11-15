@@ -36,6 +36,10 @@ test('custom release locations are scoped, canonical, and resolved without scann
   assert.deepEqual(await resolve111kReleaseLocation(scope, f.options), recorded);
   assert.deepEqual(await record111kReleaseLocation(logical, scope, f.options), recorded);
   assert.deepEqual(read111kReleaseLocation(scope, f.options), recorded);
+  const filename = path.join(f.options.repositoryRoot, '.operations/111k-release-locations/v16.json');
+  assert.equal(fs.readFileSync(filename, 'utf8'), `${JSON.stringify(recorded, null, 2)}\n`);
+  assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(path.dirname(filename)), ['v16.json']);
 });
 
 test('legacy known locations are indexed after their manifest is verified', async t => {

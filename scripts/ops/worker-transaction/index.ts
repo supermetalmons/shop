@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
@@ -9,6 +9,7 @@ import { PublicKey, TransactionInstruction, VersionedTransaction, type Connectio
 import bs58 from 'bs58';
 import { createScriptSolanaConnection } from '../../shared/solanaRpcEnvironment.ts';
 import { operationPathCandidates, prepareOperationPath, resolveOperationPath } from '../../shared/operationLocations.ts';
+import { writeDurableFile } from '../../shared/durableFile.ts';
 import { createWorkerVersionClient, type WorkerSnapshot, type TemporaryWorkerVersion, type SourceRestoration } from './cloudflare.ts';
 import { assertSignedTransaction, buildTransaction } from './transaction.ts';
 
@@ -80,12 +81,8 @@ function operationIntent(operation: WorkerTransactionOperation) {
 
 function save(file: string, value: unknown): void {
   mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  const handle = openSync(temporary, 'w', 0o600);
-  try { writeFileSync(handle, `${JSON.stringify(value, null, 2)}\n`); fsyncSync(handle); } finally { closeSync(handle); }
-  renameSync(temporary, file);
-  const directory = openSync(path.dirname(file), 'r');
-  try { fsyncSync(directory); } finally { closeSync(directory); }
+  writeDurableFile({ filePath: file, source: `${JSON.stringify(value, null, 2)}\n`, mode: 'replace',
+    verificationMessage: `Worker transaction file verification failed: ${file}` });
 }
 
 function cloudflareToken(root: string): string {

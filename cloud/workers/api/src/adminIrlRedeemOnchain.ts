@@ -8,7 +8,6 @@ import type { DasAsset } from '../../../../shared/dasAsset.js';
 import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../shared/heliusDas.js';
 import { AdminIrlRedeemPrepareError } from './adminIrlRedeemErrors.js';
 import type { AdminIrlRedeemRuntime } from './adminIrlRedeemRuntime.js';
-import { isSignalCancellationError } from './boundedRequest.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import { isRecord } from './dataAccess.js';
 import {
@@ -22,6 +21,7 @@ import {
   parseSolanaRpcAccount,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import { translateSolanaProviderError } from './solanaProviderErrors.js';
 import { readLatestBlockhash, readSolanaLookupTable } from './solanaRpcReads.js';
 
 export { buildRuntime } from './adminIrlRedeemRuntime.js';
@@ -76,41 +76,26 @@ function translateProviderError(
   error: unknown,
   assetId?: string,
 ): AdminIrlRedeemPrepareError {
-  if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-  if (!(error instanceof SolanaProviderError)) {
-    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
-  }
-  if (error.kind === 'timeout') {
-    return new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem provider request timed out.');
-  }
-  if ((error.kind === 'network' || error.kind === 'body') && error.method?.endsWith('Rest')) {
-    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
-  }
-  if (error.kind === 'invalid-response') {
-    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
-  }
-  if (error.kind === 'rpc') {
-    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.', {
-      method: error.method,
-      ...(Number.isFinite(error.rpcCode) ? { upstreamCode: error.rpcCode } : {}),
-    });
-  }
-  if (error.kind === 'not-found') {
-    if (error.method === 'getAssetRest') {
-      return new AdminIrlRedeemPrepareError('not-found', 'Asset not found.');
-    }
-    if (error.method === 'getAssetProofRest') {
-      return new AdminIrlRedeemPrepareError('not-found', 'Asset proof not found');
-    }
-    if (error.resource === 'asset-proof') {
-      return new AdminIrlRedeemPrepareError('not-found', 'Asset proof not found', { assetId });
-    }
-    return new AdminIrlRedeemPrepareError(
-      'not-found',
-      'Asset not found. If you just transferred or minted it, wait a few seconds and try again.',
-    );
-  }
-  return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
+  return translateSolanaProviderError(error, {
+    signal: context.signal,
+    providerName: 'Admin IRL redeem provider',
+    createError: (code, message, details) => new AdminIrlRedeemPrepareError(code, message, details),
+    notFound: (failure) => {
+      if (failure.method === 'getAssetRest') {
+        return new AdminIrlRedeemPrepareError('not-found', 'Asset not found.');
+      }
+      if (failure.method === 'getAssetProofRest') {
+        return new AdminIrlRedeemPrepareError('not-found', 'Asset proof not found');
+      }
+      if (failure.resource === 'asset-proof') {
+        return new AdminIrlRedeemPrepareError('not-found', 'Asset proof not found', { assetId });
+      }
+      return new AdminIrlRedeemPrepareError(
+        'not-found',
+        'Asset not found. If you just transferred or minted it, wait a few seconds and try again.',
+      );
+    },
+  });
 }
 
 export async function rpcCall(

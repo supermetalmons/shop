@@ -339,6 +339,8 @@ test('preorder deployment persists public finalized information and signs creati
   assert.equal(result.deployedAt, FIXED_DATE.toISOString());
   assert.equal(result.finalizedSlot, f.state.finalizedSlot);
   assert.deepEqual(readJson(f.recordPath), result);
+  assert.equal(readFileSync(f.recordPath, 'utf8'), `${JSON.stringify(result, null, 2)}\n`);
+  assert.equal(statSync(f.recordPath).mode & 0o777, 0o600);
   assert.equal(f.state.sends, 1);
   assert.equal(f.state.confirmations, 1);
   assert.equal(f.state.prompts, 1);

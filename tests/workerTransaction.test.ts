@@ -130,6 +130,11 @@ test('explicit write freezes one message, journals it before broadcast and saves
   assert.equal(receipt.signature, f.state.signature); assert.equal(receipt.finalizedSlot, 110);
   assert.equal(receipt.feeLamports, 5000); assert.equal(receipt.worker.absent, true);
   assert.equal(f.journal().cleanup?.productionUnchanged, true);
+  for (const filename of [f.receiptPath, f.journalPath]) {
+    const source = readFileSync(filename, 'utf8');
+    assert.equal(source, `${JSON.stringify(JSON.parse(source), null, 2)}\n`);
+    assert.equal(statSync(filename).mode & 0o777, 0o600);
+  }
   assert.equal(existsSync(f.lockPath), false);
   assert.equal(existsSync(f.lockPath.replace('/.operations/', '/.cache/')), false);
   assert.equal(statSync(path.join(f.root, '.operations')).mode & 0o777, 0o700);

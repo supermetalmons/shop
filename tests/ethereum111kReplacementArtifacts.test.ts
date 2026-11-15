@@ -74,10 +74,22 @@ function fixture(t: { after: (callback: () => void) => void }, queryRetiredDeplo
 test('replacement artifact planning is scoped and application removes only approved old evidence', async t => {
   const f = fixture(t);
   const before = fs.readFileSync(f.signedJournal);
+  const document = path.join(f.repositoryRoot, 'README.md');
+  fs.chmodSync(document, 0o640);
   const planned = await f.run();
   assert.equal(planned.planned, true);
   assert.equal(planned.complete, false);
   assert.equal(planned.targets, 4);
+  const plan = JSON.parse(fs.readFileSync(planned.planPath, 'utf8')) as {
+    artifacts: Array<{ index: string; sha256: string }>;
+    documents: Array<{ path: string; after: string }>;
+  };
+  assert.equal(fs.statSync(planned.planPath).mode & 0o777, 0o600);
+  for (const artifact of plan.artifacts) {
+    const filename = path.join(f.releaseDirectory, artifact.index);
+    assert.equal(createHash('sha256').update(fs.readFileSync(filename)).digest('hex'), artifact.sha256);
+    assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
+  }
   assert.ok(fs.existsSync(path.join(f.repositoryRoot, 'releases/111k-sepolia-v16/deployment.json')));
   const complete = await f.run(true);
   assert.equal(complete.complete, true);
@@ -87,6 +99,9 @@ test('replacement artifact planning is scoped and application removes only appro
   for (const file of [f.newMetadata, f.mainnet, f.newBackup, f.unrelated]) assert.ok(fs.existsSync(file));
   assert.match(fs.readFileSync(path.join(f.repositoryRoot, 'README.md'), 'utf8'),
     /https:\/\/github\.com\/supermetalmons\/shop\/blob\/[0-9a-f]{40}\/releases\/111k-sepolia-v16\/README.md/);
+  assert.equal(fs.statSync(document).mode & 0o777, 0o640 & ~process.umask());
+  assert.equal(createHash('sha256').update(fs.readFileSync(document)).digest('hex'),
+    plan.documents.find(change => change.path === 'README.md')?.after);
   assert.equal(fs.readdirSync(f.releaseDirectory).filter(name => name.endsWith('.jsonl')).length, 0);
   assert.equal((await f.run(true)).complete, true);
 });

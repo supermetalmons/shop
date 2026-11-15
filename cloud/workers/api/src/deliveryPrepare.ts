@@ -69,6 +69,7 @@ import {
   parseSolanaRpcAccount,
   SolanaProviderError,
 } from './solanaProvider.js';
+import { translateSolanaProviderError } from './solanaProviderErrors.js';
 import {
   createSolanaReadProvider,
   SOLANA_TRANSIENT_RPC_READ_RETRY,
@@ -274,29 +275,14 @@ function translateProviderError(
   context: ProviderContext,
   error: unknown,
 ): DeliveryPrepareError {
-  if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-  if (!(error instanceof SolanaProviderError)) {
-    return new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
-  }
-  if (error.kind === 'timeout') {
-    return new DeliveryPrepareError('deadline-exceeded', 'Delivery provider request timed out.');
-  }
-  if ((error.kind === 'network' || error.kind === 'body') && error.method?.endsWith('Rest')) {
-    return new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
-  }
-  if (error.kind === 'invalid-response') {
-    return new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
-  }
-  if (error.kind === 'rpc') {
-    return new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.', {
-      method: error.method,
-      ...(Number.isFinite(error.rpcCode) ? { upstreamCode: error.rpcCode } : {}),
-    });
-  }
-  if (error.kind === 'not-found' && error.resource === 'asset') {
-    return new DeliveryPrepareError('not-found', 'Asset not found.');
-  }
-  return new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
+  return translateSolanaProviderError(error, {
+    signal: context.signal,
+    providerName: 'Delivery provider',
+    createError: (code, message, details) => new DeliveryPrepareError(code, message, details),
+    notFound: (failure) => failure.resource === 'asset'
+      ? new DeliveryPrepareError('not-found', 'Asset not found.')
+      : undefined,
+  });
 }
 
 async function rpcCall(
