@@ -133,8 +133,13 @@ test('native owner enrichment recovers failures and schedules work without block
             sql.exec("INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES(?,?,'111112',?)", origin.category, origin.assetId, slot);
           }
         });
-        store.freeze(await current(this.env), ${JSON.stringify(observation)},
-          [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, i) => String(i+1)) }], Date.now());
+        const deployment = await current(this.env);
+        const observation = ${JSON.stringify(observation)};
+        const now = Date.now();
+        if (!store.acceptVerified(deployment, observation.transactionHash, {
+          status: 'confirmed', observation, confirmations: 1000 - observation.blockNumber + 1,
+          crates: [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, i) => String(i+1)) }],
+        }, now, now)) throw new Error('Confirmed fixture seed was not accepted');
         for (const row of sql.exec('SELECT token_id,metadata_json FROM assignments').toArray()) {
           await bucket.put(prefix+row.token_id+'.json', row.metadata_json,
             { httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' } });
