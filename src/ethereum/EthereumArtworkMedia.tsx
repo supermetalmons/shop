@@ -1,6 +1,8 @@
 import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { EthereumInventoryItem } from '../../shared/ethereum/protocol';
 import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
+import { useNearViewport } from '../hooks/useNearViewport';
+import { useReducedMotion } from '../hooks/useReducedMotion';
 import { ethereumInventoryView } from './state';
 import { isEthereumGifUrl } from './artworkMedia';
 
@@ -25,9 +27,8 @@ export function EthereumArtworkMedia({ item, viewer = false, fullscreen = false,
   const maximumWidth = item.aspectRatio ? '' : dimensions ? `${dimensions.width}px, ` : '';
   const root = useRef<HTMLSpanElement>(null);
   const video = useRef<HTMLVideoElement>(null);
-  const [active, setActive] = useState(viewer);
-  const [reducedMotion, setReducedMotion] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true);
+  const active = useNearViewport(root, { alwaysActive: viewer });
+  const reducedMotion = useReducedMotion();
   const [failedVideo, setFailedVideo] = useState<string | null>(null);
   const [readyVideo, setReadyVideo] = useState<string | null>(null);
   const [failedImage, setFailedImage] = useState<string | null>(null);
@@ -45,20 +46,6 @@ export function EthereumArtworkMedia({ item, viewer = false, fullscreen = false,
   const modelSession = useMemo(() => ({}), [modelKey]);
   const showModel = Boolean(model && failedModel !== modelSession);
   const modelReady = showModel && readyModel === modelSession;
-  useEffect(() => {
-    const preference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-    if (!preference) return;
-    const update = () => setReducedMotion(preference.matches);
-    update();
-    preference.addEventListener('change', update);
-    return () => preference.removeEventListener('change', update);
-  }, []);
-  useEffect(() => {
-    if (viewer || !root.current || typeof IntersectionObserver === 'undefined') { setActive(true); return; }
-    const observer = new IntersectionObserver(([entry]) => setActive(Boolean(entry?.isIntersecting)), { rootMargin: '160px' });
-    observer.observe(root.current);
-    return () => observer.disconnect();
-  }, [viewer]);
   useEffect(() => {
     const media = video.current;
     if (!media) return;

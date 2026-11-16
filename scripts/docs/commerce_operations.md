@@ -31,10 +31,10 @@ generations and overlapping claims, and retries reuse an existing box assignment
 ```sh
 npm run check:commerce-ready
 npm run dude-inventory-control -- status
-npm run notification-outbox-control -- status
-npm run stripe-checkout-state-control -- status
-npm run pack-status-outbox-control -- status
-npm run delivery-recovery-state-control -- status
+npm run notification-outbox-control -- summary
+npm run stripe-checkout-state-control -- summary
+npm run pack-status-outbox-control -- summary
+npm run delivery-recovery-state-control -- summary
 npm run commerce-authority-control -- status
 npm run check:queue-backlogs
 ```
@@ -68,7 +68,17 @@ State-control commands are read-only inspectors; their old `prepare` and
 `activate` commands have been retired. Inventory preparation remains available
 for new drops.
 
-Status includes validation errors, pending ages, failure reasons, and processing
+Notification, checkout, pack-status, and delivery-recovery inspectors accept
+`summary`, `validate`, and `status`. Use `summary` for routine inspection: it reads
+control state and SQL aggregates without fetching business-record pages, and
+reports `validation: "not_run"`. Aggregate database work still grows with the
+records being summarized. `validate` performs the existing row and parent checks
+and reports `validation: "passed"` or `"failed"`; `validationError` retains the
+diagnostic. Existing `status` commands keep their full validation and output shape.
+Validation scans use the shared final-key and cursor guards, with pages of 25
+rows or five delivery-recovery rows to preserve payload-size bounds.
+
+Inspection includes pending ages, failure reasons, and processing
 leases. It does not send emails or contact payment or chain providers. Inventory
 status checks ownership documents and reports configuration matches, stock
 counts, and orphan reservations; the integrity check also validates availability.

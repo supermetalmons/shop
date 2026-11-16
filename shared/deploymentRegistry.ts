@@ -310,6 +310,32 @@ export type ReceiptPoolDeployment = {
   receiptsTreeCanopyDepth: number;
 };
 
+type ReceiptPoolDeploymentFieldSpecs = {
+  readonly [Field in keyof ReceiptPoolDeployment]-?: {
+    readonly required: {} extends Pick<ReceiptPoolDeployment, Field>
+      ? false
+      : true;
+  } & (ReceiptPoolDeployment[Field] extends number
+    ? { readonly kind: 'integer'; readonly min: number; readonly max: number }
+    : { readonly kind: 'string' });
+};
+
+export const RECEIPT_POOL_DEPLOYMENT_FIELDS = {
+  solanaCluster: { required: true, kind: 'string' },
+  receiptPoolId: { required: true, kind: 'string' },
+  collectionMint: { required: true, kind: 'string' },
+  receiptsMerkleTree: { required: true, kind: 'string' },
+  authority: { required: true, kind: 'string' },
+  collectionMetadataUri: { required: true, kind: 'string' },
+  collectionName: { required: true, kind: 'string' },
+  collectionSymbol: { required: true, kind: 'string' },
+  royaltiesBasisPoints: { required: true, kind: 'integer', min: 0, max: 10_000 },
+  royaltiesRecipient: { required: true, kind: 'string' },
+  receiptsTreeMaxDepth: { required: true, kind: 'integer', min: 1, max: 30 },
+  receiptsTreeMaxBufferSize: { required: true, kind: 'integer', min: 1, max: 2048 },
+  receiptsTreeCanopyDepth: { required: true, kind: 'integer', min: 0, max: 29 },
+} as const satisfies ReceiptPoolDeploymentFieldSpecs;
+
 export type ReceiptPoolDeploymentsMap = Record<
   string,
   ReceiptPoolDeployment

@@ -26,6 +26,7 @@ import {
 import {
   clonePaymentRoutingConfig,
   DEPLOYMENT_REGISTRY_DROP_FIELDS,
+  RECEIPT_POOL_DEPLOYMENT_FIELDS,
   normalizeAndValidatePaymentRouting,
   type BoxMinterConfigTombstone,
   type DeploymentRegistryDrop,
@@ -341,6 +342,9 @@ const DEPLOYMENT_REGISTRY_REQUIRED_DROP_KEYS = Object.entries(
   .filter(([, descriptor]) => descriptor.required)
   .map(([field]) => field);
 
+const RECEIPT_POOL_FIELD_ENTRIES = Object.entries(RECEIPT_POOL_DEPLOYMENT_FIELDS);
+const RECEIPT_POOL_KEYS = new Set(Object.keys(RECEIPT_POOL_DEPLOYMENT_FIELDS));
+
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
@@ -393,25 +397,10 @@ export function assertValidReceiptPoolDeployment(args: {
   }
   if (!isPlainRecord(args.value)) return invalid('expected an object');
   const row = args.value;
-  const allowed = new Set([
-    'solanaCluster',
-    'receiptPoolId',
-    'collectionMint',
-    'receiptsMerkleTree',
-    'authority',
-    'collectionMetadataUri',
-    'collectionName',
-    'collectionSymbol',
-    'royaltiesBasisPoints',
-    'royaltiesRecipient',
-    'receiptsTreeMaxDepth',
-    'receiptsTreeMaxBufferSize',
-    'receiptsTreeCanopyDepth',
-  ]);
-  const unknown = Object.keys(row).find((key) => !allowed.has(key));
+  const unknown = Object.keys(row).find((key) => !RECEIPT_POOL_KEYS.has(key));
   if (unknown) invalid(`unknown field ${unknown}`);
-  for (const field of allowed) {
-    if (!Object.prototype.hasOwnProperty.call(row, field)) {
+  for (const [field, descriptor] of RECEIPT_POOL_FIELD_ENTRIES) {
+    if (descriptor.required && !Object.prototype.hasOwnProperty.call(row, field)) {
       invalid(`${field} is required`);
     }
   }
@@ -456,26 +445,18 @@ export function assertValidReceiptPoolDeployment(args: {
   if (args.registryKey !== `${cluster}:${receiptPoolId}`) {
     invalid('registry key must equal solanaCluster:receiptPoolId');
   }
-  for (const field of [
-    'collectionMint',
-    'receiptsMerkleTree',
-    'authority',
-    'collectionMetadataUri',
-    'collectionName',
-    'collectionSymbol',
-    'royaltiesRecipient',
-  ]) {
-    requireString(field);
+  for (const [field, descriptor] of RECEIPT_POOL_FIELD_ENTRIES) {
+    if (descriptor.kind === 'string' && field !== 'solanaCluster' && field !== 'receiptPoolId') {
+      requireString(field);
+    }
   }
-  requireInteger('royaltiesBasisPoints', 0, 10_000);
-  const maxDepth = requireInteger('receiptsTreeMaxDepth', 1, 30);
-  requireInteger('receiptsTreeMaxBufferSize', 1, 2048);
-  const canopyDepth = requireInteger(
-    'receiptsTreeCanopyDepth',
-    0,
-    29,
-  );
-  if (canopyDepth >= maxDepth) {
+  const integers: Record<string, number> = {};
+  for (const [field, descriptor] of RECEIPT_POOL_FIELD_ENTRIES) {
+    if (descriptor.kind === 'integer') {
+      integers[field] = requireInteger(field, descriptor.min, descriptor.max);
+    }
+  }
+  if (integers.receiptsTreeCanopyDepth >= integers.receiptsTreeMaxDepth) {
     invalid('receiptsTreeCanopyDepth must be smaller than max depth');
   }
 }

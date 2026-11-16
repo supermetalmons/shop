@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import ts from 'typescript';
 import {
   deploymentTreasuryAlias,
+  RECEIPT_POOL_DEPLOYMENT_FIELDS,
   type BoxMinterConfigTombstone,
   type ReceiptPoolDeployment,
 } from '../../shared/deploymentRegistry.ts';
@@ -385,19 +386,10 @@ function renderReceiptPoolDeploymentEntry(
 ): string {
   return [
     `  ${tsPropertyName(registryKey)}: {`,
-    `    solanaCluster: ${tsStringLiteral(pool.solanaCluster)},`,
-    `    receiptPoolId: ${tsStringLiteral(pool.receiptPoolId)},`,
-    `    collectionMint: ${tsStringLiteral(pool.collectionMint)},`,
-    `    receiptsMerkleTree: ${tsStringLiteral(pool.receiptsMerkleTree)},`,
-    `    authority: ${tsStringLiteral(pool.authority)},`,
-    `    collectionMetadataUri: ${tsStringLiteral(pool.collectionMetadataUri)},`,
-    `    collectionName: ${tsStringLiteral(pool.collectionName)},`,
-    `    collectionSymbol: ${tsStringLiteral(pool.collectionSymbol)},`,
-    `    royaltiesBasisPoints: ${Math.floor(pool.royaltiesBasisPoints)},`,
-    `    royaltiesRecipient: ${tsStringLiteral(pool.royaltiesRecipient)},`,
-    `    receiptsTreeMaxDepth: ${Math.floor(pool.receiptsTreeMaxDepth)},`,
-    `    receiptsTreeMaxBufferSize: ${Math.floor(pool.receiptsTreeMaxBufferSize)},`,
-    `    receiptsTreeCanopyDepth: ${Math.floor(pool.receiptsTreeCanopyDepth)},`,
+    ...Object.keys(RECEIPT_POOL_DEPLOYMENT_FIELDS).map((field) => {
+      const value = pool[field as keyof ReceiptPoolDeployment];
+      return `    ${field}: ${typeof value === 'string' ? tsStringLiteral(value) : Math.floor(value)},`;
+    }),
     '  },',
   ].join('\n');
 }

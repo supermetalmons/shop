@@ -21,11 +21,28 @@ function fixture(t: test.TestContext, count = 1, marker = false) {
   return { harness, query: commerceTestQuery(harness.database) };
 }
 
-test('pack-status inspection accepts only read-only status', () => {
-  assert.deepEqual(parsePackStatusOutboxControlArgs(['status']), { command: 'status' });
+test('pack-status inspection accepts read-only inspection modes', () => {
+  for (const command of ['status', 'summary', 'validate']) {
+    assert.deepEqual(parsePackStatusOutboxControlArgs([command]), { command });
+  }
   for (const args of [[], ['prepare'], ['activate'], ['status', '--write'], ['status', '--expected-revision', '2']]) {
     assert.throws(() => parsePackStatusOutboxControlArgs(args), /read-only/);
   }
+});
+
+test('pack-status summary skips row validation while explicit validation preserves status results', async (t) => {
+  const { harness, query } = fixture(t);
+  seedPackStatusOutbox(harness, record(1));
+  const summary = await runPackStatusOutboxControl(['summary'], { query: async (sql) => {
+    assert.match(sql, /^SELECT/);
+    assert.doesNotMatch(sql, /outbox\.\*|__audit_key_bytes|SELECT document_path/);
+    return query(sql);
+  } });
+  assert.equal(summary.validation, 'not_run');
+  assert.equal(summary.projectionCount, 1);
+  const { validation, ...validated } = await runPackStatusOutboxControl(['validate'], { query });
+  assert.equal(validation, 'passed');
+  assert.deepEqual(validated, await runPackStatusOutboxControl(['status'], { query }));
 });
 
 test('uninitialized pack-status reports readiness and never imports markers', async (t) => {

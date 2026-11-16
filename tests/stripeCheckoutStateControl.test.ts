@@ -23,8 +23,10 @@ function seed(harness: CommerceD1Harness, id: string, data: Record<string, unkno
   });
 }
 
-test('checkout control exposes only read-only status and rejects retired writes before querying', async () => {
-  assert.deepEqual(parseStripeCheckoutStateControlArgs(['status']), { command: 'status' });
+test('checkout control exposes read-only inspection modes and rejects retired writes before querying', async () => {
+  for (const command of ['status', 'summary', 'validate']) {
+    assert.deepEqual(parseStripeCheckoutStateControlArgs([command]), { command });
+  }
   for (const args of [[], ['prepare'], ['activate', '--write', '--expected-revision', '2', '--worker-deployed'],
     ['status', '--write'], ['status', '--expected-revision', '2']]) {
     assert.throws(() => parseStripeCheckoutStateControlArgs(args), /read-only/);
@@ -32,6 +34,22 @@ test('checkout control exposes only read-only status and rejects retired writes 
       query: () => { assert.fail('Invalid commands must not access the database.'); },
     }), /read-only/);
   }
+});
+
+test('checkout summary counts source records without fetching state pages or asserting validation', async (context) => {
+  const harness = currentHarness(context);
+  seed(harness, 'cs_1');
+  const query = commerceTestQuery(harness.database);
+  const summary = await runStripeCheckoutStateControl(['summary'], { query: async (sql) => {
+    assert.match(sql, /^SELECT/);
+    assert.doesNotMatch(sql, /checkout\.\*|__audit_key_bytes/);
+    return query(sql);
+  } });
+  assert.equal(summary.validation, 'not_run');
+  assert.equal(summary.checkoutCount, 1);
+  const { validation, ...validated } = await runStripeCheckoutStateControl(['validate'], { query });
+  assert.equal(validation, 'passed');
+  assert.deepEqual(validated, await runStripeCheckoutStateControl(['status'], { query }));
 });
 
 test('checkout status reports uninitialized storage without migrating it', async (context) => {

@@ -5,7 +5,7 @@ import { Keypair, PublicKey, TransactionMessage, VersionedTransaction } from '@s
 import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts';
-import { isRetryableStripeCheckoutFulfillmentError, runStripeCheckoutFulfillmentWithRetry } from '../src/stripeCheckout/service.ts';
+import { isRetryableStripeCheckoutFulfillmentError, runStripeCheckoutFulfillmentWithRetry } from '../src/stripeCheckout/retryPolicy.ts';
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';

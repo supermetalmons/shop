@@ -1218,8 +1218,8 @@ test('receipt pool relations bind pooled drops to one cluster-scoped identity', 
   }
 });
 
-test('canonical receipt pool renderer round-trips cluster-scoped rows', async () => {
-  const pool: ReceiptPoolDeployment = {
+function receiptPoolFixture(): ReceiptPoolDeployment {
+  return {
     solanaCluster: 'devnet',
     receiptPoolId: 'mons_shop_receipts',
     collectionMint: 'Collection33333333333333333333333333333333',
@@ -1236,12 +1236,72 @@ test('canonical receipt pool renderer round-trips cluster-scoped rows', async ()
     receiptsTreeMaxBufferSize: 64,
     receiptsTreeCanopyDepth: 8,
   };
+}
+
+test('receipt pool rendering rejects invalid scalar fields and preserves numeric boundaries', () => {
+  const pool = receiptPoolFixture();
+  const baseSource = renderDeploymentRegistryFile({ drops: {} });
+  const render = (value: Record<string, unknown>) => renderReceiptPoolDeploymentsFileFromSource({
+    filePath: fileURLToPath(CANONICAL_SOURCE_URL),
+    existingContent: baseSource,
+    receiptPools: { 'devnet:mons_shop_receipts': value as ReceiptPoolDeployment },
+  });
+  assert.throws(() => render({ ...pool, unexpected: true }), /unknown field unexpected/);
+  for (const [field, value] of Object.entries(pool)) {
+    const missing: Record<string, unknown> = { ...pool };
+    delete missing[field];
+    assert.throws(() => render(missing), new RegExp(`${field} is required`));
+    if (typeof value === 'string') {
+      for (const invalid of ['', ` ${value}`, 123]) {
+        assert.throws(() => render({ ...pool, [field]: invalid }),
+          new RegExp(`${field} must be a non-empty trimmed string`));
+      }
+    }
+  }
+  const numericBoundaries = [
+    ['royaltiesBasisPoints', 0, 10_000],
+    ['receiptsTreeMaxDepth', 1, 30],
+    ['receiptsTreeMaxBufferSize', 1, 2048],
+    ['receiptsTreeCanopyDepth', 0, 29],
+  ] as const;
+  for (const [field, min, max] of numericBoundaries) {
+    const base = { ...pool, receiptsTreeMaxDepth: 30, receiptsTreeCanopyDepth: 0 };
+    for (const valid of [min, max]) assert.doesNotThrow(() => render({ ...base, [field]: valid }));
+    for (const invalid of [min - 1, max + 1, 1.5, NaN, Infinity, String(min)]) {
+      assert.throws(() => render({ ...base, [field]: invalid }),
+        new RegExp(`${field} has an invalid integer value`));
+    }
+  }
+  assert.throws(() => render({ ...pool, solanaCluster: 'unsupported' }), /solanaCluster is unsupported/);
+  assert.throws(() => render({ ...pool, receiptPoolId: 'MONS_SHOP_RECEIPTS' }), /receiptPoolId must be normalized/);
+  assert.throws(() => render({ ...pool, receiptPoolId: 'other_pool' }), /registry key must equal/);
+  assert.throws(() => render({ ...pool, receiptsTreeCanopyDepth: pool.receiptsTreeMaxDepth }),
+    /receiptsTreeCanopyDepth must be smaller than max depth/);
+});
+
+test('canonical receipt pool renderer round-trips cluster-scoped rows', async () => {
+  const pool = receiptPoolFixture();
   const baseSource = renderDeploymentRegistryFile({ drops: {} });
   const source = renderReceiptPoolDeploymentsFileFromSource({
     filePath: fileURLToPath(CANONICAL_SOURCE_URL),
     existingContent: baseSource,
     receiptPools: { 'devnet:mons_shop_receipts': pool },
   });
+  assert.ok(source.includes(`  'devnet:mons_shop_receipts': {
+    solanaCluster: 'devnet',
+    receiptPoolId: 'mons_shop_receipts',
+    collectionMint: 'Collection33333333333333333333333333333333',
+    receiptsMerkleTree: 'Tree333333333333333333333333333333333333',
+    authority: 'Authority333333333333333333333333333333333',
+    collectionMetadataUri: 'https://assets.example.com/receipts/collection.json',
+    collectionName: 'mons shop receipts',
+    collectionSymbol: 'receipts',
+    royaltiesBasisPoints: 500,
+    royaltiesRecipient: 'Treasury33333333333333333333333333333333',
+    receiptsTreeMaxDepth: 14,
+    receiptsTreeMaxBufferSize: 64,
+    receiptsTreeCanopyDepth: 8,
+  },`));
   await withTempCanonical(source, async (filePath) => {
     const registry = await readDeploymentDropRegistry(filePath);
     assert.deepEqual(

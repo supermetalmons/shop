@@ -42,6 +42,7 @@ import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddres
 import { decodePreorderAssetAccount } from './preorderTransaction.js';
 import { listPreorderInventoryAssets, listRecentPreorderInventoryAssets } from './preorderStore.js';
 import { MAX_INVENTORY_SERIALIZED_ITEM_BYTES } from './inventoryLimits.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 import {
   PUBLIC_RATE_LIMITS,
   applyPublicCors,
@@ -142,20 +143,6 @@ async function parseShopRequestBody<T extends ShopInventoryRequest | ShopPending
   } : {});
   if (!isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
   return value;
-}
-
-async function mapConcurrent<T, R>(items: readonly T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function parseSearchAssetsResult(value: unknown): { raw: unknown; items: DasAsset[] } {
@@ -345,15 +332,15 @@ async function fetchInventoryCollections(
   owner: string,
   scopes: readonly ShopInventoryCollectionScope[],
 ): Promise<Map<string, ShopInventoryItem>> {
-  const grouped = await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
-    fetchGroupedInventoryScope(context, owner, scope));
+  const grouped = await mapWithConcurrency(scopes, PROVIDER_CONCURRENCY, (scope) =>
+    fetchGroupedInventoryScope(context, owner, scope), { signal: context.signal, failureMode: 'fail-fast' });
   const fallbackClusters = Array.from(new Set(
     grouped.filter((entry) => entry.needsFallback).map((entry) => entry.scope.solanaCluster),
   ));
-  const fallbackRows = await mapConcurrent(fallbackClusters, PROVIDER_CONCURRENCY, async (cluster) => ({
+  const fallbackRows = await mapWithConcurrency(fallbackClusters, PROVIDER_CONCURRENCY, async (cluster) => ({
     cluster,
     items: await fetchUngroupedInventory(context, owner, cluster, new Set(scopes.filter((scope) => scope.solanaCluster === cluster).map((scope) => scope.collectionMint))),
-  }));
+  }), { signal: context.signal, failureMode: 'fail-fast' });
   const itemsById = new Map<string, ShopInventoryItem>();
   for (const result of grouped) {
     for (const item of result.items) itemsById.set(item.id, item);
@@ -693,7 +680,7 @@ async function mergeExpectedInventoryItems(
   if (groups.length === 0) return;
   const recoveryScope = createAttemptScope(context.signal, context.dependencies.expectedAssetRecoveryTimeoutMs);
   try {
-    const rows = await mapConcurrent(groups, PROVIDER_CONCURRENCY, async ({ cluster, ids }) => {
+    const rows = await mapWithConcurrency(groups, PROVIDER_CONCURRENCY, async ({ cluster, ids }) => {
       const recovery = await fetchExpectedAssetGroup(context, cluster, ids, recoveryScope.signal);
       context.metrics.expectedAssetRecoveryFailures += recovery.failures;
       const items: ShopInventoryItem[] = [];
@@ -702,7 +689,7 @@ async function mergeExpectedInventoryItems(
         if (item) items.push(item);
       }
       return { items, rawAssets: recovery.assetsById.size };
-    });
+    }, { signal: context.signal, failureMode: 'fail-fast' });
     if (context.signal.aborted) throw context.signal.reason;
     for (const row of rows) {
       if (context.inventoryCandidates + row.rawAssets > context.dependencies.inventoryMaxCandidates) {
@@ -739,8 +726,8 @@ async function fetchPendingOpenBoxes(
   deadlineAt: number,
 ): Promise<ShopPendingOpenBoxesResponse> {
   const scopes = listShopPendingOpenProgramScopes(requestBody.includeDevnet === true);
-  const rows = (await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
-    fetchPendingProgramScope(context, requestBody.owner, scope))).flat();
+  const rows = (await mapWithConcurrency(scopes, PROVIDER_CONCURRENCY, (scope) =>
+    fetchPendingProgramScope(context, requestBody.owner, scope), { signal: context.signal, failureMode: 'fail-fast' })).flat();
   const deduped = new Map<string, PendingOpenRecordCandidate>();
   for (const row of rows) {
     const key = `${row.solanaCluster}:${row.pendingPda}`;
@@ -751,10 +738,10 @@ async function fetchPendingOpenBoxes(
   const unresolved = records.filter((entry) => resolvePendingOpenDropId(entry) === null && !entry.configPda);
   const assetsByCluster = new Map<SolanaCluster, Map<string, DasAsset>>();
   const unresolvedClusters = Array.from(new Set(unresolved.map((entry) => entry.solanaCluster)));
-  await mapConcurrent(unresolvedClusters, PROVIDER_CONCURRENCY, async (cluster) => {
+  await mapWithConcurrency(unresolvedClusters, PROVIDER_CONCURRENCY, async (cluster) => {
     const ids = Array.from(new Set(unresolved.filter((entry) => entry.solanaCluster === cluster).map((entry) => entry.boxAssetId)));
     assetsByCluster.set(cluster, await fetchAssetBatch(context, cluster, ids));
-  });
+  }, { signal: context.signal, failureMode: 'fail-fast' });
   const metadataTimeoutMs = Math.min(context.dependencies.expectedAssetRecoveryTimeoutMs,
     deadlineAt - performance.now() - PENDING_METADATA_RESPONSE_RESERVE_MS);
   if (requestBody.includeBoxMetadata && metadataTimeoutMs > 0) {
@@ -762,7 +749,7 @@ async function fetchPendingOpenBoxes(
     const clusters = Array.from(new Set(resolved.map(entry => entry.solanaCluster)));
     const metadataScope = createAttemptScope(context.signal, metadataTimeoutMs);
     try {
-      await mapConcurrent(clusters, PROVIDER_CONCURRENCY, async (cluster) => {
+      await mapWithConcurrency(clusters, PROVIDER_CONCURRENCY, async (cluster) => {
         try {
           const ids = Array.from(new Set(resolved.filter(entry => entry.solanaCluster === cluster).map(entry => entry.boxAssetId)));
           const metadata = await fetchAssetBatch(context, cluster, ids, {
@@ -777,7 +764,7 @@ async function fetchPendingOpenBoxes(
         } catch {
           context.signal.throwIfAborted();
         }
-      });
+      }, { signal: context.signal, failureMode: 'fail-fast' });
     } finally {
       metadataScope.dispose();
     }

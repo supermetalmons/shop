@@ -1,24 +1,12 @@
 import { randomInt } from 'crypto';
-import {
-  ComputeBudgetProgram,
-  Connection,
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  TransactionInstruction,
-  VersionedTransaction,
-} from '@solana/web3.js';
+import type { PublicKey } from '@solana/web3.js';
 import type Stripe from 'stripe';
 import type { MintSelectionConfig, SolanaCluster } from '../dropConfig.js';
 import type { DropFamily, DropSalesMode } from '../../../../../shared/deploymentCore.js';
 import {
   buildStripeOffchainAddressSnapshot,
-  decodeAdminDeliveryOrderRecord,
-  deriveAdminOrderPda,
-  encodeAdminDeliverVariantOrderArgs,
   stripeCheckoutSessionOrderHash,
   validateStripeCheckoutContract,
-  type DecodedAdminDeliveryOrderRecord,
   type StripeAddressEncryptionResult,
 } from './contract.js';
 import { generateUniqueStripeReceiptClaimCodes } from '../../../../../shared/stripeReceiptClaims.js';
@@ -39,12 +27,25 @@ import {
 } from '../stripeProviderConfig.js';
 import { stripeClientForKey } from './provider.js';
 import {
+  ensureAdminDeliveryOrder,
+  type AdminDeliveryOrderDependencies,
+  type StripeCheckoutOnchainConfig,
+} from './adminDeliveryOrder.js';
+import {
   classifyStripeCheckoutKind,
   stripeCheckoutModeForCluster,
   type StripeCheckoutKind as SharedStripeCheckoutKind,
 } from '../../../../../shared/stripeCheckoutCore.js';
-import { StripeCheckoutFulfillmentError, StripeCheckoutProcessingAttemptOwnershipCheckError } from './errors.js';
-import { isSignalCancellationError, sleepWithSignal } from '../boundedRequest.js';
+import {
+  StaleStripeCheckoutProcessingAttemptError,
+  StripeCheckoutFulfillmentError,
+  StripeCheckoutProcessingAttemptOwnershipCheckError,
+} from './errors.js';
+import {
+  isRetryableStripeCheckoutFulfillmentError,
+  normalizeFulfillmentCancellation,
+  runStripeCheckoutFulfillmentWithRetry,
+} from './retryPolicy.js';
 import type { CommerceDocumentKey } from '../commerceRepository.js';
 import type { StripeCheckoutCommerceContext, ValidatedStripeCheckoutRecord } from './commerce.js';
 import {
@@ -53,16 +54,16 @@ import {
   markStripeCheckoutFulfillmentFulfilled,
   normalizedMetadataIds,
   publishStripeOffchainDeliveryOrder,
-  recordStripeCheckoutRetryableFulfillmentError,
   releaseStripeCheckoutFulfillmentForRetry,
   startStripeCheckoutFulfillmentDocument,
-  STRIPE_CHECKOUT_FULFILLMENT_MAX_ATTEMPTS,
   type StripeCheckoutFulfillmentCompletionFields,
   type StripeCheckoutFulfillmentStart,
   type StripeCheckoutFulfillmentStartSkippedReason,
   type StripeOffchainDeliveryOrderDraft,
   type StripeOffchainDeliveryOrderResult,
 } from './store.js';
+
+export type { StripeCheckoutOnchainConfig } from './adminDeliveryOrder.js';
 
 type StripeCheckoutFulfillmentSkippedReason =
   | StripeCheckoutFulfillmentStartSkippedReason
@@ -140,19 +141,6 @@ export class StripeCheckoutPackStatusProjectionError extends Error {
   }
 }
 
-export type StripeCheckoutOnchainConfig = {
-  admin: PublicKey;
-  coreCollection: PublicKey;
-};
-
-type StripeCheckoutPrograms = {
-  bubblegumProgramId: PublicKey;
-  mplNoopProgramId: PublicKey;
-  mplAccountCompressionProgramId: PublicKey;
-  mplCoreProgramId: PublicKey;
-  mplCoreCpiSigner: PublicKey;
-};
-
 export type StripeCheckoutKind = SharedStripeCheckoutKind;
 
 type DropRuntimeDeps<Runtime extends StripeCheckoutDropRuntime> = {
@@ -163,41 +151,11 @@ type DropRuntimeDeps<Runtime extends StripeCheckoutDropRuntime> = {
 export type StripeCheckoutFlowDeps<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
-> = DropRuntimeDeps<Runtime> & {
-  runRpc: <T>(
-    dropRuntime: Runtime,
-    operation: (connection: Connection) => Promise<T>,
-    timeoutMs: number,
-    label: string,
-  ) => Promise<T>;
-  ensureOnchainCoreConfig: (dropRuntime: Runtime) => Promise<Config>;
-  requireStripeCheckoutCollectionMatchesConfig: (
-    dropRuntime: Runtime,
-    cfg: Config,
-    code?: 'failed-precondition' | 'unavailable',
-  ) => void;
-  cosigner: () => Keypair;
+> = DropRuntimeDeps<Runtime> & AdminDeliveryOrderDependencies<Runtime, Config> & {
   encryptAddress: (plaintext: string) => StripeAddressEncryptionResult | null;
   normalizeCountryCode: (country?: string) => string;
-  buildTx: (
-    instructions: TransactionInstruction[],
-    payer: PublicKey,
-    blockhash: string,
-    signers: Keypair[],
-  ) => VersionedTransaction;
-  sendAndConfirmSignedTx: (
-    dropRuntime: Runtime,
-    tx: VersionedTransaction,
-    label: string,
-    opts?: { sendTimeoutMs?: number; confirmTimeoutMs?: number },
-  ) => Promise<string>;
   isAlreadyExistsError: (err: unknown) => boolean;
   summarizeError: (err: unknown) => unknown;
-  programs: StripeCheckoutPrograms;
-  rpcTimeoutMs: number;
-  txSendTimeoutMs: number;
-  txConfirmTimeoutMs: number;
-  signal?: AbortSignal;
   resolveWalletOwner?: (authSubject: string) => Promise<string | null>;
   countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
   repairPackStatus?: StripeCheckoutPackStatusRepair<Runtime>;
@@ -205,146 +163,12 @@ export type StripeCheckoutFlowDeps<
 };
 
 const STRIPE_CHECKOUT_SESSION_ID_RE = /^[A-Za-z0-9_:-]{4,256}$/;
-const STRIPE_CHECKOUT_FULFILLMENT_RETRY_DELAY_MS = 1_000;
 const STRIPE_CHECKOUT_PROVIDER_TIMEOUT_MS = 30_000;
 const STRIPE_CHECKOUT_PROVIDER_MAX_NETWORK_RETRIES = 0;
 const STRIPE_CHECKOUT_PROVIDER_REQUEST_OPTIONS: Stripe.RequestOptions = {
   maxNetworkRetries: STRIPE_CHECKOUT_PROVIDER_MAX_NETWORK_RETRIES,
   timeout: STRIPE_CHECKOUT_PROVIDER_TIMEOUT_MS,
 };
-const RETRYABLE_STRIPE_FULFILLMENT_CODES = new Set([
-  'aborted',
-  'deadline-exceeded',
-  'internal',
-  'resource-exhausted',
-  'unavailable',
-]);
-const RETRYABLE_GRPC_STATUS_CODES = new Set([4, 8, 10, 13, 14]);
-
-function errorStatusCode(err: unknown): number | null {
-  const anyErr = err as any;
-  const candidates = [anyErr?.statusCode, anyErr?.status, anyErr?.response?.status, anyErr?.raw?.statusCode];
-  for (const candidate of candidates) {
-    const statusCode = Number(candidate);
-    if (Number.isFinite(statusCode) && statusCode > 0) return Math.floor(statusCode);
-  }
-  return null;
-}
-
-function errorCodeValues(err: unknown): Array<string | number> {
-  const anyErr = err as any;
-  return [
-    anyErr?.code,
-    anyErr?.details?.code,
-    anyErr?.cause?.code,
-    typeof anyErr?.status === 'string' ? anyErr.status : undefined,
-    typeof anyErr?.details?.status === 'string' ? anyErr.details.status : undefined,
-    typeof anyErr?.cause?.status === 'string' ? anyErr.cause.status : undefined,
-  ].filter((value) => value != null);
-}
-
-function looksLikeTransientProviderMessage(message: string): boolean {
-  const m = message.toLowerCase();
-  return (
-    m.includes('429') ||
-    m.includes('rate limit') ||
-    m.includes('too many requests') ||
-    m.includes('timed out') ||
-    m.includes('timeout') ||
-    m.includes('deadline exceeded') ||
-    m.includes('fetch failed') ||
-    m.includes('socket hang up') ||
-    m.includes('econnreset') ||
-    m.includes('etimedout') ||
-    m.includes('service unavailable') ||
-    m.includes('gateway timeout') ||
-    (m.includes('rpc') && m.includes('error'))
-  );
-}
-
-export function isRetryableStripeCheckoutFulfillmentError(err: unknown): boolean {
-  const errorType = String((err as any)?.type || (err as any)?.rawType || '');
-  if (errorType === 'StripeConnectionError') return true;
-
-  const statusCode = errorStatusCode(err);
-  if (statusCode === 408 || statusCode === 409 || statusCode === 429) return true;
-  if (statusCode != null && statusCode >= 500) return true;
-
-  for (const code of errorCodeValues(err)) {
-    if (typeof code === 'number' && RETRYABLE_GRPC_STATUS_CODES.has(code)) return true;
-    const normalized = String(code).trim().toLowerCase().replace(/_/g, '-');
-    if (RETRYABLE_STRIPE_FULFILLMENT_CODES.has(normalized)) return true;
-    const numericCode = Number(normalized);
-    if (Number.isFinite(numericCode) && RETRYABLE_GRPC_STATUS_CODES.has(numericCode)) return true;
-  }
-
-  const message = err instanceof Error ? err.message : String(err || '');
-  return looksLikeTransientProviderMessage(message);
-}
-
-function normalizeFulfillmentCancellation(error: unknown, signal?: AbortSignal): unknown {
-  if (!signal || !isSignalCancellationError(signal, error)) return error;
-  if (error instanceof StripeCheckoutFulfillmentError) return error;
-  const timedOut = signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
-  const cancellation = new StripeCheckoutFulfillmentError(
-    timedOut ? 'deadline-exceeded' : 'aborted',
-    timedOut ? 'Stripe checkout fulfillment timed out' : 'Stripe checkout fulfillment was cancelled',
-  );
-  Object.defineProperty(cancellation, 'cause', { value: signal.reason });
-  return cancellation;
-}
-
-class StaleStripeCheckoutProcessingAttemptError extends Error {
-  constructor() {
-    super('Stripe checkout fulfillment attempt no longer owns the processing lease');
-    this.name = 'StaleStripeCheckoutProcessingAttemptError';
-  }
-}
-
-export async function runStripeCheckoutFulfillmentWithRetry<T>(
-  operation: (attempt: number) => Promise<T>,
-  params: {
-    commerce: StripeCheckoutCommerceContext;
-    checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
-    summarizeError: (err: unknown) => unknown;
-    maxAttempts?: number;
-    retryDelayMs?: number;
-    processingAttemptId?: string;
-    signal?: AbortSignal;
-  },
-): Promise<T> {
-  const maxAttempts = Math.max(1, Math.floor(Number(params.maxAttempts ?? STRIPE_CHECKOUT_FULFILLMENT_MAX_ATTEMPTS)));
-  const retryDelayMs = Math.max(0, Math.floor(Number(params.retryDelayMs ?? STRIPE_CHECKOUT_FULFILLMENT_RETRY_DELAY_MS)));
-  const signal = params.signal || new AbortController().signal;
-  let attempt = 1;
-
-  while (true) {
-    signal.throwIfAborted();
-    try {
-      return await operation(attempt);
-    } catch (err) {
-      if (signal.aborted || attempt >= maxAttempts || !isRetryableStripeCheckoutFulfillmentError(err)) throw err;
-
-      const retryRecordStatus = await recordStripeCheckoutRetryableFulfillmentError({
-        commerce: params.commerce,
-        checkoutKey: params.checkoutKey,
-        summarizeError: params.summarizeError,
-        err,
-        attempt,
-        retryDelayMs,
-        processingAttemptId: params.processingAttemptId,
-      });
-      if (retryRecordStatus === 'stale') throw new StaleStripeCheckoutProcessingAttemptError();
-      try {
-        await sleepWithSignal(retryDelayMs, signal);
-      } catch (error) {
-        if (isSignalCancellationError(signal, error)) throw err;
-        throw error;
-      }
-      attempt += 1;
-    }
-  }
-}
 
 export function stripeApiKeysForMode(apiKeys: readonly string[], mode: StripeApiMode): string[] {
   const keys = selectStripeApiKeys(apiKeys, mode);
@@ -580,36 +404,6 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
   throw new StripeCheckoutFulfillmentError('unavailable', 'Failed to allocate off-chain delivery id or receipt claim code (try again)');
 }
 
-async function fetchAdminDeliveryOrderRecord<Runtime extends StripeCheckoutDropRuntime>(params: {
-  dropRuntime: Runtime;
-  adminOrderPda: PublicKey;
-  context: string;
-  deps: Pick<StripeCheckoutFlowDeps<Runtime, StripeCheckoutOnchainConfig>, 'runRpc' | 'rpcTimeoutMs'>;
-}): Promise<DecodedAdminDeliveryOrderRecord | null> {
-  const { dropRuntime, adminOrderPda, context, deps } = params;
-  const info = await deps.runRpc(
-    dropRuntime,
-    async (connection) => (await connection.getAccountInfoAndContext(
-      adminOrderPda,
-      { commitment: 'confirmed' },
-    )).value,
-    deps.rpcTimeoutMs,
-    context,
-  );
-  if (!info) return null;
-  if (!info.owner.equals(dropRuntime.boxMinterProgramId)) {
-    if (info.owner.equals(SystemProgram.programId) && info.data.length === 0) {
-      return null;
-    }
-    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order PDA has an unexpected owner', {
-      adminOrderPda: adminOrderPda.toBase58(),
-      owner: info.owner.toBase58(),
-      expectedOwner: dropRuntime.boxMinterProgramId.toBase58(),
-    });
-  }
-  return decodeAdminDeliveryOrderRecord(Buffer.from(info.data));
-}
-
 async function fulfillStripeCheckoutSession<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
@@ -717,134 +511,14 @@ async function fulfillStripeCheckoutSession<
     normalizeCountryCode: deps.normalizeCountryCode,
     dropFamily: dropRuntime.config.dropFamily,
   });
-  const cfg = await deps.ensureOnchainCoreConfig(dropRuntime);
-  const signer = deps.cosigner();
-  if (!signer.publicKey.equals(cfg.admin)) {
-    throw new StripeCheckoutFulfillmentError('unavailable', 'COSIGNER_SECRET does not match on-chain admin', {
-      expectedAdmin: cfg.admin.toBase58(),
-      cosigner: signer.publicKey.toBase58(),
-    });
-  }
-  deps.requireStripeCheckoutCollectionMatchesConfig(dropRuntime, cfg, 'unavailable');
-
-  const receiptOwner = cfg.admin;
-  const [adminOrderPda, orderBump] = deriveAdminOrderPda(dropRuntime.boxMinterProgramId, dropRuntime.boxMinterConfigPda, orderHash);
-  let record = await fetchAdminDeliveryOrderRecord({
+  const { metadataId, metadataIds, receiptOwner, receiptTx } = await ensureAdminDeliveryOrder({
+    dropId,
     dropRuntime,
-    adminOrderPda,
-    context: 'getAccountInfo:adminOrder',
+    orderHash,
+    variantIndex,
+    quantity: checkout.quantity,
     deps,
   });
-  let receiptTx: string | null = null;
-
-  if (!record) {
-    const treeConfig = PublicKey.findProgramAddressSync([dropRuntime.receiptsMerkleTree.toBuffer()], deps.programs.bubblegumProgramId)[0];
-    const ix = new TransactionInstruction({
-      programId: dropRuntime.boxMinterProgramId,
-      keys: [
-        { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: true },
-        { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-        { pubkey: receiptOwner, isSigner: false, isWritable: false },
-        { pubkey: adminOrderPda, isSigner: false, isWritable: true },
-        { pubkey: dropRuntime.receiptsMerkleTree, isSigner: false, isWritable: true },
-        { pubkey: treeConfig, isSigner: false, isWritable: true },
-        { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-        { pubkey: deps.programs.bubblegumProgramId, isSigner: false, isWritable: false },
-        { pubkey: deps.programs.mplNoopProgramId, isSigner: false, isWritable: false },
-        { pubkey: deps.programs.mplAccountCompressionProgramId, isSigner: false, isWritable: false },
-        { pubkey: deps.programs.mplCoreProgramId, isSigner: false, isWritable: false },
-        { pubkey: deps.programs.mplCoreCpiSigner, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ],
-      data: encodeAdminDeliverVariantOrderArgs({
-        orderHash,
-        variantIndex,
-        quantity: checkout.quantity,
-      }),
-    });
-    const { blockhash } = await deps.runRpc(
-      dropRuntime,
-      async (connection) => (await connection.getLatestBlockhashAndContext('confirmed')).value,
-      deps.rpcTimeoutMs,
-      'getLatestBlockhash:stripeCheckoutFulfillment',
-    );
-    const tx = deps.buildTx([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ix], signer.publicKey, blockhash, [signer]);
-    try {
-      receiptTx = await deps.sendAndConfirmSignedTx(dropRuntime, tx, 'adminDeliverVariantOrder', {
-        sendTimeoutMs: deps.txSendTimeoutMs,
-        confirmTimeoutMs: deps.txConfirmTimeoutMs,
-      });
-    } catch (err) {
-      if (deps.signal?.aborted) throw err;
-      const maybeRecord = await fetchAdminDeliveryOrderRecord({
-        dropRuntime,
-        adminOrderPda,
-        context: 'getAccountInfo:adminOrderAfterError',
-        deps,
-      }).catch(() => null);
-      if (!maybeRecord) throw err;
-      record = maybeRecord;
-    }
-  }
-
-  if (!record) {
-    record = await fetchAdminDeliveryOrderRecord({
-      dropRuntime,
-      adminOrderPda,
-      context: 'getAccountInfo:adminOrderAfterSend',
-      deps,
-    });
-  }
-  if (!record) {
-    throw new StripeCheckoutFulfillmentError('unavailable', 'Admin order record was not created', {
-      adminOrderPda: adminOrderPda.toBase58(),
-      dropId,
-    });
-  }
-  if (!record.orderHash.equals(orderHash)) {
-    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record hash mismatch', { dropId, adminOrderPda: adminOrderPda.toBase58() });
-  }
-  if (record.variantIndex !== variantIndex) {
-    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record variant mismatch', {
-      dropId,
-      adminOrderPda: adminOrderPda.toBase58(),
-      expectedVariantIndex: variantIndex,
-      actualVariantIndex: record.variantIndex,
-    });
-  }
-  if (record.quantity !== checkout.quantity) {
-    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record quantity mismatch', {
-      dropId,
-      adminOrderPda: adminOrderPda.toBase58(),
-      expectedQuantity: checkout.quantity,
-      actualQuantity: record.quantity,
-    });
-  }
-  if (record.bump !== orderBump) {
-    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record bump mismatch', {
-      dropId,
-      adminOrderPda: adminOrderPda.toBase58(),
-      expectedBump: orderBump,
-      actualBump: record.bump,
-    });
-  }
-  if (!record.receiptOwner.equals(receiptOwner)) {
-    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record receipt owner mismatch', {
-      dropId,
-      adminOrderPda: adminOrderPda.toBase58(),
-      expectedOwner: receiptOwner.toBase58(),
-      actualOwner: record.receiptOwner.toBase58(),
-    });
-  }
-  if (record.firstMetadataId < 1) {
-    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record metadata id is invalid', {
-      dropId,
-      adminOrderPda: adminOrderPda.toBase58(),
-      firstMetadataId: record.firstMetadataId,
-    });
-  }
-  const metadataId = record.firstMetadataId;
-  const metadataIds = Array.from({ length: checkout.quantity }, (_, index) => metadataId + index);
   const authSubject = checkout.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS
     ? checkout.authSubject
     : undefined;

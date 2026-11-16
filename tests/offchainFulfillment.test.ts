@@ -56,13 +56,15 @@ import {
 import {
   StripeCheckoutPackStatusProjectionError,
   createOrGetStripeOffchainDeliveryOrder,
-  isRetryableStripeCheckoutFulfillmentError,
   processStripeCheckoutFulfillmentDocument,
-  runStripeCheckoutFulfillmentWithRetry,
   stripeApiModeForCluster,
   stripeApiKeysForMode,
   stripeCheckoutKindForDrop,
 } from '../cloud/workers/api/src/stripeCheckout/service.ts';
+import {
+  isRetryableStripeCheckoutFulfillmentError,
+  runStripeCheckoutFulfillmentWithRetry,
+} from '../cloud/workers/api/src/stripeCheckout/retryPolicy.ts';
 import {
   markStripeCheckoutFulfillmentFailed,
   markStripeCheckoutFulfillmentFulfilled,

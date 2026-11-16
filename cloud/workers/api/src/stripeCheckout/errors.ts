@@ -27,3 +27,10 @@ export class StripeCheckoutProcessingAttemptOwnershipCheckError extends Error {
     this.cause = cause;
   }
 }
+
+export class StaleStripeCheckoutProcessingAttemptError extends Error {
+  constructor() {
+    super('Stripe checkout fulfillment attempt no longer owns the processing lease');
+    this.name = 'StaleStripeCheckoutProcessingAttemptError';
+  }
+}

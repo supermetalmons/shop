@@ -45,8 +45,10 @@ function responseBytes(rows: Record<string, unknown>[]): number {
   return Buffer.byteLength(JSON.stringify([{ success: true, results: rows, meta: {} }], null, 2));
 }
 
-test('recovery state control accepts only read-only status and rejects retired commands before querying', async () => {
-  assert.deepEqual(parseDeliveryRecoveryStateControlArgs(['status']), { command: 'status' });
+test('recovery state control accepts read-only inspection modes and rejects retired commands before querying', async () => {
+  for (const command of ['status', 'summary', 'validate']) {
+    assert.deepEqual(parseDeliveryRecoveryStateControlArgs([command]), { command });
+  }
   for (const argv of [
     [], ['prepare'], ['activate'], ['status', '--write'], ['status', '--expected-revision', '1'],
     ['prepare', '--write', '--expected-revision', '1'],
@@ -57,6 +59,23 @@ test('recovery state control accepts only read-only status and rejects retired c
       query: () => assert.fail('Invalid commands must not query or mutate Commerce.'),
     }), /Status is read-only/);
   }
+});
+
+test('recovery summary never fetches order or recovery payloads and retains explicit validation', async (context) => {
+  const fixture = harness(context);
+  seedCommerceDocuments(fixture, [orderSeed('1', { receiptRecovery: { preparedProbeCount: 1 } })]);
+  const normal = query(fixture.database);
+  const summary = await runDeliveryRecoveryStateControl(['summary'], { query: async (sql) => {
+    assert.match(sql, /^SELECT/);
+    assert.doesNotMatch(sql, /AS document_json|recovery\.\*|__audit_key_bytes/);
+    return normal(sql);
+  } });
+  assert.equal(summary.validation, 'not_run');
+  assert.equal(summary.deliveryCount, 1);
+  assert.equal(summary.legacyMetadataCount, 0);
+  const { validation, ...validated } = await runDeliveryRecoveryStateControl(['validate'], { query: normal });
+  assert.equal(validation, 'passed');
+  assert.deepEqual(validated, await runDeliveryRecoveryStateControl(['status'], { query: normal }));
 });
 
 test('uninitialized recovery status reports the bootstrap path without preparing storage', async (context) => {
@@ -273,7 +292,7 @@ test('recovery status reads 548 orders in bounded pages without per-order querie
   assert.deepEqual(pageSizes, [...Array(109).fill(5), 3]);
   assert.equal(new Set(paths).size, orderCount);
   assert.deepEqual(paths, saved.map((row) => String(row.parent_path)));
-  assert.ok(calls <= Math.ceil(orderCount / 5) + 4, `Status made ${calls} queries for ${orderCount} orders.`);
+  assert.ok(calls <= Math.ceil(orderCount / 5) + 5, `Status made ${calls} queries for ${orderCount} orders.`);
   assert.deepEqual(normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path'), saved);
 });
 

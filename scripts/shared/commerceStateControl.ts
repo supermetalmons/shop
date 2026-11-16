@@ -8,11 +8,25 @@ export const COMMERCE_STORAGE_CONTROLS = [
 ] as const;
 export type CommerceStorageControl = (typeof COMMERCE_STORAGE_CONTROLS)[number];
 
-export function parseCommerceStatusArgs(argv: string[], command: string): { command: 'status' } {
-  if (argv.length !== 1 || argv[0] !== 'status') {
-    throw new Error(`Usage: npm run ${command} -- status. Status is read-only; initialize an empty database with bootstrap:commerce.`);
+export type CommerceInspectionCommand = 'status' | 'summary' | 'validate';
+
+export function parseCommerceStatusArgs(argv: string[], command: string): { command: CommerceInspectionCommand } {
+  if (argv.length !== 1 || !['status', 'summary', 'validate'].includes(argv[0])) {
+    throw new Error(`Usage: npm run ${command} -- <status|summary|validate>. Status is read-only; initialize an empty database with bootstrap:commerce.`);
   }
-  return { command: 'status' };
+  return { command: argv[0] as CommerceInspectionCommand };
+}
+
+export function commerceInspectionValidation(command: CommerceInspectionCommand, error: string | null) {
+  return command === 'status' ? {} : {
+    validation: command === 'summary' ? 'not_run' as const : error ? 'failed' as const : 'passed' as const,
+  };
+}
+
+export async function readCommerceInspectionCount(query: CommerceAuthorityQuery, sql: string): Promise<number> {
+  const rows = await query(sql);
+  if (rows.length !== 1) throw new Error('Invalid Commerce inspection count.');
+  return safeInteger(rows[0].count, 'Commerce inspection count');
 }
 
 export async function readCommerceStorageState(query: CommerceAuthorityQuery, table: CommerceStorageControl) {

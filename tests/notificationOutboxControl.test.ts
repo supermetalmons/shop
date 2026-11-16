@@ -24,11 +24,49 @@ function fixture(t: test.TestContext, count = 1) {
   return { harness, query: commerceTestQuery(harness.database) };
 }
 
-test('notification inspection accepts only read-only status', () => {
-  assert.deepEqual(parseNotificationOutboxControlArgs(['status']), { command: 'status' });
+test('notification inspection accepts read-only inspection modes', () => {
+  for (const command of ['status', 'summary', 'validate']) {
+    assert.deepEqual(parseNotificationOutboxControlArgs([command]), { command });
+  }
   for (const args of [[], ['prepare'], ['activate'], ['status', '--write'], ['status', '--expected-revision', '2']]) {
     assert.throws(() => parseNotificationOutboxControlArgs(args), /read-only/);
   }
+});
+
+test('notification summary skips row validation while explicit validation preserves status results', async (t) => {
+  const { query } = fixture(t, 53);
+  const summary = await runNotificationOutboxControl(['summary'], { query: async (sql) => {
+    assert.match(sql, /^SELECT/);
+    assert.doesNotMatch(sql, /outbox\.\*|__audit_key_bytes/);
+    return query(sql);
+  } });
+  assert.equal(summary.validation, 'not_run');
+  assert.equal(summary.validationError, null);
+  assert.equal(summary.groups[0].count, 53);
+  const { validation, ...validated } = await runNotificationOutboxControl(['validate'], { query });
+  assert.equal(validation, 'passed');
+  const status = await runNotificationOutboxControl(['status'], { query });
+  assert.deepEqual(validated.groups.map(({ oldest_pending_age_ms: _age, ...group }) => group),
+    status.groups.map(({ oldest_pending_age_ms: _age, ...group }) => group));
+  assert.equal(Object.hasOwn(status, 'validation'), false);
+});
+
+test('notification validation stops at its captured final key during concurrent inserts', async (t) => {
+  const { harness, query } = fixture(t, 26);
+  let inspected = 0;
+  const result = await runNotificationOutboxControl(['validate'], { query: async (sql) => {
+    const rows = query(sql);
+    if (sql.includes('ORDER BY outbox.parent_path DESC')) {
+      seedCommerceDocuments(harness, [{ key: commerceKeys.deliveryOrder('drop', '999'),
+        data: { status: 'ready_to_ship', deliveryId: 999 } }]);
+      seedNotificationOutbox(harness, record(999));
+    }
+    if (sql.startsWith('SELECT outbox.*')) inspected += rows.length;
+    return rows;
+  } });
+  assert.equal(result.validation, 'passed');
+  assert.equal(inspected, 26);
+  assert.equal(result.groups[0].count, 27);
 });
 
 test('uninitialized status reports readiness without importing any historical data', async (t) => {

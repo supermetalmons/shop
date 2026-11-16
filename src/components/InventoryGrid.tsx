@@ -4,6 +4,8 @@ import { getFrontendDrop, isDropFamily } from '../config/deployment';
 import { dropAssetCount, dropMintSelectionLabel } from '../../shared/dropLabels.ts';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
+import { useNearViewport } from '../hooks/useNearViewport';
+import { useReducedMotion } from '../hooks/useReducedMotion';
 import { ColorSchemeImage, colorSchemeBackgroundImageStyle } from './ColorSchemeImage';
 import { MediaWithFallback } from './MediaWithFallback';
 import {
@@ -189,10 +191,9 @@ type InventoryVideoMediaProps = {
 function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [videoActive, setVideoActive] = useState(false);
+  const videoActive = useNearViewport(rootRef);
   const [videoFailed, setVideoFailed] = useState(false);
-  const [reducedMotion, setReducedMotion] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true);
+  const reducedMotion = useReducedMotion();
   const sourceKey = sources.map((source) => `${source.src}:${source.type || ''}`).join('|');
   const videoKey = `${posterSrc || ''}|${sourceKey}`;
   const showVideo = videoActive && !videoFailed && !reducedMotion;
@@ -202,32 +203,6 @@ function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaPr
   useEffect(() => {
     setVideoFailed(false);
   }, [posterSrc, sourceKey]);
-
-  useEffect(() => {
-    const preference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-    if (!preference) return;
-    const update = () => setReducedMotion(preference.matches);
-    update();
-    preference.addEventListener('change', update);
-    return () => preference.removeEventListener('change', update);
-  }, []);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root || typeof IntersectionObserver === 'undefined') {
-      setVideoActive(true);
-      return undefined;
-    }
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        setVideoActive(Boolean(entry?.isIntersecting));
-      },
-      { rootMargin: '160px' },
-    );
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
