@@ -105,6 +105,7 @@ function interceptRequests(options: {
   pendingEthereumOrders?: Promise<Response>;
   pendingEthereumReview?: Promise<Response>;
   pendingStatusUpdate?: Promise<Response>;
+  withManualReview?: boolean;
 } = {}) {
   const requests: Array<{ path: string; dropId?: string }> = [];
   mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
@@ -136,6 +137,10 @@ function interceptRequests(options: {
     }
     if (path === MANUAL_REVIEW_PATH) {
       if (body.dropId === ETHEREUM_DROP && options.pendingEthereumReview) return options.pendingEthereumReview;
+      if (body.dropId === 'card_nft_2' && options.withManualReview) return Response.json({
+        checkouts: [{ dropId: 'card_nft_2', sessionId: 'manual-review', owner: 'owner-wallet', address: {} }],
+        nextCursor: null,
+      });
       return Response.json({ checkouts: [], nextCursor: null });
     }
     if (path === '/ethereum/111k/metadata') {
@@ -171,6 +176,44 @@ async function assertOrdinaryExports(view: ReturnType<typeof render>) {
   const [orders, addresses] = await Promise.all(blobs.map(async (blob) => JSON.parse(await blob.text())));
   assert.deepEqual(orders.map((entry: { orderId: string }) => entry.orderId), ['card_nft_2:7']);
   assert.deepEqual(Object.keys(addresses), ['card_nft_2:7']);
+}
+
+for (const menu of [
+  { button: 'Fulfillment export menu', role: 'menu', name: 'Fulfillment exports' },
+  { button: 'Needs manual review, 1 checkout', role: 'dialog', name: 'Needs manual review' },
+]) {
+  test(`${menu.name} preserves mouse, touch, and unconsumed Escape dismissal`, async () => {
+    await installSession(ADMIN);
+    interceptRequests({ withManualReview: true });
+    const view = render(createElement(AppHarness, { wallet: ADMIN }));
+    await view.findByText('Order 7');
+    const trigger = await view.findByRole('button', { name: menu.button });
+    const isOpen = () => Boolean(view.queryByRole(menu.role, { name: menu.name }));
+
+    fireEvent.click(trigger);
+    const content = view.getByRole(menu.role, { name: menu.name });
+    fireEvent.mouseDown(content);
+    fireEvent.touchStart(content);
+    assert.equal(isOpen(), true);
+    fireEvent.mouseDown(document.body);
+    assert.equal(isOpen(), false);
+
+    fireEvent.click(trigger);
+    fireEvent.touchStart(document.body);
+    assert.equal(isOpen(), false);
+
+    fireEvent.click(trigger);
+    const escape = new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    fireEvent(document, escape);
+    assert.equal(isOpen(), false);
+    assert.equal(escape.defaultPrevented, false);
+
+    fireEvent.click(trigger);
+    const handledEscape = new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    handledEscape.preventDefault();
+    fireEvent(document, handledEscape);
+    assert.equal(isOpen(), false);
+  });
 }
 
 for (const [label, wallet] of [

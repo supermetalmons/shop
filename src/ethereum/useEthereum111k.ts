@@ -18,6 +18,7 @@ import { abortableEthereumOperation, createEthereumOperationReconciliation } fro
 import { definiteEthereumSubmissionRejection, migrateEthereumDropOperation, readEthereumDropBusy, readEthereumDropOperations, runEthereumDropRequest, subscribeEthereumDropOperations, type EthereumDropOperation } from './dropOperations';
 import { ethereumCatalogKey, retainEthereumCatalogConfig, retainEthereumMetadata } from './catalogRevision';
 import { ethereumReadCanRefetch, ethereumReadRefetchInterval, ethereumReadRetryOptions, runEthereumRead } from './readRetry';
+import { ethereumRelicsQuery, ethereumStatsQuery } from './dropQueries';
 
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
 
@@ -121,14 +122,11 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
     provider.on?.('chainChanged', changed);
     return () => { active = false; provider.removeListener?.('chainChanged', changed); };
   }, [wallet.provider]);
-  const stats = useQuery({ queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress, owner],
-    queryFn: context => runEthereumRead(context, signal => ethereumApi.stats(config, owner, signal)), enabled: config.enabled,
+  const stats = useQuery({ ...ethereumStatsQuery(config, owner), enabled: config.enabled,
     ...ethereumReadRetryOptions, refetchInterval: query => ethereumReadRefetchInterval(query, 30_000) });
   const mintSupply = useMemo(() => stats.data ? reserveMintSupply(stats.data, operations) : undefined, [stats.data, operations]);
   const relicsEnabled = config.enabled && mintKind === 'relic' && pageVisible && !suspended;
-  const relicQueryKey = ['ethereum111k', 'relics', config.chainId, config.contractAddress, owner] as const;
-  const relicQuery = useQuery({ queryKey: relicQueryKey,
-    queryFn: context => runEthereumRead(context, signal => ethereumApi.relics(config, owner, signal)), enabled: relicsEnabled,
+  const relicQuery = useQuery({ ...ethereumRelicsQuery(config, owner), enabled: relicsEnabled,
     ...ethereumReadRetryOptions, staleTime: 0, refetchInterval: query => ethereumReadRefetchInterval(query, 4_000),
     refetchOnWindowFocus: query => ethereumReadCanRefetch(query) ? 'always' : false });
   const relics = { ...relicQuery, data: useMemo(() => relicQuery.data ? reserveRelics(relicQuery.data, operations) : undefined, [relicQuery.data, operations]) };
@@ -224,8 +222,7 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > config.maxMintQuantity) throw new Error(`Choose a quantity from 1 to ${config.maxMintQuantity}.`);
       if (!expected) throw new Error('Wait for your mint price to load and try again.');
       const readTerms = async () => {
-        const stats = await client.fetchQuery({ queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress, operation.address],
-          queryFn: context => runEthereumRead(context, signal => ethereumApi.stats(config, operation.address, signal), operation.signal), staleTime: 0 });
+        const stats = await client.fetchQuery({ ...ethereumStatsQuery(config, operation.address, operation.signal), staleTime: 0 });
         operation.assertCurrent();
         if (!stats.saleActive) throw new Error('Minting is not open yet.');
         if (quantity > ethereumMintRemaining(kind, stats)) throw new Error('That quantity is no longer available. Choose fewer containers.');
@@ -275,11 +272,11 @@ export function useEthereum111k(wallet: EthereumWallet, mintKind: EthereumContai
   };
   const claimRelic = async (relicId: number): Promise<boolean> => await run('Confirm relic claim in your wallet…', async (operation, capturedScope) => {
     if (!Number.isInteger(relicId) || relicId < 1 || relicId > ETHEREUM_MAX_RELICS) throw new Error('Choose a relic from 1 to 18.');
-    const key = ['ethereum111k', 'relics', config.chainId, config.contractAddress, operation.address];
+    const query = ethereumRelicsQuery(config, operation.address, operation.signal);
+    const key = query.queryKey;
     await client.cancelQueries({ queryKey: key, exact: true });
     operation.assertCurrent();
-    await client.fetchQuery({ queryKey: key,
-      queryFn: context => runEthereumRead(context, signal => ethereumApi.relics(config, operation.address, signal), operation.signal), staleTime: 0 });
+    await client.fetchQuery({ ...query, staleTime: 0 });
     operation.assertCurrent();
     const assertAvailable = () => {
       const state = client.getQueryState<EthereumRelicStatus>(key);

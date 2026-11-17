@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type RefObject,
 } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
@@ -12,6 +11,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
 import type { FulfillmentOrder } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
+import { useDismissibleLayer } from './hooks/useDismissibleLayer';
 import { updateFulfillmentStatus } from './api/fulfillment';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { useFigureMetadataSnapshot, useFigureMetadataTargets } from './hooks/useFigureMetadata';
@@ -65,32 +65,6 @@ type DuplicateFigureSummary = {
   count: number;
   sortValue: number;
 };
-
-function useDismissibleMenu<T extends HTMLElement>(
-  open: boolean,
-  menuRef: RefObject<T | null>,
-  setOpen: (open: boolean) => void,
-) {
-  useEffect(() => {
-    if (!open || typeof document === 'undefined') return;
-    const handlePointerDown = (evt: MouseEvent | TouchEvent) => {
-      const node = menuRef.current;
-      if (!node || node.contains(evt.target as Node)) return;
-      setOpen(false);
-    };
-    const handleKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [menuRef, open, setOpen]);
-}
 
 function summarizeDuplicateFigures(args: {
   orders: FulfillmentOrder[];
@@ -220,8 +194,14 @@ export default function FulfillmentApp({
   const manualReviewMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
 
-  useDismissibleMenu(manualReviewMenuOpen, manualReviewMenuRef, setManualReviewMenuOpen);
-  useDismissibleMenu(exportMenuOpen, exportMenuRef, setExportMenuOpen);
+  useDismissibleLayer({
+    open: manualReviewMenuOpen, rootRef: manualReviewMenuRef, setOpen: setManualReviewMenuOpen,
+    touchStart: true, escapeBehavior: 'always',
+  });
+  useDismissibleLayer({
+    open: exportMenuOpen, rootRef: exportMenuRef, setOpen: setExportMenuOpen,
+    touchStart: true, escapeBehavior: 'always',
+  });
   useEffect(() => {
     walletConnectingSeenRef.current = false;
     setWalletReady(!walletAdapter.wallet || !autoConnectPossible);

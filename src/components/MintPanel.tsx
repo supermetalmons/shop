@@ -1,4 +1,4 @@
-import { type ComponentProps, type ReactNode, type RefObject, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { FaCircleQuestion } from 'react-icons/fa6';
 import { LuInfo } from 'react-icons/lu';
 import type { PackStatusBreakdown, PackStatusDisplayLabels } from '../types';
@@ -7,6 +7,7 @@ import { resolveDropXProfile } from '../lib/dropSocialLinks';
 import { formatRemainingCount } from '../lib/formatRemainingCount';
 import { getFrontendDrop, secondaryMarketplaceLinksForDropId } from '../config/deployment';
 import { useMintPanelForm, type MintPanelFormOptions } from '../shop/purchase/useMintPanelForm';
+import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 import { MintPanelActions } from './MintPanelActions';
 import { MintPreview, type MintPanelBoxMedia, type MintPreviewPrimaryRenderer } from './MintPreview';
 import { dropAssetCount } from '../../shared/dropLabels.ts';
@@ -69,31 +70,6 @@ function XProfileLogo() {
   );
 }
 
-function useDismissiblePopover<T extends HTMLElement>(
-  open: boolean,
-  rootRef: RefObject<T | null>,
-  setOpen: (open: boolean) => void,
-): void {
-  useEffect(() => {
-    if (!open) return;
-    const onMouseDown = (evt: MouseEvent) => {
-      const root = rootRef.current;
-      if (root && !root.contains(evt.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key !== 'Escape' || evt.defaultPrevented) return;
-      evt.preventDefault();
-      setOpen(false);
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open, rootRef, setOpen]);
-}
-
 function formatPackStatusAmount(amount: number): string {
   return PACK_STATUS_NUMBER_FORMATTER.format(Math.max(0, Math.floor(Number(amount) || 0)));
 }
@@ -151,7 +127,7 @@ function MintPanelTitleHelp({ title, children }: { title: string; children: Reac
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const popoverId = useId();
-  useDismissiblePopover(open, rootRef, setOpen);
+  useDismissibleLayer({ open, rootRef, setOpen, touchStart: false, escapeBehavior: 'consume-unhandled' });
 
   return (
     <div className="mint-panel__title-info-wrap" ref={rootRef}>
@@ -254,7 +230,10 @@ function MintPanelTerminalFooter({
     if (!showPackStatusControl && packStatusInfoOpen) setPackStatusInfoOpen(false);
   }, [showPackStatusControl, packStatusInfoOpen]);
 
-  useDismissiblePopover(packStatusInfoOpen, packStatusInfoRef, setPackStatusInfoOpen);
+  useDismissibleLayer({
+    open: packStatusInfoOpen, rootRef: packStatusInfoRef, setOpen: setPackStatusInfoOpen,
+    touchStart: false, escapeBehavior: 'consume-unhandled',
+  });
 
   const terminalButtons = (
     terminalAction.buttons ||
@@ -351,7 +330,10 @@ function PurchaseMintPanel({
     if (!showSizeSelector && sizeInfoOpen) setSizeInfoOpen(false);
   }, [showSizeSelector, sizeInfoOpen]);
 
-  useDismissiblePopover(sizeInfoOpen, sizeInfoRef, setSizeInfoOpen);
+  useDismissibleLayer({
+    open: sizeInfoOpen, rootRef: sizeInfoRef, setOpen: setSizeInfoOpen,
+    touchStart: false, escapeBehavior: 'consume-unhandled',
+  });
 
   const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
     return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({

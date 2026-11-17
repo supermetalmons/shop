@@ -5,7 +5,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, within } = await import('@testing-library/react');
-const { MintPanel } = await import('../src/components/MintPanel.tsx');
+const { MintPanel, MintPanelTitle } = await import('../src/components/MintPanel.tsx');
 const { MintPanelActions } = await import('../src/components/MintPanelActions.tsx');
 const { mintPanelPreviewQuantity } = await import('../src/components/MintPreview.tsx');
 const { shouldFetchMintProgress } = await import('../src/hooks/useMintProgress.ts');
@@ -65,6 +65,45 @@ function sizedPanelProps(overrides: Partial<Props> = {}): Props {
       ],
     },
     ...overrides,
+  });
+}
+
+for (const fixture of [
+  {
+    name: 'title help', button: 'Drop info', dialog: 'Drop info',
+    element: () => createElement(MintPanelTitle, { title: 'Drop', helpContent: 'About this drop' }),
+  },
+  {
+    name: 'pack status', button: 'Card status', dialog: 'Card status',
+    element: () => createElement(MintPanel, {
+      mode: 'announcement', showPackStatusInfo: true, terminalAction: { statusText: 'Coming soon' },
+    }),
+  },
+  {
+    name: 'size guide', button: 'Size info', dialog: 'Hoodie sizing',
+    element: () => createElement(MintPanel, sizedPanelProps()),
+  },
+]) {
+  test(`${fixture.name} keeps mouse-only outside dismissal and consumes only unhandled Escape`, () => {
+    const view = render(fixture.element());
+    const trigger = view.getByRole('button', { name: fixture.button });
+    fireEvent.click(trigger);
+    const popover = view.getByRole('dialog', { name: fixture.dialog });
+    fireEvent.mouseDown(popover);
+    fireEvent.touchStart(document.body);
+    const handledEscape = new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    handledEscape.preventDefault();
+    fireEvent(document, handledEscape);
+    assert.equal(view.getByRole('dialog', { name: fixture.dialog }), popover);
+
+    const escape = new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    fireEvent(document, escape);
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(view.queryByRole('dialog', { name: fixture.dialog }), null);
+
+    fireEvent.click(trigger);
+    fireEvent.mouseDown(document.body);
+    assert.equal(view.queryByRole('dialog', { name: fixture.dialog }), null);
   });
 }
 
