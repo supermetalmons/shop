@@ -63,12 +63,15 @@ test('scan refresh keeps the original identity and returns the reset scan status
 
 test('status returns only aggregate fields and never triggers registry or mutation calls', async () => {
   const calls: OwnerHatchingMaintenanceRequest[] = [];
-  const expected = status({ pendingEnrichment: 2, failedEnrichment: 1 });
+  const expected = status({ pendingEnrichment: 2, failedEnrichment: 1, verificationCursor: 'pending' });
+  const progress: OwnerHatchingMaintenanceResult[] = [];
   const result = await ownerHatchingControlMain(['inspect', ...identity], {
     registry: async () => { throw new Error('Registry should not be queried for status.'); },
-    transport: async request => { calls.push(request); return { ...expected, assignments: [{ tokenId: 'secret' }] }; },
+    onProgress: value => progress.push(value),
+    transport: async request => { calls.push(request); return { ...expected, verificationCursor: '98231', assignments: [{ tokenId: 'secret' }] }; },
   });
   assert.deepEqual(calls.map(call => call.action), ['status']);
+  assert.deepEqual(progress, [expected]);
   assert.deepEqual(result, expected);
   assert.ok(!JSON.stringify(result).includes('secret'));
 });

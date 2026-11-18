@@ -1,0 +1,90 @@
+{
+  "checkedAt": "2026-11-17T20:33:56.917Z",
+  "sourceSha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60",
+  "mediaRechecked": 20,
+  "reviewedETagsMatch": true,
+  "primaryPreflight": 13296,
+  "alternatesPreflight": 37990,
+  "observed": [
+    {
+      "url": "https://cdn.lil.org/nft/111k/animated/597.mp4",
+      "etag": "\"d9fae5d1bbb3ba9ed4bc3cac8036de2a\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/animated/597.png",
+      "etag": "\"1cef8f21e5af8f31d2573224f5cb69c8\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/animated/720.mp4",
+      "etag": "\"1918d3b64d9a2b242b7fc63f8b2c9562\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/animated/720.png",
+      "etag": "\"b002d18ad54e3c55dfe8d3a0048590c5\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/animated/json/v0/597.json",
+      "etag": "W/\"526a74054d106d654750cd6761eddbf6\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/animated/json/v0/720.json",
+      "etag": "W/\"19e3ab145d0e5b7445c6ea4720b39991\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/68981.png",
+      "etag": "\"a2b2edbea244433357a342bcc1773833\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/70480.png",
+      "etag": "\"1d9e1d0fd8dcc13796196548cea1a5fe\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/70481.png",
+      "etag": "\"2a279b6bc7141b2dd782476fc591d40a\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/72769.png",
+      "etag": "\"52481cdfe7fe7f04d4ae5611d60d0a86\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/72770.png",
+      "etag": "\"2e2319a27ff8db33b58324eecc40022f\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/75442.png",
+      "etag": "\"6ecf123c2d1c3c47774611759f2550d4\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/alt/30991.webp",
+      "etag": "\"dc3a1104dd5b7c3cabbbdfc748840f91\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/alt/68980.webp",
+      "etag": "\"97ca91697ad458bf94b6cf6794569838\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/68981.json",
+      "etag": "W/\"2409e39fc46b2bbaa7b18f53a46ebe4e\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/70480.json",
+      "etag": "W/\"eff773266270f2837b8327f5780dfcc8\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/70481.json",
+      "etag": "W/\"e08a9ba3e6101a6510be8d0a415f9f83\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/72769.json",
+      "etag": "W/\"a9e5ab7638d12aa909809af7a6d57792\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/72770.json",
+      "etag": "W/\"0a4ec076933c28059c03033c790d6424\""
+    },
+    {
+      "url": "https://cdn.lil.org/nft/111k/paintings/json/v0/75442.json",
+      "etag": "W/\"85f236b3a29e804e2e117b4e891d29f2\""
+    }
+  ]
+}

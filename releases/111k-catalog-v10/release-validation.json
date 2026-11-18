@@ -1,0 +1,51 @@
+{
+  "apiSources": "npm run deploy:api",
+  "apiSuites": [
+    {
+      "tests": 3790,
+      "passed": 3790,
+      "failed": 0
+    },
+    {
+      "tests": 92,
+      "passed": 92,
+      "failed": 0
+    }
+  ],
+  "frontendSources": "npm run deploy",
+  "frontendSuites": [
+    {
+      "tests": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    {
+      "tests": 29,
+      "passed": 29,
+      "failed": 0
+    },
+    {
+      "tests": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "tests": 5509,
+      "passed": 5509,
+      "failed": 0
+    }
+  ],
+  "ethereumEndToEnd": {
+    "passed": true,
+    "chainId": 31337,
+    "metadataStorage": "isolated-local-r2",
+    "readOnlyMetadataSource": "live Sepolia CDN"
+  },
+  "assetCatalogCheck": "passed",
+  "toolsAndTestsTypechecks": "passed",
+  "productionExportGate": "passed",
+  "apiStartupMs": 187,
+  "pendingD1Migrations": 0,
+  "commerceValidation": "bounded production release readiness checks",
+  "nativeRehearsal": "production-rehearsal.json"
+}

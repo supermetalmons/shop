@@ -1239,6 +1239,892 @@
           "animationExtension": "gif"
         }
       ]
+    },
+    {
+      "id": "gan-videos-2026-11-17",
+      "allocation": "mixed",
+      "source": {
+        "filename": "111k.json",
+        "sha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60"
+      },
+      "predecessor": {
+        "catalogVersion": "111k-v9",
+        "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+      },
+      "target": {
+        "catalogVersion": "111k-v10",
+        "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec"
+      },
+      "artworks": [
+        {
+          "assetId": 597,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 598,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 599,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 600,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 601,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 602,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 603,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 604,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 605,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 606,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 607,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 608,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 609,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 610,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 611,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 612,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 613,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 614,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 615,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 616,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 617,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 618,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 619,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 620,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 621,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 622,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 623,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 624,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 625,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 626,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 627,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 628,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 629,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 630,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 631,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 632,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 633,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 634,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 635,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 636,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 637,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 638,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 639,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 640,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 641,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 642,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 643,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 644,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 645,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 646,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 647,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 648,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 649,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 650,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 651,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 652,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 653,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 654,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 655,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 656,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 657,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 658,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 659,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 660,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 661,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 662,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 663,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 664,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 665,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 666,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 667,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 668,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 669,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 670,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 671,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 672,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 673,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 674,
+          "width": 932,
+          "height": 1006,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 675,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 676,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 677,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 678,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 679,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 680,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 681,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 682,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 683,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 684,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 685,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 686,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 687,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 688,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 689,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 690,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 691,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 692,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 693,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 694,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 695,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 696,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 697,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 698,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 699,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 700,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 701,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 702,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 703,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 704,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 705,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 706,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 707,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 708,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 709,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 710,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 711,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 712,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 713,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 714,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 715,
+          "width": 1024,
+          "height": 1024,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 716,
+          "width": 1536,
+          "height": 1536,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 717,
+          "width": 1536,
+          "height": 1536,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 718,
+          "width": 1536,
+          "height": 1536,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 719,
+          "width": 1536,
+          "height": 1536,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        },
+        {
+          "assetId": 720,
+          "width": 1536,
+          "height": 1536,
+          "collectionBlock": "GAN videos",
+          "animationExtension": "mp4"
+        }
+      ]
     }
   ]
 }

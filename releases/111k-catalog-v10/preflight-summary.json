@@ -1,0 +1,67 @@
+{
+  "result": "PASS",
+  "completedAt": "2026-11-17T20:05:04.035Z",
+  "scope": "Read-only Ethereum mainnet preflight. No deployment, activation, reward selection, allocation, or onchain transaction.",
+  "registry": {
+    "deployment": "mainnet-v1",
+    "contract": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "creationBlock": 26387160,
+    "metadataBaseUri": "https://cdn.mons.shop/111k/",
+    "state": "active",
+    "registryRevision": 9,
+    "catalogRevision": 1,
+    "originCatalog": "111k-v8",
+    "effective": {
+      "catalogVersion": "111k-v9",
+      "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+    },
+    "candidate": {
+      "catalogVersion": "111k-v10",
+      "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec"
+    },
+    "pendingCatalogUpdate": null,
+    "unfinishedCatalogOperations": 0,
+    "unfinishedOwnerBatches": 0,
+    "saleActive": true,
+    "revealEnabled": true
+  },
+  "manifest": {
+    "sha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60",
+    "newPrimaryArtworks": 6586,
+    "newAlternateImages": 37990
+  },
+  "media": {
+    "totalDistinctObjects": 51286,
+    "png": 6586,
+    "mp4": 124,
+    "traitDocuments": 6586,
+    "alternateWebP": 37990,
+    "failures": 0,
+    "validation": "Full trait bodies checked against the candidate catalog and live metadata template. Images and videos checked by bounded CDN byte ranges for identity, format, dimensions or display ratio, MIME and CORS. All videos had an H.264 track and frames; media were not decoded end-to-end."
+  },
+  "capacity": {
+    "ledgerReadAt": "2026-11-17T20:04:59.949Z",
+    "canonicalEthereumBlock": 26437039,
+    "canonicalEthereumBlockHash": "0xa4ec4afbf811d40e2e361901adcd96c2a757a0b970d509b4199ee243237be71c",
+    "eligibleMintedEggs": 10844,
+    "ownerReadyRequired": 424,
+    "unassignedUnprotectedFreeEggSlots": 27610,
+    "freeEggSlotsRequired": 6162,
+    "freeSlotsAllCategories": 70991,
+    "reservedSlots": 0,
+    "frozenSlots": 40120,
+    "totalSlots": 111111
+  },
+  "evidence": [
+    "preflight/registry-start.json",
+    "preflight/registry-end.json",
+    "preflight/chain-start.json",
+    "preflight/chain-end.json",
+    "preflight/candidate.json",
+    "preflight/operation-readiness.json",
+    "preflight/capacity.json",
+    "preflight/primary-summary.json",
+    "preflight/primary-mp4-summary.json",
+    "preflight/variants-summary.json"
+  ]
+}

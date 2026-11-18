@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRevealAssetCatalog, withRevealAssetImportLock } from './assetImport.ts';
+import { ordinaryRevealCatalogSource } from './ownerHatchingCatalog.ts';
 import { createRecoverableFileSet, readOptionalFile as optional, type FileSetRecoveryEntry } from '../shared/recoverableFileSet.ts';
 import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog,
   REVEAL_ASSET_FAMILIES, type RevealAssetCatalog } from '../../shared/ethereum/revealAssetCatalog.ts';
@@ -23,6 +24,17 @@ function sourceEntries(bytes: string | Uint8Array): Source {
   return JSON.parse(Buffer.from(bytes).toString('utf8')) as Source;
 }
 
+function validateSourceLabels(source: Source): void {
+  for (const [path, value] of Object.entries(source)) {
+    if (value.length !== 3 || typeof value[2] !== 'string' || !value[2].trim()) {
+      throw new Error(`Collection block must be a nonempty string: ${path}`);
+    }
+    const primary = path.startsWith('paintings/alt/') ? path.replace('paintings/alt/', 'paintings/').replace(/\.webp$/, '.png')
+      : path.startsWith('videos/') && path.endsWith('.webp') ? path.replace(/\.webp$/, '.mp4') : path;
+    if (source[primary]?.[2] !== value[2]) throw new Error(`Collection block companions must match: ${path}`);
+  }
+}
+
 function compatible(catalog: RevealAssetCatalog, current: RevealAssetCatalog): boolean {
   return CATEGORIES.every(category => {
     const count = catalog.categories[REVEAL_ASSET_FAMILIES[category]].count;
@@ -33,6 +45,40 @@ function compatible(catalog: RevealAssetCatalog, current: RevealAssetCatalog): b
     }
     return true;
   });
+}
+
+function catalogBindings(source: Source, current: RevealAssetCatalog, ancestors: readonly RevealAssetCatalog[], previous?: RevealCollectionBlocks) {
+  const catalogs = new Map<string, RevealCollectionBlocks['catalogs'][number]>();
+  if (previous) {
+    validateRevealCollectionBlocks(previous);
+    for (const binding of previous.catalogs) {
+      catalogs.set(binding.catalogVersion, binding);
+      const before = selectRevealCollectionBlocks(previous, binding);
+      for (const category of CATEGORIES) {
+        const family = current.categories[REVEAL_ASSET_FAMILIES[category]];
+        for (let id = 1; id <= binding.counts[category]; id++) {
+          const path = (family.imagePathTemplate ?? family.pathTemplate).replace('{id}', String(id));
+          const entry = source[path];
+          if (!entry || entry[2] !== undefined && entry[2] !== lookupRevealCollectionBlock(before, category, id)) {
+            throw new Error(`Recorded collection block changed: ${category}/${id}`);
+          }
+        }
+      }
+    }
+  }
+  for (const catalog of [...ancestors, current]) {
+    validateRevealAssetCatalog(catalog);
+    if (!compatible(catalog, current)) throw new Error(`Incompatible collection block catalog: ${catalog.catalogVersion}`);
+    const descriptor = computeRevealCatalogDescriptor(catalog);
+    const existing = catalogs.get(descriptor.catalogVersion);
+    if (existing && existing.manifestSha256 !== descriptor.manifestSha256) {
+      throw new Error(`Collection block catalog identity changed: ${descriptor.catalogVersion}`);
+    }
+    catalogs.set(descriptor.catalogVersion, { ...descriptor,
+      counts: Object.fromEntries(CATEGORIES.map(category => [category, catalog.categories[REVEAL_ASSET_FAMILIES[category]].count])) as
+        RevealCollectionBlocks['catalogs'][number]['counts'] });
+  }
+  return [...catalogs.values()].sort((first, second) => Number(first.catalogVersion.slice(6)) - Number(second.catalogVersion.slice(6)));
 }
 
 export function buildRevealCollectionBlocks(input: {
@@ -54,14 +100,7 @@ export function buildRevealCollectionBlocks(input: {
     value[2] !== undefined && value[2] !== source[path][2])) {
     throw new Error('Collection block source cannot change existing paths, dimensions, or recorded labels.');
   }
-  for (const [path, value] of Object.entries(source)) {
-    if (value.length !== 3 || typeof value[2] !== 'string' || !value[2].trim()) {
-      throw new Error(`Collection block must be a nonempty string: ${path}`);
-    }
-    const primary = path.startsWith('paintings/alt/') ? path.replace('paintings/alt/', 'paintings/').replace(/\.webp$/, '.png')
-      : path.startsWith('videos/') && path.endsWith('.webp') ? path.replace(/\.webp$/, '.mp4') : path;
-    if (source[primary]?.[2] !== value[2]) throw new Error(`Collection block companions must match: ${path}`);
-  }
+  validateSourceLabels(source);
   const ranges: Record<typeof CATEGORIES[number], Array<[number, string]>> = { painting: [], video: [], '3d': [], animated: [] };
   for (const category of CATEGORIES) {
     const family = REVEAL_ASSET_FAMILIES[category];
@@ -76,39 +115,9 @@ export function buildRevealCollectionBlocks(input: {
       else entries.push([id, label]);
     }
   }
-  const catalogs = new Map<string, RevealCollectionBlocks['catalogs'][number]>();
-  if (input.previous) {
-    validateRevealCollectionBlocks(input.previous);
-    for (const binding of input.previous.catalogs) catalogs.set(binding.catalogVersion, binding);
-  }
-  for (const catalog of [...(input.ancestors ?? []), input.catalog]) {
-    validateRevealAssetCatalog(catalog);
-    if (!compatible(catalog, input.catalog)) throw new Error(`Incompatible collection block catalog: ${catalog.catalogVersion}`);
-    const descriptor = computeRevealCatalogDescriptor(catalog);
-    const existing = catalogs.get(descriptor.catalogVersion);
-    if (existing && existing.manifestSha256 !== descriptor.manifestSha256) {
-      throw new Error(`Collection block catalog identity changed: ${descriptor.catalogVersion}`);
-    }
-    catalogs.set(descriptor.catalogVersion, { ...descriptor,
-      counts: Object.fromEntries(CATEGORIES.map(category => [category, catalog.categories[REVEAL_ASSET_FAMILIES[category]].count])) as
-        RevealCollectionBlocks['catalogs'][number]['counts'] });
-  }
   const result: RevealCollectionBlocks = { version: 1, source: { filename: '111k.json', sha256: sha256(input.source) },
-    catalogs: [...catalogs.values()].sort((first, second) => Number(first.catalogVersion.slice(6)) - Number(second.catalogVersion.slice(6))), ranges };
+    catalogs: catalogBindings(source, input.catalog, input.ancestors ?? [], input.previous), ranges };
   validateRevealCollectionBlocks(result);
-  if (input.previous) {
-    for (const binding of input.previous.catalogs) {
-      const before = selectRevealCollectionBlocks(input.previous, binding);
-      const after = selectRevealCollectionBlocks(result, binding);
-      for (const category of CATEGORIES) {
-        for (let id = 1; id <= binding.counts[category]; id++) {
-          if (lookupRevealCollectionBlock(before, category, id) !== lookupRevealCollectionBlock(after, category, id)) {
-            throw new Error(`Recorded collection block changed: ${category}/${id}`);
-          }
-        }
-      }
-    }
-  }
   return result;
 }
 
@@ -137,27 +146,44 @@ function collectionBlockFileSet(root: string) {
   });
 }
 
-async function runImport(root: string, options: RevealCollectionBlocksImportOptions) {
-  const directory = join(root, ASSETS);
-  const [frozenSource, catalogBytes, descriptorBytes, ancestorBytes, savedSource, savedArtifact] = await Promise.all([
-    readFile(join(directory, 'source.json')), readFile(join(directory, 'manifest.json')),
-    readFile(join(root, 'shared/ethereum/revealCatalog.json')), optional(join(root, 'shared/ethereum/revealCatalogAncestors.json')),
-    optional(join(directory, FILES[0])), optional(join(directory, FILES[1])),
-  ]);
-  const catalog: unknown = JSON.parse(catalogBytes.toString('utf8'));
-  validateRevealAssetCatalog(catalog, JSON.parse(descriptorBytes.toString('utf8')));
-  const ancestors: unknown = ancestorBytes ? JSON.parse(ancestorBytes.toString('utf8')) : [];
-  if (!Array.isArray(ancestors)) throw new Error('Invalid collection block ancestor catalogs.');
-  for (const ancestor of ancestors) validateRevealAssetCatalog(ancestor);
+async function savedCollectionBlocks(directory: string, catalogs: readonly RevealAssetCatalog[]) {
+  const [savedSource, savedArtifact] = await Promise.all(FILES.map(name => optional(join(directory, name))));
   if (Boolean(savedSource) !== Boolean(savedArtifact)) throw new Error('Collection block source and artifact must both exist or both be absent.');
   let previous: RevealCollectionBlocks | undefined;
   if (savedArtifact) {
     const value: unknown = JSON.parse(savedArtifact.toString('utf8'));
     validateRevealCollectionBlocks(value);
     if (value.source.sha256 !== sha256(savedSource!)) throw new Error('Saved collection block source checksum mismatch.');
+    const supported = new Set(catalogs.map(entry => entry.catalogVersion));
+    if (value.catalogs.some(binding => !supported.has(binding.catalogVersion))) {
+      throw new Error('A previously bound reveal catalog is missing from the installed catalogs.');
+    }
     previous = value;
   }
-  const source = options.sourcePath ? await readFile(resolve(options.sourcePath)) : savedSource;
+  return { previous, savedSource, savedArtifact };
+}
+
+export async function validateCollectionBlockUpgrade(root: string, source: Uint8Array, catalog: RevealAssetCatalog, ancestors: readonly RevealAssetCatalog[]) {
+  if (await optional(join(root, STATE, 'recovery.json'))) throw new Error('Resume the interrupted collection block import before advancing the catalog.');
+  const { previous } = await savedCollectionBlocks(join(root, ASSETS), [catalog, ...ancestors]);
+  const entries = sourceEntries(source);
+  if (Object.values(entries).some(entry => entry.length === 3)) validateSourceLabels(entries);
+  catalogBindings(entries, catalog, ancestors, previous);
+}
+
+async function runImport(root: string, options: RevealCollectionBlocksImportOptions) {
+  const directory = join(root, ASSETS);
+  const [frozenSource, catalogBytes, descriptorBytes, ancestorBytes] = await Promise.all([
+    readFile(join(directory, 'source.json')), readFile(join(directory, 'manifest.json')),
+    readFile(join(root, 'shared/ethereum/revealCatalog.json')), optional(join(root, 'shared/ethereum/revealCatalogAncestors.json')),
+  ]);
+  const catalog: unknown = JSON.parse(catalogBytes.toString('utf8'));
+  validateRevealAssetCatalog(catalog, JSON.parse(descriptorBytes.toString('utf8')));
+  const ancestors: unknown = ancestorBytes ? JSON.parse(ancestorBytes.toString('utf8')) : [];
+  if (!Array.isArray(ancestors)) throw new Error('Invalid collection block ancestor catalogs.');
+  for (const ancestor of ancestors) validateRevealAssetCatalog(ancestor);
+  const { previous, savedSource, savedArtifact } = await savedCollectionBlocks(directory, [catalog, ...ancestors]);
+  const source = options.sourcePath ? Buffer.from(ordinaryRevealCatalogSource(await readFile(resolve(options.sourcePath), 'utf8'))) : savedSource;
   if (!source) throw new Error('Collection block source is missing; supply --source with the complete three-value manifest.');
   const artifact = buildRevealCollectionBlocks({ source, frozenSource, catalog, ancestors, previous });
   const next = [source, Buffer.from(`${JSON.stringify(artifact, null, 2)}\n`)];

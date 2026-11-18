@@ -8,17 +8,19 @@ import {
 } from '../../shared/ethereum/revealAssetCatalog.ts';
 import type { EthereumArtworkCategory } from '../../shared/ethereum/reveal.ts';
 import { withMetadataLock } from './lock.ts';
+import { ordinaryRevealCatalogSource } from './ownerHatchingCatalog.ts';
 import { createRecoverableFileSet, readOptionalFile as readOptional, type FileSetRecoveryEntry } from '../shared/recoverableFileSet.ts';
 
 const ROOT_DIRECTORY = fileURLToPath(new URL('../../', import.meta.url));
 const ARTWORK_TEMPLATE = fileURLToPath(new URL('./templates/artwork.json', import.meta.url));
 const ASSET_DIRECTORY = 'scripts/ethereum-metadata/reveal-assets/111k_devnet';
 const DESCRIPTOR_PATH = 'shared/ethereum/revealCatalog.json';
+const ANCESTORS_PATH = 'shared/ethereum/revealCatalogAncestors.json';
 const ARTWORK_COUNT = 111_111;
 const DEFAULT_AVAILABLE_EGGS = 76_700;
 const REFERENCE_CATEGORIES: EthereumArtworkCategory[] = ['egg', 'painting', 'video', '3d', 'animated'];
 const OUTPUT_PATHS = ['source.json', 'manifest.json', ...REFERENCE_CATEGORIES.map(category => `${category}.template.json`)]
-  .map(name => join(ASSET_DIRECTORY, name)).concat(DESCRIPTOR_PATH);
+  .map(name => join(ASSET_DIRECTORY, name)).concat(DESCRIPTOR_PATH, ANCESTORS_PATH);
 const IMPORT_STATE_DIRECTORY = '.cache/111k-assets';
 const SOURCE_GROUPS = ['3d', 'animated', 'paintings', 'paintings/alt', 'videos/mp4', 'videos/webp'] as const;
 type SourceGroup = typeof SOURCE_GROUPS[number];
@@ -271,7 +273,7 @@ async function runImport(rootDirectory: string, options: RevealAssetImportOption
   const assetDirectory = join(rootDirectory, ASSET_DIRECTORY);
   const manifestPath = join(assetDirectory, 'manifest.json');
   const descriptorPath = join(rootDirectory, DESCRIPTOR_PATH);
-  const [existingManifestBytes, existingDescriptorBytes, sourceBytes, templateBytes] = await Promise.all([
+  const [existingManifestBytes, existingDescriptorBytes, inputBytes, templateBytes] = await Promise.all([
     readOptional(manifestPath),
     readOptional(descriptorPath),
     readFile(options.sourcePath ? resolve(options.sourcePath) : join(assetDirectory, 'source.json')),
@@ -300,6 +302,8 @@ async function runImport(rootDirectory: string, options: RevealAssetImportOption
   }
   const savedAvailableEggs = record(existingManifest) && record(existingManifest.importSettings)
     ? existingManifest.importSettings.availableEggs : undefined;
+  const sourceBytes = options.sourcePath || priorVersion !== catalogVersion
+    ? Buffer.from(ordinaryRevealCatalogSource(inputBytes.toString('utf8'))) : inputBytes;
   const manifest = buildRevealAssetCatalog(sourceBytes, {
     catalogVersion: catalogVersion as string,
     availableEggs: options.availableEggs ?? (savedAvailableEggs as number | undefined),
@@ -321,6 +325,28 @@ async function runImport(rootDirectory: string, options: RevealAssetImportOption
       file.path === descriptorPath ? existingDescriptorBytes : await readOptional(file.path),
   }))))
     .filter(file => !file.previous?.equals(file.bytes));
+  if (priorVersion !== undefined && priorVersion !== catalogVersion) {
+    validateRevealAssetCatalog(existingManifest, existingDescriptor);
+    const path = join(rootDirectory, ANCESTORS_PATH);
+    const previous = await readOptional(path);
+    const ancestors: unknown = previous ? JSON.parse(previous.toString('utf8')) : [];
+    if (!Array.isArray(ancestors)) throw new Error('Invalid supported catalog ancestors.');
+    let retained = false;
+    for (const ancestor of ancestors) {
+      validateRevealAssetCatalog(ancestor);
+      if (ancestor.catalogVersion === priorVersion) {
+        if (JSON.stringify(ancestor) !== JSON.stringify(existingManifest)) throw new Error('Conflicting supported predecessor catalog.');
+        retained = true;
+      }
+      if (ancestor.catalogVersion === catalogVersion) validateRevealAssetCatalog(ancestor, descriptor);
+    }
+    if (!retained) {
+      ancestors.push(existingManifest);
+      outputs.unshift({ path, previous, bytes: Buffer.from(JSON.stringify(ancestors, null, 2) + '\n') });
+    }
+    const { validateCollectionBlockUpgrade } = await import('./collectionBlocks.ts');
+    await validateCollectionBlockUpgrade(rootDirectory, sourceBytes, manifest, ancestors);
+  }
   const changedFiles = outputs.map(output => relative(rootDirectory, output.path));
   if (outputs.length > 0 && priorVersion === catalogVersion) {
     throw new Error(`Changed or stale catalog ${catalogVersion} requires a higher catalog version: ${changedFiles.join(', ')}`);

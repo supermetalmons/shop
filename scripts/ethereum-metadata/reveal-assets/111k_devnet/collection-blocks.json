@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "filename": "111k.json",
-    "sha256": "1914e178a8e8acec92f9bd19485da58e054cff083a926bf4340d128bc07dcc68"
+    "sha256": "baabe4d52bb0d1ec920f2cb4f3593134f317ae28350c61e19e5c8dee9b32ae63"
   },
   "catalogs": [
     {
@@ -50,6 +50,16 @@
       "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1",
       "counts": {
         "painting": 68980,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v10",
+      "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec",
+      "counts": {
+        "painting": 75442,
         "video": 58,
         "3d": 3000,
         "animated": 421
@@ -153,6 +163,18 @@
       [
         68980,
         "watercolor mons"
+      ],
+      [
+        70480,
+        "DriFPS"
+      ],
+      [
+        72769,
+        "ever since i was"
+      ],
+      [
+        75442,
+        "Collage Paintings"
       ]
     ],
     "video": [

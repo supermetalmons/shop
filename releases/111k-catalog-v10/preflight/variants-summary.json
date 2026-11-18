@@ -1,0 +1,22 @@
+{
+  "started": "2026-11-17T19:49:58.281Z",
+  "sourceSha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60",
+  "expected": 37990,
+  "checked": 37990,
+  "ok": 37990,
+  "failed": 0,
+  "retries": 80,
+  "resumed": 0,
+  "finished": "2026-11-17T20:04:48.345Z",
+  "purpose": "Read-only public CDN validation of newly added alternate painting WebP files",
+  "uriPattern": "https://cdn.lil.org/nft/111k/paintings/alt/{id}.webp",
+  "firstId": 30991,
+  "lastId": 68980,
+  "probe": "GET Range bytes=0-47, WebP RIFF length, WebP header width and height compared with exact manifest, image/webp MIME, browser Origin/CORS",
+  "responses": {
+    "206": 37990
+  },
+  "concurrency": 16,
+  "objectsFileSha256": "93ecda80c97ac34b90a66d8512d663971ce8e74d9045401bc4fc6e78fb685cd3",
+  "failures": []
+}

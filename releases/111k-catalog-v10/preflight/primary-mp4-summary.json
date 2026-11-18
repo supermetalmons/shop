@@ -1,0 +1,17 @@
+{
+  "started": "2026-11-17T19:50:27.294Z",
+  "completed": "2026-11-17T19:51:05.455Z",
+  "sourceSha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60",
+  "objectCount": 124,
+  "failures": [],
+  "posterAspectDifferences": [],
+  "codecs": [
+    "avc1"
+  ],
+  "durationRangeSeconds": [
+    4,
+    6
+  ],
+  "observationsSha256": "b91f9f9eda51cf015de949c809a1cd1767aaae3f0254c0ca4eb65cf6e3502a7c",
+  "method": "Bounded read-only byte ranges: validate top-level object boundaries, nonempty mdat, moov video track dimensions, duration, codec and frame count. No full video decode."
+}

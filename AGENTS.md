@@ -27,6 +27,18 @@ reporting completion. This is an in-place catalog expansion, not a testnet
 replacement. Mainnet application and sending marketplace-refresh transactions
 require explicit instructions; keep refresh calldata unsigned by default.
 
+### Keep hatch assignments private
+
+Keep selected token IDs, reserved artwork IDs, draw order and token-to-reward
+pairs in the allocation ledger. Publish complete catalog inputs, media checks,
+counts and aggregate verification results. Use the private cutoff bundle path
+in the runbook for ordinary releases. Keep raw operator evidence in
+`.operations/` and scratch data in `.cache/`.
+
+Review release evidence before publishing, including decompressed records.
+The ready list and artwork names after a holder claims are public. Keep
+individual tokens and unpublished reward assignments out of release evidence.
+
 ## 111k testnet replacements
 
 Every replacement of the 111k testnet includes purging the superseded deployment

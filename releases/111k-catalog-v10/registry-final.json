@@ -1,0 +1,16 @@
+{
+  "deploymentId": "mainnet-v1",
+  "dropId": "111k",
+  "chainId": 1,
+  "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "metadataBaseUri": "https://cdn.mons.shop/111k/",
+  "deploymentBlock": 26387160,
+  "catalogVersion": "111k-v8",
+  "effectiveCatalogVersion": "111k-v10",
+  "effectiveCatalogSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec",
+  "catalogRevision": 2,
+  "revision": 12,
+  "catalogUpdateId": null,
+  "state": "active",
+  "lastError": null
+}

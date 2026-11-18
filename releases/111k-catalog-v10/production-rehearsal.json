@@ -1,0 +1,119 @@
+{
+  "runtime": "local Miniflare with SQLite, D1, and R2",
+  "registryOrigin": "111k-v8",
+  "fixturePredecessor": "111k-v9",
+  "sourceSha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60",
+  "manifestPaths": 148276,
+  "unchangedPaths": 103507,
+  "knownOwnerArtworks": 175,
+  "knownRelics": 18,
+  "newAlternates": 37990,
+  "newArtworks": 6586,
+  "ownerCount": 424,
+  "futureCount": 6162,
+  "groups": [
+    {
+      "category": "animated",
+      "collectionBlock": "GAN videos",
+      "firstId": 597,
+      "lastId": 720,
+      "ownerCount": 124,
+      "newArtworks": 124,
+      "futureCount": 0
+    },
+    {
+      "category": "painting",
+      "collectionBlock": "DriFPS",
+      "firstId": 68981,
+      "lastId": 70480,
+      "ownerCount": 100,
+      "newArtworks": 1500,
+      "futureCount": 1400
+    },
+    {
+      "category": "painting",
+      "collectionBlock": "ever since i was",
+      "firstId": 70481,
+      "lastId": 72769,
+      "ownerCount": 100,
+      "newArtworks": 2289,
+      "futureCount": 2189
+    },
+    {
+      "category": "painting",
+      "collectionBlock": "Collage Paintings",
+      "firstId": 72770,
+      "lastId": 75442,
+      "ownerCount": 100,
+      "newArtworks": 2673,
+      "futureCount": 2573
+    }
+  ],
+  "allocation": [
+    {
+      "collection": "GAN videos",
+      "owner": 124,
+      "future": 0
+    },
+    {
+      "collection": "DriFPS",
+      "owner": 100,
+      "future": 1400
+    },
+    {
+      "collection": "ever since i was",
+      "owner": 100,
+      "future": 2189
+    },
+    {
+      "collection": "Collage Paintings",
+      "owner": 100,
+      "future": 2573
+    }
+  ],
+  "atActivation": {
+    "free": 109631,
+    "reserved": 20,
+    "frozen": 1460,
+    "freeEggs": 32058,
+    "revision": 2
+  },
+  "exchangedFreeEggs": 6162,
+  "automaticFrozenOrReservedConversions": 0,
+  "publishedInFixture": 424,
+  "ordinaryCrateMetadataVerified": true,
+  "fixtureVerificationPasses": 2,
+  "acceptanceBlock": 1003,
+  "localActivationMs": 298,
+  "observationClockAdvancedMs": 300001,
+  "stagingCleaned": true,
+  "afterTwoOwnerClaims": {
+    "ready": 422,
+    "hatched": 2,
+    "inventory": {
+      "free": 109611,
+      "reserved": 20,
+      "frozen": 1480,
+      "freeEggs": 32059,
+      "revision": 2
+    }
+  },
+  "exercised": [
+    "D1 claim, mirror and release retries under active traffic",
+    "canonical minted scan and activation snapshot reorg recovery",
+    "reordered begin replay",
+    "redeemed candidate replaced at a fresh canonical cutoff",
+    "two local R2 verification passes separated by a simulated scheduler interval",
+    "staging restart",
+    "ordinary reveal, release, and earlier hatch during staging",
+    "reservation after sealing",
+    "insufficient eligible minted eggs",
+    "rollback after injected activation failure",
+    "activation replay after restart",
+    "future crate and earlier owner draw from shared additions",
+    "unauthorized owner rejection",
+    "signed GAN and painting claims with idempotent replay",
+    "free-egg capacity checks before begin and at cutover",
+    "cancelled candidate with intact predecessor"
+  ]
+}

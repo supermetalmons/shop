@@ -58,11 +58,12 @@ function fixture() {
 test('private reveal maintenance accepts only explicit identities and revisions', async () => {
   const f = fixture();
   assert.deepEqual(Object.getOwnPropertyNames(EthereumRevealMaintenance.prototype).sort(),
-    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'inspectReplacement', 'inspectRetired', 'ownerHatching', 'purgeRetired', 'rebuildEmptyPool', 'relicImages', 'retireForReplacement']);
+    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'inspectReplacement', 'inspectRetired', 'mixedAllocation', 'ownerHatching', 'purgeRetired', 'rebuildEmptyPool', 'relicImages', 'retireForReplacement']);
   for (const value of [null, {}, { ...request, expectedRevision: 0 }, { ...request, expectedRevision: '4' },
     { ...request, deploymentId: '../old' }, { ...request, contractAddress: currentContract }]) {
     await assert.rejects(f.maintenance.purgeRetired(value), /Invalid reveal maintenance/);
     await assert.rejects(f.maintenance.inspectRetired(value), /Invalid reveal maintenance/);
+    await assert.rejects(f.maintenance.mixedAllocation(value), /Invalid mixed allocation/);
   }
   assert.deepEqual(f.calls, []);
 });
@@ -117,7 +118,7 @@ for (const invalid of ['missing', 'revision', 'active', 'not-retired', 'mainnet'
   });
 }
 
-for (const catalogVersion of ['111k-v1', '111k-v4', '111k-v5', '111k-v6', '111k-v7', '111k-v8', '111k-v9']) {
+for (const catalogVersion of ['111k-v1', '111k-v4', '111k-v5', '111k-v6', '111k-v7', '111k-v8', '111k-v9', '111k-v10']) {
   test(`catalog ${catalogVersion} requires an explicit retirement marker before purge`, async () => {
     const f = fixture();
     Object.assign(f.registry.row!, { catalog_version: catalogVersion, retired_at_ms: null, replacement_deployment_id: null });

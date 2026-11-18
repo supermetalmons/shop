@@ -1,9 +1,9 @@
 # 111k reveal asset catalog
 
-[manifest.json](manifest.json) is the generated `111k-v9` reveal catalog for fresh
+[manifest.json](manifest.json) is the generated `111k-v10` reveal catalog for fresh
 deployments and explicit catalog expansion. [source.json](source.json) preserves the
-artwork dimensions map from the supplied `111k.json`. Relic images belong to the
-separate relic metadata and are excluded from this artwork source. The catalog uses the media root
+ordinary artwork dimensions from the supplied `111k.json`. Both import commands
+validate and exclude known relics and owner-supplement animations. The catalog uses the media root
 `https://cdn.lil.org/nft/111k/`; metadata JSONs still use the deployment's
 `cdn.mons.shop` prefix. See the [reveal runbook](../../../docs/111k_reveal_ops.md)
 for publication and registration.
@@ -12,8 +12,8 @@ for publication and registration.
 
 | Category | Allocated | Image | Animation/model | Ratio |
 | --- | ---: | --- | --- | --- |
-| Eggs | 38,652 | `eggs/{id}.png` | — | 1:1 |
-| Paintings | 68,980 | `paintings/{id}.png` | — | Per ID |
+| Eggs | 32,190 | `eggs/{id}.png` | — | 1:1 |
+| Paintings | 75,442 | `paintings/{id}.png` | — | Per ID |
 | 3D | 3,000 | `3d/{id}.png` | `3d/{id}.glb` | 1:1 preview |
 | Animated | 421 | `animated/{id}.png` | `animated/{id}.mp4` | Per ID, currently 466:503 |
 | Videos | 58 | `videos/{id}.webp` | `videos/{id}.mp4` | Per ID |
@@ -21,12 +21,12 @@ for publication and registration.
 
 Category-local IDs are continuous integers beginning at 1. They are independent
 of onchain token IDs. There are 76,700 available egg PNGs; the current allocation
-uses IDs 1–38,652 and leaves IDs 38,653–76,700 unused. Every import recalculates
+uses IDs 1–32,190 for a fresh deployment. Each import recalculates
 the egg allocation as `111111 - nonEggArtworkCount` and rejects an insufficient
 egg inventory or more than 111,111 non-egg artworks.
 
-Paintings 1–30,990 also have `paintings/alt/{id}.webp` variants. Paintings
-30,991–68,980 have no alternative. Their paths
+Paintings 1–68,980 also have `paintings/alt/{id}.webp` variants. Paintings
+68,981–75,442 have only the primary image. Their paths
 and exact ratios are preserved separately; they do not add artworks or replace
 the PNG used by metadata. Video MP4/poster pairs also count as one artwork each.
 The source map intentionally omits 3D GLBs and animated MP4s; those companions
@@ -54,14 +54,22 @@ block labels cannot change or disappear during catalog expansion.
 Run it from the shop repository:
 
 ```sh
-npm run ethereum:assets -- import --source /path/to/updated/111k.json --catalog-version 111k-v10
+npm run ethereum:assets -- import --source /path/to/updated/111k.json --catalog-version 111k-v11
+npm run ethereum:assets -- collection-blocks --source /path/to/updated/111k.json
 npm run check:ethereum-assets
 ```
 
 The first imported revision is `111k-v4`. Use a higher explicit catalog version
 whenever the source, allocation settings, or generated manifest changes. An
-identical import at the same version is a no-op; changed content at the same
-or an older version fails before any output is written. For additions to an existing
+identical import at the same version is a no-op. The importer rejects changed
+content at the same version and refuses lower versions. Advancing the version
+retains the previous manifest in the supported catalog registry as part of the same
+recoverable write. The collection-block check verifies all previously bound catalog
+versions are still available. Before writing a higher revision, the importer
+checks candidate media against retained catalogs, including before the first
+collection-block import. It checks supplied labels against recorded bindings.
+Two-value dimension maps can still use a separate labeled source.
+For additions to an existing
 pool, use the [catalog expansion operation](../../../docs/111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs)
 instead of a standalone import. It freezes the old-to-new egg mapping, preserves
 supported ancestor catalogs, and separates local promotion from live application.
@@ -90,10 +98,10 @@ video/poster pairs, and supply before writing generated outputs.
 
 ## Collection blocks in reveal responses
 
-[collection-blocks.source.json](collection-blocks.source.json) preserves the full
-manifest with block labels separately from the frozen catalog source.
+[collection-blocks.source.json](collection-blocks.source.json) preserves the ordinary
+artwork dimensions and block labels separately from the frozen catalog source.
 [collection-blocks.json](collection-blocks.json) contains only the generated ranges,
-source checksum, and verified catalog bindings. The API Worker imports this compact
+normalized source checksum, and verified catalog bindings. The API Worker imports this compact
 artifact; the full source and generator are not bundled into the Worker or browser.
 
 Generate it for the current catalog after importing or promoting artwork additions:
@@ -106,7 +114,7 @@ npm run check:ethereum-assets
 The input must exactly cover the current catalog paths and dimensions, with a
 collection block on every entry. The generator verifies compatible ancestor media,
 binds exact catalog versions and hashes, and retains earlier bindings and labels.
-The source checksum records the exact input bytes. The current catalog, its source,
+The source checksum records the normalized ordinary source bytes. The current catalog, its source,
 descriptor, templates, allocation, and publication state remain unchanged.
 
 Both reveal endpoints add `collectionBlock` using the effective artwork category
@@ -129,7 +137,7 @@ pending recovery without changing files.
 
 ## Manifest and metadata references
 
-Storage format version 2 is distinct from the `111k-v9` catalog revision.
+Storage format version 2 is distinct from the `111k-v10` catalog revision.
 `source.sha256` hashes the exact source bytes. `importSettings` records the
 available egg inventory and square egg ratio. The compact shared descriptor
 pins the catalog version and SHA-256 of `JSON.stringify(manifest)`; browser
@@ -172,9 +180,12 @@ placeholder PNG, preserving all existing artwork counts and source dimensions.
 The v6 catalog added paintings 30,991–40,348 and reduced the egg allocation by
 9,358. The v7 catalog added paintings 40,349–47,128 and reduced the egg allocation
 by another 6,780. The v8 catalog added paintings 47,129–52,329 at 466:503 and
-reduced the egg allocation by another 5,201. The v9 catalog adds paintings
-52,330–68,980 with per-asset ratios and replaces egg IDs 38,653–55,303, reducing
-the egg allocation by another 16,651. The retained v5, v6, v7, and v8 catalogs
+reduced the egg allocation by another 5,201. The v9 catalog added paintings
+52,330–68,980 with per-asset ratios and replaced egg IDs 38,653–55,303, reducing
+the egg allocation by another 16,651. The v10 catalog adds paintings 68,981–75,442.
+The mainnet batch reserves 300 of them and all 124 GAN videos from the owner
+supplement for holder hatching, and exchanges 6,162 free egg slots for the
+other paintings. The retained v5 through v9 catalogs
 remain available for existing deployments until their explicit online catalog
 update activates.
 

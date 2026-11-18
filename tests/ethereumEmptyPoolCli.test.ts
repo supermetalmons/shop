@@ -19,6 +19,14 @@ test('empty-pool CLI pins one operation and requires explicit writes', () => {
   for (const command of ['inspect', 'verify']) assert.throws(() => parseEmptyPoolArgs([command, ...scope, '--write']), /Usage/);
 });
 
+test('empty-pool writes reject public bundle directories before opening a transport', async () => {
+  let calls = 0;
+  await assert.rejects(emptyPoolMain(['apply', ...scope, '--write'], {
+    transport: async () => { calls++; throw new Error('Unexpected transport'); },
+  }), /Hatch evidence/);
+  assert.equal(calls, 0);
+});
+
 test('empty-pool CLI rejects ambiguous identities and unsafe revisions', () => {
   assert.throws(() => parseEmptyPoolArgs(['apply', ...scope, '--write', '--operation-id', `empty-${'b'.repeat(32)}`]), /Duplicate/);
   for (const revision of ['0', '-1', '01', '1.5', '9007199254740992']) {

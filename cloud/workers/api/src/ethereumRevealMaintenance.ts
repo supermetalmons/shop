@@ -18,7 +18,20 @@ import { parseEmptyPoolRequest } from './ethereumRevealEmptyPool.js';
 import type { EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/revealMaintenance.js';
 import { parseOwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceResult } from '../../../../shared/ethereum/ownerHatchingMaintenance.js';
 
+import { requireMixedMainnetDeployment } from './ethereumMixedAllocationOperation.js';
+import { parseMixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
+
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async mixedAllocation(value: unknown): Promise<MixedAllocationMaintenanceResult> {
+    const request = parseMixedAllocationMaintenanceRequest(value);
+    const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)
+      .bind(request.deploymentId).first<Record<string, unknown>>();
+    if (!row) throw new Error('Mixed allocation deployment is not registered.');
+    const deployment = parseEthereumRevealDeployment(row);
+    requireMixedMainnetDeployment(deployment);
+    return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).mixedAllocationOperation(deployment, request);
+  }
+
   async ownerHatching(value: unknown): Promise<OwnerHatchingMaintenanceResult> {
     const request = parseOwnerHatchingMaintenanceRequest(value);
     const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)

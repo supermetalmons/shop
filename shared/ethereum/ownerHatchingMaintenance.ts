@@ -13,7 +13,7 @@ export type OwnerHatchingMaintenanceRequest = {
 export type OwnerHatchingMaintenanceResult = {
   deploymentId: string;
   batchId: string;
-  phase: 'scanning' | 'staging' | 'prepared' | 'activating' | 'publishing' | 'observing' | 'complete';
+  phase: 'scanning' | 'staging' | 'prepared' | 'activating' | 'publishing' | 'observing' | 'complete' | 'cancelled';
   readyCount: number;
   grailCount: number;
   candidates: number;
@@ -33,6 +33,12 @@ export type OwnerHatchingMaintenanceResult = {
   observationUntilMs: number | null;
   complete: boolean;
 };
+
+export function redactOwnerHatchingCursor(cursor: string | null): 'pending' | null {
+  if (cursor === null) return null;
+  if (typeof cursor !== 'string' || !cursor) throw new Error('Invalid owner hatching verification cursor.');
+  return 'pending';
+}
 
 export function parseOwnerHatchingMaintenanceRequest(value: unknown): OwnerHatchingMaintenanceRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid owner hatching operation.');

@@ -1,0 +1,10 @@
+{
+  "at": "2026-11-17T21:29:37.496Z",
+  "chainId": 1,
+  "contract": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "block": 26437462,
+  "blockHash": "0x7f240423ddc6f72fd8289ac8b4e573b71279d87fac0ec5ecbf78d525cde946a1",
+  "baseURI": "https://cdn.mons.shop/111k/",
+  "maxArtworks": 111111,
+  "saleActive": true
+}

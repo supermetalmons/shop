@@ -1,0 +1,52 @@
+{
+  "started": "2026-11-17T19:49:37.760Z",
+  "completed": "2026-11-17T19:53:25.322Z",
+  "methods": [
+    "GET",
+    "GET Range 0-32"
+  ],
+  "maxConcurrency": 12,
+  "sourceSha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60",
+  "predecessor": {
+    "catalogVersion": "111k-v9",
+    "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+  },
+  "target": {
+    "catalogVersion": "111k-v10",
+    "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec"
+  },
+  "tokensTemplateSha256": "07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9",
+  "newArtworks": 6586,
+  "expectedObjects": 13296,
+  "passed": {
+    "png": 6586,
+    "mp4": 124,
+    "traits": 6586
+  },
+  "failed": 0,
+  "retries": 0,
+  "byBlock": {
+    "GAN videos": {
+      "png": 124,
+      "mp4": 124,
+      "traits": 124
+    },
+    "DriFPS": {
+      "png": 1500,
+      "mp4": 0,
+      "traits": 1500
+    },
+    "ever since i was": {
+      "png": 2289,
+      "mp4": 0,
+      "traits": 2289
+    },
+    "Collage Paintings": {
+      "png": 2673,
+      "mp4": 0,
+      "traits": 2673
+    }
+  },
+  "evidenceSha256": "78ab1f216658ef69b4ed1528b45ecdcc7c5f117d7fb5a746d9063c482f0f1add",
+  "notes": "All PNG dimensions, MP4 signatures, MIME, CORS, non-empty length and trait documents checked; trait JSON used release-bound production parser and metadata guards. Media payloads range-sampled, not decoded end-to-end."
+}

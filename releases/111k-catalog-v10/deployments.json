@@ -1,0 +1,54 @@
+{
+  "api": {
+    "before": {
+      "id": "610b10fa-7453-48e5-951c-42453e8131d8",
+      "versions": [
+        {
+          "version_id": "bef3f00f-206a-4771-82c9-c93c3812f3da",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-11-16T12:05:25.951104Z"
+    },
+    "after": {
+      "id": "b1f8986f-0f55-40ce-b8d4-947a7e83eb98",
+      "versions": [
+        {
+          "version_id": "204e0c10-b380-402d-945e-16182cab2236",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-11-17T20:32:38.327174Z"
+    }
+  },
+  "frontend": {
+    "before": {
+      "id": "2861c5d3-9c06-4ba9-bba8-41c6e2e2c697",
+      "versions": [
+        {
+          "version_id": "ea9ea576-478a-4f28-b77a-96119446f875",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-11-17T17:00:24.281535Z"
+    },
+    "after": {
+      "id": "68b1037e-f29e-48d2-8bc7-bfa63c5a67c5",
+      "versions": [
+        {
+          "version_id": "fafc17f3-be97-4508-b2de-5605b684a157",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-11-17T20:37:33.548993Z"
+    }
+  },
+  "coordinatorUpdateWindow": {
+    "observedAt": "2026-11-17T20:33:12.692Z",
+    "deploymentAt": "2026-11-17T20:32:38.327174Z",
+    "version": "204e0c10-b380-402d-945e-16182cab2236",
+    "percentage": 100,
+    "delayMs": 300000,
+    "beginNotBeforeMs": 1794947892692
+  }
+}

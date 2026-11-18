@@ -1,3 +1,4 @@
+import { requireOrdinaryCatalogTarget } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import { createHash } from 'node:crypto';
 import { encodeCall } from '../../../../shared/ethereum/abi.js';
 import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUri.js';
@@ -126,6 +127,7 @@ export class EthereumRevealCatalogUpdate {
     deployment = await this.current(deployment);
     if (request.action === 'begin') {
       const batch = request.batch!;
+      if (!record) requireOrdinaryCatalogTarget(deployment.chainId, batch.target.descriptor);
       if (!this.registry.getCatalog(batch.predecessor.descriptor.catalogVersion, batch.predecessor.descriptor.manifestSha256) ||
         !this.registry.getCatalog(batch.target.descriptor.catalogVersion, batch.target.descriptor.manifestSha256)) {
         throw new Error('Deploy support for both catalog revisions before beginning the update.');

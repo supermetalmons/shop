@@ -1,0 +1,95 @@
+{
+  "checkedAt": "2026-11-17T19:49:03.812Z",
+  "definition": {
+    "version": 1,
+    "sourceSha256": "e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60",
+    "predecessor": {
+      "catalogVersion": "111k-v9",
+      "manifestSha256": "a7cf99fd2f9850a069ff9e69dfacdfb87249eeb0c4a8d5fcee1967da950974f1"
+    },
+    "target": {
+      "catalogVersion": "111k-v10",
+      "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec"
+    },
+    "collectionBlocksSha256": "1602b99cf2dde92cad6a0910507452afd2f84839a819b11460d6e98575ebb85d",
+    "ownerSupplementSha256": "5a31cbfedb39acb4368a9d4e36ce9effa979fba6693898676ba84a23dcbf4d63",
+    "groups": [
+      {
+        "category": "animated",
+        "collectionBlock": "GAN videos",
+        "firstId": 597,
+        "lastId": 720,
+        "ownerCount": 124
+      },
+      {
+        "category": "painting",
+        "collectionBlock": "DriFPS",
+        "firstId": 68981,
+        "lastId": 70480,
+        "ownerCount": 100
+      },
+      {
+        "category": "painting",
+        "collectionBlock": "ever since i was",
+        "firstId": 70481,
+        "lastId": 72769,
+        "ownerCount": 100
+      },
+      {
+        "category": "painting",
+        "collectionBlock": "Collage Paintings",
+        "firstId": 72770,
+        "lastId": 75442,
+        "ownerCount": 100
+      }
+    ]
+  },
+  "summary": {
+    "manifestPaths": 148276,
+    "unchangedPaths": 103507,
+    "knownOwnerArtworks": 175,
+    "knownRelics": 18,
+    "newAlternates": 37990,
+    "newArtworks": 6586,
+    "ownerCount": 424,
+    "futureCount": 6162,
+    "groups": [
+      {
+        "category": "animated",
+        "collectionBlock": "GAN videos",
+        "firstId": 597,
+        "lastId": 720,
+        "ownerCount": 124,
+        "newArtworks": 124,
+        "futureCount": 0
+      },
+      {
+        "category": "painting",
+        "collectionBlock": "DriFPS",
+        "firstId": 68981,
+        "lastId": 70480,
+        "ownerCount": 100,
+        "newArtworks": 1500,
+        "futureCount": 1400
+      },
+      {
+        "category": "painting",
+        "collectionBlock": "ever since i was",
+        "firstId": 70481,
+        "lastId": 72769,
+        "ownerCount": 100,
+        "newArtworks": 2289,
+        "futureCount": 2189
+      },
+      {
+        "category": "painting",
+        "collectionBlock": "Collage Paintings",
+        "firstId": 72770,
+        "lastId": 75442,
+        "ownerCount": 100,
+        "newArtworks": 2673,
+        "futureCount": 2573
+      }
+    ]
+  }
+}

@@ -4,7 +4,7 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-New deployments use catalog version `111k-v9`: 38,652 eggs, 68,980 paintings,
+The `111k-v10` catalog for new deployments contains 32,190 eggs, 75,442 paintings,
 58 videos, 3,000 3D models, and 421 animated artworks. The importer fills the
 111,111-artwork supply from 76,700 available eggs after counting all non-egg
 artworks. The runtime supports the current catalog and explicitly retained ancestor
@@ -115,10 +115,43 @@ For a new batch, run from the repository root:
 hatch_source='/absolute/path/to/111k.json'
 npm run ethereum:catalog-update -- inspect --source "$hatch_source"
 hatch_catalog='<targetVersion returned by inspect>'
-hatch_bundle="releases/111k-catalog-${hatch_catalog#111k-}"
+hatch_bundle=".operations/111k-catalog-${hatch_catalog#111k-}"
 npm run ethereum:catalog-update -- prepare --source "$hatch_source" --catalog-version "$hatch_catalog" --bundle "$hatch_bundle"
 npm run ethereum:catalog-update -- verify --bundle "$hatch_bundle"
 ```
+
+For a Sepolia deployment still on v8, prepare its ordinary in-place upgrade to
+the installed v10 catalog with the frozen v8 source and the effective catalog
+checksum from step 1. The checksum selects the deployed predecessor even when
+multiple catalog versions share the same source. Ethereum mainnet uses the
+[mixed allocation workflow](#mainnet-mixed-allocation) for v10.
+
+```sh
+hatch_source='releases/111k-catalog-v10/original-input.json'
+hatch_previous='releases/111k-catalog-v8/source.json'
+hatch_previous_sha='<effective catalog checksum from step 1>'
+hatch_catalog='111k-v10'
+hatch_bundle=".operations/111k-catalog-v10-from-v8"
+npm run ethereum:catalog-update -- inspect --source "$hatch_source" --predecessor-source "$hatch_previous" --predecessor-manifest-sha256 "$hatch_previous_sha" --catalog-version "$hatch_catalog"
+npm run ethereum:catalog-update -- prepare --source "$hatch_source" --predecessor-source "$hatch_previous" --predecessor-manifest-sha256 "$hatch_previous_sha" --catalog-version "$hatch_catalog" --bundle "$hatch_bundle"
+npm run ethereum:catalog-update -- verify --bundle "$hatch_bundle"
+```
+
+First preparation checks the predecessor against the installed ancestry and matches
+the normalized input and generated manifest to the installed target. To retry
+after the checkout advances, use the same sources, target version and private
+bundle directory. Preparation verifies the frozen bundle and reuses its draw.
+In step 3, skip local promotion and collection-block generation for this
+already-installed target and run `npm run check:ethereum-assets`.
+
+The default prepare destination is the ignored `.operations/111k-catalog-vN/`.
+Keep the bundle, original apply request, journals, selected egg files, and token-level
+samples private. Public release records may contain reviewed sources, catalog hashes,
+aggregate counts, and verification digests. Historical release bundles can still be
+inspected or verified in place. To resume a historical write, copy its complete frozen
+directory, including its original journal, into `.operations/` and use that copy with
+the recorded revision. The private destination also supports an external private
+directory outside every Git checkout.
 
 Inspect derives the next version without writes/network access; review additions,
 egg count, cutoff, and supply. Prepare freezes exact sources, catalogs, nonce, and
@@ -318,14 +351,81 @@ eggs are excluded; a concurrent eligibility conflict aborts only that catalog
 operation, without pausing normal reveals or owner hatching.
 
 ```sh
-npm run ethereum:catalog-update -- eligible-eggs --deployment-id "$owner_hatch_deployment" --expected-revision '<current registry revision>' --egg-cutoff '<cutoff>'
-npm run ethereum:catalog-update -- prepare --source /absolute/path/to/111k.json --bundle /absolute/path/to/catalog-bundle --egg-ids /absolute/path/to/selected-egg-ids.json --egg-cutoff '<cutoff>'
+npm run ethereum:catalog-update -- eligible-eggs --deployment-id "$owner_hatch_deployment" --expected-revision '<current registry revision>' --egg-cutoff '<cutoff>' --output .operations/eligible-eggs.json
+npm run ethereum:catalog-update -- prepare --source /absolute/path/to/111k.json --bundle "$hatch_bundle" --egg-ids .operations/selected-egg-ids.json --egg-cutoff '<cutoff>'
 ```
 
 Ordinary imports exclude known grail media so they cannot be allocated twice.
 New ordinary animated IDs beyond the excluded grail range currently fail closed:
 that case requires sparse animated-catalog support before rollout. Other ordinary
 artwork additions can use the explicit eligible-egg flow above.
+
+### Local mixed allocation rehearsal
+
+Run the November 17 candidate against disposable Miniflare SQLite storage from
+the repository root. Supply the complete manifest with SHA-256
+`e8ae1557e2aa5b4c98b525c1b8211e6aa4122468b421dbcaab078f9f33f9bc60`.
+
+```sh
+npm run ethereum:rehearse-mixed -- --source releases/111k-catalog-v10/original-input.json
+```
+
+The runner builds the candidate catalog and media bindings in memory, seeds
+111,111 slots and uses fixture ownership and traits. Its JSON report contains
+aggregate counts. Expect 124 GAN videos and 100 paintings each from DriFPS,
+ever since i was and Collage Paintings for 424 owner-ready eggs. The shared pool
+receives 6,162 paintings in exchange for 6,162 free eggs. Existing reservations
+and minted artwork identities are checked across activation. Earlier ordinary
+owner hatches can draw from the same shared pool.
+
+Before committing, mixed allocation checks all 424 selected tokens at one fresh
+canonical Ethereum block. It replaces ineligible tokens and records the block
+number and hash used for the successful allocation.
+
+### Mainnet mixed allocation
+
+Promote the reviewed release with `npm run ethereum:promote-mixed -- --source
+/absolute/path/to/111k.json --write`. Validate and deploy API and frontend
+support, wait for the Durable Object code update delay, and recheck the active
+mainnet registry, canonical eligibility and free inventory. Keep the Sepolia
+storefront configuration and mainnet public admission active.
+
+```sh
+mixed_deployment='mainnet-v1'
+npm run ethereum-reveal-control -- status --deployment-id "$mixed_deployment"
+npm run ethereum:mixed-allocation -- status --expected-revision <original-registry-revision>
+npm run ethereum:mixed-allocation -- apply --expected-revision <original-registry-revision> --write
+```
+
+The command binds the reviewed source and catalog hashes to deployment
+`mainnet-v1` and batch `mainnet-mixed-20261117`. Its first write freezes the
+original registry revision in `releases/111k-catalog-v10/mainnet-mixed-20261117.journal.json`.
+Resume with `apply --write` using that journal. The operation serializes
+catalog changes while sales, reveals and owner hatches continue.
+
+If the initial claim lost a registry revision race, keep its journal. After the
+predecessor is free again, run `status` with its current `--expected-revision`
+and a new `--journal .operations/mixed-retry.json` path. An `unstarted`
+result with a clear registry pointer permits `apply --write` with those same
+arguments. Once preparation exists, resume with the original revision and journal.
+
+Follow the second verification pass after the five-minute scheduler observation
+and all cleanup pages through `complete: true` with a cleared registry pointer.
+Capture the aggregate output, deployment versions and final public evidence.
+`status` reads progress. `verify --write` runs another complete verification
+pass. A holder hatch during verification or before finalization requires a new
+pass over the entire batch. Both commands accept the completed release journal
+after later catalog activations.
+
+If the scan finds fewer than 424 eligible minted eggs or activation exhausts
+the scanned candidates, wait for more eligible eggs, then run `refresh-scan --write`
+and resume `apply` with the original journal. The refresh preserves the artwork
+draw and rechecks previously drawn tokens in their saved order. For an interrupted reorg
+check, use the applicable `refresh-scan --write`
+or `refresh-activation --write`, then resume the same batch. `cancel --write`
+is limited to an explicitly cancelled, unactivated attempt; an activated batch
+resumes forward. The journal and operator output contain only aggregate
+progress and release identity.
 
 ### Empty mainnet pool rebuild
 
@@ -392,7 +492,7 @@ npm run ethereum:catalog-update -- cancel --bundle "$hatch_bundle" --deployment-
 For either failed-claim case, or to retry a cancellation, prepare from the frozen bundle:
 
 ```sh
-npm run ethereum:catalog-update -- prepare --from-bundle "$hatch_bundle" --bundle '<new-attempt-directory>'
+npm run ethereum:catalog-update -- prepare --from-bundle "$hatch_bundle" --bundle '.operations/<new-attempt-directory>'
 ```
 
 Keep the original bundle. The new attempt preserves the exact mapping/catalog
@@ -414,7 +514,7 @@ Create a private local manifest using the deployment ID and prefix chosen above:
   "contractAddress": "<deployed contract address>",
   "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/<new-sepolia-deployment-id>/",
   "deploymentBlock": 0,
-  "catalogVersion": "111k-v9",
+  "catalogVersion": "<catalog version prepared for this deployment>",
   "publicationDirectory": "./published-metadata"
 }
 ```

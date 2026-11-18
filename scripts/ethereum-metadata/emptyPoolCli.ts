@@ -7,6 +7,7 @@ import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenan
 import { writeDurableJsonJournalAsync } from '../shared/durableJsonJournal.ts';
 import { readRevealCatalogUpdateBundle } from './catalogUpdate.ts';
 import { withMetadataLock } from './lock.ts';
+import { privateHatchPath } from './privateHatchPath.ts';
 
 export function parseEmptyPoolArgs(argv: string[]) {
   const { values, positionals, tokens } = parseArgs({ args: argv, allowPositionals: true, tokens: true, options: {
@@ -34,6 +35,7 @@ type EmptyPoolTransport = (request: EthereumRevealEmptyPoolRequest) => Promise<E
 
 export async function emptyPoolMain(argv: string[], dependencies: { transport?: EmptyPoolTransport } = {}): Promise<EthereumRevealEmptyPoolResult> {
   const options = parseEmptyPoolArgs(argv);
+  if (options.command === 'apply' || options.command === 'cancel') options.directory = privateHatchPath(options.directory);
   const { batch } = await readRevealCatalogUpdateBundle(options.directory);
   const request = { deploymentId: options.deploymentId, operationId: options.operationId, expectedRevision: options.expectedRevision };
   const journalPath = join(options.directory, `${options.deploymentId}.empty-pool.journal.json`);

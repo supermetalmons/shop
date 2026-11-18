@@ -1,0 +1,974 @@
+{
+  "beforeAndDuring": {
+    "samples": 145,
+    "first": "2026-11-17T20:11:41.404Z",
+    "last": "2026-11-17T21:50:13.214Z",
+    "allChecksPassedSamples": 143,
+    "failedProbes": [
+      {
+        "at": "2026-11-17T20:30:00.838Z",
+        "failures": [
+          {
+            "name": "storefront",
+            "error": "fetch failed"
+          }
+        ]
+      },
+      {
+        "at": "2026-11-17T20:31:38.632Z",
+        "failures": [
+          {
+            "name": "storefront",
+            "error": "fetch failed"
+          }
+        ]
+      }
+    ]
+  },
+  "fromApplicationDeployment": {
+    "samples": 116,
+    "first": "2026-11-17T20:32:57.805Z",
+    "last": "2026-11-17T21:50:13.214Z",
+    "allChecksPassedSamples": 116,
+    "failedProbes": []
+  },
+  "fromActivation": {
+    "samples": 27,
+    "first": "2026-11-17T21:33:31.272Z",
+    "last": "2026-11-17T21:50:13.214Z",
+    "allChecksPassedSamples": 27,
+    "failedProbes": []
+  },
+  "schedulerObservations": [
+    {
+      "observedAt": "2026-11-17T20:46:13.398Z",
+      "eventTimestamp": 1794948370366,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:47:38.893Z",
+      "eventTimestamp": 1794948457902,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:48:40.959Z",
+      "eventTimestamp": 1794948519131,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:50:11.059Z",
+      "eventTimestamp": 1794948609975,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:51:12.169Z",
+      "eventTimestamp": 1794948670872,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:52:13.355Z",
+      "eventTimestamp": 1794948732447,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:53:36.194Z",
+      "eventTimestamp": 1794948814628,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:55:04.021Z",
+      "eventTimestamp": 1794948902734,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:56:40.285Z",
+      "eventTimestamp": 1794948998964,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:57:54.404Z",
+      "eventTimestamp": 1794949072958,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T20:58:55.191Z",
+      "eventTimestamp": 1794949134521,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:00:10.186Z",
+      "eventTimestamp": 1794949208637,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:26:05.747Z",
+      "eventTimestamp": 1794950763406,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:26:34.154Z",
+      "eventTimestamp": 1794950793576,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:26:54.406Z",
+      "eventTimestamp": 1794950812773,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:28:14.344Z",
+      "eventTimestamp": 1794950892020,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:29:16.029Z",
+      "eventTimestamp": 1794950953827,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:30:40.116Z",
+      "eventTimestamp": 1794951038307,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:31:43.396Z",
+      "eventTimestamp": 1794951101171,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:32:56.786Z",
+      "eventTimestamp": 1794951175422,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:34:00.631Z",
+      "eventTimestamp": 1794951239323,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:35:04.305Z",
+      "eventTimestamp": 1794951303099,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:36:08.175Z",
+      "eventTimestamp": 1794951365872,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:37:06.967Z",
+      "eventTimestamp": 1794951425777,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:38:08.014Z",
+      "eventTimestamp": 1794951487119,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:39:11.691Z",
+      "eventTimestamp": 1794951550686,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:40:12.712Z",
+      "eventTimestamp": 1794951611287,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:41:21.908Z",
+      "eventTimestamp": 1794951680702,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:41:48.916Z",
+      "eventTimestamp": 1794951707897,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:42:49.907Z",
+      "eventTimestamp": 1794951769186,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:43:56.022Z",
+      "eventTimestamp": 1794951835256,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:44:17.938Z",
+      "eventTimestamp": 1794951856150,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:45:09.618Z",
+      "eventTimestamp": 1794951908837,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:46:19.782Z",
+      "eventTimestamp": 1794951978416,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:47:29.551Z",
+      "eventTimestamp": 1794952048918,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:48:54.700Z",
+      "eventTimestamp": 1794952133761,
+      "outcome": "ok",
+      "eventType": [
+        "scheduledTime"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    },
+    {
+      "observedAt": "2026-11-17T21:50:09.616Z",
+      "eventTimestamp": 1794952208783,
+      "outcome": "ok",
+      "eventType": [
+        "rpcMethod"
+      ],
+      "summary": {
+        "ready": true,
+        "seeded": 111111,
+        "free": 70991,
+        "reserved": 0,
+        "frozen": 40120,
+        "publication": {
+          "published": 40120
+        },
+        "ownerEnrichment": {
+          "pending": 0,
+          "failed": 0,
+          "completed": 152,
+          "errors": {}
+        }
+      }
+    }
+  ],
+  "latestMainnetConfig": [
+    {
+      "name": "storefront",
+      "status": 200,
+      "latencyMs": 744
+    },
+    {
+      "name": "default",
+      "status": 200,
+      "latencyMs": 3085,
+      "deployment": "v17",
+      "catalogRevision": 3
+    },
+    {
+      "name": "mainnet",
+      "status": 200,
+      "latencyMs": 1842,
+      "saleActive": true,
+      "revealEnabled": true,
+      "catalogRevision": 2
+    },
+    {
+      "name": "ready",
+      "status": 200,
+      "latencyMs": 1280,
+      "ready": 479,
+      "catalogRevision": 2
+    },
+    {
+      "name": "metadata",
+      "status": 200,
+      "latencyMs": 2237,
+      "catalogRevision": 2,
+      "metadataRevision": 3
+    },
+    {
+      "name": "cdn",
+      "status": 200,
+      "latencyMs": 935
+    }
+  ],
+  "unchangedPublicMediaChecks": 2
+}

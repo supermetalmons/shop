@@ -1,3 +1,4 @@
+import { requireOrdinaryCatalogTarget } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../../../../shared/ethereum/revealMaintenance.js';
@@ -107,6 +108,7 @@ export class EthereumRevealEmptyPool {
       let current = await this.current(deployment, record);
       if (request.action === 'begin') {
         const batch = request.batch!;
+        if (!record) requireOrdinaryCatalogTarget(current.chainId, batch.target.descriptor);
         if (!getRevealCatalog(batch.predecessor.descriptor.catalogVersion, batch.predecessor.descriptor.manifestSha256) ||
           !getRevealCatalog(batch.target.descriptor.catalogVersion, batch.target.descriptor.manifestSha256)) throw new Error('Deploy both catalogs before rebuilding.');
         if (record && record.batchSha256 !== batch.batchSha256) throw new Error('Empty-pool frozen batch changed.');

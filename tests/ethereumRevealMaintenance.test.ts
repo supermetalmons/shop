@@ -39,8 +39,8 @@ test('owner hatching transport preserves enrichment counts while stripping priva
     phase: 'complete', readyCount: 2, grailCount: 1, candidates: 10, scanned: 10, total: 10, staged: 1,
     activationChecked: 2, activationSelected: 2,
     published: 2, hatched: 1, retrying: 0, conflicts: 0, pendingEnrichment: 1, failedEnrichment: 1,
-    retryAfterMs: 0, verificationCursor: null, observationUntilMs: 300_000, complete: true };
-  const proxied = new Proxy({ ...expected, assignments: [{ tokenId: 'private' }] }, { ownKeys: () => [] });
+    retryAfterMs: 0, verificationCursor: 'pending', observationUntilMs: 300_000, complete: true };
+  const proxied = new Proxy({ ...expected, verificationCursor: '98231', assignments: [{ tokenId: 'private' }] }, { ownKeys: () => [] });
   await withEthereumRevealMaintenance(async transport => {
     const result = await transport.ownerHatching!({ action: 'status', deploymentId: expected.deploymentId,
       batchId: expected.batchId, expectedRevision: 9 });

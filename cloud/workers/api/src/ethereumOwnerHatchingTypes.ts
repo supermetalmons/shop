@@ -12,6 +12,7 @@ export type OwnerHatchingHooks = {
   build(tokenId: string, asset: OwnerHatchingAsset, original: OwnerHatchingCanonical): {
     artwork: EthereumRevealedArtwork; metadataJson: string;
   };
+  reservedAttributes?(batchId: string, asset: RevealOriginUnit): string | undefined;
   takeOrdinary(): { origin: RevealOriginUnit; effective: OwnerHatchingAsset } | null;
   originForToken(tokenId: string): RevealOriginUnit;
   transitionSlot(origin: RevealOriginUnit, before: RevealOriginUnit, after: RevealOriginUnit): void;

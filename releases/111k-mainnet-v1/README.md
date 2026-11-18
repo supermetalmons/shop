@@ -2,9 +2,9 @@
 
 Ownership update: [15 November nomination of the treasury Safe](ownership-transfer-2026-11-15/README.md), awaiting the Safe's `acceptOwnership()` transaction. The deployer remains owner until acceptance; the deployment settings below record the original configuration.
 
-Latest artwork catalog: [v9 empty-pool rebuild](../111k-catalog-v9/README.md), adding 16,651 paintings before mint opening. Mainnet uses catalog revision 1 with 38,652 remaining egg slots; the sale remains closed.
+The [v10 mixed allocation](../111k-catalog-v10/README.md) made 424 minted eggs ready for owner hatching and exchanged 6,162 free egg slots for future reveals. It completed on the existing contract at catalog revision 2 and registry revision 12. The [v9 rebuild](../111k-catalog-v9/README.md) preceded the opening of sales.
 
-Latest API update: [mainnet public APIs and reveal enabled](public-api-readiness-2026-11-11.json), with the onchain sale still closed and zero token supply. See the [VVV mainnet checklist](../../scripts/docs/111k_mainnet_vvv.md).
+The initial public API and reveal activation preceded the opening of sales. [Initial readiness](public-api-readiness-2026-11-11.json) · [VVV mainnet checklist](../../scripts/docs/111k_mainnet_vvv.md)
 
 Latest discount update: [Terraforms holder expansion to 3,242 eligible addresses](discounts-terraforms-2026-11-11/README.md).
 

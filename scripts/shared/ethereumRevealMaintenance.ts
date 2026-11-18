@@ -2,12 +2,14 @@ import { fileURLToPath } from 'node:url';
 import type { GetPlatformProxyOptions } from 'wrangler';
 import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../../shared/ethereum/revealMaintenance.ts';
 import type { RelicImagesRequest, RelicImagesResult } from '../../shared/ethereum/relicImages.ts';
-import type { OwnerHatchingMaintenanceRequest, OwnerHatchingMaintenanceResult } from '../../shared/ethereum/ownerHatchingMaintenance.ts';
+import { redactOwnerHatchingCursor, type OwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceResult } from '../../shared/ethereum/ownerHatchingMaintenance.ts';
+import type { MixedAllocationMaintenanceRequest, MixedAllocationMaintenanceResult } from '../../shared/ethereum/mixedAllocationMaintenance.ts';
 import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfillRequest, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealRetirementRequest, EthereumRevealRetirementResult, EthereumRevealRetirementCancellation, EthereumRevealReplacementRequest,
   EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  mixedAllocation?(request: MixedAllocationMaintenanceRequest): Promise<MixedAllocationMaintenanceResult>;
   ownerHatching?(request: OwnerHatchingMaintenanceRequest): Promise<OwnerHatchingMaintenanceResult>;
   rebuildEmptyPool?(request: EthereumRevealEmptyPoolRequest): Promise<EthereumRevealEmptyPoolResult>;
   relicImages?(request: RelicImagesRequest): Promise<RelicImagesResult>;
@@ -21,6 +23,21 @@ export type EthereumRevealMaintenanceTransport = {
 };
 type Proxy = { env: { REVEAL_MAINTENANCE: EthereumRevealMaintenanceTransport }; dispose(): Promise<void> };
 type ProxyFactory = (options: GetPlatformProxyOptions) => Promise<Proxy>;
+
+export function mixedAllocationProgress(value: MixedAllocationMaintenanceResult): MixedAllocationMaintenanceResult {
+  return {
+    deploymentId: value.deploymentId, batchId: value.batchId, phase: value.phase, readyCount: value.readyCount,
+    grailCount: value.grailCount, candidates: value.candidates, scanned: value.scanned, total: value.total, staged: value.staged,
+    generationSeeded: value.generationSeeded, futureCount: value.futureCount, activationChecked: value.activationChecked,
+    activationSelected: value.activationSelected, published: value.published, hatched: value.hatched, retrying: value.retrying,
+    conflicts: value.conflicts, pendingEnrichment: value.pendingEnrichment, failedEnrichment: value.failedEnrichment,
+    verificationPasses: value.verificationPasses, verificationInProgress: value.verificationInProgress,
+    observationUntilMs: value.observationUntilMs, retryAfterMs: value.retryAfterMs, complete: value.complete,
+    registryRevision: value.registryRevision, catalogRevision: value.catalogRevision, catalogUpdateId: value.catalogUpdateId,
+    targetVersion: value.targetVersion, targetSha256: value.targetSha256, sourceSha256: value.sourceSha256,
+    ...(value.remainingCleanup === undefined ? {} : { remainingCleanup: value.remainingCleanup }),
+  };
+}
 
 async function defaultProxyFactory(options: GetPlatformProxyOptions): Promise<Proxy> {
   const { getPlatformProxy } = await import('wrangler');
@@ -48,7 +65,10 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async ownerHatching(request) {
+    return await run({ async mixedAllocation(request) {
+      const result = await call(() => proxy.env.REVEAL_MAINTENANCE.mixedAllocation!(request));
+      return mixedAllocationProgress(result);
+    }, async ownerHatching(request) {
       const result = await call(() => proxy.env.REVEAL_MAINTENANCE.ownerHatching!(request));
       return { deploymentId: result.deploymentId, batchId: result.batchId, phase: result.phase,
         readyCount: result.readyCount, grailCount: result.grailCount, candidates: result.candidates,
@@ -56,7 +76,7 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
         activationChecked: result.activationChecked, activationSelected: result.activationSelected, published: result.published,
         hatched: result.hatched, retrying: result.retrying, conflicts: result.conflicts, retryAfterMs: result.retryAfterMs,
         pendingEnrichment: result.pendingEnrichment, failedEnrichment: result.failedEnrichment,
-        verificationCursor: result.verificationCursor, observationUntilMs: result.observationUntilMs, complete: result.complete };
+        verificationCursor: redactOwnerHatchingCursor(result.verificationCursor), observationUntilMs: result.observationUntilMs, complete: result.complete };
     }, async rebuildEmptyPool(request) {
       const result = await call(() => proxy.env.REVEAL_MAINTENANCE.rebuildEmptyPool!(request));
       return { deploymentId: result.deploymentId, operationId: result.operationId, phase: result.phase,

@@ -66,7 +66,7 @@ function fixture(t: TestContext, catalogVersion = '111k-v9') {
 test('the bundled lookup resolves every range boundary and bounds each supported catalog', () => {
   const blocks: unknown = source;
   validateRevealCollectionBlocks(blocks);
-  const current = selectRevealCollectionBlocks(blocks, getRevealCatalogDescriptor('111k-v9'));
+  const current = selectRevealCollectionBlocks(blocks, getRevealCatalogDescriptor('111k-v10'));
   assert.ok(current);
   for (const category of ['painting', 'video', '3d', 'animated'] as const) {
     let first = 1;

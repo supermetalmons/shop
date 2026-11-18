@@ -16,6 +16,13 @@ dist/
 .vite/
 .cache/
 .operations/
+# Ordinary 111k cutoff bundles include the egg-to-artwork mapping.
+/releases/111k-*/**/batch.json
+/releases/111k-*/**/*-apply-request.json
+/releases/111k-*/**/eligible-eggs*.json
+/releases/111k-*/**/selected-egg-ids*.json
+/releases/111k-*/**/*assignments*.json*
+/releases/111k-*/**/*affected-samples*.json
 /output/canvas/
 /output/eggs/
 /output/video-frames/

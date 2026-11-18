@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog,
@@ -13,16 +13,20 @@ import { writeDurableJsonJournalAsync } from '../shared/durableJsonJournal.ts';
 import { buildRevealAssetCatalog, withRevealAssetImportLock } from './assetImport.ts';
 import { sha256 } from './catalog.ts';
 import { withMetadataLock } from './lock.ts';
-import { getOwnerHatchingGrail } from '../../shared/ethereum/ownerHatchingCatalog.ts';
+import { defaultHatchBundle, privateHatchPath } from './privateHatchPath.ts';
+import { initializeOperationsDirectory } from '../shared/localArtifacts.ts';
+import { ordinaryRevealCatalogSource } from './ownerHatchingCatalog.ts';
+
+export { ordinaryRevealCatalogSource };
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ASSETS = 'scripts/ethereum-metadata/reveal-assets/111k_devnet';
 const ANCESTORS = 'shared/ethereum/revealCatalogAncestors.json';
-export type RevealCatalogUpdateInput = { sourcePath: string; catalogVersion?: string; rootDirectory?: string;
-  eggIds?: number[]; eggCutoff?: number };
+export type RevealCatalogUpdateInput = { sourcePath: string; catalogVersion?: string; predecessorSourcePath?: string;
+  predecessorManifestSha256?: string; rootDirectory?: string; eggIds?: number[]; eggCutoff?: number };
 export type RevealCatalogUpdateBundle = { batch: RevealCatalogUpdateBatch; source: string; predecessorSource: string };
 export type RevealCatalogUpdateSummary = {
-  predecessorVersion: string; targetVersion: string; sourceSha256: string; additions: number;
+  predecessorVersion: string; predecessorManifestSha256: string; targetVersion: string; targetManifestSha256: string; sourceSha256: string; additions: number;
   oldEggCount: number; newEggCount: number; firstCutoffEgg: number; lastCutoffEgg: number;
   addedByCategory: Record<string, number>;
 };
@@ -50,37 +54,39 @@ function requireUnchangedSource(before: string, after: string): void {
   }
 }
 
-export function ordinaryRevealCatalogSource(bytes: string): string {
-  const source: unknown = JSON.parse(bytes);
-  if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('Invalid ordinary reveal source.');
-  const paths = [...bytes.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(match => JSON.parse(match[1]) as string);
-  if (new Set(paths).size !== paths.length) throw new Error('Artwork source contains duplicate paths.');
-  let removed = false;
-  const entries = Object.entries(source).filter(([path, value]) => {
-    const match = /^animated\/([1-9]\d*)\.(png|gif|mp4)$/.exec(path);
-    const grail = match && getOwnerHatchingGrail('animated', Number(match[1]));
-    if (!grail) return true;
-    if (!Array.isArray(value) || value.length < 2 || !Number.isSafeInteger(value[0]) || !Number.isSafeInteger(value[1]) ||
-      value[0] * grail.aspectRatio.height !== value[1] * grail.aspectRatio.width ||
-      value[2] !== undefined && value[2] !== grail.collectionBlock) throw new Error('Existing owner hatching artwork changed.');
-    removed = true;
-    return false;
-  });
-  return removed ? `${JSON.stringify(Object.fromEntries(entries), null, 2)}\n` : bytes;
+async function retainedPredecessor(sourcePath: string, root: string, manifestSha256?: string) {
+  const [source, ancestry] = await Promise.all([readFile(sourcePath, 'utf8'), readFile(join(root, ANCESTORS), 'utf8')]);
+  const ancestors: unknown = JSON.parse(ancestry);
+  if (!Array.isArray(ancestors)) throw new Error('Invalid supported catalog ancestors.');
+  const checksum = sha256(source);
+  const matches = ancestors.filter((catalog): catalog is RevealAssetCatalog => {
+    validateRevealAssetCatalog(catalog);
+    return catalog.source.sha256 === checksum;
+  }).map(manifest => ({ manifest, descriptor: computeRevealCatalogDescriptor(manifest) }))
+    .filter(({ descriptor }) => manifestSha256 === undefined || descriptor.manifestSha256 === manifestSha256);
+  if (matches.length !== 1) throw new Error('Predecessor inputs must identify exactly one installed ancestor. Use --predecessor-manifest-sha256 to select the deployed catalog.');
+  return { source, ...matches[0] };
 }
 
 async function inputCatalogs(input: RevealCatalogUpdateInput) {
+  if (input.predecessorManifestSha256 !== undefined && !input.predecessorSourcePath) throw new Error('A predecessor manifest checksum requires its source.');
   const root = resolve(input.rootDirectory ?? ROOT);
-  const [inputSource, predecessorSource, manifest, descriptor, blockSource, blockArtifact] = await Promise.all([
+  const [inputSource, installedSource, manifest, descriptor, blockSource, blockArtifact] = await Promise.all([
     readFile(resolve(input.sourcePath), 'utf8'), readFile(join(root, ASSETS, 'source.json'), 'utf8'),
     readFile(join(root, ASSETS, 'manifest.json'), 'utf8'), readFile(join(root, 'shared/ethereum/revealCatalog.json'), 'utf8'),
     optionalFile(join(root, ASSETS, 'collection-blocks.source.json')), optionalFile(join(root, ASSETS, 'collection-blocks.json')),
   ]);
   const source = ordinaryRevealCatalogSource(inputSource);
-  const previous: unknown = JSON.parse(manifest);
-  const previousDescriptor = JSON.parse(descriptor);
-  validateRevealAssetCatalog(previous, previousDescriptor);
-  if (previous.source.sha256 !== sha256(predecessorSource)) throw new Error('Saved reveal source checksum mismatch.');
+  const installed: unknown = JSON.parse(manifest);
+  const installedDescriptor = JSON.parse(descriptor);
+  validateRevealAssetCatalog(installed, installedDescriptor);
+  if (installed.source.sha256 !== sha256(installedSource)) throw new Error('Saved reveal source checksum mismatch.');
+  if (input.predecessorSourcePath && (source !== installedSource || input.catalogVersion !== installed.catalogVersion)) {
+    throw new Error('Preparing from a retained predecessor requires the installed target version and exact target source.');
+  }
+  const { manifest: previous, descriptor: previousDescriptor, source: predecessorSource } = input.predecessorSourcePath
+    ? await retainedPredecessor(input.predecessorSourcePath, root, input.predecessorManifestSha256)
+    : { manifest: installed, descriptor: installedDescriptor, source: installedSource };
   const catalogVersion = input.catalogVersion ?? `111k-v${Number(previous.catalogVersion.slice(6)) + 1}`;
   const target = buildRevealAssetCatalog(source, { catalogVersion, availableEggs: previous.importSettings.availableEggs });
   requireUnchangedSource(predecessorSource, source);
@@ -92,14 +98,19 @@ async function inputCatalogs(input: RevealCatalogUpdateInput) {
     if (!selectRevealCollectionBlocks(blocks, previousDescriptor)) throw new Error('Collection blocks do not cover the predecessor catalog.');
     requireUnchangedSource(blockSource, source);
   }
+  const targetDescriptor = computeRevealCatalogDescriptor(target);
+  if (input.predecessorSourcePath && targetDescriptor.manifestSha256 !== installedDescriptor.manifestSha256) {
+    throw new Error('Generated target differs from the installed catalog.');
+  }
   const additions = revealCatalogAdditions(previous, target);
   return { source, predecessorSource, predecessor: { manifest: previous, descriptor: previousDescriptor },
-    target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) }, additions };
+    target: { manifest: target, descriptor: targetDescriptor }, additions };
 }
 
 export async function inspectRevealCatalogUpdate(input: RevealCatalogUpdateInput): Promise<RevealCatalogUpdateSummary> {
   const { predecessor, target, additions } = await inputCatalogs(input);
-  return { predecessorVersion: predecessor.manifest.catalogVersion, targetVersion: target.manifest.catalogVersion,
+  return { predecessorVersion: predecessor.manifest.catalogVersion, predecessorManifestSha256: predecessor.descriptor.manifestSha256,
+    targetVersion: target.manifest.catalogVersion, targetManifestSha256: target.descriptor.manifestSha256,
     sourceSha256: target.manifest.source.sha256, additions: additions.length,
     oldEggCount: predecessor.manifest.categories.eggs.count, newEggCount: target.manifest.categories.eggs.count,
     firstCutoffEgg: target.manifest.categories.eggs.count + 1, lastCutoffEgg: predecessor.manifest.categories.eggs.count,
@@ -146,29 +157,53 @@ export async function readRevealCatalogUpdateBundle(directory: string): Promise<
 
 async function writeBundleDirectory(directory: string, bundle: RevealCatalogUpdateBundle): Promise<void> {
   const staging = `${directory}.staging-${randomUUID()}`;
-  await mkdir(staging);
+  await mkdir(staging, { mode: 0o700 });
   try {
     await Promise.all([['batch.json', `${JSON.stringify(bundle.batch, null, 2)}\n`], ['source.json', bundle.source],
-      ['predecessor-source.json', bundle.predecessorSource]].map(([name, bytes]) => writeFile(join(staging, name), bytes, { flag: 'wx' })));
+      ['predecessor-source.json', bundle.predecessorSource]].map(([name, bytes]) => writeFile(join(staging, name), bytes, { flag: 'wx', mode: 0o600 })));
     await rename(staging, directory);
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
 
-export async function prepareRevealCatalogUpdate(input: RevealCatalogUpdateInput & { directory: string }): Promise<RevealCatalogUpdateBundle> {
-  const directory = resolve(input.directory);
-  await mkdir(dirname(directory), { recursive: true });
+async function defaultBundleVersion(input: RevealCatalogUpdateInput): Promise<string> {
+  const root = resolve(input.rootDirectory ?? ROOT);
+  const operations = initializeOperationsDirectory(root);
+  const source = ordinaryRevealCatalogSource(await readFile(input.sourcePath, 'utf8'));
+  let match: string | undefined;
+  for (const name of await readdir(operations)) {
+    if (!/^111k-catalog-v[1-9]\d{0,8}$/.test(name)) continue;
+    const saved = privateHatchPath(join(operations, name, 'source.json'));
+    if (await optionalFile(saved) !== source) continue;
+    if (match) throw new Error('Multiple private bundles match this source. Use the original --bundle to resume.');
+    match = name.replace('111k-catalog-', '111k-');
+  }
+  if (match) return match;
+  const descriptor = JSON.parse(await readFile(join(root, 'shared/ethereum/revealCatalog.json'), 'utf8'));
+  return `111k-v${Number(descriptor.catalogVersion.slice(6)) + 1}`;
+}
+
+export async function prepareRevealCatalogUpdate(input: RevealCatalogUpdateInput & { directory?: string }): Promise<RevealCatalogUpdateBundle> {
+  if ((input.predecessorSourcePath || input.predecessorManifestSha256 !== undefined) &&
+    (!input.predecessorSourcePath || !input.catalogVersion || !input.directory)) {
+    throw new Error('Preparing from a retained predecessor requires its source, an explicit target version and a private bundle directory.');
+  }
+  const catalogVersion = input.catalogVersion ?? (input.directory ? undefined : await defaultBundleVersion(input));
+  const directory = privateHatchPath(input.directory ?? defaultHatchBundle(catalogVersion!, input.rootDirectory));
+  await mkdir(dirname(directory), { recursive: true, mode: 0o700 });
   return withMetadataLock(`${directory}.lock`, async () => {
     if (await optionalFile(join(directory, 'batch.json'))) {
       const existing = await readRevealCatalogUpdateBundle(directory);
       if (existing.source !== ordinaryRevealCatalogSource(await readFile(resolve(input.sourcePath), 'utf8')) ||
-        input.catalogVersion !== undefined && input.catalogVersion !== existing.batch.target.descriptor.catalogVersion ||
+        input.predecessorSourcePath && existing.predecessorSource !== await readFile(input.predecessorSourcePath, 'utf8') ||
+        input.predecessorManifestSha256 !== undefined && existing.batch.predecessor.descriptor.manifestSha256 !== input.predecessorManifestSha256 ||
+        catalogVersion !== undefined && catalogVersion !== existing.batch.target.descriptor.catalogVersion ||
         input.eggIds !== undefined && (existing.batch.version !== 2 || existing.batch.eggCutoff !== input.eggCutoff ||
           JSON.stringify(existing.batch.mappings.map(row => row.eggId)) !== JSON.stringify([...input.eggIds].sort((a, b) => a - b)))) {
         throw new Error('Frozen bundle already exists for different catalog inputs.');
       }
       return existing;
     }
-    const catalogs = await inputCatalogs(input);
+    const catalogs = await inputCatalogs({ ...input, catalogVersion });
     if ((input.eggIds === undefined) !== (input.eggCutoff === undefined)) throw new Error('Explicit cutoff requires both egg IDs and cutoff.');
     const batch = buildRevealCatalogUpdateBatch(catalogs.predecessor.manifest, catalogs.target.manifest, randomInt,
       input.eggIds === undefined ? undefined : { eggIds: input.eggIds, eggCutoff: input.eggCutoff! });
@@ -179,10 +214,10 @@ export async function prepareRevealCatalogUpdate(input: RevealCatalogUpdateInput
 }
 
 export async function prepareRevealCatalogUpdateFromBundle(fromDirectory: string, targetDirectory: string): Promise<RevealCatalogUpdateBundle> {
-  const directory = resolve(targetDirectory);
+  const directory = privateHatchPath(targetDirectory);
   if (resolve(fromDirectory) === directory) throw new Error('A new catalog operation requires a new bundle directory.');
   const original = await readRevealCatalogUpdateBundle(resolve(fromDirectory));
-  await mkdir(dirname(directory), { recursive: true });
+  await mkdir(dirname(directory), { recursive: true, mode: 0o700 });
   return withMetadataLock(`${directory}.lock`, async () => {
     if (await optionalFile(join(directory, 'batch.json'))) {
       const existing = await readRevealCatalogUpdateBundle(directory);
@@ -214,17 +249,6 @@ export async function promoteRevealCatalogUpdate(directory: string, options: { r
       return;
     }
     if (JSON.stringify(descriptor) !== JSON.stringify(bundle.batch.predecessor.descriptor)) throw new Error('Catalog promotion predecessor changed.');
-    const ancestorPath = join(root, ANCESTORS);
-    const ancestors: unknown = JSON.parse(await optionalFile(ancestorPath) ?? '[]');
-    if (!Array.isArray(ancestors)) throw new Error('Invalid supported catalog ancestors.');
-    for (const catalog of ancestors) validateRevealAssetCatalog(catalog);
-    const prior = ancestors.find(catalog => catalog.catalogVersion === bundle.batch.predecessor.manifest.catalogVersion);
-    if (prior && computeRevealCatalogDescriptor(prior).manifestSha256 !== bundle.batch.predecessor.descriptor.manifestSha256) {
-      throw new Error('Conflicting supported predecessor catalog.');
-    }
-    if (!prior) {
-      await writeDurableJsonJournalAsync({ filePath: ancestorPath, mode: 'replace', value: [...ancestors, bundle.batch.predecessor.manifest] });
-    }
     await importAssets({ sourcePath: join(resolve(directory), 'source.json'),
       catalogVersion: bundle.batch.target.descriptor.catalogVersion, availableEggs: bundle.batch.target.manifest.importSettings.availableEggs });
   });
@@ -261,6 +285,14 @@ export async function preflightRevealCatalogUpdateMedia(batch: RevealCatalogUpda
     reportSha256: sha256(JSON.stringify(evidence)) };
 }
 
+export function publicCatalogUpdateResult(result: EthereumRevealCatalogUpdateResult) {
+  return { deploymentId: result.deploymentId, batchId: result.batchId, phase: result.phase, complete: result.complete,
+    catalogRevision: result.catalogRevision, total: result.total, staged: result.staged, applied: result.applied,
+    published: result.published, frozen: result.frozen, conflicts: result.conflicts, retrying: result.retrying,
+    retryAfterMs: result.retryAfterMs, ...(result.refreshTransaction && { refreshTransaction: {
+      chainId: result.refreshTransaction.chainId, to: result.refreshTransaction.to, data: result.refreshTransaction.data, value: result.refreshTransaction.value } }) };
+}
+
 export type RunRevealCatalogUpdateOptions = {
   directory: string; deploymentId: string; expectedRevision: number; action: 'apply' | 'inspect' | 'verify' | 'cancel';
   transport?: UpdateTransport; fetchSource?: typeof fetch; sleep?: (ms: number) => Promise<void>;
@@ -272,8 +304,9 @@ export async function runRevealCatalogUpdate(options: RunRevealCatalogUpdateOpti
     throw new Error('Catalog update requires a deployment ID and positive expected original revision.');
   }
   if (options.action === 'apply' || options.action === 'cancel') {
-    await readRevealCatalogUpdateBundle(resolve(options.directory));
-    return withMetadataLock(join(resolve(options.directory), `${options.deploymentId}.operation.lock`), () => executeRevealCatalogUpdate(options));
+    const directory = privateHatchPath(options.directory);
+    await readRevealCatalogUpdateBundle(directory);
+    return withMetadataLock(join(directory, `${options.deploymentId}.operation.lock`), () => executeRevealCatalogUpdate({ ...options, directory }));
   }
   return executeRevealCatalogUpdate(options);
 }
@@ -308,6 +341,15 @@ export async function inspectEligibleCutoffEggs(options: {
   });
 }
 
+export async function writeEligibleCutoffEggs(options: Parameters<typeof inspectEligibleCutoffEggs>[0] & { outputPath: string }) {
+  const output = privateHatchPath(options.outputPath);
+  await mkdir(dirname(output), { recursive: true, mode: 0o700 });
+  const report = await inspectEligibleCutoffEggs(options);
+  await writeDurableJsonJournalAsync({ filePath: output, value: report, mode: 'create' });
+  return { deploymentId: report.deploymentId, catalogRevision: report.catalogRevision,
+    eggCutoff: report.eggCutoff, eligibleCount: report.eggIds.length, output };
+}
+
 async function executeRevealCatalogUpdate(options: RunRevealCatalogUpdateOptions): Promise<EthereumRevealCatalogUpdateResult> {
   const directory = resolve(options.directory);
   const { batch } = await readRevealCatalogUpdateBundle(directory);
@@ -325,7 +367,7 @@ async function executeRevealCatalogUpdate(options: RunRevealCatalogUpdateOptions
       while (true) {
         const result = await transport({ ...request, action: 'verify', verificationAfterEggId: cursor });
         if (result.deploymentId !== request.deploymentId || result.batchId !== batch.batchId) throw new Error('Catalog verification returned a different operation identity.');
-        options.onProgress?.(result);
+        options.onProgress?.(publicCatalogUpdateResult(result));
         if (result.nextVerificationEggId === null) return result;
         if (!Number.isSafeInteger(result.nextVerificationEggId) || result.nextVerificationEggId! <= cursor ||
           result.nextVerificationEggId! > (batch.version === 2 ? batch.predecessor.manifest.importSettings.availableEggs
@@ -341,7 +383,7 @@ async function executeRevealCatalogUpdate(options: RunRevealCatalogUpdateOptions
     while (true) {
       if (result.deploymentId !== request.deploymentId || result.batchId !== batch.batchId) throw new Error('Catalog maintenance returned a different operation identity.');
       await writeDurableJsonJournalAsync({ filePath: journalPath, mode: 'replace', value: { ...request, batchSha256: batch.batchSha256, result } });
-      options.onProgress?.(result);
+      options.onProgress?.(publicCatalogUpdateResult(result));
       if (result.complete || result.phase === 'cancelled') return result;
       const delay = Math.min(5_000, Math.max(0, result.retryAfterMs ?? 0));
       if (delay) await (options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))(delay);

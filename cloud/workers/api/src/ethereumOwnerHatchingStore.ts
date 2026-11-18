@@ -89,7 +89,7 @@ export class EthereumOwnerHatchingStore {
       this.hooks.eligibleEgg(tokenId, canonical.assetId) ? canonical : null;
   }
 
-  prepare(input: OwnerHatchingBatchInput, now = Date.now()): OwnerHatchingBatchStatus {
+  prepare(input: OwnerHatchingBatchInput, now = Date.now(), options?: { frozenOrder: true }): OwnerHatchingBatchStatus {
     if (!/^[a-z0-9][a-z0-9-]{0,127}$/.test(input.batchId) || !SHA256.test(input.sourceSha256) ||
       !integer(input.readyCount) || !integer(now, Number.MAX_SAFE_INTEGER) || !Array.isArray(input.candidateTokenIds) ||
       input.candidateTokenIds.length > 111_111 || input.candidateTokenIds.some(id => !/^[1-9]\d*$/.test(id) || !integer(Number(id))) ||
@@ -97,12 +97,14 @@ export class EthereumOwnerHatchingStore {
       input.grails.length > input.readyCount || input.grails.some(asset => !validAsset(asset)) ||
       new Set(input.grails.map(asset => `${asset.category}:${asset.assetId}`)).size !== input.grails.length ||
       !Array.isArray(input.freshEggIds) || input.freshEggIds.length !== input.readyCount - input.grails.length ||
+      options?.frozenOrder && (input.candidateTokenIds.length !== input.readyCount || input.grails.length !== input.readyCount) ||
       input.freshEggIds.some(id => !integer(id)) || new Set(input.freshEggIds).size !== input.freshEggIds.length) {
       throw new Error('Invalid owner hatching batch.');
     }
     const inputSha256 = hash(JSON.stringify({ sourceSha256: input.sourceSha256, readyCount: input.readyCount,
       candidateTokenIds: [...input.candidateTokenIds].sort((a, b) => Number(a) - Number(b)),
-      grails: [...input.grails].sort((a, b) => a.category.localeCompare(b.category) || a.assetId - b.assetId),
+      grails: options?.frozenOrder ? input.grails : [...input.grails].sort((a, b) => a.category.localeCompare(b.category) || a.assetId - b.assetId),
+      ...(options?.frozenOrder ? { frozenOrder: true } : {}),
       freshEggIds: [...input.freshEggIds].sort((a, b) => a - b) }));
     return this.transaction(() => {
       const existing = this.sql.exec<OwnerHatchingBatchRow>('SELECT * FROM owner_hatching_batches WHERE batch_id=?', input.batchId).toArray()[0];
@@ -115,9 +117,10 @@ export class EthereumOwnerHatchingStore {
         throw new Error('Owner hatching batch contains unavailable assets.');
       }
       const candidates = [...input.candidateTokenIds];
+      if (options?.frozenOrder) candidates.sort((a, b) => Number(b) - Number(a));
       const selected: OwnerHatchingCanonical[] = [];
       while (candidates.length && selected.length < input.readyCount) {
-        const index = this.randomInteger(candidates.length);
+        const index = options?.frozenOrder ? candidates.length - 1 : this.randomInteger(candidates.length);
         const tokenId = candidates[index];
         candidates[index] = candidates[candidates.length - 1];
         candidates.pop();
@@ -127,9 +130,11 @@ export class EthereumOwnerHatchingStore {
       }
       if (selected.length !== input.readyCount) throw new Error('Not enough eligible minted eggs.');
       const grails = [...input.grails];
-      for (let index = grails.length - 1; index > 0; index--) {
-        const other = this.randomInteger(index + 1);
-        [grails[index], grails[other]] = [grails[other], grails[index]];
+      if (!options?.frozenOrder) {
+        for (let index = grails.length - 1; index > 0; index--) {
+          const other = this.randomInteger(index + 1);
+          [grails[index], grails[other]] = [grails[other], grails[index]];
+        }
       }
       this.sql.exec(`INSERT INTO owner_hatching_batches(batch_id,source_sha256,input_sha256,ready_count,grail_count,fresh_egg_count,created_at_ms)
         VALUES(?,?,?,?,?,?,?)`, input.batchId, input.sourceSha256, inputSha256, input.readyCount, grails.length, input.freshEggIds.length, now);
@@ -166,8 +171,9 @@ export class EthereumOwnerHatchingStore {
       if (token.grail_category !== null && token.grail_asset_id !== null) {
         const grail = this.sql.exec<{ attributes_json: string | null }>(
           'SELECT attributes_json FROM owner_hatching_grails WHERE category=? AND asset_id=?', token.grail_category, token.grail_asset_id).toArray()[0];
-        asset = { category: token.grail_category, assetId: token.grail_asset_id,
-          ...(grail.attributes_json === null ? {} : { attributesJson: grail.attributes_json }) };
+        asset = { category: token.grail_category, assetId: token.grail_asset_id };
+        const attributes = grail.attributes_json ?? this.hooks.reservedAttributes?.(token.batch_id, asset);
+        if (attributes !== undefined) asset.attributesJson = attributes;
       } else {
         const fresh = this.sql.exec<{ egg_id: number }>(
           'SELECT egg_id FROM owner_hatching_fresh_eggs WHERE batch_id=? AND token_id IS NULL ORDER BY egg_id LIMIT 1', token.batch_id).toArray()[0];

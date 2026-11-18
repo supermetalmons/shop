@@ -1,0 +1,35 @@
+{
+  "original": {
+    "observedAt": "2026-11-17T20:14:26.031Z",
+    "frozenThroughMs": 1794946404404,
+    "count": 40120,
+    "sha256": "6bcf5b3991768fdec71453c983aad786d843e583a5e0af10b56344f7b6709c5b",
+    "fields": [
+      "token_id",
+      "category",
+      "asset_id",
+      "crate_token_id",
+      "slot",
+      "assignment_revision",
+      "frozen_at_ms",
+      "provenance"
+    ]
+  },
+  "final": {
+    "observedAt": "2026-11-17T21:48:26.359Z",
+    "frozenThroughMs": 1794946404404,
+    "count": 40120,
+    "sha256": "6bcf5b3991768fdec71453c983aad786d843e583a5e0af10b56344f7b6709c5b",
+    "fields": [
+      "token_id",
+      "category",
+      "asset_id",
+      "crate_token_id",
+      "slot",
+      "assignment_revision",
+      "frozen_at_ms",
+      "provenance"
+    ]
+  },
+  "verifiedPublicSampleCount": 8
+}

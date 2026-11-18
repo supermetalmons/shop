@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
-import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
+import { getOwnerHatchingGrail, requireOrdinaryCatalogTarget } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import type { EthereumArtworkCategory } from '../../../../shared/ethereum/reveal.js';
 import type { RevealAssetCatalog, RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
@@ -8,6 +8,7 @@ import { validateRevealCatalogUpdateBatch, type RevealCatalogUpdateBatch, type R
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
+import { EthereumRevealMixedAllocation } from './ethereumRevealMixedAllocation.js';
 import { EthereumOwnerHatchingStore } from './ethereumOwnerHatchingStore.js';
 import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import {
@@ -34,6 +35,7 @@ const hash = (json: string) => bytesToHex(sha256(json));
 
 export class EthereumRevealCatalogUpdateStore {
   readonly ownerHatching: EthereumOwnerHatchingStore;
+  readonly mixed: EthereumRevealMixedAllocation;
   constructor(private readonly sql: RevealSql, private readonly transaction: <T>(action: () => T) => T,
     readonly reader = new EthereumRevealCatalogReader(sql)) {
     this.ownerHatching = new EthereumOwnerHatchingStore(sql, transaction, {
@@ -54,6 +56,7 @@ export class EthereumRevealCatalogUpdateStore {
         return { artwork: built.artwork,
           metadataJson: asset.attributesJson ? applyRevealAttributePayload(built.metadataJson, asset.attributesJson).metadataJson : built.metadataJson };
       },
+      reservedAttributes: (batchId, asset) => this.reader.mixedAttributes(batchId, asset),
       takeOrdinary: () => {
         const pools = this.reader.pools().filter(pool => pool.category !== 'egg' && pool.available > 0);
         const available = pools.reduce((sum, pool) => sum + pool.available, 0);
@@ -65,7 +68,8 @@ export class EthereumRevealCatalogUpdateStore {
         if (effective.category === 'egg' || getOwnerHatchingGrail(effective.category, effective.assetId)) {
           throw new Error('Ordinary hatch inventory is inconsistent.');
         }
-        return { origin, effective: { category: effective.category, assetId: effective.assetId } };
+        const attributesJson = this.reader.mixedFutureAttributes(effective);
+        return { origin, effective: { category: effective.category, assetId: effective.assetId, ...(attributesJson ? { attributesJson } : {}) } };
       },
       transitionSlot: (origin, before, after) => this.transitionOwnerSlot(origin, before, after),
       releaseReplacement: origin => this.releaseFree(origin),
@@ -75,6 +79,15 @@ export class EthereumRevealCatalogUpdateStore {
           UNION ALL SELECT batch_id,egg_id FROM reveal_catalog_mappings) m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
           WHERE m.egg_id=? AND g.phase IN ('mapping','staging','ready') LIMIT 1`, eggId).toArray().length,
     }, revealRandomInteger, this.reader.ownerHatching);
+    this.mixed = new EthereumRevealMixedAllocation(sql, transaction, this.reader, this.ownerHatching);
+  }
+
+  private candidateProgress(batchId: string | null) {
+    if (!batchId) return null;
+    const row = this.sql.exec<{ batch_id: string; batch_version: number; mode: string; seeded: number }>(
+      'SELECT batch_id,batch_version,mode,seeded FROM reveal_catalog_generations WHERE batch_id=?', batchId).toArray()[0];
+    if (!row) throw new Error('Unknown candidate catalog generation.');
+    return row;
   }
 
   private transitionOwnerSlot(origin: RevealOriginUnit, before: RevealOriginUnit, after: RevealOriginUnit): void {
@@ -82,7 +95,8 @@ export class EthereumRevealCatalogUpdateStore {
     const saved = this.reader.settings()!;
     if (!saved.active_catalog_generation) throw new Error('Owner hatching requires a canonical inventory generation.');
     for (const generation of [saved.active_catalog_generation, saved.candidate_catalog_generation].filter((value): value is string => Boolean(value))) {
-      const seeded = generation === saved.active_catalog_generation || this.reader.ordinal(origin) <= this.reader.operation(generation).seeded;
+      const candidate = generation === saved.active_catalog_generation ? null : this.candidateProgress(generation);
+      const seeded = !candidate || candidate.batch_version === 3 || this.reader.ordinal(origin) <= candidate.seeded;
       this.sql.exec('UPDATE reveal_catalog_pools SET total=total+1,seeded=seeded+? WHERE generation=? AND category=?',
         Number(seeded), generation, after.category);
       this.sql.exec('UPDATE reveal_catalog_pools SET total=total-1,seeded=seeded-? WHERE generation=? AND category=?',
@@ -120,7 +134,8 @@ export class EthereumRevealCatalogUpdateStore {
   takeFree(category: EthereumArtworkCategory, index: number): RevealOriginUnit {
     return this.transaction(() => {
       const saved = this.reader.settings()!;
-      if (saved.candidate_catalog_generation && this.reader.operation(saved.candidate_catalog_generation).mode === 'empty-rebuild') {
+      const candidate = this.candidateProgress(saved.candidate_catalog_generation);
+      if (candidate && candidate.mode === 'empty-rebuild') {
         throw new Error('Empty pool rebuild is fenced.');
       }
       let unit: RevealOriginUnit;
@@ -141,8 +156,8 @@ export class EthereumRevealCatalogUpdateStore {
         if (index !== pool.available - 1) this.sql.exec('UPDATE free_slots SET asset_id=? WHERE category=? AND slot=?', last.asset_id, category, index);
         this.sql.exec('UPDATE pools SET available=available-1 WHERE category=?', category);
       }
-      if (saved.candidate_catalog_generation && this.reader.ordinal(unit) <= this.reader.operation(saved.candidate_catalog_generation).seeded) {
-        this.removeFree(saved.candidate_catalog_generation, unit);
+      if (candidate && this.reader.ordinal(unit) <= candidate.seeded) {
+        this.removeFree(candidate.batch_id, unit);
       }
       return unit;
     });
@@ -151,7 +166,8 @@ export class EthereumRevealCatalogUpdateStore {
   releaseFree(unit: RevealOriginUnit): void {
     this.transaction(() => {
       const saved = this.reader.settings()!;
-      if (saved.candidate_catalog_generation && this.reader.operation(saved.candidate_catalog_generation).mode === 'empty-rebuild') {
+      const candidate = this.candidateProgress(saved.candidate_catalog_generation);
+      if (candidate && candidate.mode === 'empty-rebuild') {
         throw new Error('Empty pool rebuild is fenced.');
       }
       if (saved.active_catalog_generation) this.insertFree(saved.active_catalog_generation, unit);
@@ -160,8 +176,8 @@ export class EthereumRevealCatalogUpdateStore {
         this.sql.exec('INSERT INTO free_slots(category,slot,asset_id) VALUES(?,?,?)', unit.category, pool.available, unit.assetId);
         this.sql.exec('UPDATE pools SET available=available+1 WHERE category=?', unit.category);
       }
-      if (saved.candidate_catalog_generation && this.reader.ordinal(unit) <= this.reader.operation(saved.candidate_catalog_generation).seeded) {
-        this.insertFree(saved.candidate_catalog_generation, unit);
+      if (candidate && this.reader.ordinal(unit) <= candidate.seeded) {
+        this.insertFree(candidate.batch_id, unit);
       }
     });
   }
@@ -183,6 +199,7 @@ export class EthereumRevealCatalogUpdateStore {
     return this.transaction(() => {
       this.reader.assertEmptyRebuildInventory();
       const saved = this.reader.settings()!;
+      requireOrdinaryCatalogTarget((JSON.parse(saved.deployment_json) as EthereumRevealDeployment).chainId, batch.target.descriptor);
       const current = this.reader.effectiveCatalog()!;
       if (saved.candidate_catalog_generation || current.catalogVersion !== batch.predecessor.descriptor.catalogVersion ||
         current.manifestSha256 !== batch.predecessor.descriptor.manifestSha256) throw new Error('Empty pool rebuild predecessor changed.');
@@ -284,6 +301,7 @@ export class EthereumRevealCatalogUpdateStore {
       const current = this.reader.effectiveCatalog();
       if (!saved || !current || saved.candidate_catalog_generation || current.catalogVersion !== batch.predecessor.descriptor.catalogVersion ||
         current.manifestSha256 !== batch.predecessor.descriptor.manifestSha256) throw new Error('Catalog update predecessor changed.');
+      requireOrdinaryCatalogTarget((JSON.parse(saved.deployment_json) as EthereumRevealDeployment).chainId, batch.target.descriptor);
       if (!this.sql.exec('SELECT 1 FROM settings WHERE id=1 AND ready=1').toArray().length) throw new Error('Reveal inventory is not ready.');
       if (this.sql.exec("SELECT 1 FROM reveal_catalog_generations WHERE phase='active' LIMIT 1").toArray().length) throw new Error('Finish the previous catalog operation first.');
       const origins = batch.mappings.map(mapping => this.reader.requireCutoffEgg(mapping.eggId));
@@ -363,6 +381,7 @@ export class EthereumRevealCatalogUpdateStore {
     limit(rows.length);
     this.transaction(() => {
       const operation = this.reader.operation(batchId);
+      if (operation.batch_version === 3) throw new Error('Use mixed allocation trait staging.');
       if (!['staging', 'ready'].includes(operation.phase)) throw new Error('Catalog metadata is not staging.');
       const deployment = JSON.parse(this.reader.settings()!.deployment_json) as EthereumRevealDeployment;
       const catalog = JSON.parse(operation.target_manifest_json) as RevealAssetCatalog;
@@ -379,7 +398,7 @@ export class EthereumRevealCatalogUpdateStore {
           previous.attributes_json !== null && (previous.attributes_json !== row.attributesJson || previous.attributes_sha256 !== row.sha256)) {
           throw new Error('Staged artwork attributes cannot change.');
         }
-        const metadataInput = { templateJson: deployment.templateJson, tokenId: '111111', crateTokenId: '116666',
+        const metadataInput = { templateJson: deployment.templateJson, tokenId: String(TOTAL), crateTokenId: '116666',
           category: row.category, assetId: row.assetId, catalog,
           observation: { transactionHash: `0x${'0'.repeat(64)}`, blockHash: `0x${'0'.repeat(64)}`, blockNumber: 0 } };
         applyRevealAttributePayload(buildRevealedArtwork(metadataInput).metadataJson, row.attributesJson);
@@ -395,6 +414,7 @@ export class EthereumRevealCatalogUpdateStore {
     limit(pageSize);
     this.transaction(() => {
       const operation = this.reader.operation(batchId);
+      if (operation.batch_version === 3) throw new Error('Use mixed allocation staging.');
       if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild staging.');
       if (operation.phase !== 'staging') throw new Error('Catalog generation is not staging.');
       this.reader.requireValidatedMetadata(batchId);
@@ -415,6 +435,7 @@ export class EthereumRevealCatalogUpdateStore {
 
   seal(batchId: string): RevealCatalogUpdateStatus {
     const operation = this.reader.operation(batchId);
+    if (operation.batch_version === 3) throw new Error('Use mixed allocation sealing.');
     if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild sealing.');
     if (!['staging', 'ready'].includes(operation.phase) || operation.seeded !== TOTAL) throw new Error('Catalog generation is incomplete.');
     this.reader.requireValidatedMetadata(batchId);
@@ -428,6 +449,7 @@ export class EthereumRevealCatalogUpdateStore {
   activate(batchId: string, now = Date.now()): RevealCatalogUpdateStatus {
     return this.transaction(() => {
       const operation = this.reader.operation(batchId);
+      if (operation.batch_version === 3) throw new Error('Use mixed allocation activation.');
       if (operation.mode === 'empty-rebuild') throw new Error('Use empty pool rebuild activation.');
       if (operation.activated_at_ms !== null) return this.reader.status(batchId)!;
       const saved = this.reader.settings()!;
@@ -479,6 +501,7 @@ export class EthereumRevealCatalogUpdateStore {
   }
 
   finalize(batchId: string): RevealCatalogUpdateStatus {
+    if (this.reader.operation(batchId).batch_version === 3) throw new Error('Use mixed allocation finalization.');
     this.reader.verify(batchId);
     this.sql.exec("UPDATE reveal_catalog_generations SET phase='complete' WHERE batch_id=? AND phase='active'", batchId);
     return this.reader.status(batchId)!;
@@ -487,6 +510,7 @@ export class EthereumRevealCatalogUpdateStore {
   cancel(batchId: string): RevealCatalogUpdateStatus {
     this.transaction(() => {
       const operation = this.reader.operation(batchId);
+      if (operation.batch_version === 3) throw new Error('Use mixed allocation cancellation.');
       if (operation.activated_at_ms !== null) throw new Error('An activated catalog update must resume forward.');
       this.sql.exec("UPDATE reveal_catalog_generations SET phase='cancelled' WHERE batch_id=?", batchId);
       this.sql.exec('UPDATE settings SET candidate_catalog_generation=NULL WHERE id=1 AND candidate_catalog_generation=?', batchId);
@@ -513,7 +537,13 @@ export class EthereumRevealCatalogUpdateStore {
     const count = this.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM reveal_catalog_free WHERE generation!=? AND generation!=?`,
       saved.active_catalog_generation ?? '', saved.candidate_catalog_generation ?? '').toArray()[0].count;
     const legacy = saved.active_catalog_generation ? this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM free_slots').toArray()[0].count : 0;
-    return { remaining: count + legacy };
+    let mixed = 0;
+    if (operation.batch_version === 3 && operation.phase === 'cancelled') {
+      this.sql.exec(`DELETE FROM reveal_mixed_artworks WHERE rowid IN (SELECT rowid FROM reveal_mixed_artworks WHERE batch_id=? LIMIT ?)`,
+        batchId, Math.min(pageSize, 8));
+      mixed = this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM reveal_mixed_artworks WHERE batch_id=?', batchId).toArray()[0].count;
+    }
+    return { remaining: count + legacy + mixed };
   }
 
   pruneObsolete(pageSize = 256): { remaining: number } {

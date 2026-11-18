@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
+import { buildRevealCatalogUpdateBatch } from '../../../../scripts/ethereum-metadata/catalogUpdate.ts';
 import { computeRevealCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import { revealCatalogUpdateHash, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
@@ -16,7 +17,7 @@ import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksF
 const source = getRevealCatalog('111k-v5')!;
 const templateJson = JSON.stringify({ name: '{{tokenId}}', description: '111k', image: 'https://cdn.lil.org/nft/111k/placeholder.png',
   attributes: [{ trait_type: 'series', value: '111K' }] });
-const deployment: EthereumRevealDeployment = { deploymentId: 'catalog-controller-test', dropId: '111k_devnet', chainId: 11155111,
+const sepolia: EthereumRevealDeployment = { deploymentId: 'catalog-controller-test', dropId: '111k_devnet', chainId: 11155111,
   contractAddress: `0x${'ab'.repeat(20)}`, metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/catalog-controller-test/',
   deploymentBlock: 100, catalogVersion: source.catalogVersion, templateJson,
   templateSha256: createHash('sha256').update(templateJson).digest('hex'), state: 'active', revision: 3,
@@ -38,7 +39,7 @@ function batch() {
   return { ...body, batchSha256, batchId: `catalog-${batchSha256.slice(0, 32)}` };
 }
 
-function fixture(t: TestContext, frozen = 0) {
+function fixture(t: TestContext, frozen = 0, deployment = sepolia) {
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   database.exec('PRAGMA foreign_keys=ON');
@@ -194,7 +195,7 @@ function fixture(t: TestContext, frozen = 0) {
 
 test('catalog maintenance parsing requires exact operation and frozen batch identity', () => {
   const update = batch();
-  const value = { deploymentId: deployment.deploymentId, expectedRevision: 3, batchId: update.batchId, action: 'advance' as const };
+  const value = { deploymentId: sepolia.deploymentId, expectedRevision: 3, batchId: update.batchId, action: 'advance' as const };
   assert.deepEqual(parseCatalogUpdateRequest(value), value);
   assert.deepEqual(parseCatalogUpdateRequest({ ...value, action: 'begin', batch: update }).batch, update);
   for (const changed of [{ action: 'begin' }, { batch: update }, { expectedRevision: 0 }, { batchId: 'other' },
@@ -208,10 +209,34 @@ test('inspection and unsupported catalog requests never change registration or a
   const schema = f.database.prepare('SELECT * FROM sqlite_schema ORDER BY name').all();
   const before = f.current();
   assert.equal((await f.run('inspect')).phase, 'unstarted');
-  await assert.rejects(new EthereumRevealCatalogUpdate(f.host).run(f.request('begin'), deployment), /Deploy support/);
+  await assert.rejects(new EthereumRevealCatalogUpdate(f.host).run(f.request('begin'), sepolia), /Deploy support/);
   assert.deepEqual(f.current(), before);
   assert.deepEqual(f.database.prepare('SELECT * FROM sqlite_schema ORDER BY name').all(), schema);
   assert.equal(f.kv.size, 0);
+});
+
+test('an ordinary v10 upgrade can start on Sepolia and is refused before the mainnet registry claim', async t => {
+  for (const [network, chainId, version] of [['mainnet', 1, '111k-v9'], ['Sepolia', 11155111, '111k-v8']] as const) {
+    await t.test(network, async t => {
+      const predecessor = getRevealCatalog(version)!;
+      const batch = buildRevealCatalogUpdateBatch(predecessor, getRevealCatalog('111k-v10')!);
+      const deployment = { ...sepolia, catalogVersion: predecessor.catalogVersion, chainId,
+        ...(chainId === 1 && { dropId: '111k', metadataBaseUri: 'https://cdn.mons.shop/111k/' }) };
+      const f = fixture(t, 0, deployment);
+      const controller = new EthereumRevealCatalogUpdate(f.host);
+      const begin = () => controller.run({ ...f.request('begin'), batch, batchId: batch.batchId }, f.current());
+      if (chainId === 1) {
+        await assert.rejects(begin(), /mainnet catalog requires mixed allocation/);
+        assert.throws(() => f.store.catalogUpdate.begin(batch, f.clock.now), /mainnet catalog requires mixed allocation/);
+        assert.equal(f.current().catalogUpdateId, null);
+        assert.equal(f.kv.size, 0);
+      } else {
+        assert.equal((await begin()).phase, 'staging');
+        assert.equal(f.current().catalogUpdateId, batch.batchId);
+        assert.equal(f.store.catalogUpdate.reader.settings()?.candidate_catalog_generation, batch.batchId);
+      }
+    });
+  }
 });
 
 test('eligible egg inspection on a pre-owner ledger never initializes schema', async t => {

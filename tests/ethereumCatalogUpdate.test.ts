@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import fs, { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createHash } from 'node:crypto';
+import relicEvidence from '../releases/111k-relic-images-2026-11-11/preflight.json';
 import { buildRevealAssetCatalog, importRevealAssets } from '../scripts/ethereum-metadata/assetImport.ts';
 import { importRevealCollectionBlocks } from '../scripts/ethereum-metadata/collectionBlocks.ts';
 import { buildRevealCatalogUpdateBatch, inspectRevealCatalogUpdate, preflightRevealCatalogUpdateMedia,
   prepareRevealCatalogUpdate, prepareRevealCatalogUpdateFromBundle, promoteRevealCatalogUpdate,
-  readRevealCatalogUpdateBundle, runRevealCatalogUpdate, ordinaryRevealCatalogSource, inspectEligibleCutoffEggs } from '../scripts/ethereum-metadata/catalogUpdate.ts';
+  readRevealCatalogUpdateBundle, runRevealCatalogUpdate, ordinaryRevealCatalogSource, inspectEligibleCutoffEggs, publicCatalogUpdateResult, writeEligibleCutoffEggs } from '../scripts/ethereum-metadata/catalogUpdate.ts';
+import { defaultHatchBundle, privateHatchPath } from '../scripts/ethereum-metadata/privateHatchPath.ts';
 import { parseCatalogUpdateArgs } from '../scripts/ethereum-metadata/catalogUpdateCli.ts';
 import { computeRevealCatalogDescriptor, validateRevealAssetCatalog } from '../shared/ethereum/revealAssetCatalog.ts';
 import { getRevealCatalog, getRevealCatalogDescriptor, getSupportedRevealCatalogVersions } from '../shared/ethereum/revealCatalogRegistry.ts';
@@ -107,6 +110,105 @@ test('ordinary catalogue source removes registered grails without admitting them
   assert.throws(() => ordinaryRevealCatalogSource('{"animated/422.png":[512,512,"DROWEE"],"animated/422.png":[512,512,"DROWEE"]}'), /duplicate paths/);
 });
 
+test('ordinary preparation validates and excludes existing relics in a complete artwork manifest', async t => {
+  const input = await fixture(t);
+  const relics = Object.fromEntries(relicEvidence.checks.filter(row => row.kind === 'canonical')
+    .map(row => [`relics/${row.id}.png`, [row.width, row.height]]));
+  const source = { ...nextSource(), ...relics };
+  await writeFile(input.sourcePath, JSON.stringify(source));
+  const prepared = await prepareRevealCatalogUpdate(input);
+  assert.equal(prepared.batch.mappings.length, 3);
+  assert.deepEqual(JSON.parse(prepared.source), nextSource());
+  for (const invalid of [[1, 1], [...relics['relics/1.png'], 'changed label']]) {
+    await writeFile(input.sourcePath, JSON.stringify({ ...source, 'relics/1.png': invalid }));
+    await assert.rejects(inspectRevealCatalogUpdate(input), /changed or removed relics/);
+  }
+  await writeFile(input.sourcePath, JSON.stringify({ ...source, 'relics/19.png': [1, 1] }));
+  await assert.rejects(inspectRevealCatalogUpdate(input), /Unsupported asset source path/);
+});
+
+test('default preparation resumes the original private bundle after promotion', async t => {
+  const { sourcePath, rootDirectory } = await fixture(t);
+  const input = { sourcePath, rootDirectory };
+  const original = await prepareRevealCatalogUpdate(input);
+  const directory = defaultHatchBundle(original.batch.target.descriptor.catalogVersion, rootDirectory);
+  const journal = join(directory, 'test.journal.json');
+  const evidence = JSON.stringify({ expectedRevision: 4, batchId: original.batch.batchId });
+  await writeFile(journal, evidence, { mode: 0o600 });
+  await promoteRevealCatalogUpdate(directory, { rootDirectory, write: true });
+  assert.deepEqual(await prepareRevealCatalogUpdate(input), original);
+  assert.equal(await readFile(journal, 'utf8'), evidence);
+  assert.deepEqual(await readdir(join(rootDirectory, '.operations')), ['111k-catalog-v6']);
+  await fs.cp(directory, defaultHatchBundle('111k-v7', rootDirectory), { recursive: true });
+  await assert.rejects(prepareRevealCatalogUpdate(input), /Multiple private bundles/);
+});
+
+test('an older deployed predecessor can prepare and resume an upgrade to the exact installed target', async t => {
+  const { sourcePath, rootDirectory, directory } = await fixture(t);
+  await prepareRevealCatalogUpdate({ sourcePath, rootDirectory, directory });
+  await promoteRevealCatalogUpdate(directory, { rootDirectory, write: true });
+  await writeFile(sourcePath, JSON.stringify({ ...nextSource(), 'paintings/4.png': [3, 4] }));
+  const catchup = directory + '-catchup';
+  const current = await prepareRevealCatalogUpdate({ rootDirectory, sourcePath, directory: directory + '-v7' });
+  await promoteRevealCatalogUpdate(directory + '-v7', { rootDirectory, write: true });
+  const args = ['--source', sourcePath, '--predecessor-source', join(directory, 'predecessor-source.json'), '--catalog-version', '111k-v7'];
+  const options = parseCatalogUpdateArgs(['prepare', ...args, '--bundle', catchup])!;
+  const input = { rootDirectory, sourcePath, catalogVersion: options.catalogVersion, predecessorSourcePath: options.predecessorSourcePath };
+  const summary = await inspectRevealCatalogUpdate(input);
+  assert.equal(summary.predecessorVersion, '111k-v5');
+  assert.equal(summary.additions, 4);
+  assert.equal(summary.targetManifestSha256, current.batch.target.descriptor.manifestSha256);
+  const frozen = await prepareRevealCatalogUpdate({ ...input, directory: catchup });
+  assert.deepEqual((await prepareRevealCatalogUpdate({ ...input, directory: catchup })).batch, frozen.batch);
+  await assert.rejects(inspectRevealCatalogUpdate({ ...input, predecessorSourcePath: sourcePath }), /exactly one installed ancestor/);
+  await assert.rejects(inspectRevealCatalogUpdate({ ...input, catalogVersion: '111k-v8' }), /installed target/);
+  const journalPath = join(catchup, 'fixture.journal.json');
+  const journal = JSON.stringify({ batchSha256: frozen.batch.batchSha256, expectedRevision: 3 });
+  await writeFile(journalPath, journal, { mode: 0o600 });
+  const laterSource = join(rootDirectory, 'later.json');
+  const laterDir = directory + '-v8';
+  await writeFile(laterSource, JSON.stringify({ ...nextSource(), 'paintings/4.png': [3, 4], 'paintings/5.png': [1, 2] }));
+  await prepareRevealCatalogUpdate({ rootDirectory, sourcePath: laterSource, directory: laterDir });
+  await promoteRevealCatalogUpdate(laterDir, { rootDirectory, write: true });
+  const retried = await prepareRevealCatalogUpdate({ ...input, directory: catchup });
+  assert.equal(retried.batch.batchSha256, frozen.batch.batchSha256);
+  assert.equal(await readFile(journalPath, 'utf8'), journal);
+  await assert.rejects(prepareRevealCatalogUpdate({ ...input, directory: catchup + '-new' }), /installed target/);
+  await assert.rejects(prepareRevealCatalogUpdate({ ...input, directory: catchup, predecessorSourcePath: join(directory, 'source.json') }), /different catalog inputs/);
+  await writeFile(sourcePath, JSON.stringify({ ...nextSource(), 'paintings/4.png': [4, 3] }));
+  await assert.rejects(inspectRevealCatalogUpdate({ ...input, catalogVersion: '111k-v8' }), /exact target source/);
+  await assert.rejects(prepareRevealCatalogUpdate({ ...input, directory: catchup }), /different catalog inputs/);
+  assert.throws(() => parseCatalogUpdateArgs(['prepare', ...args]), /Usage/);
+  assert.throws(() => parseCatalogUpdateArgs(['inspect', '--source', sourcePath, '--predecessor-source', directory]), /Usage/);
+});
+
+test('retained predecessors sharing one source are selected and resumed by manifest checksum', async t => {
+  const { rootDirectory, sourcePath, directory } = await fixture(t);
+  const predecessorSourcePath = join(rootDirectory, ASSETS, 'source.json');
+  const frozenSource = directory + '-previous.json';
+  await fs.copyFile(predecessorSourcePath, frozenSource);
+  const first = await importRevealAssets({ rootDirectory, check: true });
+  const second = await importRevealAssets({ rootDirectory, sourcePath: frozenSource, catalogVersion: '111k-v6' });
+  await importRevealAssets({ rootDirectory, sourcePath, catalogVersion: '111k-v7' });
+  const args = ['inspect', '--source', sourcePath, '--predecessor-source', frozenSource, '--catalog-version', '111k-v7'];
+  const input = { rootDirectory, sourcePath, predecessorSourcePath: frozenSource, catalogVersion: '111k-v7' };
+  await assert.rejects(prepareRevealCatalogUpdate({ ...input, directory }), /exactly one installed ancestor/);
+  for (const { descriptor } of [first, second]) {
+    const parsed = parseCatalogUpdateArgs([...args, '--predecessor-manifest-sha256', descriptor.manifestSha256])!;
+    const report = await inspectRevealCatalogUpdate({ ...input, predecessorManifestSha256: parsed.predecessorManifestSha256 });
+    assert.equal(report.predecessorVersion, descriptor.catalogVersion);
+    assert.equal(report.predecessorManifestSha256, descriptor.manifestSha256);
+  }
+  await assert.rejects(inspectRevealCatalogUpdate({ ...input, predecessorManifestSha256: '0'.repeat(64) }), /exactly one installed ancestor/);
+  assert.throws(() => parseCatalogUpdateArgs([...args, '--predecessor-manifest-sha256', 'invalid']), /Usage/);
+  assert.throws(() => parseCatalogUpdateArgs(['inspect', '--source', sourcePath, '--predecessor-manifest-sha256', first.descriptor.manifestSha256]), /Usage/);
+  const chosen = { ...input, directory, predecessorManifestSha256: second.descriptor.manifestSha256 };
+  const frozen = await prepareRevealCatalogUpdate(chosen);
+  assert.deepEqual(frozen.batch.predecessor.descriptor, second.descriptor);
+  assert.equal((await prepareRevealCatalogUpdate(chosen)).batch.batchSha256, frozen.batch.batchSha256);
+  await assert.rejects(prepareRevealCatalogUpdate({ ...chosen, predecessorManifestSha256: first.descriptor.manifestSha256 }), /different catalog inputs/);
+});
+
 test('explicit cutoff preparation preserves its mapping and threshold through frozen bundle retries', async t => {
   const input = await fixture(t);
   const options = { ...input, eggIds: [20, 80, 111110], eggCutoff: 10 };
@@ -138,9 +240,51 @@ test('eligible cutoff inspection pages without mutation and rejects a changing c
   assert.deepEqual(calls.map(call => call.afterEggId), [10, 266]);
   await assert.rejects(inspectEligibleCutoffEggs({ ...options, transport: async request => ({ ...await transport(request),
     catalogRevision: request.afterEggId === 10 ? 2 : 3 }) }), /changed eligible/);
-  assert.equal(parseCatalogUpdateArgs(['eligible-eggs', '--deployment-id', 'test', '--expected-revision', '4', '--egg-cutoff', '10'])!.eggCutoff, 10);
+  const args = ['eligible-eggs', '--deployment-id', 'test', '--expected-revision', '4', '--egg-cutoff', '10'];
+  assert.throws(() => parseCatalogUpdateArgs(args), /Usage/);
+  assert.equal(parseCatalogUpdateArgs([...args, '--output', '.operations/egg-inventory.json'])!.eggCutoff, 10);
   assert.equal(parseCatalogUpdateArgs(['prepare', '--source', '/tmp/source', '--bundle', '/tmp/bundle', '--egg-ids', '/tmp/ids', '--egg-cutoff', '10'])!.eggIdsPath, '/tmp/ids');
   assert.throws(() => parseCatalogUpdateArgs(['prepare', '--source', '/tmp/source', '--bundle', '/tmp/bundle', '--egg-ids', '/tmp/ids']));
+});
+
+test('cutoff evidence requires a private destination before reading IDs or contacting the deployment', async t => {
+  const f = await fixture(t);
+  const external = await mkdtemp(join(tmpdir(), 'hatch-privacy-'));
+  t.after(() => rm(external, { recursive: true, force: true }));
+  const publicPath = resolve('releases/111k-unsafe-test/eligible.json');
+  await assert.rejects(prepareRevealCatalogUpdate({ ...f, directory: publicPath }), /Hatch evidence/);
+  await assert.rejects(runRevealCatalogUpdate({ directory: publicPath, action: 'apply', deploymentId: 'test', expectedRevision: 4 }), /Hatch evidence/);
+
+  const privateDir = defaultHatchBundle('111k-v123456');
+  assert.equal(privateHatchPath(privateDir), privateDir);
+  const scratch = await mkdtemp(resolve('.operations/hatch-privacy-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  await fs.symlink(resolve('releases'), join(scratch, 'escape'));
+  assert.throws(() => privateHatchPath(join(scratch, 'escape', 'subdir', 'ids.json')), /Hatch evidence/);
+  await fs.symlink(resolve('releases'), join(external, 'alias'));
+  assert.throws(() => privateHatchPath(join(external, 'alias', 'subdir', 'ids.json')), /Hatch evidence/);
+  const otherRepo = join(external, 'other-repo');
+  execFileSync('git', ['init', '--quiet', otherRepo]);
+  assert.throws(() => privateHatchPath(join(otherRepo, 'nested', 'ids.json')), /Hatch evidence/);
+
+  let calls = 0;
+  const options = { deploymentId: 'test', expectedRevision: 4, eggCutoff: 10,
+    transport: async (request: EthereumRevealCatalogUpdateRequest): Promise<EthereumRevealCatalogUpdateResult> => {
+      calls++;
+      return { deploymentId: 'test', batchId: request.batchId, phase: 'unstarted', complete: false, catalogRevision: 2,
+        total: 0, staged: 0, applied: 0, published: 0, frozen: 0, retryAfterMs: 0, eligibleEggIds: [22, 35], nextEligibleEggId: null };
+    } };
+  await assert.rejects(writeEligibleCutoffEggs({ ...options, outputPath: publicPath }), /Hatch evidence/);
+  assert.equal(calls, 0);
+  const output = join(scratch, 'private-ids.json');
+  const result = await writeEligibleCutoffEggs({ ...options, outputPath: output });
+  assert.deepEqual(result, { deploymentId: 'test', catalogRevision: 2, eggCutoff: 10, eligibleCount: 2, output });
+  assert.deepEqual(JSON.parse(await readFile(output, 'utf8')).eggIds, [22, 35]);
+  assert.equal((await fs.stat(output)).mode & 0o777, 0o600);
+  await assert.rejects(writeEligibleCutoffEggs({ ...options, outputPath: output }), { code: 'EEXIST' });
+  const raw = await options.transport({ deploymentId: 'test', batchId: 'test', expectedRevision: 4, action: 'verify', verificationAfterEggId: 35 });
+  const progress = publicCatalogUpdateResult({ ...raw, nextVerificationEggId: 35 });
+  assert.ok(!('eligibleEggIds' in progress || 'nextEligibleEggId' in progress || 'nextVerificationEggId' in progress));
 });
 
 test('updates reject deletions, old media changes and nonincreasing catalog versions', () => {
@@ -442,11 +586,11 @@ test('concurrent local mutation commands cannot overwrite the operation journal'
   assert.equal(JSON.parse(await readFile(join(input.directory, 'test.journal.json'), 'utf8')).expectedRevision, 4);
 });
 
-test('current v9 catalog and retained v5 through v8 ancestors are pinned and immutable', () => {
+test('current v10 catalog and retained v5 through v9 ancestors are pinned and immutable', () => {
   const supported = getSupportedRevealCatalogVersions();
   for (const [version, eggs, paintings] of [
     ['111k-v5', 76642, 30990], ['111k-v6', 67284, 40348], ['111k-v7', 60504, 47128],
-    ['111k-v8', 55303, 52329], ['111k-v9', 38652, 68980],
+    ['111k-v8', 55303, 52329], ['111k-v9', 38652, 68980], ['111k-v10', 32190, 75442],
   ] as const) {
     assert.ok(supported.includes(version));
     const descriptor = getRevealCatalogDescriptor(version)!;

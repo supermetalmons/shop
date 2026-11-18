@@ -1,0 +1,57 @@
+{
+  "checkedAt": "2026-11-17T21:49:30.336Z",
+  "total": 111111,
+  "available": 70991,
+  "reserved": 0,
+  "frozen": 40120,
+  "cohort": 424,
+  "owner_ready": 418,
+  "owner_hatched": 6,
+  "distinct_rewards": 424,
+  "mappings": 6162,
+  "exchanged_eggs": 6162,
+  "distinct_shared": 6162,
+  "catalog_revision": 2,
+  "effective_catalog_version": "111k-v10",
+  "effective_catalog_sha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec",
+  "candidate_catalog_generation": null,
+  "catalog_phase": "complete",
+  "activated_at_ms": 1794951196916,
+  "auto_migrated": 0,
+  "owner_phase": "complete",
+  "verification_passes": 3,
+  "observation_until_ms": 1794951965640,
+  "eligibility_block": 26437480,
+  "eligibility_block_hash": "0x17e049369fd5042bc9a21788a6f40a98e8948f60497c0d21911fe6df856184d3",
+  "effective_egg_slots": 32347,
+  "free_egg_slots": 21448,
+  "free_rows": 70991,
+  "old_free_rows": 0,
+  "cross_allocation_overlap": 0,
+  "older_assignments_converted": 0,
+  "unpublished": 0,
+  "temporary_eggs": 0,
+  "temporary_draws": 0,
+  "groups": [
+    {
+      "collection": "GAN videos",
+      "owner": 124,
+      "shared": 0
+    },
+    {
+      "collection": "DriFPS",
+      "owner": 100,
+      "shared": 1400
+    },
+    {
+      "collection": "ever since i was",
+      "owner": 100,
+      "shared": 2189
+    },
+    {
+      "collection": "Collage Paintings",
+      "owner": 100,
+      "shared": 2573
+    }
+  ]
+}

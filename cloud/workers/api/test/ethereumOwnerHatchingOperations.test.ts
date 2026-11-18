@@ -4,6 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { decodeReturn, encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
+import { computeRevealCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.ts';
+import type { MixedAllocationArtwork, MixedAllocationDefinition } from '../../../../shared/ethereum/revealMixedAllocation.ts';
 import { getRevealCatalog, getRevealCatalogDescriptor } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import { ownerHatchingCatalogSha256 } from '../../../../shared/ethereum/ownerHatchingCatalog.ts';
 import supplement from '../../../../shared/ethereum/ownerHatchingCatalog.json';
@@ -62,7 +64,7 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
     now: 1_000_000, head: 500, minted: 240, catalogRevision: 1, registryRevision: 9, recover: true, current: true,
     published: 0, conflicts: 0, pendingEnrichment: 0, failedEnrichment: 0, prepareCalls: 0, wakeCalls: 0, requireCalls: 0, assigned: 0,
     traitsFail: false, malformedTraits: false, missingObject: false, badObject: false, badHeaders: false, oversized: false,
-    reorg: false, conservation: true, revisionChanged: false, r2Gate: null as Promise<void> | null,
+    reorg: false, conservation: true, revisionChanged: false, r2Gate: null as Promise<void> | null, nextRegistryGate: null as Promise<void> | null,
     missing: new Set<string>(), nonEgg: new Set<string>(), protected: new Set<number>(), claimed: new Set<string>(),
     randomCalls: 0, rpcCalls: 0, tokenFailure: null as Error | null, snapshotFailure: null as Error | null,
     canonicalHashes: new Map<number, string>(),
@@ -112,23 +114,26 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
       const tokenId = /\/(\d+)\.json$/.exec(key)![1];
       state.objectReads.push(tokenId);
       if (state.missingObject) return null;
-      const body = state.badObject ? '{}' : metadata(tokenId);
       if (state.r2Gate) await state.r2Gate;
       if (state.revisionChanged) { revisions.set(tokenId, (revisions.get(tokenId) ?? 1) + 1); state.revisionChanged = false; }
+      const body = state.badObject ? '{}' : metadata(tokenId);
       return { size: state.oversized ? MAX_REVEAL_METADATA_BYTES + 1 : Buffer.byteLength(body),
         httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: state.badHeaders ? 'public' : 'no-store' },
         async text() { return body; } };
     } },
   } as unknown as Env;
-  const reopen = () => new EthereumOwnerHatchingOperations({ env, sql, store, transaction,
+  const reopen = (mixed?: ConstructorParameters<typeof EthereumOwnerHatchingOperations>[1]) => new EthereumOwnerHatchingOperations({ env, sql, store, transaction,
     randomInteger: maximum => state.randomCalls++ % maximum,
     recover: async tokenIds => { state.recovered.push(tokenIds); return state.recover; },
     requireCurrent: async expectedRevision => {
       state.requireCalls++;
+      const gate = state.nextRegistryGate;
+      state.nextRegistryGate = null;
+      if (gate) await gate;
       if (!state.current || expectedRevision !== undefined && expectedRevision !== state.registryRevision) throw new Error('Registry revision changed.');
     },
     wake: async () => { state.wakeCalls++; },
-  });
+  }, mixed);
   let operations = reopen();
   t.mock.method(Date, 'now', () => state.now);
   t.mock.method(console, 'log', () => {});
@@ -191,7 +196,7 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
     while ((await run('verify')).verificationCursor !== null) {}
     return run('complete');
   };
-  return { state, database, run, prepared, activate, finishActivation, complete, reopen: () => { operations = reopen(); },
+  return { state, database, store, open: reopen, run, prepared, activate, finishActivation, complete, reopen: () => { operations = reopen(); },
     row: () => database.prepare('SELECT * FROM owner_hatching_preparations WHERE batch_id=?').get(request.batchId)!,
     activation: () => database.prepare('SELECT * FROM owner_hatching_activation WHERE batch_id=?').get(request.batchId)!,
     draws: () => database.prepare('SELECT position,token_id,live FROM owner_hatching_activation_candidates WHERE batch_id=? ORDER BY position')
@@ -408,10 +413,11 @@ test('a frozen batch resumes after additive catalog support changes without chan
   await f.run('begin');
   const frozen = JSON.parse(String(f.row().request_json)) as OwnerHatchingMaintenanceRequest;
   frozen.catalogSha256 = 'b'.repeat(64);
-  f.database.prepare('UPDATE owner_hatching_preparations SET request_json=? WHERE batch_id=?').run(JSON.stringify(frozen), begin.batchId);
+  const historical = JSON.stringify(Object.fromEntries(Object.entries(frozen).reverse()));
+  f.database.prepare('UPDATE owner_hatching_preparations SET request_json=? WHERE batch_id=?').run(historical, begin.batchId);
   const replayed = await f.run('begin');
   assert.equal(replayed.scanned, 0);
-  assert.equal(JSON.parse(String(f.row().request_json)).catalogSha256, frozen.catalogSha256);
+  assert.equal(f.row().request_json, historical);
   await assert.rejects(f.run('begin', { catalogSha256: 'c'.repeat(64) }), /inputs changed/);
   await assert.rejects(f.run('begin', { expectedRevision: 10 }), /inputs changed/);
 });
@@ -966,7 +972,8 @@ test('completion verifies every metadata page twice across the scheduler interva
   assert.equal(waiting.verificationCursor, null);
   assert.equal(f.row().verification_passes, 0);
   f.state.published = 18;
-  assert.equal((await f.run('verify')).verificationCursor, '16');
+  assert.equal((await f.run('verify')).verificationCursor, 'pending');
+  assert.equal(f.row().verification_cursor, '16');
   const observed = await f.run('verify');
   assert.equal(observed.verificationCursor, null);
   assert.equal(observed.phase, 'observing');
@@ -976,7 +983,7 @@ test('completion verifies every metadata page twice across the scheduler interva
   await assert.rejects(f.run('complete'), /two verification passes/);
   f.state.now += 300_000;
   f.reopen();
-  assert.equal((await f.run('verify')).verificationCursor, '16');
+  assert.equal((await f.run('verify')).verificationCursor, 'pending');
   await f.run('verify');
   const completed = await f.run('complete');
   assert.equal(completed.complete, true);
@@ -1006,7 +1013,7 @@ test('metadata errors, concurrent hatching revisions and inventory loss cannot a
   f.state.revisionChanged = true;
   assert.equal((await f.run('verify')).verificationCursor, null);
   assert.equal(f.row().verification_passes, 0);
-  assert.equal((await f.run('verify')).verificationCursor, '16');
+  assert.equal((await f.run('verify')).verificationCursor, 'pending');
 });
 
 test('published base metadata cannot verify or complete while hatched traits are pending or failed', async t => {
@@ -1072,7 +1079,7 @@ test('completed batches verify every page afresh without changing their setup or
     const first = await f.run('verify');
     assert.equal(first.complete, true);
     assert.equal(first.phase, 'complete');
-    assert.equal(first.verificationCursor, '16');
+    assert.equal(first.verificationCursor, 'pending');
     assert.deepEqual(await f.run('verify'), completed);
     assert.deepEqual(f.state.objectReads.slice(pass * 18), Array.from({ length: 18 }, (_, index) => String(index + 1)));
   }
@@ -1131,7 +1138,7 @@ test('completed setup preserves its phase but rejects pending or failed enrichme
   assert.equal(f.state.wakeCalls, wakeCalls);
   f.state.pendingEnrichment = 0;
   f.state.failedEnrichment = 0;
-  assert.equal((await f.run('verify')).verificationCursor, '16');
+  assert.equal((await f.run('verify')).verificationCursor, 'pending');
   assert.deepEqual(await f.run('verify'), completed);
 });
 
@@ -1160,5 +1167,283 @@ test('private assignment count corruption prevents a successful verification pas
   f.database.exec("UPDATE owner_hatching_tokens SET status='hatched' WHERE token_id='1'");
   await assert.rejects(f.run('verify'), /private allocation verification failed/);
   f.database.exec("INSERT INTO owner_hatching_retired_eggs VALUES('1'); INSERT INTO owner_hatching_artwork_claims VALUES('1')");
-  assert.equal((await f.run('verify')).verificationCursor, '16');
+  assert.equal((await f.run('verify')).verificationCursor, 'pending');
+});
+
+
+function mixedReleaseFixture() {
+  const targetCatalog = structuredClone(getRevealCatalog('111k-v9')!);
+  targetCatalog.catalogVersion = '111k-v10';
+  const batchId = begin.batchId;
+  const definition: MixedAllocationDefinition = { version: 1, sourceSha256: digest('mixed source'), predecessor: descriptor,
+    target: computeRevealCatalogDescriptor(targetCatalog), collectionBlocksSha256: digest('blocks'), ownerSupplementSha256: digest('supplement'),
+    groups: [{ category: 'animated', collectionBlock: 'DROWEE', firstId: 422, lastId: 422, ownerCount: 1 },
+      { category: 'painting', collectionBlock: 'collection', firstId: 100, lastId: 101, ownerCount: 1 }] };
+  return { batchId, definition, targetCatalog };
+}
+
+test('mixed coordinator preserves its release identity across reorgs, legacy requests and bounded cleanup', async t => {
+  const f = fixture(t, { readyCount: 2, grailIds: [422, 423], freshEggIds: [] });
+  const release = mixedReleaseFixture();
+  const { batchId, definition } = release;
+  const identity = { deploymentId: deployment.deploymentId, batchId, expectedRevision: 9 };
+  const rewards: MixedAllocationArtwork[] = [{ category: 'animated', assetId: 422 }, { category: 'painting', assetId: 100 }];
+  const pending: MixedAllocationArtwork[] = [...rewards, { category: 'painting', assetId: 101 }];
+  let stageCount = 0, began = 0, sealed = 0, verified = 0, cleanupPages = 0;
+  Object.assign(f.store.catalogUpdate, {
+    mixed: {
+      begin: () => { began++; },
+      pendingTraits: () => pending.slice(stageCount),
+      stageTraits: (_batch: string, rows: Array<MixedAllocationArtwork & { attributesJson: string; sha256: string }>) => {
+        assert.deepEqual(rows.map(({ category, assetId }) => ({ category, assetId })), pending);
+        assert.ok(rows.every(row => row.sha256 === digest(row.attributesJson)));
+        stageCount += rows.length;
+      },
+      stageInventory: () => ({ generationSeeded: 111111 }),
+      seal: () => { sealed++; },
+      activate: (_batch: string, candidates: string[]) => {
+        f.store.catalogUpdate.ownerHatching.prepare({ batchId, candidateTokenIds: candidates, sourceSha256: definition.sourceSha256,
+          readyCount: 2, grails: rewards, freshEggIds: [] });
+        f.state.catalogRevision++;
+      },
+      status: () => ({ metadataStaged: stageCount }),
+      verify: () => { verified++; },
+      finalize: () => {},
+      cancel: () => { throw new Error('An activated mixed allocation must resume forward.'); },
+    },
+    prune: () => ({ remaining: ++cleanupPages === 1 ? 1 : 0 }),
+  });
+  let operations = f.open(release);
+  const run = (action: OwnerHatchingMaintenanceRequest['action']) => operations.run(deployment, { ...identity, action });
+  await assert.rejects(operations.run(deployment, begin), /frozen release/);
+  const both = await Promise.all([run('begin'), operations.run(deployment, {
+    action: 'begin', expectedRevision: identity.expectedRevision, batchId, deploymentId: identity.deploymentId,
+  })]);
+  assert.deepEqual(both[0], both[1]);
+  assert.equal(began, 1);
+  await assert.rejects(f.run('status'), /original operation identity/);
+  const changed = f.open({ ...release, definition: { ...definition, sourceSha256: digest('different') } });
+  await assert.rejects(changed.run(deployment, { ...identity, action: 'stage' }), /original operation identity/);
+  await assert.rejects(changed.run(deployment, { ...identity, action: 'begin' }), /inputs changed/);
+  f.state.reorg = true;
+  await assert.rejects(run('scan'), /Ethereum changed/);
+  assert.equal((await run('status')).scanned, 0);
+  f.state.reorg = false;
+  await run('refresh-scan');
+  while ((await run('scan')).phase === 'scanning') {}
+  f.state.traitsFail = true;
+  await assert.rejects(run('stage'));
+  assert.equal(stageCount, 0);
+  f.state.traitsFail = false;
+  await run('stage');
+  operations = f.open(release);
+  assert.equal((await run('stage')).phase, 'prepared');
+  assert.equal(sealed, 1);
+  await run('activate');
+  f.state.reorg = true;
+  await assert.rejects(run('activate'), /Ethereum changed/);
+  assert.equal(f.state.prepareCalls, 0);
+  assert.equal(f.draws().length, 2);
+  const originalDraws = f.draws().map(row => row.token_id);
+  f.state.reorg = false;
+  await run('refresh-activation');
+  const gate = Promise.withResolvers<void>();
+  t.after(() => gate.resolve());
+  f.state.nextRegistryGate = gate.promise;
+  const delayed = run('activate');
+  const committed = await run('activate');
+  assert.equal(committed.phase, 'publishing');
+  gate.resolve();
+  assert.deepEqual(await delayed, committed);
+  assert.deepEqual(f.state.prepared!.candidateTokenIds, originalDraws);
+  assert.deepEqual(f.state.prepared!.grails, rewards);
+  await run('activate');
+  assert.equal(f.state.prepareCalls, 1);
+  f.state.published = 2;
+  f.state.revisionChanged = true;
+  await run('verify');
+  assert.equal(verified, 0);
+  assert.equal(f.row().verification_cursor, null);
+  await run('verify');
+  await assert.rejects(run('complete'), /two verification passes/);
+  f.state.now += 300_000;
+  await run('verify');
+  assert.equal(verified, 2);
+  assert.equal((await run('complete')).complete, false);
+  assert.equal((await run('complete')).complete, true);
+  assert.equal(f.count('owner_hatching_activation_candidates'), 0);
+  f.database.prepare(`UPDATE owner_hatching_preparations SET verification_cursor=(
+    SELECT token_id FROM owner_hatching_tokens ORDER BY CAST(token_id AS INTEGER) LIMIT 1) WHERE batch_id=?`).run(batchId);
+  const blockedRead = Promise.withResolvers<void>();
+  f.state.r2Gate = blockedRead.promise;
+  f.state.objectReads.length = 0;
+  const historical = run('verify');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.state.objectReads.length, 1);
+  f.state.published = 1;
+  blockedRead.resolve();
+  assert.equal((await historical).retrying, 1);
+  assert.equal(f.row().verification_cursor, '0');
+  assert.equal(f.row().verification_passes, 2);
+  f.state.published = 2;
+  f.state.r2Gate = null;
+  await run('verify');
+  assert.equal(f.state.objectReads.length, 3);
+  assert.equal(f.row().verification_passes, 3);
+  f.state.badObject = true;
+  await assert.rejects(run('verify'), /verification did not match/);
+  assert.equal(f.row().verification_passes, 3);
+  f.state.badObject = false;
+  f.database.exec('ALTER TABLE owner_hatching_preparations DROP COLUMN verification_hatched');
+  f.database.prepare(`UPDATE owner_hatching_preparations SET verification_cursor=(
+    SELECT token_id FROM owner_hatching_tokens ORDER BY CAST(token_id AS INTEGER) LIMIT 1) WHERE batch_id=?`).run(batchId);
+  operations = f.open(release);
+  f.state.objectReads.length = 0;
+  assert.equal((await run('verify')).complete, true);
+  assert.equal(f.state.objectReads.length, 2);
+  assert.equal(f.row().verification_passes, 4);
+});
+
+test('underfilled scans and exhausted activations replenish eligible eggs with the original mixed draw', async t => {
+  const f = fixture(t);
+  const release = mixedReleaseFixture();
+  const identity = { deploymentId: deployment.deploymentId, expectedRevision: 9, batchId: release.batchId };
+  let draws = 0;
+  let allocated: string[] = [];
+  Object.assign(f.store.catalogUpdate, { mixed: {
+    begin: () => { draws++; }, status: () => ({ metadataStaged: 0 }), pendingTraits: () => [],
+    stageInventory: () => ({ generationSeeded: 111_111 }), seal: () => {},
+    activate: (_batch: string, ids: string[]) => { allocated = ids; },
+  } });
+  let operations = f.open(release);
+  const run = (action: OwnerHatchingMaintenanceRequest['action']) => operations.run(deployment, { ...identity, action });
+  f.state.minted = 20;
+  for (let id = 1; id < 60; id++) if (id % 20) f.state.nonEgg.add(String(id));
+  await run('begin');
+  const short = await run('scan');
+  assert.equal(short.phase, 'staging');
+  assert.equal(short.candidates, 1);
+  assert.equal(short.scanned, short.total);
+  await assert.rejects(run('stage'), /too few eligible/);
+  operations = f.open(release);
+  f.state.head++;
+  f.state.minted = 40;
+  const refreshed = await run('refresh-scan');
+  assert.equal(refreshed.phase, 'scanning');
+  assert.equal(refreshed.scanned, 0);
+  assert.equal(refreshed.candidates, 0);
+  assert.equal((await run('scan')).candidates, 2);
+  await assert.rejects(run('refresh-scan'), /unfinished scan/);
+  assert.equal((await run('stage')).phase, 'prepared');
+  await run('activate');
+  await assert.rejects(run('refresh-scan'), /unfinished scan/);
+  f.state.missing.add('40');
+  assert.equal((await run('activate')).activationSelected, 1);
+  await assert.rejects(run('activate'), /refresh-scan --write/);
+  const order = f.draws().map(row => row.token_id);
+  f.state.head++;
+  f.state.minted = 60;
+
+  const gate = holdNextRpc(t);
+  const delayed = run('refresh-scan');
+  await gate.started;
+  await run('refresh-activation');
+  gate.release();
+  await assert.rejects(delayed, /Scan changed/);
+  await assert.rejects(run('refresh-scan'), /unfinished scan/);
+  assert.equal((await run('activate')).activationSelected, 1);
+
+  operations = f.open(release);
+  assert.equal((await run('refresh-scan')).phase, 'scanning');
+  assert.equal((await run('scan')).candidates, 2);
+  await run('stage');
+  await run('activate');
+  assert.deepEqual(f.draws().map(row => row.token_id), order);
+  f.state.missing.clear();
+  assert.equal((await run('activate')).activationSelected, 1);
+  assert.equal((await run('activate')).phase, 'publishing');
+  assert.deepEqual(allocated, ['20', '60']);
+  await assert.rejects(run('refresh-scan'), /unfinished scan/);
+  assert.equal(draws, 1);
+  assert.equal(f.state.prepareCalls, 0);
+});
+
+test('cancelling a mixed preparation invalidates in-flight scanning and preserves the original release evidence', async t => {
+  const f = fixture(t);
+  const release = mixedReleaseFixture();
+  const identity = { deploymentId: deployment.deploymentId, expectedRevision: 9, batchId: release.batchId };
+  let cancellations = 0;
+  Object.assign(f.store.catalogUpdate, {
+    mixed: { begin: () => {}, status: () => ({ metadataStaged: 0 }), cancel: () => { cancellations++; } },
+    prune: () => ({ remaining: 0 }),
+  });
+  const operations = f.open(release);
+  await operations.run(deployment, { ...identity, action: 'begin' });
+  await operations.run(deployment, { ...identity, action: 'scan' });
+  assert.equal(f.count('owner_hatching_candidates'), 100);
+  const gate = holdNextRpc(t);
+  const pending = operations.run(deployment, { ...identity, action: 'scan' });
+  await gate.started;
+  await assert.rejects(operations.cancelMixed(deployment, { ...identity, expectedRevision: 8 }), /original operation identity/);
+  assert.deepEqual(await operations.cancelMixed(deployment, identity), { cancelled: true, remaining: 0 });
+  gate.release();
+  assert.equal((await pending).phase, 'cancelled');
+  const reopened = f.open(release);
+  for (const action of ['begin', 'refresh-scan', 'scan', 'stage', 'activate'] as const) {
+    await assert.rejects(reopened.run(deployment, { ...identity, action }), /cancelled/);
+  }
+  assert.deepEqual(await reopened.cancelMixed(deployment, identity), { cancelled: true, remaining: 0 });
+  assert.equal(cancellations, 1);
+  assert.equal(f.count('owner_hatching_candidates'), 0);
+  assert.equal(f.count('owner_hatching_tokens'), 0);
+  assert.equal(JSON.parse(String(f.row().request_json)).sourceSha256, release.definition.sourceSha256);
+});
+
+test('mixed activation rechecks its entire cohort at a fresh cutoff and refills burned eggs after restart', async t => {
+  const f = fixture(t);
+  const release = mixedReleaseFixture();
+  Object.assign(release.definition.groups[1], { lastId: 280, ownerCount: 179 });
+  const identity = { deploymentId: deployment.deploymentId, expectedRevision: 9, batchId: release.batchId };
+  let allocated: string[] = [];
+  Object.assign(f.store.catalogUpdate, { mixed: {
+    begin: () => {}, status: () => ({ metadataStaged: 0 }), pendingTraits: () => [],
+    stageInventory: () => ({ generationSeeded: 111_111 }), seal: () => {},
+    activate: (_batch: string, ids: string[]) => { allocated = ids; },
+  } });
+  let operations = f.open(release);
+  const run = (action: OwnerHatchingMaintenanceRequest['action']) => operations.run(deployment, { ...identity, action });
+  await run('begin');
+  while ((await run('scan')).phase === 'scanning') {}
+  await run('stage');
+  await run('activate');
+  assert.equal((await run('activate')).activationChecked, 100);
+  const burned = String(f.draws()[0].token_id);
+  f.state.head = 499;
+  await assert.rejects(run('activate'), /Ethereum changed/);
+  f.state.head = 501;
+  f.state.missing.add(burned);
+  const refill = await run('activate');
+  assert.deepEqual([refill.phase, refill.activationChecked, refill.activationSelected], ['activating', 180, 179]);
+  assert.equal(f.activation().block_number, 501);
+  assert.equal(f.draws()[0].live, 0);
+  assert.equal(allocated.length, 0);
+
+  operations = f.open(release);
+  f.state.head = 502;
+  f.state.canonicalHashes.set(501, blockHash(1501));
+  f.state.missing.delete(burned);
+  await assert.rejects(run('activate'), /Ethereum changed/);
+  const draws = f.draws().map(row => String(row.token_id));
+  await run('refresh-activation');
+  assert.deepEqual(f.draws().map(row => row.token_id), draws);
+  assert.equal((await run('activate')).activationSelected, 100);
+  f.state.head = 503;
+  f.state.missing.add(draws[1]);
+  f.state.tokenCalls.length = 0;
+  assert.equal((await run('activate')).phase, 'publishing');
+  assert.deepEqual(allocated, draws.filter(id => id !== draws[1]));
+  assert.equal(allocated[0], burned);
+  assert.deepEqual(f.state.tokenCalls.flatMap(call => call.ids), draws);
+  assert.ok(f.state.tokenCalls.every(call => JSON.stringify(call.block) === JSON.stringify({ blockHash: blockHash(503), requireCanonical: true })));
+  assert.deepEqual([f.activation().block_number, f.activation().block_hash], [503, blockHash(503)]);
 });

@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-11-17T20:38:03.452Z",
+  "buildDigest": "93af29d75b77b98155d11c6cae475a6fcfcfdb328e7c492f6a5f3cf685dc010c",
+  "filesPerDomain": 67,
+  "bytesPerDomain": 7572231,
+  "domains": [
+    {
+      "domain": "https://mons.shop",
+      "fileCount": 67,
+      "requests": 67,
+      "retried": 0,
+      "errors": []
+    },
+    {
+      "domain": "https://www.mons.shop",
+      "fileCount": 67,
+      "requests": 67,
+      "retried": 0,
+      "errors": []
+    }
+  ]
+}

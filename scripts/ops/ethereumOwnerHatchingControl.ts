@@ -3,9 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import supplement from '../../shared/ethereum/ownerHatchingCatalog.json';
-import { getOwnerHatchingGrail, ownerHatchingCatalogSha256, type OwnerHatchingGrail } from '../../shared/ethereum/ownerHatchingCatalog.ts';
-import type { OwnerHatchingMaintenanceRequest, OwnerHatchingMaintenanceResult } from '../../shared/ethereum/ownerHatchingMaintenance.ts';
+import { getOwnerHatchingGrail, getStandaloneOwnerHatchingBatch, ownerHatchingCatalogSha256, type OwnerHatchingGrail } from '../../shared/ethereum/ownerHatchingCatalog.ts';
+import { redactOwnerHatchingCursor, type OwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceResult } from '../../shared/ethereum/ownerHatchingMaintenance.ts';
 import type { EthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
 import { withEthereumRevealMaintenance } from '../shared/ethereumRevealMaintenance.ts';
 import { runEthereumRevealControl } from './ethereumRevealControl.ts';
@@ -141,7 +140,7 @@ function sanitizedResult(value: OwnerHatchingMaintenanceResult, options: Control
     staged: value.staged, activationChecked: value.activationChecked, activationSelected: value.activationSelected,
     published: value.published, hatched: value.hatched, retrying: value.retrying, conflicts: value.conflicts,
     pendingEnrichment: value.pendingEnrichment, failedEnrichment: value.failedEnrichment,
-    retryAfterMs: value.retryAfterMs, verificationCursor: value.verificationCursor,
+    retryAfterMs: value.retryAfterMs, verificationCursor: redactOwnerHatchingCursor(value.verificationCursor),
     observationUntilMs: value.observationUntilMs, complete: value.complete };
 }
 
@@ -232,7 +231,7 @@ async function runOperation(options: ControlOptions, transport: Transport, depen
   }
   const source = await (dependencies.readSource ?? (path => readFile(path, 'utf8')))(options.sourcePath!);
   const sourceSha256 = createHash('sha256').update(source).digest('hex');
-  const catalogBatch = supplement.batches.find(batch => batch.source.sha256 === sourceSha256);
+  const catalogBatch = getStandaloneOwnerHatchingBatch(sourceSha256);
   if (!catalogBatch) throw new Error('Source checksum does not match an approved owner hatching catalog batch.');
   const grailIds = catalogBatch.artworks.map(artwork => artwork.assetId);
   const readyCount = options.readyCount ?? grailIds.length * 2;

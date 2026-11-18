@@ -1,0 +1,57 @@
+{
+  "complete": true,
+  "verifiedAt": "2026-11-17T21:50:15+00:00",
+  "batchId": "mainnet-mixed-20261117",
+  "activatedAt": "2026-11-17T21:33:16.916Z",
+  "catalog": "111k-v10",
+  "catalogRevision": 2,
+  "registryRevision": 12,
+  "newOwnerReadyAllocations": 424,
+  "readyAtFinalLedgerRead": 418,
+  "ownerHatchedAtFinalLedgerRead": 6,
+  "observedAtFinalLedgerRead": "2026-11-17T21:49:30.336Z",
+  "sharedPoolExchanges": 6162,
+  "automaticMintedOrReservedConversions": 0,
+  "allocationSlots": 111111,
+  "groups": [
+    {
+      "collection": "GAN videos",
+      "owner": 124,
+      "shared": 0
+    },
+    {
+      "collection": "DriFPS",
+      "owner": 100,
+      "shared": 1400
+    },
+    {
+      "collection": "ever since i was",
+      "owner": 100,
+      "shared": 2189
+    },
+    {
+      "collection": "Collage Paintings",
+      "owner": 100,
+      "shared": 2573
+    }
+  ],
+  "eligibleAtScan": 10844,
+  "eligibilityBlock": 26437480,
+  "eligibilityBlockHash": "0x17e049369fd5042bc9a21788a6f40a98e8948f60497c0d21911fe6df856184d3",
+  "maintenancePause": false,
+  "onchainTransactions": 0,
+  "publicChecks": "publication-verification.json",
+  "schedulerAndAvailability": "health-verification.json",
+  "remainingOldGenerationFreeRows": 0,
+  "pendingOwnerCandidates": 0,
+  "pendingActivationDraws": 0,
+  "sepolia": {
+    "deploymentId": "v17",
+    "contractAddress": "0xaca342968965ddb20badb1943b99ee6523658619",
+    "catalogRevision": 3,
+    "effectiveCatalogVersion": "111k-v8",
+    "state": "active"
+  },
+  "rawRegistryBefore": 9,
+  "operatorRecovery": "Resumed the same frozen journal after private RPC interruptions; registry, public admission and the private draw were preserved."
+}

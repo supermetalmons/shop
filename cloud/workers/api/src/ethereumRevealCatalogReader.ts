@@ -43,6 +43,7 @@ export function validateCatalogPageSize(value: number, maximum = 256): void {
 export class EthereumRevealCatalogReader {
   private originCounts: { generation: string | null; counts: Record<EthereumArtworkCategory, number> } | undefined;
   private mappingOriginsAvailable: boolean | undefined;
+  private mixedAssetsAvailable = false;
   private readonly catalogs = new Map<string, RevealAssetCatalog>();
   readonly ownerHatching: EthereumOwnerHatchingReader;
 
@@ -72,6 +73,22 @@ export class EthereumRevealCatalogReader {
     return this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", name).toArray().length > 0;
   }
 
+  mixedAttributes(batchId: string, asset: RevealOriginUnit): string | undefined {
+    if (!this.mixedAssetsAvailable) return undefined;
+    const result = this.sql.exec<{ attributes_json: string | null }>(`SELECT a.attributes_json FROM reveal_mixed_operations m
+      LEFT JOIN reveal_mixed_artworks a ON a.batch_id=m.batch_id AND a.owner_reward=1 AND a.category=? AND a.asset_id=?
+      WHERE m.batch_id=?`, asset.category, asset.assetId, batchId).toArray()[0];
+    if (result?.attributes_json === null) throw new Error('Mixed owner reward traits are missing.');
+    return result?.attributes_json;
+  }
+
+  mixedFutureAttributes(asset: RevealOriginUnit): string | undefined {
+    if (!this.mixedAssetsAvailable) return undefined;
+    return this.sql.exec<{ attributes_json: string }>(`SELECT a.attributes_json FROM reveal_catalog_generations g
+      JOIN reveal_mixed_artworks a ON a.batch_id=g.batch_id AND a.category=? AND a.asset_id=? AND a.owner_reward=0
+      WHERE g.batch_version=3 AND g.activated_at_ms IS NOT NULL`, asset.category, asset.assetId).toArray()[0]?.attributes_json;
+  }
+
   private mappingOriginJoin(): string {
     if (!this.mappingOriginsAvailable) {
       const columns = this.sql.exec<{ name: string }>('PRAGMA table_info(reveal_catalog_mappings)').toArray();
@@ -85,7 +102,9 @@ export class EthereumRevealCatalogReader {
   settings(): { deployment_json: string; catalog_revision: number; active_catalog_generation: string | null;
     candidate_catalog_generation: string | null; allocation_base_generation: string | null;
     effective_catalog_version: string | null; effective_catalog_sha256: string | null } | null {
-    if (!this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='settings'").toArray().length) return null;
+    const tables = this.sql.exec<{ name: string }>("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('settings','reveal_mixed_artworks')").toArray();
+    this.mixedAssetsAvailable = tables.some(table => table.name === 'reveal_mixed_artworks');
+    if (!tables.some(table => table.name === 'settings')) return null;
     const row = this.sql.exec<{ deployment_json: string; catalog_revision?: number; active_catalog_generation?: string | null;
       candidate_catalog_generation?: string | null; allocation_base_generation?: string | null;
       effective_catalog_version?: string | null; effective_catalog_sha256?: string | null }>(
@@ -107,7 +126,8 @@ export class EthereumRevealCatalogReader {
     const saved = this.settings();
     if (!saved) return null;
     const origin = JSON.parse(saved.deployment_json) as EthereumRevealDeployment;
-    const descriptor = saved.active_catalog_generation ? JSON.parse(this.operation(saved.active_catalog_generation).target_json) as RevealAssetCatalogDescriptor
+    const descriptor = saved.active_catalog_generation ? JSON.parse(this.sql.exec<{ target_json: string }>(
+      'SELECT target_json FROM reveal_catalog_generations WHERE batch_id=?', saved.active_catalog_generation).toArray()[0].target_json) as RevealAssetCatalogDescriptor
       : getRevealCatalogDescriptor(origin.catalogVersion);
     if (!descriptor) throw new Error('Reveal catalog is not supported.');
     return { ...descriptor, catalogRevision: saved.catalog_revision, generation: saved.active_catalog_generation };
@@ -135,7 +155,7 @@ export class EthereumRevealCatalogReader {
       effectiveCatalogSha256: effective.manifestSha256, catalogRevision: effective.catalogRevision } : deployment;
   }
 
-  private originalCounts(): Record<EthereumArtworkCategory, number> {
+  originalCounts(): Record<EthereumArtworkCategory, number> {
     const saved = this.settings();
     const generation = saved?.allocation_base_generation ?? null;
     if (this.originCounts?.generation === generation) return this.originCounts.counts;
@@ -166,9 +186,14 @@ export class EthereumRevealCatalogReader {
     throw new Error('Invalid allocation unit.');
   }
 
-  private canonicalMappings<T extends { egg_id: number }>(units: readonly RevealOriginUnit[], fields: string): Map<number, T> {
+  private canonicalMappings<T extends { egg_id: number }>(units: readonly RevealOriginUnit[], projection: 'bytes' | 'metadata'): Map<number, T> {
     const eggIds = [...new Set(units.filter(unit => unit.category === 'egg').map(unit => unit.assetId))];
     if (!eggIds.length) return new Map();
+    const payload = this.mixedAssetsAvailable
+      ? `COALESCE(m.attributes_json,(SELECT a.attributes_json FROM reveal_mixed_artworks a
+          WHERE a.batch_id=m.batch_id AND a.category=m.category AND a.asset_id=m.asset_id))` : 'm.attributes_json';
+    const fields = projection === 'bytes' ? `m.egg_id,COALESCE(length(CAST(${payload} AS BLOB)),0) AS bytes`
+      : `m.egg_id,m.category,m.asset_id,${payload} AS attributes_json`;
     const rows = this.sql.exec<T>(`SELECT * FROM (
       SELECT ${fields},g.target_revision,ROW_NUMBER() OVER (PARTITION BY m.egg_id ORDER BY g.target_revision DESC) AS ordinal
       FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
@@ -391,7 +416,7 @@ export class EthereumRevealCatalogReader {
       const overrides = this.ownerHatching.slotOverrides(sizes.map(row => ({ category: row.category, assetId: row.asset_id })));
       const units = new Map(sizes.map((row, index) => [row.token_id, overrides[index] ?? { category: row.category, assetId: row.asset_id }]));
       const mappingSizes = this.canonicalMappings<{ egg_id: number; bytes: number }>([...units.values()],
-        'm.egg_id,COALESCE(length(CAST(m.attributes_json AS BLOB)),0) AS bytes');
+        'bytes');
       for (const row of sizes) {
         const unit = units.get(row.token_id)!;
         if (unit.category === 'egg') row.bytes += mappingSizes.get(unit.assetId)?.bytes ?? 0;
@@ -402,7 +427,7 @@ export class EthereumRevealCatalogReader {
         const ids = sizes.slice(start, end).map(row => row.token_id);
         const placeholders = ids.map(() => '?').join(',');
         const rows = this.sql.exec<Assignment>(`SELECT * FROM assignments WHERE token_id IN (${placeholders})`, ...ids).toArray();
-        const mappings = this.canonicalMappings<CanonicalMapping>(ids.map(tokenId => units.get(tokenId)!), 'm.*');
+        const mappings = this.canonicalMappings<CanonicalMapping>(ids.map(tokenId => units.get(tokenId)!), 'metadata');
         const publications = new Map(this.sql.exec<{ token_id: string; status: string }>(
           `SELECT token_id,status FROM publication WHERE token_id IN (${placeholders})`, ...ids).toArray().map(row => [row.token_id, row]));
         const enrichments = new Map(hasEnrichment ? this.sql.exec<{ token_id: string; target_json: string | null;
@@ -539,7 +564,7 @@ export class EthereumRevealCatalogReader {
     const row = batchId ? this.sql.exec<Operation>('SELECT * FROM reveal_catalog_generations WHERE batch_id=?', batchId).toArray()[0]
       : this.sql.exec<Operation>('SELECT * FROM reveal_catalog_generations ORDER BY rowid DESC LIMIT 1').toArray()[0];
     if (!row) return null;
-    const staged = row.activated_at_ms === null ? `NOT (${this.unvalidatedMetadataCondition()})` : 'attributes_json IS NOT NULL';
+    const staged = row.batch_version === 3 ? '1' : row.activated_at_ms === null ? `NOT (${this.unvalidatedMetadataCondition()})` : 'attributes_json IS NOT NULL';
     const progress = this.sql.exec<{ mapped: number; staged: number }>(`SELECT COUNT(*) AS mapped,
       COALESCE(SUM(${staged}),0) AS staged FROM reveal_catalog_mappings WHERE batch_id=?`, row.batch_id).toArray()[0];
     const publications = this.sql.exec<{ published: number; retrying: number; conflicts: number }>(`SELECT COALESCE(SUM(published),0) AS published,
