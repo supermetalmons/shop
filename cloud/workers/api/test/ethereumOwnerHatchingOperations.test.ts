@@ -9,7 +9,7 @@ import type { MixedAllocationArtwork, MixedAllocationDefinition } from '../../..
 import { getRevealCatalog, getRevealCatalogDescriptor } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import { ownerHatchingCatalogSha256 } from '../../../../shared/ethereum/ownerHatchingCatalog.ts';
 import supplement from '../../../../shared/ethereum/ownerHatchingCatalog.json';
-import { parseOwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceRequest } from '../../../../shared/ethereum/ownerHatchingMaintenance.ts';
+import { parseHistoricalOwnerHatchingRequest, type OwnerHatchingMaintenanceRequest } from '../../../../shared/ethereum/ownerHatchingMaintenance.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { EthereumOwnerHatchingOperations } from '../src/ethereumOwnerHatchingOperations.ts';
 import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
@@ -64,6 +64,7 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
     now: 1_000_000, head: 500, minted: 240, catalogRevision: 1, registryRevision: 9, recover: true, current: true,
     published: 0, conflicts: 0, pendingEnrichment: 0, failedEnrichment: 0, prepareCalls: 0, wakeCalls: 0, requireCalls: 0, assigned: 0,
     traitsFail: false, malformedTraits: false, missingObject: false, badObject: false, badHeaders: false, oversized: false,
+    publicFailure: null as 'stale' | 'headers' | 'offline' | 'superseded' | null, publicReads: 0,
     reorg: false, conservation: true, revisionChanged: false, r2Gate: null as Promise<void> | null, nextRegistryGate: null as Promise<void> | null,
     missing: new Set<string>(), nonEgg: new Set<string>(), protected: new Set<number>(), claimed: new Set<string>(),
     randomCalls: 0, rpcCalls: 0, tokenFailure: null as Error | null, snapshotFailure: null as Error | null,
@@ -138,6 +139,14 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
   t.mock.method(Date, 'now', () => state.now);
   t.mock.method(console, 'log', () => {});
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(deployment.metadataBaseUri)) {
+      state.publicReads++;
+      const tokenId = /\/(\d+)\.json$/.exec(String(input))![1];
+      if (state.publicFailure === 'offline') throw new Error('Cannot fetch ' + input);
+      if (state.publicFailure === 'superseded') revisions.set(tokenId, (revisions.get(tokenId) ?? 1) + 1);
+      return new Response(state.publicFailure === 'stale' || state.publicFailure === 'superseded' ? '{}' : metadata(tokenId),
+        { headers: { 'Content-Type': 'application/json', 'Cache-Control': state.publicFailure === 'headers' ? 'public' : 'no-store' } });
+    }
     if (String(input).startsWith('https://cdn.lil.org/')) {
       const id = Number(/\/(\d+)\.json$/.exec(String(input))![1]); state.traitIds.push(id);
       if (state.traitsFail) return new Response(null, { status: 503 });
@@ -173,8 +182,8 @@ function fixture(t: TestContext, overrides: Partial<OwnerHatchingMaintenanceRequ
     return Response.json(Array.isArray(payload) ? payload.map(respond) : respond(payload));
   });
   const run = (action: OwnerHatchingMaintenanceRequest['action'], overrides: Partial<OwnerHatchingMaintenanceRequest> = {}) => operations.run(deployment,
-    parseOwnerHatchingMaintenanceRequest(action === 'begin' ? { ...request, ...overrides } : { action, deploymentId: request.deploymentId,
-      batchId: request.batchId, expectedRevision: request.expectedRevision, ...overrides }));
+    action === 'begin' ? { ...request, ...overrides } : { action, deploymentId: request.deploymentId,
+      batchId: request.batchId, expectedRevision: request.expectedRevision, ...overrides });
   const prepared = async () => {
     await run('begin');
     let result = await run('status');
@@ -230,11 +239,11 @@ const cohort = (readyCount: number) => ({ readyCount,
   freshEggIds: Array.from({ length: readyCount - begin.grailIds!.length }, (_, index) => 55304 + index) });
 
 test('owner hatching maintenance parsing accepts exact identities and rejects malformed or secret-bearing inputs', () => {
-  assert.deepEqual(parseOwnerHatchingMaintenanceRequest(begin), begin);
-  for (const value of [null, [], { ...begin, privateMapping: {} }, { ...begin, expectedRevision: 0 },
-    { ...begin, grailIds: [422, 422] }, { ...begin, freshEggIds: [1.5] }, { ...begin, readyCount: 2001 },
-    { ...begin, action: 'status' }, { ...begin, sourceSha256: 'not-a-hash' }]) {
-    assert.throws(() => parseOwnerHatchingMaintenanceRequest(value));
+  const request = { action: 'status', deploymentId: begin.deploymentId, batchId: begin.batchId, expectedRevision: begin.expectedRevision };
+  assert.deepEqual(parseHistoricalOwnerHatchingRequest(request), request);
+  for (const invalid of [null, [], begin, { ...request, privateMapping: {} }, { ...request, expectedRevision: 0 },
+    { ...request, grailIds: [] }, { ...request, batchId: '../other' }]) {
+    assert.throws(() => parseHistoricalOwnerHatchingRequest(invalid));
   }
 });
 
@@ -1260,10 +1269,20 @@ test('mixed coordinator preserves its release identity across reorgs, legacy req
   await run('activate');
   assert.equal(f.state.prepareCalls, 1);
   f.state.published = 2;
-  f.state.revisionChanged = true;
+  for (const failure of ['stale', 'headers', 'offline'] as const) {
+    f.state.publicFailure = failure;
+    await assert.rejects(run('verify'), {
+      message: failure === 'stale' ? 'Public owner hatching metadata verification did not match.' : 'Public owner hatching metadata could not be verified.',
+    });
+    assert.equal(f.row().verification_passes, 0);
+    assert.equal(f.row().verification_cursor, null);
+  }
+  assert.equal(f.state.publicReads, 3);
+  f.state.publicFailure = 'superseded';
   await run('verify');
   assert.equal(verified, 0);
   assert.equal(f.row().verification_cursor, null);
+  f.state.publicFailure = null;
   await run('verify');
   await assert.rejects(run('complete'), /two verification passes/);
   f.state.now += 300_000;
@@ -1446,4 +1465,41 @@ test('mixed activation rechecks its entire cohort at a fresh cutoff and refills 
   assert.deepEqual(f.state.tokenCalls.flatMap(call => call.ids), draws);
   assert.ok(f.state.tokenCalls.every(call => JSON.stringify(call.block) === JSON.stringify({ blockHash: blockHash(503), requireCanonical: true })));
   assert.deepEqual([f.activation().block_number, f.activation().block_hash], [503, blockHash(503)]);
+});
+
+test('future-only mixed operation reaches completion without querying minted tokens or allocating a holder reward', async t => {
+  const f = fixture(t);
+  const prior = mixedReleaseFixture();
+  const release = { ...prior, definition: { ...prior.definition, version: 2 as const, batchId: prior.batchId,
+    deploymentId: deployment.deploymentId, contractAddress: deployment.contractAddress, chainId: deployment.chainId,
+    metadataBaseUri: deployment.metadataBaseUri, deploymentBlock: deployment.deploymentBlock, originCatalogVersion: deployment.catalogVersion, ordinaryCount: 0,
+    groups: prior.definition.groups.map(group => ({ ...group, ownerCount: 0 })) } };
+  const identity = { deploymentId: deployment.deploymentId, batchId: release.batchId, expectedRevision: 9 };
+  let activations = 0;
+  Object.assign(f.store.catalogUpdate, {
+    mixed: {
+      begin: () => {}, pendingTraits: () => [], status: () => ({ metadataStaged: 3 }),
+      stageInventory: () => ({ generationSeeded: 111111 }), seal: () => {}, verify: () => {}, finalize: () => {},
+      activate: (_batchId: string, candidates: string[]) => {
+        assert.deepEqual(candidates, []);
+        activations++;
+        f.state.catalogRevision++;
+      },
+    },
+    prune: () => ({ remaining: 0 }),
+  });
+  const operations = f.open(release);
+  const run = (action: OwnerHatchingMaintenanceRequest['action']) => operations.run(deployment, { ...identity, action });
+  assert.equal((await run('begin')).phase, 'staging');
+  assert.equal((await run('begin')).total, 0);
+  assert.equal((await run('stage')).phase, 'prepared');
+  assert.equal((await run('activate')).phase, 'publishing');
+  assert.equal((await run('activate')).phase, 'publishing');
+  assert.equal((await run('verify')).phase, 'observing');
+  f.state.now += 300000;
+  await run('verify');
+  assert.equal((await run('complete')).complete, true);
+  assert.equal(f.state.rpcCalls, 0);
+  assert.equal(f.state.prepareCalls, 0);
+  assert.equal(activations, 1);
 });

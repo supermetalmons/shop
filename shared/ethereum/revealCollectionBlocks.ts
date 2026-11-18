@@ -1,5 +1,5 @@
 import type { EthereumArtworkCategory } from './reveal.ts';
-import type { RevealAssetCatalogDescriptor } from './revealAssetCatalog.ts';
+import { revealCatalogAssetOrdinal, type RevealAssetCatalogDescriptor } from './revealAssetCatalog.ts';
 
 export type RevealCollectionBlockCategory = Exclude<EthereumArtworkCategory, 'egg'>;
 export type RevealCollectionBlockRanges = Record<RevealCollectionBlockCategory, readonly (readonly [number, string])[]>;
@@ -7,10 +7,10 @@ export type RevealCollectionBlockCounts = Record<RevealCollectionBlockCategory, 
 export type RevealCollectionBlocks = {
   version: 1;
   source: { filename: '111k.json'; sha256: string };
-  catalogs: readonly (RevealAssetCatalogDescriptor & { counts: RevealCollectionBlockCounts })[];
+  catalogs: readonly (RevealAssetCatalogDescriptor & { counts: RevealCollectionBlockCounts; animatedAssetIds?: readonly number[] })[];
   ranges: RevealCollectionBlockRanges;
 };
-export type RevealCollectionBlockLookup = { ranges: RevealCollectionBlockRanges; counts: RevealCollectionBlockCounts };
+export type RevealCollectionBlockLookup = { ranges: RevealCollectionBlockRanges; counts: RevealCollectionBlockCounts; animatedAssetIds?: readonly number[] };
 
 const CATEGORIES = ['painting', 'video', '3d', 'animated'] as const;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -44,10 +44,13 @@ export function validateRevealCollectionBlocks(value: unknown): asserts value is
   }
   const versions = new Set<string>();
   for (const catalog of value.catalogs) {
-    if (!record(catalog) || !keys(catalog, ['catalogVersion', 'manifestSha256', 'counts']) ||
+    if (!record(catalog) || !keys(catalog, ['catalogVersion', 'manifestSha256', 'counts', ...(Object.hasOwn(catalog, 'animatedAssetIds') ? ['animatedAssetIds'] : [])]) ||
       typeof catalog.catalogVersion !== 'string' || !/^111k-v[1-9]\d{0,8}$/.test(catalog.catalogVersion) || versions.has(catalog.catalogVersion) ||
       typeof catalog.manifestSha256 !== 'string' || !SHA256.test(catalog.manifestSha256) ||
       !record(catalog.counts) || !keys(catalog.counts, CATEGORIES)) invalid();
+    const ids = catalog.animatedAssetIds;
+    if (ids !== undefined && (!Array.isArray(ids) || ids.length !== catalog.counts.animated || ids.some((id, index) =>
+      !Number.isSafeInteger(id) || id < 1 || id > 111_111 || index > 0 && id <= ids[index - 1]))) invalid();
     versions.add(catalog.catalogVersion);
     for (const category of CATEGORIES) {
       const count = catalog.counts[category];
@@ -61,17 +64,19 @@ export function selectRevealCollectionBlocks(value: RevealCollectionBlocks,
   descriptor: RevealAssetCatalogDescriptor | null | undefined): RevealCollectionBlockLookup | null {
   if (!descriptor) return null;
   const catalog = value.catalogs.find(entry => entry.catalogVersion === descriptor.catalogVersion && entry.manifestSha256 === descriptor.manifestSha256);
-  return catalog ? { ranges: value.ranges, counts: catalog.counts } : null;
+  return catalog ? { ranges: value.ranges, counts: catalog.counts, ...(catalog.animatedAssetIds ? { animatedAssetIds: catalog.animatedAssetIds } : {}) } : null;
 }
 
 export function lookupRevealCollectionBlock(lookup: RevealCollectionBlockLookup | null, category: EthereumArtworkCategory, assetId: number): string | null {
-  if (!lookup || category === 'egg' || !Number.isSafeInteger(assetId) || assetId < 1 || assetId > lookup.counts[category]) return null;
+  if (!lookup || category === 'egg') return null;
+  const ordinal = revealCatalogAssetOrdinal({ count: lookup.counts[category], assetIds: category === 'animated' ? lookup.animatedAssetIds : undefined }, assetId);
+  if (!ordinal) return null;
   const ranges = lookup.ranges[category];
   let low = 0;
   let high = ranges.length;
   while (low < high) {
     const middle = (low + high) >>> 1;
-    if (ranges[middle][0] < assetId) low = middle + 1;
+    if (ranges[middle][0] < ordinal) low = middle + 1;
     else high = middle;
   }
   return ranges[low]?.[1] ?? null;

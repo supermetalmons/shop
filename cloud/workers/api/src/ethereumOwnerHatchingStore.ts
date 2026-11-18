@@ -82,6 +82,29 @@ export class EthereumOwnerHatchingStore {
       origin.category, origin.assetId, asset.category, asset.assetId, tokenId);
   }
 
+  protectOrdinaryReward(origin: RevealOriginUnit, asset: OwnerHatchingAsset, now = Date.now()): void {
+    this.transaction(() => {
+      const sponsor = this.sql.exec<{ token_id: string; batch_id: string }>(`SELECT token_id,batch_id FROM owner_hatching_tokens t
+        WHERE t.status='ready' AND t.grail_asset_id IS NULL
+          AND NOT EXISTS(SELECT 1 FROM owner_hatching_ordinary_backing b WHERE b.sponsor=t.token_id)
+        ORDER BY CAST(t.token_id AS INTEGER) LIMIT 1`).toArray()[0];
+      if (!sponsor) throw new Error('Missing pending ordinary hatch.');
+      const fresh = this.unusedFreshEgg(sponsor.batch_id);
+      if (!fresh) throw new Error('Missing fresh egg for pending ordinary hatch.');
+      // The sponsor supplies the replacement egg slot. The artwork is drawn separately at claim time.
+      this.sql.exec(`INSERT INTO owner_hatching_ordinary_backing(egg_id,sponsor,category,asset_id,attributes_json)
+        VALUES(?,?,?,?,?)`, fresh.egg_id, sponsor.token_id, asset.category, asset.assetId, asset.attributesJson ?? null);
+      const replacement = { category: 'egg' as const, assetId: fresh.egg_id };
+      this.overrideSlot(origin, replacement, sponsor.token_id, now);
+      this.hooks.transitionSlot(origin, asset, replacement);
+    });
+  }
+
+  private unusedFreshEgg(batchId: string) {
+    return this.sql.exec<{ egg_id: number }>(`SELECT egg_id FROM owner_hatching_fresh_eggs f WHERE batch_id=? AND token_id IS NULL
+      AND NOT EXISTS(SELECT 1 FROM owner_hatching_ordinary_backing b WHERE b.egg_id=f.egg_id) ORDER BY egg_id LIMIT 1`, batchId).toArray()[0];
+  }
+
   eligibleCandidate(tokenId: string): OwnerHatchingCanonical | null {
     if (this.reader.token(tokenId)) return null;
     const canonical = this.hooks.canonical(tokenId);
@@ -97,12 +120,12 @@ export class EthereumOwnerHatchingStore {
       input.grails.length > input.readyCount || input.grails.some(asset => !validAsset(asset)) ||
       new Set(input.grails.map(asset => `${asset.category}:${asset.assetId}`)).size !== input.grails.length ||
       !Array.isArray(input.freshEggIds) || input.freshEggIds.length !== input.readyCount - input.grails.length ||
-      options?.frozenOrder && (input.candidateTokenIds.length !== input.readyCount || input.grails.length !== input.readyCount) ||
+      options?.frozenOrder && input.candidateTokenIds.length !== input.readyCount ||
       input.freshEggIds.some(id => !integer(id)) || new Set(input.freshEggIds).size !== input.freshEggIds.length) {
       throw new Error('Invalid owner hatching batch.');
     }
     const inputSha256 = hash(JSON.stringify({ sourceSha256: input.sourceSha256, readyCount: input.readyCount,
-      candidateTokenIds: [...input.candidateTokenIds].sort((a, b) => Number(a) - Number(b)),
+      candidateTokenIds: options?.frozenOrder && input.freshEggIds.length ? input.candidateTokenIds : [...input.candidateTokenIds].sort((a, b) => Number(a) - Number(b)),
       grails: options?.frozenOrder ? input.grails : [...input.grails].sort((a, b) => a.category.localeCompare(b.category) || a.assetId - b.assetId),
       ...(options?.frozenOrder ? { frozenOrder: true } : {}),
       freshEggIds: [...input.freshEggIds].sort((a, b) => a - b) }));
@@ -117,16 +140,17 @@ export class EthereumOwnerHatchingStore {
         throw new Error('Owner hatching batch contains unavailable assets.');
       }
       const candidates = [...input.candidateTokenIds];
-      if (options?.frozenOrder) candidates.sort((a, b) => Number(b) - Number(a));
-      const selected: OwnerHatchingCanonical[] = [];
+      if (options?.frozenOrder) {
+        if (input.freshEggIds.length) candidates.reverse();
+        else candidates.sort((a, b) => Number(b) - Number(a));
+      }
+      const selected: string[] = [];
       while (candidates.length && selected.length < input.readyCount) {
         const index = options?.frozenOrder ? candidates.length - 1 : this.randomInteger(candidates.length);
         const tokenId = candidates[index];
         candidates[index] = candidates[candidates.length - 1];
         candidates.pop();
-        const canonical = this.eligibleCandidate(tokenId);
-        if (!canonical) continue;
-        selected.push(canonical);
+        if (options?.frozenOrder || this.eligibleCandidate(tokenId)) selected.push(tokenId);
       }
       if (selected.length !== input.readyCount) throw new Error('Not enough eligible minted eggs.');
       const grails = [...input.grails];
@@ -142,7 +166,9 @@ export class EthereumOwnerHatchingStore {
         grail.category, grail.assetId, input.batchId, grail.attributesJson ?? null);
       for (const eggId of input.freshEggIds) this.sql.exec('INSERT INTO owner_hatching_fresh_eggs(egg_id,batch_id) VALUES(?,?)', eggId, input.batchId);
       for (let index = 0; index < selected.length; index++) {
-        const original = selected[index], grail = grails[index];
+        const original = this.eligibleCandidate(selected[index]);
+        if (!original) throw new Error('Not enough eligible minted eggs.');
+        const grail = grails[index];
         const metadataJson = withReady(original.metadataJson);
         const metadataRevision = original.metadataRevision + 2;
         const canonical: OwnerHatchingCanonical = { ...original, metadataJson, metadataRevision,
@@ -175,17 +201,27 @@ export class EthereumOwnerHatchingStore {
         const attributes = grail.attributes_json ?? this.hooks.reservedAttributes?.(token.batch_id, asset);
         if (attributes !== undefined) asset.attributesJson = attributes;
       } else {
-        const fresh = this.sql.exec<{ egg_id: number }>(
-          'SELECT egg_id FROM owner_hatching_fresh_eggs WHERE batch_id=? AND token_id IS NULL ORDER BY egg_id LIMIT 1', token.batch_id).toArray()[0];
+        const sponsored = this.sql.exec<{ egg_id: number }>('SELECT egg_id FROM owner_hatching_ordinary_backing WHERE sponsor=?', tokenId).toArray()[0];
+        const fresh = sponsored ?? this.unusedFreshEgg(token.batch_id);
         if (!fresh) return { kind: 'unavailable' };
-        const chosen = this.hooks.takeOrdinary();
-        if (!chosen) return { kind: 'unavailable' };
-        asset = chosen.effective;
+        if (sponsored) {
+          const count = this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM owner_hatching_ordinary_backing WHERE claimed_by IS NULL').toArray()[0].n;
+          if (!count) throw new Error('Pending ordinary hatch has no backing artwork.');
+          const backing = this.sql.exec<{ egg_id: number; category: OwnerHatchingAsset['category']; asset_id: number; attributes_json: string | null }>(
+            `SELECT egg_id,category,asset_id,attributes_json FROM owner_hatching_ordinary_backing
+              WHERE claimed_by IS NULL ORDER BY egg_id LIMIT 1 OFFSET ?`, this.randomInteger(count)).toArray()[0];
+          asset = { category: backing.category, assetId: backing.asset_id, ...(backing.attributes_json ? { attributesJson: backing.attributes_json } : {}) };
+          this.sql.exec('UPDATE owner_hatching_ordinary_backing SET claimed_by=? WHERE egg_id=? AND claimed_by IS NULL', tokenId, backing.egg_id);
+        } else {
+          const chosen = this.hooks.takeOrdinary();
+          if (!chosen) return { kind: 'unavailable' };
+          asset = chosen.effective;
+          this.overrideSlot(chosen.origin, { category: 'egg', assetId: fresh.egg_id }, tokenId, now);
+          this.hooks.transitionSlot(chosen.origin, chosen.effective, { category: 'egg', assetId: fresh.egg_id });
+          replacement = { origin: chosen.origin, eggId: fresh.egg_id };
+        }
         if (!validAsset(asset) || this.reader.reservedGrail(asset) || this.reader.claimedArtwork(asset)) throw new Error('Ordinary hatch selected unavailable artwork.');
         this.sql.exec('UPDATE owner_hatching_fresh_eggs SET token_id=? WHERE egg_id=? AND token_id IS NULL', tokenId, fresh.egg_id);
-        this.overrideSlot(chosen.origin, { category: 'egg', assetId: fresh.egg_id }, tokenId, now);
-        this.hooks.transitionSlot(chosen.origin, chosen.effective, { category: 'egg', assetId: fresh.egg_id });
-        replacement = { origin: chosen.origin, eggId: fresh.egg_id };
       }
       if (!validAsset(asset)) throw new Error('Invalid hatch artwork.');
       const built = this.hooks.build(tokenId, asset, original);
@@ -209,7 +245,7 @@ export class EthereumOwnerHatchingStore {
         JSON.stringify(canonical), metadataRevision, now, tokenId);
       this.sql.exec(`UPDATE owner_hatching_publication SET status='pending',metadata_revision=?,attempts=0,next_check_ms=0,claim_id=NULL WHERE token_id=?`,
         metadataRevision, tokenId);
-      if (replacement && asset.attributesJson === undefined) {
+      if (token.grail_asset_id === null && asset.attributesJson === undefined) {
         this.sql.exec('INSERT INTO owner_hatching_enrichment(token_id,metadata_revision) VALUES(?,?)', tokenId, metadataRevision);
       }
       return { kind: 'hatched', artwork };

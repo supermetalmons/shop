@@ -2,10 +2,12 @@ import { ethereumItemDisplayIdMaximum } from './protocol.ts';
 import type { RevealCatalogUpdateBatch } from './revealCatalogUpdate.ts';
 import type { EthereumArtworkCategory } from './reveal.ts';
 
+export type EmptyPoolBatch = RevealCatalogUpdateBatch | { batchId: string; batchSha256: string; version: 'mixed' };
+
 export type EthereumRevealEmptyPoolRequest = EthereumRevealMaintenanceRequest & {
   operationId: string;
   action: 'inspect' | 'begin' | 'advance' | 'verify' | 'cancel';
-  batch?: RevealCatalogUpdateBatch;
+  batch?: EmptyPoolBatch;
 };
 
 export type EthereumRevealEmptyPoolResult = {
@@ -24,11 +26,8 @@ export type EthereumRevealEmptyPoolResult = {
 
 export type EthereumRevealCatalogUpdateRequest = EthereumRevealMaintenanceRequest & {
   batchId: string;
-  action: 'inspect' | 'begin' | 'advance' | 'verify' | 'cancel';
-  batch?: RevealCatalogUpdateBatch;
+  action: 'inspect' | 'verify';
   verificationAfterEggId?: number;
-  eggCutoff?: number;
-  afterEggId?: number;
 };
 
 export type EthereumRevealCatalogUpdateResult = {
@@ -46,8 +45,6 @@ export type EthereumRevealCatalogUpdateResult = {
   retrying?: number;
   retryAfterMs: number;
   nextVerificationEggId?: number | null;
-  eligibleEggIds?: number[];
-  nextEligibleEggId?: number | null;
   refreshTransaction?: { chainId: number; to: string; data: string; value: '0x0' };
 };
 

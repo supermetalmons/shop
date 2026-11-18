@@ -15,7 +15,6 @@ export function revealCategoryCounts(catalog: { categories: Record<'eggs' | 'pai
   '3d': catalog.categories['3d'].count,
   animated: catalog.categories.animated.count,
 } as const; }
-export const REVEAL_CATEGORY_COUNTS = revealCategoryCounts(catalog);
 
 export function revealDeploymentCatalog(deployment: Pick<EthereumRevealDeployment, 'catalogVersion' | 'effectiveCatalogVersion' | 'effectiveCatalogSha256'>): RevealAssetCatalog {
   const catalog = getRevealCatalog(deployment.effectiveCatalogVersion ?? deployment.catalogVersion, deployment.effectiveCatalogSha256 ?? undefined);
@@ -68,7 +67,7 @@ type RevealArtworkInput = {
   allocatedEgg?: boolean;
 };
 
-function buildArtwork(input: RevealArtworkInput, includeCollectionBlock: boolean): {
+function buildArtwork(input: RevealArtworkInput, includeCollectionBlock: boolean, preparedBlocks?: RevealCollectionBlockLookup): {
   artwork: EthereumRevealedArtwork; metadataJson: string; placeholderJson: string;
 } {
   const template = JSON.parse(input.templateJson.replaceAll('{{tokenId}}', input.tokenId).replaceAll('{{displayId}}', input.tokenId)) as {
@@ -82,7 +81,7 @@ function buildArtwork(input: RevealArtworkInput, includeCollectionBlock: boolean
   if (includeCollectionBlock && input.category !== 'egg') {
     const grail = input.ownerHatching ? getOwnerHatchingGrail(input.category, input.assetId) : undefined;
     const selected = input.catalog ?? (validateRevealCatalog(), validatedCatalog!);
-    let blocks = collectionBlockLookups.get(selected);
+    let blocks = preparedBlocks ?? collectionBlockLookups.get(selected);
     if (blocks === undefined) {
       blocks = revealCollectionBlocks(computeRevealCatalogDescriptor(selected));
       collectionBlockLookups.set(selected, blocks);
@@ -106,8 +105,8 @@ export function buildRevealedArtwork(input: RevealArtworkInput) {
   return buildArtwork(input, false);
 }
 
-export function buildNewRevealedArtwork(input: RevealArtworkInput) {
-  return buildArtwork(input, true);
+export function buildNewRevealedArtwork(input: RevealArtworkInput, preparedBlocks?: RevealCollectionBlockLookup) {
+  return buildArtwork(input, true, preparedBlocks);
 }
 
 export function revealRandomInteger(maximum: number): number {

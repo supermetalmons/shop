@@ -1,3 +1,5 @@
+export const MIXED_MAINNET_BATCH_ID = 'mainnet-mixed-20261117';
+
 export const MIXED_ALLOCATION_GROUPS = [
   { category: 'animated', collectionBlock: 'GAN videos', firstId: 597, lastId: 720, ownerCount: 124 },
   { category: 'painting', collectionBlock: 'DriFPS', firstId: 68_981, lastId: 70_480, ownerCount: 100 },

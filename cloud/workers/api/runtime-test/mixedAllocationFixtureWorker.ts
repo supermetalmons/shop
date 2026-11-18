@@ -4,9 +4,9 @@ import { createHash } from 'node:crypto';
 import { getStandaloneOwnerHatchingBatch, requireOrdinaryCatalogTarget } from '../../../../shared/ethereum/ownerHatchingCatalog.ts';
 import { getRevealCatalog, getRevealCatalogDescriptor, getSupportedRevealCatalogVersions } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
-import type { MixedAllocationDefinition } from '../../../../shared/ethereum/revealMixedAllocation.ts';
+import { REVEAL_ASSET_FAMILIES } from '../../../../shared/ethereum/revealAssetCatalog.ts';
+import { mixedAllocationCounts, type MixedAllocationDefinition } from '../../../../shared/ethereum/revealMixedAllocation.ts';
 import { authorizeOwnerHatch } from '../src/ethereumOwnerHatching.ts';
-import { revealCategoryCounts } from '../src/ethereumRevealCatalog.ts';
 import { EthereumRevealStore } from '../src/ethereumRevealStore.ts';
 import { EthereumOwnerHatchingOperations } from '../src/ethereumOwnerHatchingOperations.ts';
 import type { OwnerHatchingMaintenanceRequest } from '../../../../shared/ethereum/ownerHatchingMaintenance.ts';
@@ -17,27 +17,29 @@ import type { EthereumRevealPublisherObject } from '../src/ethereumRevealPublish
 import { decodeReturn, encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 
-import { MIXED_MAINNET_BATCH_ID as batchId, parseMixedAllocationMaintenanceRequest } from '../../../../shared/ethereum/mixedAllocationMaintenance.ts';
+import { mixedAllocationScope, parseMixedAllocationMaintenanceRequest } from '../../../../shared/ethereum/mixedAllocationMaintenance.ts';
 import { EthereumMixedAllocationOperation } from '../src/ethereumMixedAllocationOperation.ts';
 import artworkTemplate from '../../../../scripts/ethereum-metadata/templates/artwork.json';
 const legacyBatch = 'previous-owner-batch';
 const templateJson = JSON.stringify(artworkTemplate);
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const observation = { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 };
+declare const REHEARSAL_DEFINITION: MixedAllocationDefinition;
+const fixtureScope = mixedAllocationScope(REHEARSAL_DEFINITION);
+const batchId = fixtureScope.batchId;
 const deployment: EthereumRevealDeployment = {
-  deploymentId: 'mainnet-v1', dropId: '111k', chainId: 1,
-  contractAddress: '0x08cded8258730bda384ff198001e47a1b50f7f9d', metadataBaseUri: 'https://cdn.mons.shop/111k/',
-  deploymentBlock: 26387160, catalogVersion: '111k-v8', templateJson, templateSha256: hash(templateJson), state: 'active',
+  ...fixtureScope, dropId: fixtureScope.chainId === 1 ? '111k' : '111k_devnet',
+  catalogVersion: REHEARSAL_DEFINITION.version === 1 ? '111k-v8' : REHEARSAL_DEFINITION.originCatalogVersion, templateJson, templateSha256: hash(templateJson), state: 'active',
   revision: 4, catalogRevision: 1, createdAtMs: 1, updatedAtMs: 3, activatedAtMs: 3, provisionedAtMs: 2, lastError: null
 };
 const fixtureCandidates = Array.from({ length: 424 }, (_, index) => String(index + 1));
 const crateTokenIds = (start: number) => Array.from({ length: 20 }, (_, index) => String(start + index));
 type FixtureEnv = { OPS_DB: D1Database; POOL: DurableObjectNamespace; DEFINITION: string; WALLET: string; ETHEREUM_REVEAL_METADATA: R2Bucket; ETHEREUM_REVEAL_PUBLISHER: DurableObjectNamespace<EthereumRevealPublisherObject> };
-const fixtureRpcEnv = { ETHEREUM_111K_CHAIN_ID: '1', ALCHEMY_MI_NOTE_API_KEY: 'local-fixture', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'false' };
+const fixtureRpcEnv = { ETHEREUM_111K_CHAIN_ID: String(deployment.chainId), ALCHEMY_MI_NOTE_API_KEY: 'local-fixture', ETHEREUM_PROVIDER_CONTROL_ENABLED: 'false' };
 const nativeNow = Date.now;
 let clockOffset = 0;
 Date.now = () => nativeNow() + clockOffset;
-type FixtureRequest = { expectedRevision?: number; offset?: number; signature?: string; kind?: 'animated' | 'painting' };
+type FixtureRequest = { expectedRevision?: number; definitionSha256?: string; offset?: number; signature?: string; kind?: 'animated' | 'painting' };
 type FixtureChain = { reorg: number; head: number; clock_offset: number; redeemed_token: string | null };
 const blockHash = (reorg: number, block: number) => `0x${(reorg * 10000 + block).toString(16).padStart(64, '0')}`;
 
@@ -53,9 +55,11 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
   constructor(ctx: DurableObjectState, env: FixtureEnv) {
     super(ctx, env);
     this.definition = JSON.parse(env.DEFINITION);
-    assert.deepEqual(getSupportedRevealCatalogVersions(), [deployment.catalogVersion, this.definition.predecessor.catalogVersion, this.definition.target.catalogVersion]);
-    assert.throws(() => getStandaloneOwnerHatchingBatch(this.definition.sourceSha256), /mixed/i);
-    assert.throws(() => requireOrdinaryCatalogTarget(deployment.chainId, this.definition.target), /requires mixed allocation/);
+    if (this.definition.version === 1) {
+      assert.deepEqual(getSupportedRevealCatalogVersions(), [deployment.catalogVersion, this.definition.predecessor.catalogVersion, this.definition.target.catalogVersion]);
+      assert.throws(() => getStandaloneOwnerHatchingBatch(this.definition.sourceSha256), /mixed/i);
+      assert.throws(() => requireOrdinaryCatalogTarget(deployment.chainId, this.definition.target), /requires mixed allocation/);
+    }
     let depth = 0;
     const transaction = <T>(work: () => T): T => depth ? work() : ctx.storage.transactionSync(() => {
       depth++;
@@ -79,19 +83,16 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
     }
   }
 
-  private run(action: OwnerHatchingMaintenanceRequest['action'], expectedRevision = deployment.revision) {
-    const request = { action, deploymentId: deployment.deploymentId, batchId, expectedRevision };
+  private run(action: OwnerHatchingMaintenanceRequest['action'], expectedRevision = deployment.revision, definitionSha256?: string) {
+    const request = { action, deploymentId: deployment.deploymentId, batchId, expectedRevision,
+      ...(this.definition.version === 2 ? { definitionSha256 } : {}) };
     return this.registry ? this.registry.run(parseMixedAllocationMaintenanceRequest(request)) : this.operations.run(deployment, request);
   }
 
   private get update() { return this.store.catalogUpdate; }
   private get sql() { return this.ctx.storage.sql; }
 
-  private seed() {
-    this.sql.exec('CREATE TABLE fixture_chain(reorg INTEGER, head INTEGER, clock_offset INTEGER, redeemed_token TEXT)');
-    this.sql.exec('INSERT INTO fixture_chain VALUES(0,1000,0,NULL)');
-    this.store.configure(deployment);
-    while (!this.store.initializeChunk()) { }
+  private seedPredecessor() {
     const catalog = getRevealCatalog(this.definition.predecessor.catalogVersion)!;
     const descriptor = JSON.stringify(this.definition.predecessor);
     this.ctx.storage.transactionSync(() => {
@@ -99,14 +100,48 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
         source_revision,target_revision,mapping_count,mapping_sha256,phase,started_at_ms,activated_at_ms,seeded,frozen_count,mode)
         VALUES('local-base',?,?,?,?,0,1,0,?,'complete',1,2,111111,0,'empty-rebuild')`, 'a'.repeat(64),
         JSON.stringify(getRevealCatalogDescriptor(deployment.catalogVersion)), descriptor, JSON.stringify(catalog), hash('[]'));
-      for (const [category, count] of Object.entries(revealCategoryCounts(catalog))) {
+      for (const [category, family] of Object.entries(REVEAL_ASSET_FAMILIES)) {
+        const { count, assetIds } = catalog.categories[family];
         this.sql.exec("INSERT INTO reveal_catalog_pools(generation,category,total,seeded,available) VALUES('local-base',?,?,?,?)", category, count, count, count);
-        this.sql.exec(`WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<?)
+        if (!count) continue;
+        if (assetIds) this.sql.exec(`INSERT INTO reveal_catalog_free(generation,category,slot,origin_category,origin_asset_id,asset_id)
+          SELECT 'local-base',?,key,?,value,value FROM json_each(?)`, category, category, JSON.stringify(assetIds));
+        else this.sql.exec(`WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<?)
           INSERT INTO reveal_catalog_free(generation,category,slot,origin_category,origin_asset_id,asset_id)
           SELECT 'local-base',?,id-1,?,id,id FROM ids`, count, category, category);
       }
       this.sql.exec(`UPDATE settings SET active_catalog_generation='local-base',allocation_base_generation='local-base',catalog_revision=1,
         effective_catalog_version=?,effective_catalog_sha256=? WHERE id=1`, this.definition.predecessor.catalogVersion, this.definition.predecessor.manifestSha256);
+    });
+  }
+
+  private seed() {
+    this.sql.exec('CREATE TABLE fixture_chain(reorg INTEGER, head INTEGER, clock_offset INTEGER, redeemed_token TEXT)');
+    this.sql.exec('INSERT INTO fixture_chain VALUES(0,1000,0,NULL)');
+    this.store.configure(deployment);
+    while (!this.store.initializeChunk()) { }
+    if (deployment.catalogVersion !== this.definition.predecessor.catalogVersion) this.seedPredecessor();
+    if (this.definition.version === 2) {
+      let remaining = mixedAllocationCounts(this.definition).readyCount;
+      for (let crate = 0; remaining > 0; crate++) {
+        const pools = this.update.reader.pools().filter(pool => pool.available > 0);
+        const egg = pools.find(pool => pool.category === 'egg');
+        if (!egg || egg.available < remaining) throw new Error('Fixture predecessor has insufficient egg inventory.');
+        const eggs = Math.min(remaining, 6);
+        const eggOffset = pools.filter(pool => pool.category < 'egg').reduce((sum, pool) => sum + pool.total, 0);
+        const ordinary = pools.find(pool => pool.category !== 'egg');
+        if (!ordinary) throw new Error('Fixture predecessor cannot form a mixed crate.');
+        for (let slot = 0; slot < 20; slot++) {
+          const offset = slot < eggs ? eggOffset : ordinary.category < 'egg' || eggs === 6 ? 0 : egg.total;
+          this.choices.push(offset, 0);
+        }
+        this.store.freeze(deployment, { ...observation, transactionHash: `0x${(crate + 1).toString(16).padStart(64, '0')}` },
+          [{ crateTokenId: String(111112 + crate), tokenIds: crateTokenIds(1 + 20 * crate) }], 100);
+        remaining -= eggs;
+      }
+      return;
+    }
+    this.ctx.storage.transactionSync(() => {
       for (let crate = 0; crate < 72; crate++) {
         const crateTokenId = String(111112 + crate);
         const eggOffset = this.update.reader.pools().filter(pool => pool.category < 'egg').reduce((sum, pool) => sum + pool.total, 0);
@@ -242,22 +277,32 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
   private fixtureFetch(chain: FixtureChain): typeof fetch {
     return async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.href.startsWith(deployment.metadataBaseUri)) {
+        const object = await this.env.ETHEREUM_REVEAL_METADATA.get(url.pathname.slice(1));
+        if (!object) return new Response(null, { status: 404 });
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        return new Response(object.body, { headers });
+      }
       if (url.origin === 'https://cdn.lil.org') {
-        const match = /^\/nft\/111k\/(paintings|animated)\/json\/v0\/(\d+)\.json$/.exec(url.pathname);
+        if (init?.method === 'GET' && new Headers(init.headers).get('Range') === 'bytes=0-32' && /^\/nft\/111k\/eggs\/[1-9]\d*\.png$/.test(url.pathname)) {
+          return new Response('sample', { status: 206, headers: { 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' } });
+        }
+        const match = /^\/nft\/111k\/(paintings|videos|3d|animated)\/json\/v0\/(\d+)\.json$/.exec(url.pathname);
         assert.ok(match);
-        const category = match[1] === 'animated' ? 'animated' : 'painting';
+        const category = match[1] === 'paintings' ? 'painting' : match[1] === 'videos' ? 'video' : match[1];
         const id = Number(match[2]);
         const group = this.definition.groups.find(g => g.category === category && id >= g.firstId && id <= g.lastId);
         assert.ok(group);
         return new Response(`{"collection block":${JSON.stringify(group.collectionBlock)},"attributes":[{"trait_type":"fixture serial","value":9007199254740993}]}`,
           { headers: { 'Content-Type': 'application/json' } });
       }
-      assert.equal(url.href, 'https://eth-mainnet.g.alchemy.com/v2/local-fixture');
+      assert.equal(url.href, `https://eth-${deployment.chainId === 1 ? 'mainnet' : 'sepolia'}.g.alchemy.com/v2/local-fixture`);
       type RpcRow = { id: number; method: string; params: [{ data: string } | string, string | { blockHash: string }] };
       const payload: RpcRow | RpcRow[] = JSON.parse(String(init!.body));
       const respond = (row: RpcRow) => {
         let result: unknown;
-        if (row.method === 'eth_chainId') result = '0x1';
+        if (row.method === 'eth_chainId') result = '0x' + deployment.chainId.toString(16);
         else if (row.method === 'eth_getBlockByNumber') {
           const block = row.params[0] === 'latest' ? chain.head : Number(row.params[0]);
           result = { number: `0x${block.toString(16)}`, hash: blockHash(chain.reorg, block) };
@@ -265,8 +310,9 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
         else if (row.method === 'eth_call' && typeof row.params[0] === 'object') {
           const data = row.params[0].data;
           if (data.startsWith(encodeCall(ETHEREUM_FUNCTIONS.stats, [], []))) {
+            const minted = this.definition.version === 1 ? 1440 : this.sql.exec<{n: number}>('SELECT COUNT(*) AS n FROM assignments WHERE token_id IS NOT NULL').one().n;
             result = encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
-              [72, 0, 1440, 1, 1, true, `0x${'0'.repeat(64)}`, 1, 1, 0, 0, 0, 0, 0, 0]);
+              [Math.ceil(minted / 20), 0, minted, 1, 1, true, `0x${'0'.repeat(64)}`, 1, 1, 0, 0, 0, 0, 0, 0]);
           } else {
             assert.ok(data.startsWith(encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, [], [])));
             const [ids] = decodeReturn(['uint256[]'], `0x${data.slice(10)}`) as [bigint[]];
@@ -332,7 +378,7 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
         clockOffset = state.clock_offset;
         globalThis.fetch = this.fixtureFetch(state);
       }
-      if (path.startsWith('operation/')) return Response.json(await this.run(path.slice('operation/'.length) as OwnerHatchingMaintenanceRequest['action'], input.expectedRevision));
+      if (path.startsWith('operation/')) return Response.json(await this.run(path.slice('operation/'.length) as OwnerHatchingMaintenanceRequest['action'], input.expectedRevision, input.definitionSha256));
       switch (path) {
         case 'seed': result = this.seed(); break;
         case 'seed-metadata': await this.seedMetadata(); break;
@@ -345,11 +391,33 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
             mixed.begin({ batchId, definition: this.definition, targetCatalog: getRevealCatalog(this.definition.target.catalogVersion)! });
           }), /free egg/i);
           break;
-        case 'capacity-activate': {
+        case 'capacity-activate':
+        case 'late-claim-after-free-slot-swap': {
           const eligible = this.sql.exec<{ token_id: string }>(`SELECT a.token_id FROM assignments a
             WHERE a.category='egg' AND a.token_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM owner_hatching_tokens t WHERE t.token_id=a.token_id)
             ORDER BY CAST(a.token_id AS INTEGER) LIMIT 424`).toArray();
-          result = mixed.activate(batchId, eligible.map(row => row.token_id));
+          const activate = () => mixed.activate(batchId, eligible.map(row => row.token_id));
+          if (path === 'capacity-activate') { result = activate(); break; }
+          const rollback = new Error('End of independent late-claim fixture.');
+          assert.throws(() => this.ctx.storage.transactionSync(() => {
+            const origin = this.update.takeFree('painting', 0);
+            const backing = this.update.reader.resolveUnit(origin);
+            assert.equal(backing.category, 'painting');
+            this.update.ownerHatching.protectOrdinaryReward(origin, { category: 'painting', assetId: backing.assetId });
+            this.update.releaseFree(origin);
+            activate();
+            const exchanged = this.update.reader.resolveUnit(origin);
+            assert.equal(exchanged.category, 'painting');
+            assert.notEqual(exchanged.assetId, backing.assetId);
+            const { sponsor } = this.sql.exec<{ sponsor: string }>('SELECT sponsor FROM owner_hatching_ordinary_backing').one();
+            const claim = this.update.ownerHatching.hatch(sponsor);
+            assert.equal(claim.kind, 'hatched');
+            assert.equal(this.update.ownerHatching.reader.canonical(sponsor)?.assetId, backing.assetId);
+            assert.deepEqual(this.update.ownerHatching.hatch(sponsor), claim);
+            assert.deepEqual(this.update.reader.resolveUnit(origin), exchanged);
+            mixed.verify(batchId);
+            throw rollback;
+          }), error => error === rollback);
           break;
         }
         case 'cancel': result = await this.operations.cancelMixed(deployment, { deploymentId: deployment.deploymentId, batchId, expectedRevision: deployment.revision }); break;
@@ -463,6 +531,7 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
         case 'legacy-claim': this.legacyHatchAfterActivation(); break;
         case 'owner-claim': result = await this.claim(input.kind!, input.signature!); break;
         case 'inventory-only': result = this.inventory(); break;
+        case 'assignment-fingerprint': result = this.assignmentFingerprint(); break;
         case 'draw-fingerprint': result = hash(JSON.stringify(this.sql.exec('SELECT category,asset_id,owner_reward,position FROM reveal_mixed_artworks WHERE batch_id=? ORDER BY owner_reward,position', batchId).toArray())); break;
         case 'snapshot': result = {
           inventory: this.inventory(), fingerprint: this.assignmentFingerprint(),
@@ -472,7 +541,7 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
         case 'assert-allocation': result = this.checkAllocation(); break;
         case 'publish-page': {
           const owner = this.update.ownerHatching;
-          const jobs = this.store.claimPublications(Date.now(), 2);
+          const jobs = this.store.claimPublications(Date.now(), this.definition.version === 1 ? 2 : 16);
           if (jobs.length) {
             const publisher = this.env.ETHEREUM_REVEAL_PUBLISHER.getByName(`${deployment.chainId}:${deployment.contractAddress}`);
             const outcomes = await publisher.publishBatch(deployment, jobs);

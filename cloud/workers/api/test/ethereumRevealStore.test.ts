@@ -2,14 +2,23 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
+import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
-import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORY_COUNTS,
+import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, revealCategoryCounts,
   revealCrateSize, revealRandomInteger, validateRevealCatalog } from '../src/ethereumRevealCatalog.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import type { EthereumRevealObservation } from '../../../../shared/ethereum/reveal.ts';
-import { revealCatalogMedia, validateRevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
+import collectionBlocks from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/collection-blocks.json';
+import ownerSupplement from '../../../../shared/ethereum/ownerHatchingCatalog.json';
+import { lookupRevealCollectionBlock, selectRevealCollectionBlocks, validateRevealCollectionBlocks } from '../../../../shared/ethereum/revealCollectionBlocks.ts';
+import { revealCatalogAdditions } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
+import { mixedReleaseBlockHash, type MixedAllocationDefinition, type MixedAllocationGroup } from '../../../../shared/ethereum/revealMixedAllocation.ts';
+import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
+
+const v10Catalog = getRevealCatalog('111k-v10')!;
+const REVEAL_CATEGORY_COUNTS = revealCategoryCounts(v10Catalog);
 
 const REVEAL_TRANSIENT_TRANSACTION_LIMIT = 10_000;
 const REVEAL_TRANSIENT_TRANSACTION_TTL_MS = 15 * 60_000;
@@ -92,13 +101,13 @@ function reserveEggSlots(database: DatabaseSync, crateTokenId: string, slots: nu
   }
 }
 
-test('current v10 catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
+test('v10 catalog preserves all category counts, exact ratios, posters, and immutable template fields', () => {
   validateRevealCatalog();
   assert.deepEqual(REVEAL_CATEGORY_COUNTS, { '3d': 3000, animated: 421, egg: 32190, painting: 75442, video: 58 });
   assert.equal(Object.values(REVEAL_CATEGORY_COUNTS).reduce<number>((sum, value) => sum + value, 0), REVEAL_ARTWORK_COUNT);
   const imageUrls = new Set<string>();
   const mediaFor = (category: keyof typeof REVEAL_CATEGORY_COUNTS, assetId: number) => buildRevealedArtwork({
-    templateJson, tokenId: '1', crateTokenId: crateId(0), category, assetId, observation: observation(1),
+    templateJson, tokenId: '1', crateTokenId: crateId(0), category, assetId, observation: observation(1), catalog: v10Catalog,
   }).artwork;
   for (const [category, count] of Object.entries(REVEAL_CATEGORY_COUNTS)) {
     for (let assetId = 1; assetId <= count; assetId++) {
@@ -127,7 +136,7 @@ test('current v10 catalog preserves all category counts, exact ratios, posters, 
   assert.equal(imageUrls.size, REVEAL_ARTWORK_COUNT);
   assert.deepEqual(mediaFor('painting', 1).aspectRatio, { width: 466, height: 503 });
   const input = { templateJson: templateJson.replace('{{tokenId}}', '{{displayId}}'), tokenId: '71', crateTokenId: crateId(0),
-    category: 'video' as const, assetId: 3, observation: observation(1) };
+    category: 'video' as const, assetId: 3, observation: observation(1), catalog: v10Catalog };
   const result = buildRevealedArtwork(input);
   assert.equal(result.artwork.name, '71');
   assert.equal(result.artwork.description, 'Preserved description');
@@ -211,7 +220,7 @@ for (const [version, eggCount, paintingCount] of [
 }
 
 test('animated metadata resolves future ratios by asset ID and validates the ratio index', () => {
-  const candidate = { ...structuredClone(catalog), categories: { ...structuredClone(catalog.categories), animated: {
+  const candidate = { ...structuredClone(v10Catalog), categories: { ...structuredClone(v10Catalog.categories), animated: {
     count: 421, pathTemplate: 'animated/{id}.mp4', imagePathTemplate: 'animated/{id}.png',
     aspectRatioPalette: [[16, 9], [466, 503]], aspectRatioIndexById: Array<number>(421).fill(1),
   } } };
@@ -1966,4 +1975,132 @@ test('live token-only recovery waits for matching receipt IDs before admitting b
   assert.equal(restored.frozen(ids(1)).length, 0);
   assert.equal(restored.frozen(ids(21)).length, 20);
   assert.deepEqual(rows('SELECT crate_token_id FROM crate_recovery_jobs').map(row => row.crate_token_id), [crateId(1)]);
+});
+
+test('mixed future reveals and owner-only draws preserve a fresh deployment across concurrent reservations and claims', async t => {
+  const local = { ...deployment, catalogVersion: '111k-v9' };
+  const previous = getRevealCatalog(local.catalogVersion)!;
+  const next = getRevealCatalog('111k-v10')!;
+  const { store, database, reopen } = fixture(t, eggFirstRandom(), true, local);
+  const { mixed } = store.catalogUpdate;
+  const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const before = computeRevealCatalogDescriptor(previous);
+  const target = computeRevealCatalogDescriptor(next);
+  const blocks: unknown = collectionBlocks;
+  validateRevealCollectionBlocks(blocks);
+  const lookup = selectRevealCollectionBlocks(blocks, target);
+  const groups: MixedAllocationGroup[] = [];
+  for (const asset of revealCatalogAdditions(previous, next)) {
+    const label = lookupRevealCollectionBlock(lookup, asset.category, asset.assetId)!;
+    const group = groups.at(-1);
+    if (group && group.collectionBlock === label && group.category === asset.category && group.lastId + 1 === asset.assetId) group.lastId++;
+    else groups.push({ category: asset.category, collectionBlock: label, firstId: asset.assetId, lastId: asset.assetId, ownerCount: 0 });
+  }
+  const definition: MixedAllocationDefinition = { version: 2, deploymentId: local.deploymentId, chainId: local.chainId,
+    contractAddress: local.contractAddress, metadataBaseUri: local.metadataBaseUri, deploymentBlock: local.deploymentBlock,
+    batchId: 'fixture-future', originCatalogVersion: local.catalogVersion, sourceSha256: next.source.sha256, predecessor: before, target,
+    ownerSupplementSha256: hash(ownerSupplement), collectionBlocksSha256: mixedReleaseBlockHash(blocks, target), groups, ordinaryCount: 0 };
+  const future = definition.batchId;
+  store.freeze(local, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+  const first = store.frozen(ids(1));
+  const readyEgg = first.find(art => art.category === 'egg');
+  assert.ok(readyEgg);
+  mixed.begin({ batchId: future, definition, targetCatalog: next });
+  const reader = store.catalogUpdate.reader;
+  const saved = reader.settings()!;
+  const oversizedTemplate = JSON.stringify({ name: '{{tokenId}}', image: 'é'.repeat(MAX_REVEAL_METADATA_BYTES / 2) });
+  const templateOverride = t.mock.method(reader, 'settings', () => ({ ...saved,
+    deployment_json: JSON.stringify({ ...local, templateJson: oversizedTemplate }) }));
+  const [asset] = mixed.pendingTraits(future, 1);
+  const traits = [{ trait_type: 'collection block', value: lookupRevealCollectionBlock(lookup, asset.category, asset.assetId) }];
+  assert.throws(() => mixed.stageTraits(future, [{ ...asset, attributesJson: JSON.stringify(traits), sha256: hash(traits) }]),
+    /Base or placeholder metadata exceeds/);
+  templateOverride.mock.restore();
+  assert.deepEqual(mixed.pendingTraits(future, 1), [asset]);
+  for (let pending = mixed.pendingTraits(future, 256); pending.length; pending = mixed.pendingTraits(future, 256)) {
+    mixed.stageTraits(future, pending.map(asset => {
+      const label = lookupRevealCollectionBlock(lookup, asset.category, asset.assetId);
+      const attributes = [{ trait_type: 'collection block', value: label }];
+      return { ...asset, attributesJson: JSON.stringify(attributes), sha256: hash(attributes) };
+    }));
+  }
+  mixed.stageInventory(future, 4096);
+  store.reserve([crateId(1)]);
+  store.freeze(local, observation(2), [{ crateTokenId: crateId(2), tokenIds: ids(21) }], 2);
+  const reservations = () => database.prepare('SELECT category,asset_id,crate_token_id,slot FROM assignments WHERE token_id IS NULL ORDER BY crate_token_id,slot').all();
+  const reserved = reservations();
+  assert.equal(reserved.length, 20);
+  while (mixed.stageInventory(future, 4096).generationSeeded < REVEAL_ARTWORK_COUNT) {}
+  mixed.seal(future);
+  const activated = mixed.activate(future, []);
+  assert.equal(activated.readyCount, 0);
+  assert.equal(activated.futureCount, groups.reduce((n, group) => n + group.lastId - group.firstId + 1, 0));
+  assert.deepEqual(reopen().catalogUpdate.mixed.activate(future, []), activated);
+  assert.deepEqual(store.frozen(ids(1)), first);
+  assert.deepEqual(reservations(), reserved);
+  assert.equal(store.catalogUpdate.ownerHatching.reader.batchStatus(future), null);
+  mixed.finalize(future);
+
+  const ownerOnly: MixedAllocationDefinition = { ...definition, batchId: 'fixture-owner', predecessor: target, groups: [],
+    ordinaryCount: 2 };
+  const ownerBatch = ownerOnly.batchId;
+  const release = { batchId: ownerBatch, definition: ownerOnly, targetCatalog: next };
+  const maximum = next.importSettings.availableEggs;
+  const priorEgg = first.filter(art => art.category === 'egg')[2];
+  assert.ok(priorEgg);
+  const legacy = store.catalogUpdate.ownerHatching;
+  legacy.prepare({ batchId: 'fixture-earlier-owner', sourceSha256: next.source.sha256, readyCount: 1,
+    candidateTokenIds: [priorEgg.tokenId], grails: [], freshEggIds: [maximum] });
+  assert.equal(legacy.hatch(priorEgg.tokenId).kind, 'hatched');
+  const bounds = t.mock.method(store.catalogUpdate.reader, 'freshEggBounds', () => ({ lastIssued: maximum - 2, maximum }));
+  assert.throws(() => mixed.begin(release), /Insufficient unused fresh egg/);
+  assert.equal(store.catalogUpdate.reader.status(ownerBatch), null);
+  bounds.mock.mockImplementation(() => ({ lastIssued: maximum - 3, maximum }));
+  mixed.begin(release);
+  bounds.mock.restore();
+  const frozenDraw = () => database.prepare('SELECT egg_id,checked FROM reveal_mixed_fresh_eggs WHERE batch_id=? ORDER BY egg_id').all(ownerBatch);
+  const originalDraw = frozenDraw();
+  assert.equal(originalDraw.length, 2);
+  assert.ok(originalDraw.every(row => row.egg_id !== maximum));
+  await assert.rejects(mixed.checkFreshMediaPage(release, async () => new Response(null, { status: 404 })), /media/);
+  reopen().catalogUpdate.mixed.begin(release);
+  assert.deepEqual(frozenDraw(), originalDraw);
+  assert.ok(await mixed.checkFreshMediaPage(release, async () => new Response('sample', {
+    headers: { 'content-type': 'image/png', 'access-control-allow-origin': '*' },
+  })));
+  while (mixed.stageInventory(ownerBatch, 4096).generationSeeded < REVEAL_ARTWORK_COUNT) {}
+  mixed.seal(ownerBatch);
+  assert.throws(() => mixed.activate(ownerBatch, []), /cohort/);
+  const tokenIds = first.filter(a => a.category === 'egg').slice(0, 2).map(a => a.tokenId);
+  assert.equal(tokenIds.length, 2);
+  const prepared = mixed.activate(ownerBatch, tokenIds);
+  assert.equal(prepared.ready, 2);
+  assert.deepEqual(mixed.activate(ownerBatch, tokenIds), prepared);
+  assert.deepEqual(frozenDraw(), []);
+  assert.deepEqual(reservations(), reserved);
+  database.prepare('INSERT INTO crates(crate_token_id) VALUES(?)').run(crateId(7));
+  database.prepare(`CREATE TEMP TABLE approaching_sellout AS SELECT origin_category,origin_asset_id,ROW_NUMBER() OVER(ORDER BY category,slot) AS slot
+    FROM reveal_catalog_free WHERE generation=? AND (category!='painting' OR slot>=2)`).run(ownerBatch);
+  database.prepare(`DELETE FROM reveal_catalog_free WHERE generation=? AND (category!='painting' OR slot>=2)`).run(ownerBatch);
+  database.prepare(`INSERT INTO assignments(category,asset_id,crate_token_id,slot)
+    SELECT origin_category,origin_asset_id,?,slot FROM approaching_sellout`).run(crateId(7));
+  database.prepare("UPDATE reveal_catalog_pools SET available=CASE WHEN category='painting' THEN 2 ELSE 0 END WHERE generation=?").run(ownerBatch);
+  store.reserve([crateId(8)]);
+  assert.equal(store.catalogUpdate.reader.pools().reduce((n, row) => n + row.available, 0), 0);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM owner_hatching_ordinary_backing WHERE claimed_by IS NULL').get()!.n, 2);
+  const finalCrate = ids(201);
+  store.freeze(local, observation(9), [{ crateTokenId: crateId(8), tokenIds: finalCrate }], 4000);
+  assert.equal(store.frozen(finalCrate).length, finalCrate.length);
+  assert.ok(store.frozen(finalCrate.slice(0, 2)).every(art => art.category === 'egg'));
+  assert.ok(store.frozen(tokenIds).every(art => art.category === 'egg'));
+  assert.equal(mixed.verify(ownerBatch).ready, 2);
+  const owner = reopen().catalogUpdate.ownerHatching;
+  for (const tokenId of tokenIds.reverse()) {
+    const claim = owner.hatch(tokenId);
+    assert.equal(claim.kind, 'hatched');
+    assert.deepEqual(owner.hatch(tokenId), claim);
+  }
+  assert.equal(mixed.verify(future).futureCount, activated.futureCount);
+  assert.equal(mixed.verify(ownerBatch).hatched, 2);
+  assert.equal(store.catalogUpdate.reader.effectiveCatalog()?.manifestSha256, target.manifestSha256);
 });

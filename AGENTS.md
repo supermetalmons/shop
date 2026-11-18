@@ -16,7 +16,7 @@ a successful full audit within the same unchanged maintenance flow.
 ## 111k egg hatching
 
 When the user asks to hatch eggs and supplies an updated `111k.json`, follow
-`scripts/docs/111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs` end to end.
+`scripts/docs/111k_reveal_ops.md#mixed-allocation` end to end.
 That request includes the required catalog preparation, promotion, checks,
 application deployments, live apply, and completion verification unless the user
 asks for inspection/preparation only. Default to the current active Sepolia 111k
@@ -31,8 +31,9 @@ require explicit instructions; keep refresh calldata unsigned by default.
 
 Keep selected token IDs, reserved artwork IDs, draw order and token-to-reward
 pairs in the allocation ledger. Publish complete catalog inputs, media checks,
-counts and aggregate verification results. Use the private cutoff bundle path
-in the runbook for ordinary releases. Keep raw operator evidence in
+counts and aggregate verification results. Only a signed holder claim can hatch
+a revealed egg. Swap future artworks exclusively into free, unreserved egg slots.
+Keep private operator bundles and raw evidence in
 `.operations/` and scratch data in `.cache/`.
 
 Review release evidence before publishing, including decompressed records.

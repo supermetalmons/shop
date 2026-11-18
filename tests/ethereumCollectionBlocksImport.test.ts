@@ -8,6 +8,7 @@ import test, { type TestContext } from 'node:test';
 import { buildRevealCollectionBlocks, importRevealCollectionBlocks } from '../scripts/ethereum-metadata/collectionBlocks.ts';
 import { buildRevealAssetCatalog, importRevealAssets } from '../scripts/ethereum-metadata/assetImport.ts';
 import { parseAssetCliArgs } from '../scripts/ethereum-metadata/assetCli.ts';
+import currentDescriptor from '../shared/ethereum/revealCatalog.json';
 import { computeRevealCatalogDescriptor } from '../shared/ethereum/revealAssetCatalog.ts';
 import { lookupRevealCollectionBlock, selectRevealCollectionBlocks, validateRevealCollectionBlocks } from '../shared/ethereum/revealCollectionBlocks.ts';
 
@@ -76,16 +77,19 @@ test('the saved manifest reproduces all collection blocks and every real range b
   const source = JSON.parse(await readFile(new URL(`../${ASSETS}/collection-blocks.source.json`, import.meta.url), 'utf8')) as Record<string, [number, number, string]>;
   const value: unknown = JSON.parse(await readFile(new URL(`../${ASSETS}/collection-blocks.json`, import.meta.url), 'utf8'));
   validateRevealCollectionBlocks(value);
-  assert.equal(Object.values(value.ranges).reduce((sum, ranges) => sum + ranges.length, 0), 31);
-  const lookup = selectRevealCollectionBlocks(value, value.catalogs.at(-1)!);
-  let count = 0;
+  const lookup = selectRevealCollectionBlocks(value, currentDescriptor);
+  assert.ok(lookup);
   for (const [category, family, extension] of [['painting', 'paintings', 'png'], ['video', 'videos', 'mp4'], ['3d', '3d', 'png'], ['animated', 'animated', 'png']] as const) {
-    for (let id = 1; id <= lookup!.counts[category]; id++) {
-      assert.equal(lookupRevealCollectionBlock(lookup, category, id), source[`${family}/${id}.${extension}`][2]);
+    const primaryPath = new RegExp(`^${family}/([1-9]\\d*)\\.${extension}$`);
+    let count = 0;
+    for (const [path, entry] of Object.entries(source)) {
+      const match = primaryPath.exec(path);
+      if (!match) continue;
+      assert.equal(lookupRevealCollectionBlock(lookup, category, Number(match[1])), entry[2]);
       count++;
     }
+    assert.equal(lookup.counts[category], count);
   }
-  assert.equal(count, 78_921);
 });
 
 test('generation rejects incomplete, malformed and conflicting labels or changed dimensions', () => {

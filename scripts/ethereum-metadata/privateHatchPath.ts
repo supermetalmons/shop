@@ -7,11 +7,6 @@ import { initializeOperationsDirectory } from '../shared/localArtifacts.ts';
 const repository = realpathSync(fileURLToPath(new URL('../../', import.meta.url)));
 const privateRoot = join(repository, '.operations');
 
-export function defaultHatchBundle(catalogVersion: string, root = repository): string {
-  if (!/^111k-v[1-9]\d{0,8}$/.test(catalogVersion)) throw new Error('Invalid catalog version.');
-  return join(root, '.operations', `111k-catalog-${catalogVersion.slice('111k-'.length)}`);
-}
-
 function inside(root: string, path: string): boolean {
   return path === root || path.startsWith(root + sep);
 }

@@ -1,6 +1,6 @@
 import { readEthereumRevealDeployment, type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
-import { mixedAllocationHash } from '../../../../shared/ethereum/revealMixedAllocation.js';
-import type { MixedAllocationMaintenanceRequest, MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
+import { mixedAllocationCounts, mixedAllocationHash, type MixedAllocationDefinition } from '../../../../shared/ethereum/revealMixedAllocation.js';
+import { mixedAllocationScope, registeredMixedCatalog, type MixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
 import type { OwnerHatchingMaintenanceResult } from '../../../../shared/ethereum/ownerHatchingMaintenance.js';
 import type { MixedAllocationInput } from './ethereumRevealMixedAllocation.js';
 import { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
@@ -16,15 +16,16 @@ type Host = {
 };
 type RegistryPhase = 'initial' | 'claimed' | 'mirrored' | 'released' | 'cancelled';
 
-const MAINNET = { chainId: 1, contractAddress: '0x08cded8258730bda384ff198001e47a1b50f7f9d' };
-
-export function requireMixedMainnetDeployment(row: EthereumRevealDeployment | null): asserts row is EthereumRevealDeployment {
-  if (!row || row.deploymentId !== 'mainnet-v1' || row.dropId !== '111k' || row.chainId !== MAINNET.chainId ||
-    row.contractAddress !== MAINNET.contractAddress || row.deploymentBlock !== 26387160 ||
-    row.metadataBaseUri !== 'https://cdn.mons.shop/111k/' || row.catalogVersion !== '111k-v8' ||
-    row.templateSha256 !== '07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9' ||
-    row.state !== 'active' || row.retiredAtMs != null || row.provisionedAtMs === null || row.lastError !== null) {
-    throw new Error('The active mainnet mixed allocation deployment does not match its release.');
+export function requireMixedDeployment(row: EthereumRevealDeployment | null, definition: MixedAllocationDefinition): asserts row is EthereumRevealDeployment {
+  const scope = mixedAllocationScope(definition);
+  if (!row || row.deploymentId !== scope.deploymentId || row.chainId !== scope.chainId || row.contractAddress !== scope.contractAddress ||
+    row.metadataBaseUri !== scope.metadataBaseUri || row.deploymentBlock !== scope.deploymentBlock ||
+    row.dropId !== (scope.chainId === 1 ? '111k' : '111k_devnet') || row.state !== 'active' ||
+    row.retiredAtMs != null || row.provisionedAtMs === null || row.lastError !== null ||
+    definition.version === 2 && row.catalogVersion !== definition.originCatalogVersion ||
+    definition.version === 1 && (row.catalogVersion !== '111k-v8' ||
+      row.templateSha256 !== '07608824a33f42b56858a32cb675067fc633239cad9be461de01c62a2f2df9e9')) {
+    throw new Error('The active mixed allocation deployment does not match its release.');
   }
 }
 
@@ -32,31 +33,34 @@ export class EthereumMixedAllocationOperation {
   private readonly reader: EthereumRevealCatalogReader;
   private readonly releaseHash: string;
   private readonly journalKey: string;
-  private pending: Promise<void> = Promise.resolve();
 
   constructor(private readonly host: Host, private readonly release: MixedAllocationInput) {
     this.reader = new EthereumRevealCatalogReader(host.sql);
     this.releaseHash = mixedAllocationHash(release.definition);
-    this.journalKey = `mixed-mainnet:${release.batchId}`;
+    this.journalKey = `${release.definition.version === 1 ? 'mixed-mainnet' : 'mixed'}:${release.batchId}`;
   }
 
   run(request: MixedAllocationMaintenanceRequest): Promise<MixedAllocationMaintenanceResult> {
-    const operation = this.pending.then(() => this.advance(request));
-    this.pending = operation.then(() => {}, () => {});
-    return operation;
+    const scope = mixedAllocationScope(this.release.definition);
+    if (request.batchId !== scope.batchId || request.deploymentId !== scope.deploymentId ||
+      (this.release.definition.version !== 1 || request.definitionSha256 !== undefined) && request.definitionSha256 !== this.releaseHash) {
+      throw new Error('Mixed allocation request does not match the installed release.');
+    }
+    return this.advance(request);
   }
 
   private async current() {
-    const row = await readEthereumRevealDeployment(this.host.db, MAINNET);
-    requireMixedMainnetDeployment(row);
+    const row = await readEthereumRevealDeployment(this.host.db, mixedAllocationScope(this.release.definition));
+    requireMixedDeployment(row, this.release.definition);
     return row;
   }
 
   private registryPhase(row: EthereumRevealDeployment, journal: Journal): RegistryPhase {
     const { predecessor, target } = this.release.definition;
-    const old = row.effectiveCatalogVersion === predecessor.catalogVersion && row.effectiveCatalogSha256 === predecessor.manifestSha256 &&
+    const effective = registeredMixedCatalog(row);
+    const old = effective?.catalogVersion === predecessor.catalogVersion && effective.manifestSha256 === predecessor.manifestSha256 &&
       row.catalogRevision === journal.sourceRevision;
-    const next = row.effectiveCatalogVersion === target.catalogVersion && row.effectiveCatalogSha256 === target.manifestSha256 &&
+    const next = effective?.catalogVersion === target.catalogVersion && effective.manifestSha256 === target.manifestSha256 &&
       row.catalogRevision === journal.sourceRevision + 1;
     if (row.catalogUpdateId == null) {
       if (old && row.revision === journal.revision) return 'initial';
@@ -79,11 +83,14 @@ export class EthereumMixedAllocationOperation {
     const bindings = from === 'initial' ? [this.release.batchId, now] :
       from === 'claimed' && !cancel ? [target.catalogVersion, target.manifestSha256] : [];
     const step = from === 'initial' ? 0 : from === 'claimed' ? 1 : 2;
+    const scope = mixedAllocationScope(this.release.definition);
     const result = await this.host.db.prepare(`UPDATE ethereum_reveal_deployments SET ${set},revision=revision+1,updated_at_ms=?
-      WHERE deployment_id='mainnet-v1' AND chain_id=1 AND contract_address=? AND revision=? AND catalog_update_id IS ?
-      AND state='active' AND retired_at_ms IS NULL AND last_error IS NULL AND effective_catalog_version=? AND effective_catalog_sha256=?
-      AND catalog_revision=? RETURNING deployment_id`).bind(...bindings, now, MAINNET.contractAddress, journal.revision + step,
-        from === 'initial' ? null : this.release.batchId, old.catalogVersion, old.manifestSha256,
+      WHERE deployment_id=? AND chain_id=? AND contract_address=? AND revision=? AND catalog_update_id IS ?
+      AND state='active' AND retired_at_ms IS NULL AND last_error IS NULL AND
+      ((effective_catalog_version=? AND effective_catalog_sha256=?) OR
+       (effective_catalog_version IS NULL AND effective_catalog_sha256 IS NULL AND catalog_revision=0 AND catalog_version=?))
+      AND catalog_revision=? RETURNING deployment_id`).bind(...bindings, now, scope.deploymentId, scope.chainId, scope.contractAddress, journal.revision + step,
+        from === 'initial' ? null : this.release.batchId, old.catalogVersion, old.manifestSha256, old.catalogVersion,
         journal.sourceRevision + Number(from === 'mirrored')).first();
     if (!result) throw new Error('Mixed allocation registry transition needs retry with its original revision.');
     return this.current();
@@ -102,9 +109,8 @@ export class EthereumMixedAllocationOperation {
 
   private describe(request: MixedAllocationMaintenanceRequest, registry: EthereumRevealDeployment, journal: Journal, remainingCleanup?: number): MixedAllocationMaintenanceResult {
     const row = this.preparation(request);
-    const { target, sourceSha256, groups } = this.release.definition;
-    const readyCount = groups.reduce((n, group) => n + group.ownerCount, 0);
-    const futureCount = groups.reduce((n, group) => n + group.lastId - group.firstId + 1 - group.ownerCount, 0);
+    const { target, sourceSha256 } = this.release.definition;
+    const { readyCount, futureCount, preassignedCount } = mixedAllocationCounts(this.release.definition);
     const work = row && this.host.sql.exec<{ seeded: number }>('SELECT seeded FROM reveal_catalog_generations WHERE batch_id=?', request.batchId).toArray()[0];
     let progress: OwnerHatchingMaintenanceResult | undefined;
     if (row) {
@@ -114,7 +120,7 @@ export class EthereumMixedAllocationOperation {
       progress = ownerHatchingProgress(request.deploymentId, row, this.reader.ownerHatching, activation, staged);
     }
     const { verificationCursor, ...safe } = progress ?? { deploymentId: request.deploymentId, batchId: request.batchId,
-      phase: journal.cancelled ? 'cancelled' as const : 'unstarted' as const, readyCount, grailCount: readyCount, candidates: 0, scanned: 0,
+      phase: journal.cancelled ? 'cancelled' as const : 'unstarted' as const, readyCount, grailCount: preassignedCount, candidates: 0, scanned: 0,
       total: 0, staged: 0, activationChecked: 0, activationSelected: 0, published: 0, hatched: 0, retrying: 0, conflicts: 0,
       pendingEnrichment: 0, failedEnrichment: 0, retryAfterMs: 0, verificationCursor: null, observationUntilMs: null, complete: false };
     return { ...safe, complete: safe.complete && registry.catalogUpdateId !== this.release.batchId,
@@ -130,7 +136,7 @@ export class EthereumMixedAllocationOperation {
     if (local?.catalogVersion === target.catalogVersion && local.manifestSha256 === target.manifestSha256 &&
       local.catalogRevision === journal.sourceRevision + 1 && local.generation === this.release.batchId) return true;
     if (local?.catalogVersion === predecessor.catalogVersion && local.manifestSha256 === predecessor.manifestSha256 &&
-      local.catalogRevision === journal.sourceRevision && local.generation) return false;
+      local.catalogRevision === journal.sourceRevision) return false;
     throw new Error('Mixed allocation ledger catalog does not match its operation.');
   }
 
@@ -138,8 +144,12 @@ export class EthereumMixedAllocationOperation {
     let registry = await this.current();
     let saved = await this.host.storage.get<Journal>(this.journalKey);
     if (saved && !saved.cancelled && saved.releaseHash === this.releaseHash && registry.revision > saved.revision &&
-      registry.catalogUpdateId == null && registry.catalogRevision === saved.sourceRevision &&
-      !this.localCommitted(saved) && !this.preparation(request) && !this.reader.status(request.batchId)) {
+      registry.catalogUpdateId == null && registry.catalogRevision! >= saved.sourceRevision &&
+      !this.preparation(request) && !this.reader.status(request.batchId)) {
+      const currentJournal = { ...saved, revision: registry.revision, sourceRevision: registry.catalogRevision! };
+      if (this.registryPhase(registry, currentJournal) !== 'initial' || this.localCommitted(currentJournal)) {
+        throw new Error('The ledger and registry must still agree on the unclaimed predecessor.');
+      }
       if (request.expectedRevision !== registry.revision) throw new Error('Initial mixed claim lost. Use the current registry revision and a new --journal path.');
       saved = undefined;
     }
@@ -182,11 +192,15 @@ export class EthereumMixedAllocationOperation {
       if (request.action !== 'begin') throw new Error('Begin the mixed allocation first.');
       const settings = this.reader.settings();
       if (settings?.candidate_catalog_generation ||
+        this.host.sql.exec("SELECT 1 FROM sqlite_schema WHERE name='reveal_catalog_generations'").toArray().length &&
         this.host.sql.exec("SELECT 1 FROM reveal_catalog_generations WHERE phase='active' LIMIT 1").toArray().length ||
         this.host.sql.exec("SELECT 1 FROM sqlite_schema WHERE name='owner_hatching_preparations'").toArray().length &&
         this.host.sql.exec("SELECT 1 FROM owner_hatching_preparations WHERE phase NOT IN ('complete','cancelled') LIMIT 1").toArray().length) {
         throw new Error('A catalog or owner operation is already running.');
       }
+      const { futureCount, ordinaryCount } = mixedAllocationCounts(this.release.definition);
+      this.reader.requireMixedCapacity(futureCount, ordinaryCount);
+      if (ordinaryCount) this.reader.requireFreshEggInventory(ordinaryCount);
       if (!hasJournal) await this.host.storage.put(this.journalKey, journal);
       registry = await this.transition('initial', journal);
       phase = this.registryPhase(registry, journal);
@@ -217,7 +231,8 @@ export class EthereumMixedAllocationOperation {
       }
       return this.describe(request, registry, journal, cleanup.remaining);
     }
-    const result = await operations.run(registry, { ...request, action: request.action });
+    const { deploymentId, batchId, expectedRevision, action } = request;
+    const result = await operations.run(registry, { deploymentId, batchId, expectedRevision, action });
     if (phase === 'claimed' && this.localCommitted(journal)) {
       registry = await this.transition('claimed', journal);
       phase = this.registryPhase(registry, journal);

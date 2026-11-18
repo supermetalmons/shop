@@ -1,3 +1,4 @@
+import { REVEAL_ASSET_FAMILIES } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import { initializeRevealBaseSchemaV1 } from './ethereumRevealSchema/base.js';
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation,
   EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
@@ -46,7 +47,7 @@ function immutableDeployment(deployment: EthereumRevealDeployment): string {
 export class EthereumRevealStore {
   readonly enrichment: EthereumRevealEnrichmentStore;
   readonly catalogUpdate: EthereumRevealCatalogUpdateStore;
-  private readonly transaction: <T>(action: () => T) => T;
+  protected readonly transaction: <T>(action: () => T) => T;
   private readonly recovery: EthereumRevealRecoveryStore;
 
   constructor(private readonly sql: RevealSql, transaction: <T>(action: () => T) => T,
@@ -96,10 +97,14 @@ export class EthereumRevealStore {
     if (this.ready()) return true;
     return this.transaction(() => {
       let remaining = limit;
+      const catalog = this.catalogUpdate.reader.activeCatalog();
       for (const pool of this.pools()) {
         const count = Math.min(remaining, pool.total - pool.seeded);
         if (!count) continue;
-        this.sql.exec(`WITH RECURSIVE ids(id) AS (SELECT ? UNION ALL SELECT id+1 FROM ids WHERE id < ?)
+        const ids = catalog.categories[REVEAL_ASSET_FAMILIES[pool.category]].assetIds;
+        if (ids) this.sql.exec(`INSERT INTO free_slots(category,slot,asset_id) SELECT ?,?+key,value FROM json_each(?)`,
+          pool.category, pool.seeded, JSON.stringify(ids.slice(pool.seeded, pool.seeded + count)));
+        else this.sql.exec(`WITH RECURSIVE ids(id) AS (SELECT ? UNION ALL SELECT id+1 FROM ids WHERE id < ?)
           INSERT INTO free_slots(category,slot,asset_id) SELECT ?, id-1, id FROM ids`, pool.seeded + 1, pool.seeded + count, pool.category);
         this.sql.exec('UPDATE pools SET seeded=seeded+?, available=available+? WHERE category=?', count, count, pool.category);
         remaining -= count;
@@ -133,6 +138,9 @@ export class EthereumRevealStore {
       pools = this.pools().filter(pool => pool.available > 0);
     }
     if (!pools.length) return undefined;
+    const nonEggSlots = pools.reduce((n, pool) => n + (pool.category === 'egg' ? 0 : pool.available), 0);
+    const protect = nonEggSlots > 0 && nonEggSlots <= this.catalogUpdate.reader.ownerHatching.unbackedOrdinaryCount();
+    if (protect && pools.some(pool => pool.category === 'egg')) pools = pools.filter(pool => pool.category === 'egg');
     const privateEggs = this.sql.exec<ReservationRow>(`SELECT category,asset_id,crate_token_id,slot FROM assignments INDEXED BY assignments_crate
       WHERE crate_token_id=? AND token_id IS NULL`, crateTokenId).toArray().filter(row =>
       this.catalogUpdate.reader.resolveUnit({ category: row.category, assetId: row.asset_id }).category === 'egg').length;
@@ -143,6 +151,12 @@ export class EthereumRevealStore {
     const pool = pools.find(value => { selection -= value.total; return selection < 0; })!;
     const index = this.randomInteger(pool.available);
     const chosen = this.catalogUpdate.takeFree(pool.category, index);
+    if (protect && pool.category !== 'egg') {
+      const effective = this.catalogUpdate.reader.resolveUnit(chosen);
+      if (effective.category === 'egg') throw new Error('Ordinary backing inventory is inconsistent.');
+      this.catalogUpdate.ownerHatching.protectOrdinaryReward(chosen, { category: effective.category, assetId: effective.assetId,
+        attributesJson: this.catalogUpdate.reader.mixedFutureAttributes(effective) });
+    }
     this.sql.exec('INSERT INTO assignments(category,asset_id,crate_token_id,slot) VALUES(?,?,?,?)', chosen.category, chosen.assetId, crateTokenId, slot);
     return { category: chosen.category, asset_id: chosen.assetId, crate_token_id: crateTokenId, slot };
   }

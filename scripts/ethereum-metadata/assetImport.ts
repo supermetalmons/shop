@@ -8,6 +8,7 @@ import {
 } from '../../shared/ethereum/revealAssetCatalog.ts';
 import type { EthereumArtworkCategory } from '../../shared/ethereum/reveal.ts';
 import { withMetadataLock } from './lock.ts';
+import { getOwnerHatchingGrail } from '../../shared/ethereum/ownerHatchingCatalog.ts';
 import { ordinaryRevealCatalogSource } from './ownerHatchingCatalog.ts';
 import { createRecoverableFileSet, readOptionalFile as readOptional, type FileSetRecoveryEntry } from '../shared/recoverableFileSet.ts';
 
@@ -21,6 +22,8 @@ const DEFAULT_AVAILABLE_EGGS = 76_700;
 const REFERENCE_CATEGORIES: EthereumArtworkCategory[] = ['egg', 'painting', 'video', '3d', 'animated'];
 const OUTPUT_PATHS = ['source.json', 'manifest.json', ...REFERENCE_CATEGORIES.map(category => `${category}.template.json`)]
   .map(name => join(ASSET_DIRECTORY, name)).concat(DESCRIPTOR_PATH, ANCESTORS_PATH);
+const MIXED_SUPPORT_PATHS = [join(ASSET_DIRECTORY, 'collection-blocks.source.json'), join(ASSET_DIRECTORY, 'collection-blocks.json'),
+  'shared/ethereum/mixedAllocationReleases.json', 'shared/ethereum/ownerHatchingCatalog.json'];
 const IMPORT_STATE_DIRECTORY = '.cache/111k-assets';
 const SOURCE_GROUPS = ['3d', 'animated', 'paintings', 'paintings/alt', 'videos/mp4', 'videos/webp'] as const;
 type SourceGroup = typeof SOURCE_GROUPS[number];
@@ -38,6 +41,12 @@ export type RevealAssetImportOptions = {
   availableEggs?: number;
   artworkTemplatePath?: string;
   check?: boolean;
+  mixedSupport?: {
+    descriptor: RevealAssetCatalogDescriptor;
+    collectionBlocks: import('../../shared/ethereum/revealCollectionBlocks.ts').RevealCollectionBlocks;
+    registry: string;
+    ownerSupplement?: string;
+  };
 };
 
 export type RevealAssetImportResult = {
@@ -80,6 +89,17 @@ function sourceGroups(source: string): Record<SourceGroup, SourceDimensions> {
     Record<SourceGroup, SourceDimensions>;
   for (const [path, dimensions] of Object.entries(value)) {
     const match = /^(3d|animated|paintings)\/([1-9][0-9]*)\.png$|^(paintings\/alt)\/([1-9][0-9]*)\.webp$|^(videos)\/([1-9][0-9]*)\.(mp4|webp)$/.exec(path);
+    const animation = /^animated\/([1-9][0-9]*)\.(gif|mp4)$/.exec(path);
+    if (animation) {
+      const poster = value[`animated/${animation[1]}.png`];
+      const other = value[`animated/${animation[1]}.${animation[2] === 'gif' ? 'mp4' : 'gif'}`];
+      if (other || !Array.isArray(poster) || !Array.isArray(dimensions) || dimensions.length !== poster.length ||
+        !dimensions.slice(0, 2).every(value => Number.isSafeInteger(value) && value > 0) ||
+        !poster.slice(0, 2).every(value => Number.isSafeInteger(value) && value > 0) ||
+        dimensions[0] * poster[1] !== dimensions[1] * poster[0] ||
+        dimensions[2] !== poster[2]) throw new Error('Animated media must have one matching poster and companion.');
+      continue;
+    }
     if (!match) throw new Error(`Unsupported asset source path: ${path}`);
     const group = (match[1] ?? match[3] ?? `videos/${match[7]}`) as SourceGroup;
     const rawId = match[2] ?? match[4] ?? match[6];
@@ -97,7 +117,15 @@ function sourceGroups(source: string): Record<SourceGroup, SourceDimensions> {
   for (const group of SOURCE_GROUPS) {
     if (group === 'paintings/alt') continue;
     const ids = [...groups[group].keys()].sort((a, b) => a - b);
-    if (ids.length === 0 || ids.some((id, index) => id !== index + 1)) {
+    let expected = 0;
+    if (ids.length === 0 || ids.some(id => {
+      expected++;
+      if (group === 'animated') {
+        while (expected < id && getOwnerHatchingGrail('animated', expected)) expected++;
+        if (getOwnerHatchingGrail('animated', id)) return true;
+      }
+      return id !== expected;
+    })) {
       throw new Error(`Asset IDs must be contiguous from 1 with no gaps: ${group}`);
     }
   }
@@ -152,6 +180,11 @@ export function buildRevealAssetCatalog(
   if (eggCount < 0 || eggCount > availableEggs) {
     throw new Error(`Egg allocation ${eggCount} must be nonnegative and cannot exceed ${availableEggs} available eggs`);
   }
+  const animatedIds = [...groups.animated.keys()].sort((a, b) => a - b);
+  const gifAssetIds = Object.keys(JSON.parse(Buffer.from(sourceBytes).toString('utf8'))).flatMap(path => {
+    const match = /^animated\/([1-9][0-9]*)\.gif$/.exec(path);
+    return match ? [Number(match[1])] : [];
+  }).sort((a, b) => a - b);
   const manifest: RevealAssetCatalog = {
     version: 2,
     catalogVersion: options.catalogVersion,
@@ -171,7 +204,8 @@ export function buildRevealAssetCatalog(
       },
       videos: mediaCategory(groups['videos/mp4'], 'videos/{id}.mp4', 'videos/{id}.webp'),
       '3d': mediaCategory(groups['3d'], '3d/{id}.glb', '3d/{id}.png'),
-      animated: mediaCategory(groups.animated, 'animated/{id}.mp4', 'animated/{id}.png'),
+      animated: {         ...mediaCategory(groups.animated, 'animated/{id}.mp4', 'animated/{id}.png'),
+        ...(animatedIds.at(-1) === animatedIds.length ? {} : { assetIds: animatedIds }), ...(gifAssetIds.length ? { gifAssetIds } : {})       },
       receipts: { count: 85_556, pathTemplate: 'placeholder.png', aspectRatio: [466, 503] },
     },
   };
@@ -224,12 +258,12 @@ function assetFileSet(rootDirectory: string) {
     stateDirectory: join(rootDirectory, IMPORT_STATE_DIRECTORY),
     staging: 'directory',
     decodeJournal(journal): FileSetRecoveryEntry[] {
-      if (!Array.isArray(journal) || !journal.length || journal.length > OUTPUT_PATHS.length) {
+      if (!Array.isArray(journal) || !journal.length || journal.length > OUTPUT_PATHS.length + MIXED_SUPPORT_PATHS.length) {
         throw new Error('Invalid asset import recovery journal');
       }
       const paths = new Set<string>();
       return journal.map((entry: unknown) => {
-        if (!record(entry) || typeof entry.file !== 'string' || !OUTPUT_PATHS.includes(entry.file) || paths.has(entry.file) ||
+        if (!record(entry) || typeof entry.file !== 'string' || ![...OUTPUT_PATHS, ...MIXED_SUPPORT_PATHS].includes(entry.file) || paths.has(entry.file) ||
           entry.previous !== null && typeof entry.previous !== 'string' ||
           typeof entry.nextSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.nextSha256)) {
           throw new Error('Invalid asset import recovery entry');
@@ -320,7 +354,7 @@ async function runImport(rootDirectory: string, options: RevealAssetImportOption
     ...Object.entries(templates).map(([name, source]) => ({ path: join(assetDirectory, name), bytes: Buffer.from(source) })),
     { path: descriptorPath, bytes: Buffer.from(`${JSON.stringify(descriptor, null, 2)}\n`) },
   ];
-  const outputs = (await Promise.all(files.map(async file => ({ ...file,
+  const outputs: { path: string; bytes: Buffer; previous: Buffer | null }[] = (await Promise.all(files.map(async file => ({     ...file,
     previous: file.path === manifestPath ? existingManifestBytes :
       file.path === descriptorPath ? existingDescriptorBytes : await readOptional(file.path),
   }))))
@@ -347,10 +381,28 @@ async function runImport(rootDirectory: string, options: RevealAssetImportOption
     const { validateCollectionBlockUpgrade } = await import('./collectionBlocks.ts');
     await validateCollectionBlockUpgrade(rootDirectory, sourceBytes, manifest, ancestors);
   }
-  const changedFiles = outputs.map(output => relative(rootDirectory, output.path));
   if (outputs.length > 0 && priorVersion === catalogVersion) {
-    throw new Error(`Changed or stale catalog ${catalogVersion} requires a higher catalog version: ${changedFiles.join(', ')}`);
+    throw new Error(`Changed or stale catalog ${catalogVersion} requires a higher catalog version: ${outputs.map(output => relative(rootDirectory, output.path)).join(', ')}`);
   }
+  if (options.mixedSupport) {
+    const support = options.mixedSupport;
+    if (descriptor.catalogVersion !== support.descriptor.catalogVersion || descriptor.manifestSha256 !== support.descriptor.manifestSha256) {
+      throw new Error('Installed catalog differs from reviewed release.');
+    }
+    const retained = outputs.find(file => file.path === join(rootDirectory, ANCESTORS_PATH))?.bytes ?? await readOptional(join(rootDirectory, ANCESTORS_PATH));
+    const ancestors = retained ? JSON.parse(retained.toString('utf8')) : [];
+    const { previewMixedCollectionBlocks } = await import('./collectionBlocks.ts');
+    const checked = await previewMixedCollectionBlocks(rootDirectory, sourceBytes, manifest, ancestors, support.collectionBlocks);
+    const entries = [checked.source, Buffer.from(JSON.stringify(checked.artifact, null, 2) + '\n'), Buffer.from(support.registry),
+      support.ownerSupplement === undefined ? null : Buffer.from(support.ownerSupplement)];
+    for (const [index, bytes] of entries.entries()) {
+      if (bytes === null) continue;
+      const path = join(rootDirectory, MIXED_SUPPORT_PATHS[index]);
+      const previous = await readOptional(path);
+      if (!previous?.equals(bytes)) outputs.push({ path, previous, bytes });
+    }
+  }
+  const changedFiles = outputs.map(output => relative(rootDirectory, output.path));
   if (options.check) {
     if (outputs.length > 0) throw new Error(`Reveal asset outputs are stale: ${changedFiles.join(', ')}`);
     return { manifest, descriptor, status: 'checked', changedFiles };

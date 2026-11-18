@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { buildRevealAssetCatalog, withRevealAssetImportLock } from './assetImport.ts';
 import { ordinaryRevealCatalogSource } from './ownerHatchingCatalog.ts';
 import { createRecoverableFileSet, readOptionalFile as optional, type FileSetRecoveryEntry } from '../shared/recoverableFileSet.ts';
-import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog,
+import {   computeRevealCatalogDescriptor, revealCatalogAssetId, revealCatalogMedia, validateRevealAssetCatalog,
   REVEAL_ASSET_FAMILIES, type RevealAssetCatalog } from '../../shared/ethereum/revealAssetCatalog.ts';
 import { lookupRevealCollectionBlock, selectRevealCollectionBlocks, validateRevealCollectionBlocks,
   type RevealCollectionBlocks } from '../../shared/ethereum/revealCollectionBlocks.ts';
@@ -39,7 +39,9 @@ function compatible(catalog: RevealAssetCatalog, current: RevealAssetCatalog): b
   return CATEGORIES.every(category => {
     const count = catalog.categories[REVEAL_ASSET_FAMILIES[category]].count;
     if (count > current.categories[REVEAL_ASSET_FAMILIES[category]].count) return false;
-    for (let id = 1; id <= count; id++) {
+    for (let ordinal = 1; ordinal <= count; ordinal++) {
+      const id = revealCatalogAssetId(catalog.categories[REVEAL_ASSET_FAMILIES[category]], ordinal);
+      if (id !== revealCatalogAssetId(current.categories[REVEAL_ASSET_FAMILIES[category]], ordinal)) return false;
       if (JSON.stringify(revealCatalogMedia(catalog, category, id)) !==
         JSON.stringify(revealCatalogMedia(current, category, id))) return false;
     }
@@ -56,7 +58,8 @@ function catalogBindings(source: Source, current: RevealAssetCatalog, ancestors:
       const before = selectRevealCollectionBlocks(previous, binding);
       for (const category of CATEGORIES) {
         const family = current.categories[REVEAL_ASSET_FAMILIES[category]];
-        for (let id = 1; id <= binding.counts[category]; id++) {
+        for (let ordinal = 1; ordinal <= binding.counts[category]; ordinal++) {
+          const id = category === 'animated' ? binding.animatedAssetIds?.[ordinal - 1] ?? ordinal : ordinal;
           const path = (family.imagePathTemplate ?? family.pathTemplate).replace('{id}', String(id));
           const entry = source[path];
           if (!entry || entry[2] !== undefined && entry[2] !== lookupRevealCollectionBlock(before, category, id)) {
@@ -75,6 +78,7 @@ function catalogBindings(source: Source, current: RevealAssetCatalog, ancestors:
       throw new Error(`Collection block catalog identity changed: ${descriptor.catalogVersion}`);
     }
     catalogs.set(descriptor.catalogVersion, { ...descriptor,
+      ...(catalog.categories.animated.assetIds ? { animatedAssetIds: catalog.categories.animated.assetIds } : {}),
       counts: Object.fromEntries(CATEGORIES.map(category => [category, catalog.categories[REVEAL_ASSET_FAMILIES[category]].count])) as
         RevealCollectionBlocks['catalogs'][number]['counts'] });
   }
@@ -106,13 +110,14 @@ export function buildRevealCollectionBlocks(input: {
     const family = REVEAL_ASSET_FAMILIES[category];
     const definition = input.catalog.categories[family];
     const entries = ranges[category];
-    for (let id = 1; id <= definition.count; id++) {
+    for (let ordinal = 1; ordinal <= definition.count; ordinal++) {
+      const id = revealCatalogAssetId(definition, ordinal);
       const path = (definition.imagePathTemplate ?? definition.pathTemplate).replace('{id}', String(id));
       const label = source[path]?.[2];
       if (!label) throw new Error(`Missing collection block: ${path}`);
       const previous = entries.at(-1);
-      if (previous?.[1] === label) previous[0] = id;
-      else entries.push([id, label]);
+      if (previous?.[1] === label) previous[0] = ordinal;
+      else entries.push([ordinal, label]);
     }
   }
   const result: RevealCollectionBlocks = { version: 1, source: { filename: '111k.json', sha256: sha256(input.source) },
@@ -161,6 +166,16 @@ async function savedCollectionBlocks(directory: string, catalogs: readonly Revea
     previous = value;
   }
   return { previous, savedSource, savedArtifact };
+}
+
+export async function previewMixedCollectionBlocks(root: string, source: Buffer, catalog: RevealAssetCatalog,
+  ancestors: readonly RevealAssetCatalog[], expected: RevealCollectionBlocks) {
+  if (await optional(join(root, STATE, 'recovery.json'))) throw new Error('Resume interrupted collection block import before mixed promotion.');
+  const { previous, savedSource } = await savedCollectionBlocks(join(root, ASSETS), [catalog, ...ancestors]);
+  const labeled = savedSource && previous?.source.sha256 === expected.source.sha256 ? savedSource : source;
+  const artifact = buildRevealCollectionBlocks({ source: labeled, frozenSource: source, catalog, ancestors, previous });
+  if (JSON.stringify(expected) !== JSON.stringify(artifact)) throw new Error('Installed collection block history differs from the reviewed release.');
+  return { source: labeled, artifact };
 }
 
 export async function validateCollectionBlockUpgrade(root: string, source: Uint8Array, catalog: RevealAssetCatalog, ancestors: readonly RevealAssetCatalog[]) {

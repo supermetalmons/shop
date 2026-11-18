@@ -1,3 +1,4 @@
+import { emptyPoolRelease } from '../../../../shared/ethereum/installedMixedAllocation.js';
 import { requireOrdinaryCatalogTarget } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
@@ -36,7 +37,10 @@ export function parseEmptyPoolRequest(value: unknown): EthereumRevealEmptyPoolRe
     !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1 ||
     !['inspect', 'begin', 'advance', 'verify', 'cancel'].includes(request.action) ||
     (request.action === 'begin') !== (request.batch !== undefined)) throw new Error('Invalid empty-pool request.');
-  if (request.batch) validateRevealCatalogUpdateBatch(request.batch);
+  if (request.batch?.version === 'mixed') {
+    if (Object.keys(request.batch).length !== 3) throw new Error('Invalid empty-pool release identity.');
+    emptyPoolRelease(request.batch.batchId, request.batch.batchSha256, request.deploymentId);
+  } else if (request.batch) validateRevealCatalogUpdateBatch(request.batch);
   return request;
 }
 
@@ -107,7 +111,11 @@ export class EthereumRevealEmptyPool {
       let record = await this.load(request);
       let current = await this.current(deployment, record);
       if (request.action === 'begin') {
-        const batch = request.batch!;
+        const input = request.batch!;
+        const batch = input.version === 'mixed' ? emptyPoolRelease(input.batchId, input.batchSha256, request.deploymentId) : input;
+        if ('scope' in batch && (batch.scope.originCatalogVersion !== current.catalogVersion ||
+          batch.scope.contractAddress !== current.contractAddress || batch.scope.deploymentBlock !== current.deploymentBlock ||
+          batch.scope.metadataBaseUri !== current.metadataBaseUri)) throw new Error('Empty-pool release deployment changed.');
         if (!record) requireOrdinaryCatalogTarget(current.chainId, batch.target.descriptor);
         if (!getRevealCatalog(batch.predecessor.descriptor.catalogVersion, batch.predecessor.descriptor.manifestSha256) ||
           !getRevealCatalog(batch.target.descriptor.catalogVersion, batch.target.descriptor.manifestSha256)) throw new Error('Deploy both catalogs before rebuilding.');
@@ -118,7 +126,8 @@ export class EthereumRevealEmptyPool {
             ? { catalogVersion: current.effectiveCatalogVersion, manifestSha256: current.effectiveCatalogSha256 }
             : getRevealCatalogDescriptor(current.catalogVersion);
           if (current.state !== 'paused' || current.revision !== request.expectedRevision || current.catalogUpdateId != null ||
-            current.provisionedAtMs == null || JSON.stringify(previous) !== JSON.stringify(batch.predecessor.descriptor)) {
+            current.provisionedAtMs == null || previous?.catalogVersion !== batch.predecessor.descriptor.catalogVersion ||
+            previous.manifestSha256 !== batch.predecessor.descriptor.manifestSha256) {
             throw new Error('Pause the initialized empty deployment at the expected predecessor revision.');
           }
           this.host.initializeStore();
@@ -132,7 +141,7 @@ export class EthereumRevealEmptyPool {
         const status = this.reader().status(record.operationId);
         if (status?.activatedAtMs != null || record.phase !== 'fencing') return await this.advance(request, current, record);
         this.host.fence.acquire(record, Date.now());
-        this.mutate(record, store => store.beginEmptyRebuild({ operationId: record!.operationId, batch }));
+        this.mutate(record, store => store.beginEmptyRebuild({ operationId: record!.operationId, batch: input }));
         await this.host.storage.deleteAlarm();
         if (current.catalogUpdateId == null) {
           const row = await this.host.env.OPS_DB.prepare(`UPDATE ethereum_reveal_deployments SET catalog_update_id=?,

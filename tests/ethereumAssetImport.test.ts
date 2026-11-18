@@ -12,7 +12,6 @@ import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAsset
 
 const assetDirectory = 'scripts/ethereum-metadata/reveal-assets/111k_devnet';
 const descriptorPath = 'shared/ethereum/revealCatalog.json';
-const sourcePath = new URL(`../${assetDirectory}/source.json`, import.meta.url);
 const digest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const sample = (): Record<string, unknown> => ({
   '3d/1.png': [2048, 2048],
@@ -77,7 +76,7 @@ function interruptImport(options: Parameters<typeof importRevealAssets>[0], dest
 }
 
 test('saved v10 source imports the five categories, partial painting alternatives and balanced egg supply', async () => {
-  const source = await readFile(sourcePath);
+  const source = await readFile(new URL('../releases/111k-catalog-v10/source.json', import.meta.url));
   const catalog = buildRevealAssetCatalog(source, { catalogVersion: '111k-v10' });
   validateRevealAssetCatalog(catalog);
   assert.equal(catalog.version, 2);

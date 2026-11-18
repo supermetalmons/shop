@@ -6,7 +6,7 @@ import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegis
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import type { EthereumArtworkCategory } from '../../../../shared/ethereum/reveal.js';
 import { REVEAL_ENRICHMENT_SLOTS } from './ethereumRevealEnrichmentStore.js';
-import { attributePublisherName, fetchRevealAttributes, InvalidRevealAttributes, MAX_REVEAL_METADATA_BYTES,
+import { attributePublisherName, fetchRevealAttributes, InvalidRevealAttributes, MAX_REVEAL_METADATA_BYTES, revealMetadataFits,
   RevealAttributeSourceUnavailable } from './ethereumRevealAttributes.js';
 import type { RevealPublicationJob } from './ethereumRevealStore.js';
 import { requireRetiredRevealDeployment, requireRevealObjectIdentity } from './ethereumRevealMaintenanceSupport.js';
@@ -156,13 +156,11 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
     if (!Number.isSafeInteger(deadlineMs) || !scope.deploymentId || normalizeEthereumAddress(scope.contractAddress) !== scope.contractAddress) {
       throw new Error('Invalid reveal publication batch.');
     }
-    const encoder = new TextEncoder();
     for (const { write: job } of jobs) {
       ethereumTokenMetadataUri(scope, job.tokenId);
       if (BigInt(job.tokenId) > 111_111n || !Number.isSafeInteger(job.metadataRevision) || job.metadataRevision < 0 ||
         !Array.isArray(job.expectedJsons) || job.expectedJsons.length > 4 || typeof job.allowMissing !== 'boolean' ||
-        [job.metadataJson, ...job.expectedJsons].some(json => typeof json !== 'string' ||
-          json.length > MAX_REVEAL_METADATA_BYTES || encoder.encode(json).byteLength > MAX_REVEAL_METADATA_BYTES)) {
+        ![job.metadataJson, ...job.expectedJsons].every(revealMetadataFits)) {
         throw new Error('Invalid reveal publication metadata.');
       }
     }

@@ -55,6 +55,14 @@ export class EthereumOwnerHatchingReader {
     return this.sql.exec('SELECT 1 FROM owner_hatching_fresh_eggs WHERE egg_id=?', eggId).toArray().length > 0;
   }
 
+  unbackedOrdinaryCount(): number {
+    if (!this.available) return 0;
+    const hasBacking = this.currentSchema || this.sql.exec(
+      "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_ordinary_backing'").toArray().length > 0;
+    const unbacked = hasBacking ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_ordinary_backing b WHERE b.egg_id=f.egg_id)' : '';
+    return this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM owner_hatching_fresh_eggs f WHERE f.token_id IS NULL ${unbacked}`).toArray()[0].n;
+  }
+
   reservedGrail(asset: RevealOriginUnit): boolean {
     if (!this.available) return false;
     return this.sql.exec('SELECT 1 FROM owner_hatching_grails WHERE category=? AND asset_id=?', asset.category, asset.assetId).toArray().length > 0;

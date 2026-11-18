@@ -26,9 +26,9 @@ const deployment: EthereumRevealDeployment = { deploymentId: 'mainnet-empty-cont
   state: 'paused', revision: 5, createdAtMs: 1, updatedAtMs: 5, provisionedAtMs: 2, activatedAtMs: 3, lastError: null };
 const operationId = `empty-${'a'.repeat(32)}`;
 
-function batch(nonce = '11111111-1111-4111-8111-111111111111') {
+function batch(nonce = '11111111-1111-4111-8111-111111111111', descriptor = computeRevealCatalogDescriptor(source)) {
   const body: RevealCatalogUpdateBody = { version: 1, nonce,
-    predecessor: { manifest: source, descriptor: computeRevealCatalogDescriptor(source) },
+    predecessor: { manifest: source, descriptor },
     target: { manifest: target, descriptor: computeRevealCatalogDescriptor(target) },
     mappings: revealCatalogAdditions(source, target).map((row, index) => ({ eggId: target.categories.eggs.count + index + 1, ...row })) };
   const batchSha256 = revealCatalogUpdateHash(body);
@@ -175,6 +175,9 @@ test('empty-pool begin requires mainnet, paused ready inventory, and the current
   assert.deepEqual(f.current(), initial);
   assert.equal(f.kv.size, 0);
   assert.equal(f.fence().status(), null);
+  const { manifestSha256, catalogVersion } = update.predecessor.descriptor;
+  const shuffled = batch(undefined, { manifestSha256, catalogVersion });
+  assert.equal((await f.run('begin', { batch: shuffled })).phase, 'fencing');
 });
 
 for (const initial of [{ catalogVersion: '111k-v7' }, { chainId: 11155111, dropId: '111k_devnet',

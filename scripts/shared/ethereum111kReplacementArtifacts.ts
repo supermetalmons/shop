@@ -6,6 +6,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ETHEREUM_REVEAL_DEPLOYMENTS_SQL, parseEthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
+import { validateMixedAllocationDefinition } from '../../shared/ethereum/revealMixedAllocation.ts';
+import { withRevealAssetImportLock } from '../ethereum-metadata/assetImport.ts';
 import { withMetadataLock } from '../ethereum-metadata/lock.ts';
 import { createAsyncD1MaintenanceQuery } from './asyncD1MaintenanceQuery.ts';
 import type { CommerceAuthorityQuery } from './commerceD1Maintenance.ts';
@@ -21,9 +23,11 @@ type ReleaseLocation = { directory: string; manifestSha256: string };
 type DocumentChange = { path: string; before: string; after: string; replacements: Array<{ before: string; after: string }> };
 type ArtifactPlan = { version: 1; createdAt: string; oldDeployment: ReplacementArtifactScope; newDeployment: ReplacementArtifactScope;
   repositoryRoot: string; homeRoot: string; releaseDirectory: string; sourceRevision: string;
-  artifacts: Target[]; documents: DocumentChange[]; preservedShared: string[] };
+  artifacts: Target[]; documents: DocumentChange[]; preservedShared: string[]; retiredMixedSha256?: string };
 type ArtifactProgress = { version: 1; planSha256: string; complete: boolean; removed: string[] };
 const repositoryDefault = fileURLToPath(new URL('../../', import.meta.url));
+const mixedRegistry = 'shared/ethereum/mixedAllocationReleases.json';
+const mixedJournal = /^([a-z0-9][a-z0-9-]{0,63})\.journal\.json$/;
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const contentHash = (filename: string) => digest(fs.readFileSync(filename));
 const json = (filename: string): Record<string, any> => JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -63,6 +67,24 @@ function matches(data: Record<string, any>, expected: ReplacementArtifactScope) 
 function requireScope(filename: string, expected: ReplacementArtifactScope) {
   noSymlinks(filename);
   assert.ok(matches(json(filename), expected), `Artifact identity does not match the retired deployment: ${filename}`);
+}
+
+function mixedRegistryChange(repository: string, old: ReplacementArtifactScope) {
+  const filename = path.join(repository, mixedRegistry);
+  const entries: unknown = noSymlinks(filename, true) ? json(filename) : [];
+  assert.ok(Array.isArray(entries), 'Invalid mixed release registry');
+  const remaining = [];
+  const retired = [];
+  for (const entry of entries) {
+    validateMixedAllocationDefinition(entry);
+    assert.ok(entry.version === 2, 'Invalid installed mixed release');
+    if (entry.deploymentId === old.deploymentId || entry.metadataBaseUri === old.metadataBaseUri ||
+      (entry.chainId === old.chainId && entry.contractAddress === old.contractAddress)) {
+      assert.ok(matches(entry, old), 'Conflicting mixed release ownership');
+      retired.push(entry);
+    } else remaining.push(entry);
+  }
+  return { remaining: serialized(remaining), retiredSha256: retired.length ? digest(serialized(retired)) : undefined };
 }
 
 function previousReleaseLocation(manifest: Record<string, any>, old: ReplacementArtifactScope,
@@ -197,6 +219,7 @@ function targetPath(target: Pick<Target, 'root' | 'path'>, roots: { repository: 
         `111k-${id}-release`, `111k-${id}-scenes`, `111k-${id}-live-ui`,
       ].includes(parts[1])
       || parts.length === 2 && parts[0] === '.operations' && parts[1] === `111k-${id}-release`
+      || parts.length === 3 && parts[0] === '.operations' && parts[1] === id && mixedJournal.test(parts[2])
       || parts.length === 2 && parts[0] === '.cache' && parts[1].startsWith(`111k-${id}-live-ui-recheck-`)
         && /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/.test(parts[1].slice(`111k-${id}-live-ui-recheck-`.length))
       || parts.length === 3 && parts[0] === '.cache' && parts[1] === '111k-metadata'
@@ -239,7 +262,8 @@ export function uses111kMetadataNamespace(source: string, metadataBaseUri: strin
   return false;
 }
 
-function checkDependencies(repository: string, targets: string[], old: ReplacementArtifactScope, current: ReplacementArtifactScope) {
+function checkDependencies(repository: string, targets: string[], old: ReplacementArtifactScope, current: ReplacementArtifactScope,
+  remainingMixedRegistry: string) {
   const referencePaths = targets.map(target => inside(target, repository)
     ? path.relative(repository, target).split(path.sep).join('/') : target);
   const defaultConsumers = new Set(['shared/ethereum/config.ts', 'onchain/ethereum/script/Deploy111K.s.sol']);
@@ -247,7 +271,7 @@ function checkDependencies(repository: string, targets: string[], old: Replaceme
     if (!/\.(?:[cm]?js|tsx?|py|sol|jsonc?)$/.test(file.relative)
       || /^releases\/.*\.jsonc?$/.test(file.relative)
       || /(?:^|\/)(?:test|tests|__tests__|fixtures|migrations?|ops-migrations|commerce-migrations)(?:\/|\.)|\.test\./.test(file.relative)) continue;
-    const content = fs.readFileSync(file.absolute, 'utf8');
+    const content = file.relative === mixedRegistry ? remainingMixedRegistry : fs.readFileSync(file.absolute, 'utf8');
     const usedPath = referencePaths.find(target => content.includes(target));
     const live = /^(?:src|shared)\//.test(file.relative) || /^cloud\/workers\/[^/]+\/(?:src\/|wrangler\.jsonc$)/.test(file.relative)
       || ['onchain/ethereum/scripts/deploy-local.mjs', 'onchain/ethereum/script/Deploy111K.s.sol'].includes(file.relative);
@@ -305,6 +329,18 @@ async function discover(roots: { repository: string; home: string }, old: Replac
     paths.push(target);
   };
   const publicReleases: string[] = [];
+  for (const filename of children(path.join(roots.repository, '.operations', old.deploymentId))) {
+    const match = mixedJournal.exec(path.basename(filename));
+    if (!match) continue;
+    noSymlinks(filename);
+    const journal = json(filename);
+    if (journal.deploymentId !== old.deploymentId) continue;
+    assert.ok(matches(journal, old) && journal.batchId === match[1] && /^[a-f0-9]{64}$/.test(journal.definitionSha256)
+      && Number.isSafeInteger(journal.expectedRevision) && journal.expectedRevision > 0
+      && Number.isSafeInteger(journal.sourceCatalogRevision) && journal.sourceCatalogRevision >= 0,
+      `Invalid retired mixed release journal: ${filename}`);
+    add('repository', filename);
+  }
   for (const directory of children(path.join(roots.repository, 'releases'))) {
     if (!/^111k-sepolia(?:-[a-z0-9-]+)?$/.test(path.basename(directory))) continue;
     const identity = path.join(directory, 'deployment.json');
@@ -450,6 +486,7 @@ export async function cleanup111kReplacementArtifacts(context: Context, options:
   const progressPath = path.join(releaseDirectory, 'cleanup-artifacts-progress.json');
   const retiredOwners = retiredMetadataOwners(current, options.queryRetiredDeployments ?? createAsyncD1MaintenanceQuery('ops'));
   return withMetadataLock(path.join(releaseDirectory, 'cleanup-artifacts.lock'), async () => {
+    const registry = mixedRegistryChange(roots.repository, old);
     const existingPlan = noSymlinks(planPath, true);
     const location = previousReleaseLocation(frozenManifest, old, roots, !existingPlan);
     let plan: ArtifactPlan;
@@ -462,7 +499,7 @@ export async function cleanup111kReplacementArtifacts(context: Context, options:
     } else {
       const found = await discover(roots, old, current, releaseDirectory, retiredOwners, location, true);
       const targets = found.paths.map(target => targetPath(target, roots, old, location));
-      checkDependencies(roots.repository, targets, old, current);
+      checkDependencies(roots.repository, targets, old, current, registry.remaining);
       const sourceRevision = git(roots.repository, ['rev-parse', 'HEAD']);
       const documents = documentChanges(roots.repository, targets, sourceRevision);
       const artifacts = found.paths.map(target => {
@@ -478,7 +515,7 @@ export async function cleanup111kReplacementArtifacts(context: Context, options:
       });
       plan = { version: 1, createdAt: new Date().toISOString(), oldDeployment: old, newDeployment: current,
         repositoryRoot: roots.repository, homeRoot: roots.home, releaseDirectory, sourceRevision,
-        artifacts, documents, preservedShared: found.preservedShared };
+        artifacts, documents, preservedShared: found.preservedShared, retiredMixedSha256: registry.retiredSha256 };
       atomicWrite(planPath, serialized(plan));
     }
     const planSha256 = contentHash(planPath);
@@ -528,12 +565,14 @@ export async function cleanup111kReplacementArtifacts(context: Context, options:
       targets: targets.length, files: plan.artifacts.reduce((sum, target) => sum + target.files, 0),
       bytes: plan.artifacts.reduce((sum, target) => sum + target.bytes, 0), preservedShared: plan.preservedShared };
     if (progress.complete) {
+      assert.ok(!registry.retiredSha256, 'Retired mixed releases reappeared after completion');
       assert.ok(targets.every(target => !noSymlinks(target, true)), 'Retired artifacts reappeared after completion');
       assert.equal((await discover(roots, old, current, releaseDirectory, retiredOwners, location)).paths.length, 0, 'Additional retired artifacts remain');
       if (options.write) removeIndexes();
       return result;
     }
-    checkDependencies(roots.repository, targets, old, current);
+    if (registry.retiredSha256) assert.equal(registry.retiredSha256, plan.retiredMixedSha256, 'Retired mixed releases changed after artifact planning');
+    checkDependencies(roots.repository, targets, old, current, registry.remaining);
     const indexes = plan.artifacts.map(target => indexRows(target, releaseDirectory));
     for (const [index, target] of targets.entries()) verifyRemaining(target, indexes[index]);
     for (const change of plan.documents) {
@@ -544,6 +583,13 @@ export async function cleanup111kReplacementArtifacts(context: Context, options:
     }
     if (!options.write) return { ...result, complete: false };
     atomicWrite(progressPath, serialized(progress));
+    if (plan.retiredMixedSha256) await withRevealAssetImportLock(roots.repository, async () => {
+      const live = mixedRegistryChange(roots.repository, old);
+      if (!live.retiredSha256) return;
+      assert.equal(live.retiredSha256, plan.retiredMixedSha256, 'Retired mixed releases changed after artifact planning');
+      const filename = path.join(roots.repository, mixedRegistry);
+      atomicWrite(filename, live.remaining, fs.statSync(filename).mode & 0o777);
+    });
     for (const change of plan.documents) {
       const filename = path.join(roots.repository, change.path);
       if (contentHash(filename) === change.after) continue;
@@ -569,6 +615,10 @@ export async function cleanup111kReplacementArtifacts(context: Context, options:
       atomicWrite(progressPath, serialized(progress));
     }
     assert.ok(targets.every(target => !noSymlinks(target, true)), 'Retired artifacts remain');
+    const journalDirectory = path.join(roots.repository, '.operations', old.deploymentId);
+    if (targets.some(target => path.dirname(target) === journalDirectory) && noSymlinks(journalDirectory, true)
+      && !fs.readdirSync(journalDirectory).length) fs.rmdirSync(journalDirectory);
+    assert.ok(!mixedRegistryChange(roots.repository, old).retiredSha256, 'Retired mixed releases remain after cleanup');
     assert.equal((await discover(roots, old, current, releaseDirectory, retiredOwners, location)).paths.length, 0, 'Additional retired artifacts remain outside the approved plan');
     progress = { ...progress, complete: true };
     atomicWrite(progressPath, serialized(progress));

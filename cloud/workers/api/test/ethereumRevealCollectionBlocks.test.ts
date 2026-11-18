@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
+import currentDescriptor from '../../../../shared/ethereum/revealCatalog.json';
+import { REVEAL_ASSET_FAMILIES, revealCatalogAssetId, type RevealAssetCategory } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import source from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/collection-blocks.json';
 import { getRevealCatalog, getRevealCatalogDescriptor } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import { lookupRevealCollectionBlock, selectRevealCollectionBlocks, validateRevealCollectionBlocks } from '../../../../shared/ethereum/revealCollectionBlocks.ts';
@@ -66,17 +68,19 @@ function fixture(t: TestContext, catalogVersion = '111k-v9') {
 test('the bundled lookup resolves every range boundary and bounds each supported catalog', () => {
   const blocks: unknown = source;
   validateRevealCollectionBlocks(blocks);
-  const current = selectRevealCollectionBlocks(blocks, getRevealCatalogDescriptor('111k-v10'));
+  const current = selectRevealCollectionBlocks(blocks, currentDescriptor);
   assert.ok(current);
+  const catalog = getRevealCatalog(currentDescriptor.catalogVersion, currentDescriptor.manifestSha256)!;
   for (const category of ['painting', 'video', '3d', 'animated'] as const) {
-    let first = 1;
+    const media: RevealAssetCategory = catalog.categories[REVEAL_ASSET_FAMILIES[category]];
     const ranges: readonly (readonly [number, string])[] = blocks.ranges[category];
+    let first = 1;
     for (const [last, label] of ranges) {
-      assert.equal(lookupRevealCollectionBlock(current, category, first), label);
-      assert.equal(lookupRevealCollectionBlock(current, category, last), label);
+      assert.equal(lookupRevealCollectionBlock(current, category, revealCatalogAssetId(media, first)), label);
+      assert.equal(lookupRevealCollectionBlock(current, category, revealCatalogAssetId(media, last)), label);
       first = last + 1;
     }
-    assert.equal(lookupRevealCollectionBlock(current, category, first), null);
+    assert.equal(lookupRevealCollectionBlock(current, category, revealCatalogAssetId(media, first - 1) + 1), null);
     assert.equal(lookupRevealCollectionBlock(current, category, 0), null);
   }
   assert.equal(lookupRevealCollectionBlock(current, 'egg', 1), null);

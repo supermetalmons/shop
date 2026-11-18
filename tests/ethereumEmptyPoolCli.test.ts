@@ -1,10 +1,11 @@
+import registry from '../shared/ethereum/mixedAllocationReleases.json';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { buildRevealAssetCatalog } from '../scripts/ethereum-metadata/assetImport.ts';
-import { buildRevealCatalogUpdateBatch } from '../scripts/ethereum-metadata/catalogUpdate.ts';
+import { buildRevealCatalogUpdateBatch } from './helpers/historicalCatalogBatch.ts';
 import { emptyPoolMain, parseEmptyPoolArgs } from '../scripts/ethereum-metadata/emptyPoolCli.ts';
 import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../shared/ethereum/revealMaintenance.ts';
 
@@ -109,4 +110,35 @@ test('empty-pool mutations retain their operation lock and reject mismatched res
     transport: async () => ({ ...f.result(), operationId: `empty-${'b'.repeat(32)}` }),
   }), /response identity changed/);
   assert.equal(await readFile(f.journalPath, 'utf8'), before);
+});
+
+test('empty rebuild can select an installed future-only mixed release and rejects owner rewards', async t => {
+  const { getRevealCatalogDescriptor } = await import('../shared/ethereum/revealCatalogRegistry.ts');
+  const { mixedAllocationHash } = await import('../shared/ethereum/revealMixedAllocation.ts');
+  const { emptyPoolRelease } = await import('../shared/ethereum/installedMixedAllocation.ts');
+  const definition = { version: 2, batchId: 'reviewed-prelaunch-fixture', deploymentId: 'prelaunch-fixture', chainId: 1,
+    contractAddress: '0x' + '1'.repeat(40), deploymentBlock: 1, metadataBaseUri: 'https://cdn.mons.shop/111k/prelaunch-fixture/',
+    originCatalogVersion: '111k-v6', predecessor: getRevealCatalogDescriptor('111k-v6')!, target: getRevealCatalogDescriptor('111k-v7')!,
+    sourceSha256: '0'.repeat(64), ownerSupplementSha256: '0'.repeat(64), collectionBlocksSha256: '0'.repeat(64),
+    groups: [{ category: 'painting', collectionBlock: 'fixture collection', firstId: 1, lastId: 1, ownerCount: 0 }],
+    ordinaryCount: 0 };
+  (registry as unknown[]).push(definition);
+  t.after(() => { registry.pop(); });
+  const directory = await mkdtemp(join(tmpdir(), '111k-empty-mixed-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'definition.json'), JSON.stringify(definition));
+  const identity = { batchId: definition.batchId, batchSha256: mixedAllocationHash(definition), version: 'mixed' };
+  const request = { action: 'begin', deploymentId: definition.deploymentId, expectedRevision: 1, operationId: 'empty-' + '0'.repeat(32), batch: identity };
+  assert.equal(emptyPoolRelease(identity.batchId, identity.batchSha256, definition.deploymentId).batchId, identity.batchId);
+  assert.throws(() => emptyPoolRelease(identity.batchId, identity.batchSha256, 'unrelated'));
+  assert.throws(() => emptyPoolRelease(identity.batchId, '0'.repeat(64), definition.deploymentId));
+  let inspected = false;
+  await emptyPoolMain(['inspect', '--bundle', directory, '--deployment-id', definition.deploymentId, '--operation-id', request.operationId, '--expected-revision', '1'], {
+    transport: async input => { inspected = true; assert.equal(input.action, 'inspect');
+      return { deploymentId: definition.deploymentId, operationId: request.operationId, phase: 'unstarted', complete: false,
+        catalogRevision: 1, seeded: 0, total: 111111, fenceActive: false, retryAfterMs: 0 }; },
+  });
+  assert.ok(inspected);
+  definition.groups[0].ownerCount = 1;
+  assert.throws(() => emptyPoolRelease(identity.batchId, mixedAllocationHash(definition), definition.deploymentId), /future-only/);
 });

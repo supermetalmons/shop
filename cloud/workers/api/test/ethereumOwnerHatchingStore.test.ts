@@ -141,6 +141,30 @@ test('preparation is private, deterministic on retry, and consumes no ordinary r
   assert.throws(() => f.store.prepare({ ...f.input, sourceSha256: 'b'.repeat(64) }), /replay changed/);
 });
 
+test('mixed activation writes each canonical egg before reading the next and rolls back a late failure', t => {
+  const f = fixture(t);
+  const tokenIds = Array.from({ length: 2000 }, (_, index) => String(index + 1));
+  const input = { ...f.input, candidateTokenIds: tokenIds, readyCount: tokenIds.length, freshEggIds: [],
+    grails: tokenIds.map(id => ({ category: 'painting' as const, assetId: Number(id) })) };
+  const countWrites = f.database.prepare('SELECT COUNT(*) AS count FROM owner_hatching_tokens');
+  const padding = 'x'.repeat(80 * 1024);
+  let fail = true;
+  t.mock.method(f.store, 'eligibleCandidate', (tokenId: string) => {
+    const index = Number(tokenId) - 1;
+    assert.equal(countWrites.get()!.count, index);
+    if (fail && index === tokenIds.length - 1) return null;
+    const original = canonical(tokenId, Number(tokenId));
+    if (index < 32) original.expectedJsons[0] = JSON.stringify({ name: tokenId, description: padding });
+    return original;
+  });
+  assert.throws(() => f.store.prepare(input, 1000, { frozenOrder: true }), /Not enough eligible/);
+  assert.equal(countWrites.get()!.count, 0);
+  assert.equal(f.store.reader.batchStatus(input.batchId), null);
+  fail = false;
+  assert.equal(f.store.prepare(input, 1000, { frozenOrder: true }).readyCount, tokenIds.length);
+  assert.equal(f.store.prepare(input, 2000, { frozenOrder: true }).readyCount, tokenIds.length);
+});
+
 test('bulk owner reads preserve canonical payloads and slot order across bounded pages', t => {
   const f = fixture(t);
   f.store.prepare(f.input, 1000);

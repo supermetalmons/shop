@@ -168,9 +168,9 @@ ratios; use the returned ratio instead of assuming a fixed widescreen frame.
 
 New assignments use a soft cap of six eggs per crate, including the final
 31-artwork crate. Once the current allocation reaches six eggs, additional
-draws use non-egg categories while any have free inventory. Eggs can exceed the
-cap when free non-egg inventory is exhausted; assets reserved by other crates
-are unavailable. Eligible categories retain their original catalog weights.
+draws use non-egg categories while any artwork is available to crates. Eggs can
+exceed the cap when the remaining non-egg inventory is reserved for other crates
+or needed to fulfill outstanding ordinary owner hatches. Eligible categories retain their original catalog weights.
 Existing reservations and revealed artwork are preserved, even if they already
 exceed the cap. Historical frozen assignments outside the current unpack's token
 range do not count toward its limit.
@@ -181,8 +181,9 @@ only with the same or a higher token revision. Revisions encode the assignment
 revision and publication stage, so delayed base metadata cannot replace newer
 artwork or enriched traits. Use current inventory data for ownership.
 
-An online catalog update replaces cutoff eggs using a frozen random mapping,
-without changing token IDs or stopping reads and reveals. Config and inventory
+Mixed allocation marks selected minted eggs ready and places additional artworks
+in free egg slots for future reveals. A revealed egg changes to artwork only when
+its current owner signs a hatch claim. Config and inventory
 envelopes retain `catalogRevision` as a refresh signal. On advancement, keep the
 visible inventory and pending transaction tracking while refreshing owned tokens
 in the background. A pagination boundary crossing activation can be retried

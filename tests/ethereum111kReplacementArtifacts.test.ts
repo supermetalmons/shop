@@ -153,6 +153,60 @@ test('interrupted per-file deletion resumes from checksum-proven remaining files
   assert.ok(fs.existsSync(f.signedJournal));
 });
 
+test('retirement plans, prunes and verifies only the superseded mixed definitions and journals', async t => {
+  const f = fixture(t);
+  const release = (deployment: ReplacementArtifactScope, batchId: string) => {
+    const descriptor = { catalogVersion: '111k-v10', manifestSha256: 'a'.repeat(64) };
+    return { ...deployment, version: 2, batchId, deploymentBlock: 1, originCatalogVersion: '111k-v10',
+      predecessor: descriptor, target: descriptor, sourceSha256: 'b'.repeat(64), collectionBlocksSha256: 'c'.repeat(64),
+      ownerSupplementSha256: 'd'.repeat(64), groups: [], ordinaryCount: 1 };
+  };
+  const mainnet = release({ ...old, chainId: 1, deploymentId: 'mainnet-v1', metadataBaseUri: 'https://cdn.mons.shop/111k/' }, 'mainnet-batch');
+  const replacement = release(current, 'v17-batch');
+  const retired = release(old, 'v16-batch');
+  const entries = [retired, mainnet, release(old, 'v16-second'), replacement];
+  const registry = f.write('shared/ethereum/mixedAllocationReleases.json', entries);
+  const journal = (entry: typeof retired) => f.write(`.operations/${entry.deploymentId}/${entry.batchId}.journal.json`, {
+    deploymentId: entry.deploymentId, batchId: entry.batchId, chainId: entry.chainId, contractAddress: entry.contractAddress,
+    metadataBaseUri: entry.metadataBaseUri, deploymentBlock: entry.deploymentBlock, sourceSha256: entry.sourceSha256,
+    predecessorVersion: entry.predecessor.catalogVersion, predecessorSha256: entry.predecessor.manifestSha256,
+    targetVersion: entry.target.catalogVersion, targetSha256: entry.target.manifestSha256,
+    definitionSha256: createHash('sha256').update(JSON.stringify(entry)).digest('hex'), expectedRevision: 3, sourceCatalogRevision: 1,
+  });
+  const oldJournal = journal(retired);
+  const keep = [journal(mainnet), journal(replacement), f.newMetadata,
+    f.write('scripts/ethereum-metadata/reveal-assets/111k_devnet/source.json', { shared: true })];
+  const before = keep.map(filename => fs.readFileSync(filename));
+  const planned = await f.run();
+  assert.ok(fs.existsSync(oldJournal));
+  assert.deepEqual(JSON.parse(fs.readFileSync(registry, 'utf8')), entries);
+  const extra = release(current, 'v17-second');
+  f.write('shared/ethereum/mixedAllocationReleases.json', entries.map(row => row === retired ? { ...row, ordinaryCount: 2 } : row));
+  await assert.rejects(f.run(true), /Retired mixed releases changed after artifact planning/);
+  assert.ok(fs.existsSync(oldJournal));
+  f.write('shared/ethereum/mixedAllocationReleases.json', [...entries, extra]);
+  const unlink = fs.unlinkSync;
+  const interrupted = mockMethod(t, fs, 'unlinkSync', filename => {
+    if (filename === oldJournal) throw new Error('Interrupted mixed journal removal');
+    unlink(filename);
+  });
+  await assert.rejects(f.run(true), /Interrupted mixed journal removal/);
+  interrupted.mock.restore();
+  assert.deepEqual(JSON.parse(fs.readFileSync(registry, 'utf8')), [mainnet, replacement, extra]);
+  assert.ok(fs.existsSync(oldJournal));
+  const completed = await f.run(true);
+  assert.equal(completed.complete, true);
+  assert.equal(completed.planSha256, planned.planSha256);
+  assert.equal(fs.existsSync(path.dirname(oldJournal)), false);
+  for (const [index, filename] of keep.entries()) assert.deepEqual(fs.readFileSync(filename), before[index]);
+  assert.equal((await f.run()).complete, true);
+  journal(retired);
+  await assert.rejects(f.run(), /Retired artifacts reappeared/);
+  fs.unlinkSync(oldJournal);
+  f.write('shared/ethereum/mixedAllocationReleases.json', entries);
+  await assert.rejects(f.run(), /Retired mixed releases reappeared/);
+});
+
 test('changed, injected and symlinked old artifacts abort before any deletion', async t => {
   const f = fixture(t);
   await f.run();

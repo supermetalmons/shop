@@ -1,38 +1,46 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parseArgs } from 'node:util';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { mixedAllocationControlMain } from '../ops/ethereumMixedAllocationControl.ts';
+import { parseEthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
+import { mixedAllocationHash, validateMixedAllocationDefinition, type MixedAllocationDefinition } from '../../shared/ethereum/revealMixedAllocation.ts';
 import { build } from 'esbuild';
 import { Log, LogLevel, Miniflare, type MiniflareOptions } from 'miniflare';
 import { unstable_splitSqlQuery } from 'wrangler';
 import { buildEthereumRevealRegistration } from '../ops/ethereumRevealControl.ts';
 import { ethereumSignerAddress, personalMessageHash, signDigest } from '../../shared/ethereum/crypto.ts';
 import { ETHEREUM_OWNER_HATCHING_MESSAGE } from '../../shared/ethereum/ownerHatching.ts';
-import { MIXED_MAINNET_BATCH_ID, type MixedAllocationMaintenanceResult } from '../../shared/ethereum/mixedAllocationMaintenance.ts';
-import { getRevealCatalog } from '../../shared/ethereum/revealCatalogRegistry.ts';
+import { MIXED_ALLOCATION_DEFINITION_SHA256, MIXED_MAINNET_BATCH_ID } from '../../shared/ethereum/mixedAllocation20261117.ts';
+import { mixedAllocationScope, type MixedAllocationMaintenanceResult } from '../../shared/ethereum/mixedAllocationMaintenance.ts';
+import { getRevealCatalog, getSupportedRevealCatalogVersions } from '../../shared/ethereum/revealCatalogRegistry.ts';
 import artworkTemplate from './templates/artwork.json';
 import { inspectMixedAllocation } from './mixedAllocation.ts';
 
 type Release = Awaited<ReturnType<typeof inspectMixedAllocation>>;
+const ownerKey = `0x${'11'.repeat(32)}`;
 type Inventory = { revision: number; free: number; reserved: number; frozen: number; freeEggs: number };
 type Snapshot = { inventory: Inventory; fingerprint: string; ready: number; hatched: number };
-type AllocationCount = { collection: string; owner: number; future: number };
 type Stage = { metadataStaged: number; generationSeeded: number; phase: string };
 
-export async function rehearseMixedAllocation(release: Release) {
+type FixtureRelease = Pick<Release, 'predecessor' | 'targetCatalog' | 'ownerSupplement' | 'collectionBlocks'> & { definition: MixedAllocationDefinition };
+
+async function createMixedFixture(release: FixtureRelease) {
   const origin = getRevealCatalog('111k-v8');
-  assert.ok(origin, 'The rehearsal requires the original mainnet v8 catalog.');
+  const ancestors = release.definition.version === 1 ? [origin, release.predecessor] :
+    [...getSupportedRevealCatalogVersions().filter(v => v !== release.targetCatalog.catalogVersion && v !== release.predecessor.catalogVersion).map(v => getRevealCatalog(v)), release.predecessor];
   const bindings: Record<string, unknown> = {
     'manifest.json': release.targetCatalog, 'revealCatalog.json': release.definition.target,
-    'revealCatalogAncestors.json': [origin, release.predecessor],
+    'revealCatalogAncestors.json': ancestors,
     'ownerHatchingCatalog.json': release.ownerSupplement, 'collection-blocks.json': release.collectionBlocks
   };
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const workerName = 'local-mixed-review';
   const output = await build({
     entryPoints: [resolve(root, 'cloud/workers/api/runtime-test/mixedAllocationFixtureWorker.ts')],
+    define: { REHEARSAL_DEFINITION: JSON.stringify(release.definition) },
     bundle: true, write: false, target: 'es2022', platform: 'neutral', format: 'esm', external: ['cloudflare:workers', 'node:*'],
     plugins: [{
       name: 'local-candidate-catalog', setup(plugin) {
@@ -42,7 +50,6 @@ export async function rehearseMixedAllocation(release: Release) {
       }
     }]
   });
-  const ownerKey = `0x${'11'.repeat(32)}`;
   const options = (restart: number): MiniflareOptions => ({
     log: new Log(LogLevel.WARN), workers: [{
       config: {
@@ -67,14 +74,82 @@ export async function rehearseMixedAllocation(release: Release) {
     if (!response.ok) throw new Error(`${path}: ${await response.text()}`);
     return response.json() as Promise<T>;
   };
-  const contractAddress = '0x08cded8258730bda384ff198001e47a1b50f7f9d';
   const restart = () => runtime.setOptions(options(++runtimeRevision));
+  return { request, runtime, restart, root };
+}
+
+async function fixtureRegistry(runtime: Miniflare, root: string) {
+  const db = await runtime.getD1Database('OPS_DB');
+  for (const migration of ['0009_ethereum_reveal_deployments', '0011_ethereum_reveal_retirement', '0012_ethereum_reveal_catalog_updates', '0013_mixed_allocation_revisions']) {
+    const sql = await readFile(resolve(root, `cloud/workers/api/ops-migrations/${migration}.sql`), 'utf8');
+    await db.batch(unstable_splitSqlQuery(sql).map(statement => db.prepare(statement)));
+  }
+  return db;
+}
+
+export async function rehearsePreparedMixedRelease(release: FixtureRelease) {
+  const { definition } = release;
+  if (definition.version !== 2) throw new Error('Reusable rehearsal requires a prepared mixed release.');
+  const { runtime, root, request } = await createMixedFixture(release);
+  const dir = await mkdtemp(join(tmpdir(), 'mixed-rehearsal-'));
   try {
-    const db = await runtime.getD1Database('OPS_DB');
-    for (const migration of ['0009_ethereum_reveal_deployments', '0011_ethereum_reveal_retirement', '0012_ethereum_reveal_catalog_updates']) {
-      const sql = await readFile(resolve(root, `cloud/workers/api/ops-migrations/${migration}.sql`), 'utf8');
-      await db.batch(unstable_splitSqlQuery(sql).map(statement => db.prepare(statement)));
-    }
+    const scope = mixedAllocationScope(definition);
+    const db = await fixtureRegistry(runtime, root);
+    const templateJson = JSON.stringify(artworkTemplate);
+    const upgraded = definition.originCatalogVersion !== definition.predecessor.catalogVersion;
+    await db.prepare(buildEthereumRevealRegistration({ ...scope, dropId: scope.chainId === 1 ? '111k' : '111k_devnet',
+      catalogVersion: definition.originCatalogVersion, templateJson,
+      templateSha256: createHash('sha256').update(templateJson).digest('hex') })).run();
+    await db.prepare(`UPDATE ethereum_reveal_deployments SET state='active',revision=2,provisioned_at_ms=2,activated_at_ms=3,
+      catalog_update_id=?,catalog_update_started_at_ms=?`).bind(upgraded ? 'local-base' : null, upgraded ? 2 : null).run();
+    if (upgraded) await db.prepare(`UPDATE ethereum_reveal_deployments SET revision=3,catalog_revision=1,effective_catalog_version=?,
+      effective_catalog_sha256=?,catalog_update_id=NULL,catalog_update_started_at_ms=NULL`)
+      .bind(definition.predecessor.catalogVersion, definition.predecessor.manifestSha256).run();
+    await request('seed');
+    await request('seed-metadata');
+    const assignments = await request<string>('assignment-fingerprint');
+    let localTime = 0;
+    const result = await mixedAllocationControlMain(['apply','--write','--deployment-id',scope.deploymentId,
+      '--batch-id',scope.batchId,'--expected-revision',upgraded ? '3' : '2','--journal',join(dir, 'journal.json')], {
+      installed: () => ({ definition, targetCatalog: release.targetCatalog }),
+      registry: async () => parseEthereumRevealDeployment((await db.prepare('SELECT * FROM ethereum_reveal_deployments').first())!),
+      preflight: async () => ({ mediaObjects: 0, traitSources: 0, checkedAt: new Date().toISOString(), definitionSha256: mixedAllocationHash(definition) }),
+      transport: async input => {
+        if (input.action === 'verify') await request('publish-page');
+        return request(`operation/${input.action}`, { expectedRevision: input.expectedRevision, definitionSha256: input.definitionSha256 });
+      },
+      sleep: async ms => { if (ms > 2000) { await request('advance-clock'); localTime += 300_001; } },
+      now: () => Date.now() + localTime,
+    });
+    assert.ok(result.complete && result.hatched === 0);
+    assert.equal(await request<string>('assignment-fingerprint'), assignments);
+    return { runtime: 'local Miniflare with SQLite, D1, R2 and simulated chain and traits', batchId: scope.batchId,
+      ready: result.readyCount, preassigned: result.grailCount, future: result.futureCount,
+      supply: result.generationSeeded, published: result.published, verificationPasses: result.verificationPasses };
+  } finally {
+    await runtime.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+export async function rehearseMixedBundle(bundle: string) {
+  const definition: unknown = JSON.parse(await readFile(join(bundle, 'definition.json'), 'utf8'));
+  validateMixedAllocationDefinition(definition);
+  if (definition.version === 1) {
+    if (mixedAllocationHash(definition) !== MIXED_ALLOCATION_DEFINITION_SHA256) throw new Error('Unrecognized historical mixed release.');
+    const release = await inspectMixedAllocation(join(bundle, 'original-input.json'));
+    if (mixedAllocationHash(release.definition) !== MIXED_ALLOCATION_DEFINITION_SHA256) throw new Error('Historical mixed source does not reproduce its release.');
+    return rehearseMixedAllocation(release);
+  }
+  const { readPreparedMixedRelease } = await import('./mixedAllocation.ts');
+  return rehearsePreparedMixedRelease(await readPreparedMixedRelease(bundle));
+}
+
+async function rehearseMixedAllocation(release: Release) {
+  const { request, runtime, restart, root } = await createMixedFixture(release);
+  const contractAddress = '0x08cded8258730bda384ff198001e47a1b50f7f9d';
+  try {
+    const db = await fixtureRegistry(runtime, root);
     const templateJson = JSON.stringify(artworkTemplate);
     await db.prepare(buildEthereumRevealRegistration({
       deploymentId: 'mainnet-v1', dropId: '111k', chainId: 1, contractAddress,
@@ -157,16 +232,14 @@ export async function rehearseMixedAllocation(release: Release) {
     assert.deepEqual(await request('snapshot'), before);
     await assert.rejects(request('interrupt-activation'), /fixture activation interruption/);
     assert.deepEqual(await request('snapshot'), before);
-    const acceptanceBlock = await request<number>('redeem-selected');
+    await request('redeem-selected');
     await restart();
     const refill = await request<MixedAllocationMaintenanceResult>('operation/activate');
     assert.equal(refill.phase, 'activating');
     assert.equal(refill.activationSelected, 423);
     assert.deepEqual(await request('snapshot'), before);
-    const activationStarted = performance.now();
     await failTransition('NEW.catalog_revision>OLD.catalog_revision');
     await assert.rejects(request('operation/activate'), /fixture registry failure/);
-    const localActivationMs = Math.round(performance.now() - activationStarted);
     assert.equal((await request<MixedAllocationMaintenanceResult>('operation/status')).phase, 'publishing');
     assert.deepEqual(await registry(), { state: 'active', revision: 5, catalog_update_id: MIXED_MAINNET_BATCH_ID, catalog_revision: 1 });
     await unlock();
@@ -181,7 +254,7 @@ export async function rehearseMixedAllocation(release: Release) {
     assert.equal(before.inventory.freeEggs - activated.inventory.freeEggs, 6162);
     assert.equal(activated.inventory.reserved, before.inventory.reserved);
     assert.equal(activated.inventory.frozen, before.inventory.frozen);
-    const allocation = await request<AllocationCount[]>('assert-allocation');
+    await request('assert-allocation');
     await restart();
     await request('activate');
     assert.deepEqual(await request('snapshot'), activated);
@@ -246,6 +319,7 @@ export async function rehearseMixedAllocation(release: Release) {
     const audit = await request<{ verification_passes: number }>('complete-audit');
     assert.equal(audit.verification_passes, 3);
     const final = await request<Snapshot>('snapshot');
+    assert.deepEqual([final.ready, final.hatched], [422, 2]);
     const next = await request<{ catalogVersion: string; manifestSha256: string }>('later-catalog');
     const laterDb = await runtime.getD1Database('OPS_DB');
     await laterDb.prepare("UPDATE ethereum_reveal_deployments SET revision=8,catalog_update_id='fixture-next',catalog_update_started_at_ms=8").run();
@@ -278,6 +352,7 @@ export async function rehearseMixedAllocation(release: Release) {
     assert.equal(limited.freeEggs, 6161);
     await assert.rejects(request('capacity-activate', {}, 'limited'), /free egg/i);
     assert.deepEqual(await request('inventory-only', {}, 'limited'), limited);
+    await request('late-claim-after-free-slot-swap', {}, 'limited');
     let cancellation = await request<{ cancelled: boolean; remaining: number }>('cancel', {}, 'limited');
     while (cancellation.remaining) {
       const next = await request<typeof cancellation>('cancel', {}, 'limited');
@@ -286,23 +361,9 @@ export async function rehearseMixedAllocation(release: Release) {
     }
     assert.equal(cancellation.cancelled, true);
     assert.deepEqual(await request('inventory-only', {}, 'limited'), limited);
-    return {
-      runtime: 'local Miniflare with SQLite, D1, and R2', registryOrigin: '111k-v8', fixturePredecessor: '111k-v9', sourceSha256: release.definition.sourceSha256, ...release.summary,
-      allocation, atActivation: activated.inventory, exchangedFreeEggs: before.inventory.freeEggs - activated.inventory.freeEggs,
-      automaticFrozenOrReservedConversions: 0, publishedInFixture: publication.published, ordinaryCrateMetadataVerified: publication.cratePublished,
-      fixtureVerificationPasses: audit.verification_passes, acceptanceBlock, localActivationMs, observationClockAdvancedMs: 300001, stagingCleaned: true,
-      afterTwoOwnerClaims: { ready: final.ready, hatched: final.hatched, inventory: final.inventory },
-      exercised: ['D1 initial claim loss, mirror and release retries under active traffic', 'canonical minted scan and activation snapshot reorg recovery', 'reordered begin replay', 'redeemed candidate replaced at a fresh canonical cutoff', 'local R2 verification across a scheduler interval, concurrent hatch at completion and later catalog audit', 'staging restart', 'ordinary reveal, release, and earlier hatch during staging', 'reservation after sealing',
-        'insufficient eligible minted eggs', 'rollback after injected activation failure', 'activation replay after restart',
-        'future crate and earlier owner draw from shared additions', 'unauthorized owner rejection', 'signed GAN and painting claims with idempotent replay',
-        'free-egg capacity checks before begin and at cutover', 'cancelled candidate with intact predecessor']
-    };
+    return { runtime: 'local Miniflare with SQLite, D1 and R2', batchId: MIXED_MAINNET_BATCH_ID,
+      ready: activated.ready, preassigned: release.summary.ownerCount, future: before.inventory.freeEggs - activated.inventory.freeEggs,
+      supply: activated.inventory.free + activated.inventory.reserved + activated.inventory.frozen,
+      published: publication.published, verificationPasses: audit.verification_passes };
   } finally { await runtime.dispose(); }
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const { values } = parseArgs({ options: { source: { type: 'string' } } });
-  if (!values.source) throw new Error('Usage: rehearseMixedAllocation --source /path/to/111k.json');
-  const report = await rehearseMixedAllocation(await inspectMixedAllocation(resolve(values.source)));
-  console.log(JSON.stringify(report, null, 2));
 }

@@ -1,14 +1,28 @@
 import { bytesToHex } from '@noble/hashes/utils';
 import { sha256 } from '@noble/hashes/sha256';
 import { REVEAL_ENRICHMENT_VERSION, type EthereumArtworkCategory } from '../../../../shared/ethereum/reveal.js';
-import { REVEAL_ASSET_FAMILIES } from '../../../../shared/ethereum/revealAssetCatalog.js';
-import { cancelResponseBody, readBoundedResponseJson, type ResponseBodyFailure } from './boundedResponse.js';
+import { REVEAL_ASSET_FAMILIES, revealCatalogAssetOrdinal } from '../../../../shared/ethereum/revealAssetCatalog.js';
+import { cancelResponseBody, readBoundedResponseBytes, readBoundedResponseJson, type ResponseBodyFailure } from './boundedResponse.js';
 import { metadataNumber, parseMetadataJson } from './ethereumMetadataJson.js';
-import { REVEAL_CATEGORY_COUNTS } from './ethereumRevealCatalog.js';
+import defaultCatalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 import type { RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 
 export const MAX_REVEAL_METADATA_BYTES = 512 * 1024;
+
+export async function readPublishedRevealMetadata(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+  if (response.status !== 200 || response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json' ||
+    !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(response.headers.get('Cache-Control') ?? '')) {
+    await cancelResponseBody(response);
+    throw new Error('Invalid public metadata headers.');
+  }
+  return readBoundedResponseBytes(response, { maxBytes: MAX_REVEAL_METADATA_BYTES, signal, createError: () => new Error('Invalid public metadata.') });
+}
+
+export function revealMetadataFits(value: unknown): boolean {
+  return typeof value === 'string' && value.length <= MAX_REVEAL_METADATA_BYTES &&
+    new TextEncoder().encode(value).byteLength <= MAX_REVEAL_METADATA_BYTES;
+}
 
 export class InvalidRevealAttributes extends Error {}
 
@@ -37,7 +51,7 @@ export async function fetchRevealAttributePayload(category: EthereumArtworkCateg
   signal: AbortSignal, fetchSource: typeof fetch = fetch, catalog?: RevealAssetCatalog, ownerHatching = false): Promise<string> {
   if (category === 'egg' || !Object.hasOwn(REVEAL_ASSET_FAMILIES, category) ||
     !Number.isSafeInteger(assetId) || assetId < 1 ||
-    assetId > (catalog?.categories[REVEAL_ASSET_FAMILIES[category]].count ?? REVEAL_CATEGORY_COUNTS[category]) &&
+    !revealCatalogAssetOrdinal((catalog ?? defaultCatalog).categories[REVEAL_ASSET_FAMILIES[category]], assetId) &&
       !(ownerHatching && getOwnerHatchingGrail(category, assetId))) {
     throw new InvalidRevealAttributes('Invalid trait source identity.');
   }
@@ -66,7 +80,7 @@ export async function fetchRevealAttributePayload(category: EthereumArtworkCateg
 }
 
 export function applyRevealAttributePayload(baseJson: string, attributesJson: string): { metadataJson: string; metadataSha256: string } {
-  if (typeof attributesJson !== 'string' || new TextEncoder().encode(attributesJson).byteLength > MAX_REVEAL_METADATA_BYTES) {
+  if (!revealMetadataFits(attributesJson)) {
     throw new InvalidRevealAttributes('Invalid frozen attribute payload.');
   }
   let payload: unknown;
@@ -93,6 +107,13 @@ export function applyRevealAttributePayload(baseJson: string, attributesJson: st
   const bytes = new TextEncoder().encode(metadataJson);
   if (bytes.length > MAX_REVEAL_METADATA_BYTES) throw new EnrichedRevealMetadataTooLarge('Enriched metadata exceeds 512 KiB.');
   return { metadataJson, metadataSha256: bytesToHex(sha256(bytes)) };
+}
+
+export function validateStagedRevealMetadata(base: { metadataJson: string; placeholderJson: string }, traits: string): void {
+  if (!revealMetadataFits(base.metadataJson) || !revealMetadataFits(base.placeholderJson)) {
+    throw new InvalidRevealAttributes('Base or placeholder metadata exceeds 512 KiB.');
+  }
+  applyRevealAttributePayload(base.metadataJson, traits);
 }
 
 export async function fetchRevealAttributes(category: EthereumArtworkCategory, assetId: number, baseJson: string,

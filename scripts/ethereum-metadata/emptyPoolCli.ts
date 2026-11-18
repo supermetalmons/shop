@@ -1,3 +1,5 @@
+import { emptyPoolRelease } from '../../shared/ethereum/installedMixedAllocation.ts';
+import { mixedAllocationHash, validateMixedAllocationDefinition } from '../../shared/ethereum/revealMixedAllocation.ts';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -33,10 +35,25 @@ export function parseEmptyPoolArgs(argv: string[]) {
 
 type EmptyPoolTransport = (request: EthereumRevealEmptyPoolRequest) => Promise<EthereumRevealEmptyPoolResult>;
 
+async function readEmptyPoolBundle(directory: string, deploymentId: string): Promise<NonNullable<EthereumRevealEmptyPoolRequest['batch']>> {
+  let definitionBytes: string;
+  try { definitionBytes = await readFile(join(directory, 'definition.json'), 'utf8'); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return (await readRevealCatalogUpdateBundle(directory)).batch;
+  }
+  const definition: unknown = JSON.parse(definitionBytes);
+  validateMixedAllocationDefinition(definition);
+  if (definition.version !== 2) throw new Error('Empty-pool rebuild requires a future-only release.');
+  const batchSha256 = mixedAllocationHash(definition);
+  emptyPoolRelease(definition.batchId, batchSha256, deploymentId);
+  return { version: 'mixed', batchId: definition.batchId, batchSha256 };
+}
+
 export async function emptyPoolMain(argv: string[], dependencies: { transport?: EmptyPoolTransport } = {}): Promise<EthereumRevealEmptyPoolResult> {
   const options = parseEmptyPoolArgs(argv);
   if (options.command === 'apply' || options.command === 'cancel') options.directory = privateHatchPath(options.directory);
-  const { batch } = await readRevealCatalogUpdateBundle(options.directory);
+  const batch = await readEmptyPoolBundle(options.directory, options.deploymentId);
   const request = { deploymentId: options.deploymentId, operationId: options.operationId, expectedRevision: options.expectedRevision };
   const journalPath = join(options.directory, `${options.deploymentId}.empty-pool.journal.json`);
   const run = async () => {

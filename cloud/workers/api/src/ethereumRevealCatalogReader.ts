@@ -3,7 +3,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import type { EthereumArtworkCategory, EthereumRevealedArtwork } from '../../../../shared/ethereum/reveal.js';
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.js';
-import type { RevealAssetCatalog, RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
+import { REVEAL_ASSET_FAMILIES, revealCatalogAssetId, revealCatalogAssetOrdinal, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import { getRevealCatalog, getRevealCatalogDescriptor } from '../../../../shared/ethereum/revealCatalogRegistry.js';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
@@ -41,13 +41,13 @@ export function validateCatalogPageSize(value: number, maximum = 256): void {
 }
 
 export class EthereumRevealCatalogReader {
-  private originCounts: { generation: string | null; counts: Record<EthereumArtworkCategory, number> } | undefined;
+  private originCounts: { generation: string | null; catalog: RevealAssetCatalog; counts: Record<EthereumArtworkCategory, number> } | undefined;
   private mappingOriginsAvailable: boolean | undefined;
   private mixedAssetsAvailable = false;
   private readonly catalogs = new Map<string, RevealAssetCatalog>();
   readonly ownerHatching: EthereumOwnerHatchingReader;
 
-  constructor(private readonly sql: RevealSql) {
+  constructor(protected readonly sql: RevealSql) {
     this.ownerHatching = new EthereumOwnerHatchingReader(sql);
   }
 
@@ -59,18 +59,41 @@ export class EthereumRevealCatalogReader {
     this.originCounts = undefined;
   }
 
-  freshOwnerEggAvailable(eggId: number): boolean {
+  freshEggBounds(): { lastIssued: number; maximum: number } {
     const saved = this.settings();
-    if (!saved) return false;
-    const deployment = JSON.parse(saved.deployment_json) as EthereumRevealDeployment;
-    const original = getRevealCatalog(deployment.catalogVersion);
-    return Number.isSafeInteger(eggId) && eggId > Math.max(original?.categories.eggs.count ?? Infinity,
-      this.activeCatalog().categories.eggs.count) && eggId <= this.activeCatalog().importSettings.availableEggs &&
-      !this.ownerHatching.usedFreshEgg(eggId) && !this.ownerHatching.isRetiredEgg(eggId);
+    if (!saved) return { lastIssued: 0, maximum: 0 };
+    const original = getRevealCatalog((JSON.parse(saved.deployment_json) as EthereumRevealDeployment).catalogVersion);
+    if (!original) throw new Error('Original catalog is unavailable.');
+    const current = this.activeCatalog();
+    return { lastIssued: Math.max(original.categories.eggs.count, this.originalCounts().egg, current.categories.eggs.count),
+      maximum: current.importSettings.availableEggs };
   }
 
-  private hasTable(name: string): boolean {
-    return this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", name).toArray().length > 0;
+  requireMixedCapacity(futureCount: number, ordinaryCount: number): void {
+    const pools = this.pools();
+    if ((pools.find(pool => pool.category === 'egg')?.available ?? 0) < futureCount) throw new Error('Not enough free eggs for mixed allocation.');
+    if (ordinaryCount) {
+      const nonEgg = pools.reduce((sum, pool) => sum + (pool.category === 'egg' ? 0 : pool.available), 0);
+      if (nonEgg + futureCount < this.ownerHatching.unbackedOrdinaryCount() + ordinaryCount) {
+        throw new Error('Not enough available artworks for ordinary owner hatches.');
+      }
+    }
+  }
+
+  requireFreshEggInventory(count: number) {
+    const { lastIssued, maximum } = this.freshEggBounds();
+    const used = new Set(this.ownerHatching.available ? this.sql.exec<{ egg_id: number }>(`
+      SELECT egg_id FROM owner_hatching_fresh_eggs WHERE egg_id>? AND egg_id<=?
+      UNION SELECT egg_id FROM owner_hatching_retired_eggs WHERE egg_id>? AND egg_id<=?`,
+      lastIssued, maximum, lastIssued, maximum).toArray().map(row => row.egg_id) : []);
+    if (maximum - lastIssued - used.size < count) throw new Error('Insufficient unused fresh egg inventory.');
+    return { lastIssued, maximum, used };
+  }
+
+  freshOwnerEggAvailable(eggId: number): boolean {
+    const { lastIssued, maximum } = this.freshEggBounds();
+    return Number.isSafeInteger(eggId) && eggId > lastIssued && eggId <= maximum &&
+      !this.ownerHatching.usedFreshEgg(eggId) && !this.ownerHatching.isRetiredEgg(eggId);
   }
 
   mixedAttributes(batchId: string, asset: RevealOriginUnit): string | undefined {
@@ -155,35 +178,52 @@ export class EthereumRevealCatalogReader {
       effectiveCatalogSha256: effective.manifestSha256, catalogRevision: effective.catalogRevision } : deployment;
   }
 
-  originalCounts(): Record<EthereumArtworkCategory, number> {
+  private originalInventory() {
     const saved = this.settings();
     const generation = saved?.allocation_base_generation ?? null;
-    if (this.originCounts?.generation === generation) return this.originCounts.counts;
+    if (this.originCounts?.generation === generation) return this.originCounts;
     const origin = saved && JSON.parse(saved.deployment_json) as EthereumRevealDeployment | null;
     const catalog = generation ? JSON.parse(this.operation(generation).target_manifest_json) as RevealAssetCatalog
       : origin && getRevealCatalog(origin.catalogVersion);
     if (!catalog) throw new Error('Original catalog is unavailable.');
-    this.originCounts = { generation, counts: revealCatalogCounts(catalog) };
-    return this.originCounts.counts;
+    this.originCounts = { generation, catalog, counts: revealCatalogCounts(catalog) };
+    return this.originCounts;
+  }
+
+  originalCounts(): Record<EthereumArtworkCategory, number> {
+    return this.originalInventory().counts;
   }
 
   ordinal(unit: RevealOriginUnit): number {
-    const original = this.originalCounts();
+    const { catalog, counts } = this.originalInventory();
     let offset = 0;
     for (const category of CATEGORIES) {
-      if (unit.category === category) return offset + unit.assetId;
-      offset += original[category];
+      if (unit.category === category) {
+        const ordinal = revealCatalogAssetOrdinal(catalog.categories[REVEAL_ASSET_FAMILIES[category]], unit.assetId);
+        if (!ordinal) throw new Error('Unknown allocation asset.');
+        return offset + ordinal;
+      }
+      offset += counts[category];
     }
     throw new Error('Unknown allocation unit.');
   }
 
-  unitAt(index: number): RevealOriginUnit {
-    const original = this.originalCounts();
+  originPage(index: number, maximum: number) {
+    const { catalog, counts } = this.originalInventory();
     for (const category of CATEGORIES) {
-      if (index <= original[category]) return { category, assetId: index };
-      index -= original[category];
+      if (index >= 1 && index <= counts[category]) {
+        const pool = catalog.categories[REVEAL_ASSET_FAMILIES[category]];
+        const count = Math.min(maximum, counts[category] - index + 1);
+        return { category, firstId: revealCatalogAssetId(pool, index), lastId: revealCatalogAssetId(pool, index + count - 1), count };
+      }
+      index -= counts[category];
     }
     throw new Error('Invalid allocation unit.');
+  }
+
+  unitAt(index: number): RevealOriginUnit {
+    const { category, firstId } = this.originPage(index, 1);
+    return { category, assetId: firstId };
   }
 
   private canonicalMappings<T extends { egg_id: number }>(units: readonly RevealOriginUnit[], projection: 'bytes' | 'metadata'): Map<number, T> {
@@ -295,55 +335,17 @@ export class EthereumRevealCatalogReader {
       this.sql.exec('SELECT 1 FROM reveal_catalog_publications WHERE batch_id=? LIMIT 1', operationId).toArray().length) {
       throw new Error('Empty pool rebuild cannot contain mappings or publications.');
     }
-    if (this.sql.exec(`SELECT 1 FROM reveal_catalog_free f JOIN reveal_catalog_pools p
-      ON p.generation=f.generation AND p.category=f.category WHERE f.generation=? AND
-      (f.origin_category!=f.category OR f.origin_asset_id!=f.asset_id OR f.asset_id<1 OR f.asset_id>p.total OR f.slot!=f.asset_id-1) LIMIT 1`,
-      operationId).toArray().length) throw new Error('Empty pool rebuild asset identities are inconsistent.');
+    const catalog: RevealAssetCatalog = JSON.parse(operation.target_manifest_json);
+    for (const category of CATEGORIES) {
+      const family = catalog.categories[REVEAL_ASSET_FAMILIES[category]];
+      const expectedId = family.assetIds ? "json_extract(?,'$['||f.slot||']')" : 'f.slot+1';
+      if (this.sql.exec(`SELECT 1 FROM reveal_catalog_free f WHERE generation=? AND category=? AND
+        (origin_category!=category OR origin_asset_id!=asset_id OR slot<0 OR slot>=? OR asset_id IS NOT (${expectedId})) LIMIT 1`,
+        operationId, category, family.count, ...(family.assetIds ? [JSON.stringify(family.assetIds)] : [])).toArray().length) {
+        throw new Error('Empty pool rebuild asset identities are inconsistent.');
+      }
+    }
     return this.status(operationId)!;
-  }
-
-  private effectiveEggOrigin(eggId: number): RevealOriginUnit | null {
-    const override = this.sql.exec<{ origin_category: EthereumArtworkCategory; origin_asset_id: number }>(
-      "SELECT origin_category,origin_asset_id FROM owner_hatching_slot_overrides WHERE category='egg' AND asset_id=?", eggId).toArray()[0];
-    const unit: RevealOriginUnit = override ? { category: override.origin_category, assetId: override.origin_asset_id } : { category: 'egg', assetId: eggId };
-    if (!override && eggId > this.originalCounts().egg) return null;
-    const effective = this.resolveUnit(unit);
-    if (effective.category !== 'egg' || effective.assetId !== eggId || !this.isFree(unit) &&
-      !this.sql.exec('SELECT 1 FROM assignments WHERE category=? AND asset_id=?', unit.category, unit.assetId).toArray().length) return null;
-    return unit;
-  }
-
-  eligibleCutoffEggs(cutoff: number, afterEggId = cutoff, pageSize = 256): number[] {
-    validateCatalogPageSize(pageSize);
-    if (!Number.isSafeInteger(cutoff) || cutoff < 0 || !Number.isSafeInteger(afterEggId) || afterEggId < cutoff) throw new Error('Invalid cutoff egg page.');
-    const settings = this.settings();
-    if (!settings) return [];
-    const active = settings.active_catalog_generation;
-    const owner = this.ownerHatching.available;
-    const mapped = this.hasTable('reveal_catalog_mappings');
-    const claimed = this.hasTable('reveal_catalog_egg_claims');
-    const free = active ? 'SELECT asset_id AS egg_id FROM reveal_catalog_free WHERE generation=? AND category=\'egg\''
-      : 'SELECT asset_id AS egg_id FROM free_slots WHERE category=\'egg\'';
-    const assigned = owner ? `SELECT COALESCE(o.asset_id,a.asset_id) AS egg_id FROM assignments a LEFT JOIN owner_hatching_slot_overrides o
-      ON o.origin_category=a.category AND o.origin_asset_id=a.asset_id WHERE COALESCE(o.category,a.category)='egg'`
-      : "SELECT asset_id AS egg_id FROM assignments WHERE category='egg'";
-    return this.sql.exec<{ egg_id: number }>(`WITH candidates AS (${free} UNION ${assigned})
-      SELECT egg_id FROM candidates c WHERE egg_id>?
-        ${owner ? `AND NOT EXISTS(SELECT 1 FROM owner_hatching_tokens t WHERE t.egg_id=c.egg_id)
-          AND NOT EXISTS(SELECT 1 FROM owner_hatching_retired_eggs r WHERE r.egg_id=c.egg_id)` : ''}
-        ${mapped ? `AND NOT EXISTS(SELECT 1 FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
-          WHERE m.egg_id=c.egg_id AND (g.target_revision>${ALLOCATION_BASE_REVISION} AND g.activated_at_ms IS NOT NULL
-            OR g.phase IN ('mapping','staging','ready')))` : ''}
-        ${claimed ? `AND NOT EXISTS(SELECT 1 FROM reveal_catalog_egg_claims m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
-          WHERE m.egg_id=c.egg_id AND g.phase IN ('mapping','staging','ready'))` : ''}
-        ORDER BY egg_id LIMIT ?`, ...(active ? [active] : []), afterEggId, pageSize).toArray().map(row => row.egg_id);
-  }
-
-  requireCutoffEgg(eggId: number): RevealOriginUnit {
-    if (this.ownerHatching.hasProtectedEgg(eggId)) throw new Error('Cutoff egg is protected by owner hatching.');
-    const unit = this.effectiveEggOrigin(eggId);
-    if (!unit) throw new Error('Cutoff egg is not a live allocation.');
-    return unit;
   }
 
   verifyCutoffClaims(batchId: string): void {

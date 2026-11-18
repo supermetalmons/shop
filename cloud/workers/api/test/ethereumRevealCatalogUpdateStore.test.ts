@@ -7,7 +7,8 @@ import { computeRevealCatalogDescriptor, type RevealAssetCatalog } from '../../.
 import { revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.ts';
-import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
+import type { RevealSql } from '../src/ethereumRevealStore.ts';
+import { HistoricalRevealStore as EthereumRevealStore } from './historicalCatalogFixture.ts';
 import { applyRevealAttributePayload, MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
 import { buildNewRevealedArtwork, buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
 import { EthereumRevealCatalogReader } from '../src/ethereumRevealCatalogReader.ts';
@@ -126,7 +127,6 @@ test('catalog inspection is query-only on an uninitialized database', t => {
   assert.equal(reader.effectiveCatalog(), null);
   assert.deepEqual(reader.canonicalMetadata(['1', '1']), []);
   assert.deepEqual(reader.canonicalArtworks(['1']), []);
-  assert.deepEqual(reader.eligibleCutoffEggs(0), []);
   assert.equal(database.prepare('SELECT total_changes() AS changes').get()!.changes, changes);
   assert.deepEqual(database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
 });
@@ -443,7 +443,6 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   assert.ok(mixed.queries.length <= 12, `mixed owner/ordinary read used ${mixed.queries.length} queries`);
   assert.equal(mixed.queries.filter(entry => /FROM owner_hatching_tokens\s+WHERE token_id IN/.test(entry.query)).length, 2);
   conservation(f.store, f.database);
-  assert.deepEqual(f.store.catalogUpdate.reader.eligibleCutoffEggs(76699), [76700]);
   const row = f.database.prepare("SELECT slot FROM reveal_catalog_free WHERE generation=? AND category='egg' AND asset_id=76700")
     .get(initial.batchId)!;
   const origin = f.store.catalogUpdate.takeFree('egg', Number(row.slot));
@@ -458,7 +457,6 @@ test('sparse cutoff coexists with live owner hatches and publishes fresh eggs th
   const batchSha256 = revealCatalogUpdateHash(body);
   const explicit: RevealCatalogUpdateBatch = { ...body, batchSha256, batchId: `catalog-${batchSha256.slice(0, 32)}` };
   stageMetadata(f.store, explicit);
-  assert.deepEqual(f.store.catalogUpdate.reader.eligibleCutoffEggs(76699), []);
   assert.throws(() => owner.prepare({ batchId: 'owner-conflict', sourceSha256: 'b'.repeat(64), candidateTokenIds: ['21'], readyCount: 1,
     grails: [{ category: 'animated', assetId: 423, attributesJson: attributesJson.replace('new artworks', 'DROWEE') }], freshEggIds: [] }, 5002), /Not enough eligible/);
   f.store.catalogUpdate.generationStage(explicit.batchId);
@@ -533,8 +531,6 @@ test('catalogue verification and eligible inspection read completed pre-owner sc
   assert.equal(store.verify(update.batchId).published, 1);
   assert.equal(store.publicationPage(update.batchId)[0].tokenId, '1');
   assert.deepEqual(store.pendingPublications(update.batchId), []);
-  assert.deepEqual(store.eligibleCutoffEggs(source.categories.eggs.count - 3),
-    [source.categories.eggs.count - 2, source.categories.eggs.count - 1]);
   assert.equal(f.database.prepare('SELECT total_changes() AS changes').get()!.changes, before);
   assert.deepEqual(f.database.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all(), schema);
 });

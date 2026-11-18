@@ -35,8 +35,8 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
 const { EthereumRevealObject, EthereumRevealStore } = await (async () => {
   try {
     const object = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealObject.ts'));
-    const store = await import('../src/ethereumRevealStore.ts');
-    return { ...object, ...store };
+    const { HistoricalRevealStore } = await import('./historicalCatalogFixture.ts');
+    return { ...object, EthereumRevealStore: HistoricalRevealStore };
   } finally { hooks.deregister(); }
 })();
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');

@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
-import { REVEAL_ASSET_FAMILIES, revealCatalogMedia, validateRevealAssetCatalog,
+import { REVEAL_ASSET_FAMILIES, revealCatalogAssetId, revealCatalogMedia, validateRevealAssetCatalog,
   type RevealAssetCatalog, type RevealAssetCatalogDescriptor, type RevealAssetVariant } from './revealAssetCatalog.ts';
 import { getOwnerHatchingGrail } from './ownerHatchingCatalog.ts';
 import type { EthereumArtworkCategory } from './reveal.ts';
@@ -43,7 +43,8 @@ function alternate(variant: RevealAssetVariant | undefined, id: number): string 
   return JSON.stringify([variant.pathTemplate, variant.aspectRatio ?? variant.aspectRatioPalette[variant.aspectRatioIndexById[index]]]);
 }
 
-export function revealCatalogAdditions(predecessor: RevealAssetCatalog, target: RevealAssetCatalog): RevealCatalogAddition[] {
+export function revealCatalogAdditions(predecessor: RevealAssetCatalog, target: RevealAssetCatalog,
+  { allowUnchangedInventory = false } = {}): RevealCatalogAddition[] {
   validateRevealAssetCatalog(predecessor);
   validateRevealAssetCatalog(target);
   if (Number(target.catalogVersion.slice(6)) <= Number(predecessor.catalogVersion.slice(6)) ||
@@ -57,21 +58,24 @@ export function revealCatalogAdditions(predecessor: RevealAssetCatalog, target: 
     const after = target.categories[family];
     if (after.count < before.count || before.pathTemplate !== after.pathTemplate ||
       before.imagePathTemplate !== after.imagePathTemplate || before.baseUrl !== after.baseUrl) invalid('existing artwork changed');
-    for (let id = 1; id <= before.count; id++) {
+    for (let ordinal = 1; ordinal <= before.count; ordinal++) {
+      const id = revealCatalogAssetId(before, ordinal);
+      if (revealCatalogAssetId(after, ordinal) !== id) invalid('existing artwork identity changed');
       if (JSON.stringify(revealCatalogMedia(predecessor, category, id)) !== JSON.stringify(revealCatalogMedia(target, category, id))) {
         invalid('existing artwork media changed');
       }
       const oldAlternate = alternate(before.variants?.alt, id);
       if (oldAlternate !== null && oldAlternate !== alternate(after.variants?.alt, id)) invalid('existing alternate changed');
     }
-    for (let id = before.count + 1; id <= after.count; id++) {
+    for (let ordinal = before.count + 1; ordinal <= after.count; ordinal++) {
+      const id = revealCatalogAssetId(after, ordinal);
       if (getOwnerHatchingGrail(category, id)) invalid('owner hatching grails cannot enter the ordinary reveal pool');
       additions.push({ category, assetId: id });
     }
   }
   const oldEggs = predecessor.categories.eggs;
   const newEggs = target.categories.eggs;
-  if (!additions.length || oldEggs.count - newEggs.count !== additions.length ||
+  if ((!allowUnchangedInventory && !additions.length) || oldEggs.count - newEggs.count !== additions.length ||
     JSON.stringify({ ...oldEggs, count: newEggs.count }) !== JSON.stringify(newEggs)) invalid('egg cutoff does not match new artworks');
   return additions;
 }

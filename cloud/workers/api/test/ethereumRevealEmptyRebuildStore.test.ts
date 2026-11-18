@@ -6,7 +6,8 @@ import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegis
 import { computeRevealCatalogDescriptor, type RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import { revealCatalogAdditions, revealCatalogUpdateHash, type RevealCatalogUpdateBatch, type RevealCatalogUpdateBody } from '../../../../shared/ethereum/revealCatalogUpdate.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
-import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
+import type { RevealSql } from '../src/ethereumRevealStore.ts';
+import { HistoricalRevealStore as EthereumRevealStore } from './historicalCatalogFixture.ts';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.ts';
 import { revealCollectionBlocks } from '../src/ethereumRevealCollectionBlocks.ts';
 import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';

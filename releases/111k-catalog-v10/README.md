@@ -18,7 +18,7 @@ The [frozen definition](definition.json) binds the November 17 release to mainne
 
 The [normalized ordinary source](source.json) reproduces the [v10 manifest](manifest.json), including 37,990 alternate WebPs for existing paintings. The [owner supplement](owner-supplement.json) adds the GAN MP4s and preserves the DROWEE GIFs. [Collection blocks](collection-blocks.json) bind the new labels to v10 and preserve all v5–v9 bindings. The frozen predecessor supplements allow the preparation tool to reproduce this release after promotion.
 
-Reproduce local artifact promotion from the repository root:
+To reproduce local artifact promotion, run this historical command from the repository root at commit `eaeb7d5171291882226c19cd395b51506edf1976`. The current [mixed allocation runbook](../../scripts/docs/111k_reveal_ops.md#mixed-allocation) covers new releases.
 
 ```sh
 npm run ethereum:promote-mixed -- --source releases/111k-catalog-v10/original-input.json --write

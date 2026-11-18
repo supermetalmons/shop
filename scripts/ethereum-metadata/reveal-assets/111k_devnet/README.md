@@ -70,9 +70,8 @@ checks candidate media against retained catalogs, including before the first
 collection-block import. It checks supplied labels against recorded bindings.
 Two-value dimension maps can still use a separate labeled source.
 For additions to an existing
-pool, use the [catalog expansion operation](../../../docs/111k_reveal_ops.md#adding-artworks-and-cutting-off-eggs)
-instead of a standalone import. It freezes the old-to-new egg mapping, preserves
-supported ancestor catalogs, and separates local promotion from live application.
+pool, use the [catalog expansion operation](../../../docs/111k_reveal_ops.md#mixed-allocation)
+instead of a standalone import. It preserves existing token artwork, reserves owner rewards privately, and exchanges future artworks for free eggs.
 Other incompatible catalog changes still require a fresh deployment.
 
 `--source` defaults to the preserved source, and `--catalog-version` defaults

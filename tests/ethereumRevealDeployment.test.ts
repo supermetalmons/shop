@@ -32,6 +32,7 @@ async function fixture(t: TestContext) {
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0009_ethereum_reveal_deployments.sql', import.meta.url), 'utf8'));
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0011_ethereum_reveal_retirement.sql', import.meta.url), 'utf8'));
   database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0012_ethereum_reveal_catalog_updates.sql', import.meta.url), 'utf8'));
+  database.exec(await readFile(new URL('../cloud/workers/api/ops-migrations/0013_mixed_allocation_revisions.sql', import.meta.url), 'utf8'));
   t.after(() => database.close());
   const query = (sql: string) => database.prepare(sql).all();
   return { database, query, register: () => parseEthereumRevealDeployment(query(buildEthereumRevealRegistration(registration))[0]) };
@@ -41,6 +42,24 @@ function registrationIdentity(value = registration) {
   const { templateJson: _template, templateSha256: _hash, ...identity } = value;
   return identity;
 }
+
+test('a same-catalog allocation revision requires an active held operation and a single registry increment', async t => {
+  const { database, register } = await fixture(t);
+  register();
+  const update = (changes: string) => database.exec('UPDATE ethereum_reveal_deployments SET ' + changes);
+  update("state='active',provisioned_at_ms=2,revision=revision+1,catalog_update_id='first',catalog_update_started_at_ms=2");
+  update("effective_catalog_version=catalog_version,effective_catalog_sha256='" + 'a'.repeat(64) + "',catalog_revision=1,revision=revision+1");
+  const advance = 'catalog_revision=catalog_revision+1,revision=revision+1';
+  update('catalog_update_id=NULL,catalog_update_started_at_ms=NULL,revision=revision+1');
+  assert.throws(() => update(advance), /invalid reveal catalog amendment transition/);
+  update("catalog_update_id='owner-only',catalog_update_started_at_ms=3,revision=revision+1");
+  assert.throws(() => update('catalog_revision=catalog_revision+1'), /invalid reveal catalog amendment transition/);
+  assert.throws(() => update('catalog_revision=catalog_revision+2,revision=revision+1'), /invalid reveal catalog amendment transition/);
+  assert.throws(() => update(advance + ",state='paused'"), /invalid reveal catalog amendment transition/);
+  assert.throws(() => update(advance + ',catalog_update_id=NULL,catalog_update_started_at_ms=NULL'), /invalid reveal catalog amendment transition/);
+  update(advance);
+  assert.equal(database.prepare('SELECT catalog_revision FROM ethereum_reveal_deployments').get()?.catalog_revision, 2);
+});
 
 test('attribute backfill pins an explicit Sepolia deployment revision across pages and defaults to counting', async t => {
   const { database, query, register } = await fixture(t);

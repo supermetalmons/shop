@@ -5,7 +5,7 @@ import test from 'node:test';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
-import { buildRevealCatalogUpdateBatch } from '../../../../scripts/ethereum-metadata/catalogUpdate.ts';
+import { buildRevealCatalogUpdateBatch } from '../../../../tests/helpers/historicalCatalogBatch.ts';
 import type { RevealCatalogUpdateStatus } from '../src/ethereumRevealCatalogTypes.ts';
 
 test('native empty mainnet rebuild replaces sparse history under the fence and preserves normal enrichment', { timeout: 90_000 }, async t => {
@@ -25,7 +25,7 @@ test('native empty mainnet rebuild replaces sparse history under the fence and p
   const source = `
     import { DurableObject } from 'cloudflare:workers';
     import { createHash } from 'node:crypto';
-    import { EthereumRevealStore } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealStore.ts'))};
+    import { HistoricalRevealStore as EthereumRevealStore } from ${JSON.stringify(resolve('cloud/workers/api/test/historicalCatalogFixture.ts'))};
     import { lookupRevealCollectionBlock } from ${JSON.stringify(resolve('shared/ethereum/revealCollectionBlocks.ts'))};
     import { revealCollectionBlocks } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealCollectionBlocks.ts'))};
     import { EthereumRevealEmptyPoolFence, ETHEREUM_REVEAL_EMPTY_POOL_DRAIN_MS } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumRevealEmptyPoolFence.ts'))};

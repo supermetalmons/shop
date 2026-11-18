@@ -7,6 +7,7 @@ import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../.
 import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 import type { EthereumRevealResult, EthereumRevealTokensResponse, EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
 import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import type { MixedAllocationDefinition } from '../../../../shared/ethereum/revealMixedAllocation.ts';
 import { EthereumRevealStore, type RevealSql, type RevealReceiptClaim, type RevealScanClaim } from '../src/ethereumRevealStore.ts';
 import { backfillRevealAttributePage } from '../src/ethereumRevealAttributeBackfill.ts';
 import type { RevealVerificationResult, RevealVerificationScope, RevealVerificationWork } from '../src/ethereumRevealVerification.ts';
@@ -258,6 +259,85 @@ function fixture(t: TestContext, catalogVersion = deployment.catalogVersion, reg
     verifier: (transactionHash: string) => env.ETHEREUM_REVEAL_VERIFIER.getByName(`${registered.chainId}:${CONTRACT}:${transactionHash}`),
     rows: (query: string) => database.prepare(query).all() };
 }
+
+test('mixed begin checks the origin, fresh inventory, ordinary backing and future slots before claiming the registry', async t => {
+  const { getRevealCatalog, getRevealCatalogDescriptor } = await import('../../../../shared/ethereum/revealCatalogRegistry.ts');
+  const { mixedAllocationHash } = await import('../../../../shared/ethereum/revealMixedAllocation.ts');
+  const { EthereumRevealCatalogReader } = await import('../src/ethereumRevealCatalogReader.ts');
+  const { EthereumMixedAllocationOperation } = await import('../src/ethereumMixedAllocationOperation.ts');
+  const registered = { ...deployment, chainId: 11155111, catalogVersion: '111k-v5' };
+  const { database, sql, env, store } = fixture(t, registered.catalogVersion, registered);
+  const catalog = getRevealCatalog(registered.catalogVersion)!;
+  const descriptor = getRevealCatalogDescriptor(registered.catalogVersion)!;
+  const ordinaryCount = catalog.importSettings.availableEggs - catalog.categories.eggs.count;
+  const definition = { version: 2 as const, batchId: 'capacity-check', deploymentId: registered.deploymentId,
+    chainId: registered.chainId, contractAddress: registered.contractAddress, deploymentBlock: registered.deploymentBlock,
+    metadataBaseUri: registered.metadataBaseUri, originCatalogVersion: registered.catalogVersion,
+    predecessor: descriptor, target: descriptor, ordinaryCount, groups: [], sourceSha256: 'a'.repeat(64),
+    collectionBlocksSha256: 'b'.repeat(64), ownerSupplementSha256: 'c'.repeat(64) };
+  database.prepare(`INSERT INTO owner_hatching_batches(batch_id,source_sha256,input_sha256,ready_count,grail_count,fresh_egg_count,created_at_ms)
+    VALUES('old',?,?,1,0,1,1)`).run('a'.repeat(64),'b'.repeat(64));
+  database.prepare("INSERT INTO owner_hatching_fresh_eggs(batch_id,egg_id) VALUES('old',?)").run(catalog.importSettings.availableEggs);
+  const storage = { get: async () => undefined, put: () => assert.fail('unexpected journal write') } as unknown as DurableObjectStorage;
+  const begin = (release: MixedAllocationDefinition) => {
+    return new EthereumMixedAllocationOperation({ db: env.OPS_DB, sql, storage, operations: () => assert.fail('unexpected preparation') },
+      { definition: release, batchId: definition.batchId, targetCatalog: getRevealCatalog(release.target.catalogVersion)! }).run({ action: 'begin', deploymentId: registered.deploymentId,
+        batchId: definition.batchId, expectedRevision: registered.revision, definitionSha256: mixedAllocationHash(release) });
+  };
+  await assert.rejects(begin({ ...definition, originCatalogVersion: '111k-v4' }), /does not match its release/);
+  await assert.rejects(begin(definition), /Insufficient unused fresh egg inventory/);
+
+  const scarcePools = store.catalogUpdate.reader.pools().map(pool => ({ ...pool, available: pool.category === 'painting' ? 1 : 0 }));
+  t.mock.method(EthereumRevealCatalogReader.prototype, 'pools', () => scarcePools);
+  database.exec('DROP TABLE owner_hatching_ordinary_backing');
+  await assert.rejects(begin({ ...definition, ordinaryCount: 1 }), /Not enough available artworks for ordinary owner hatches/);
+  const firstId = catalog.categories.paintings.count + 1;
+  await assert.rejects(begin({ ...definition, ordinaryCount: 0, target: getRevealCatalogDescriptor('111k-v6')!,
+    groups: [{ category: 'painting', collectionBlock: 'fixture', firstId, lastId: firstId, ownerCount: 0 }] }), /Not enough free eggs/);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM reveal_catalog_generations').get()!.n, 0);
+  const registry = database.prepare('SELECT revision,catalog_update_id FROM ethereum_reveal_deployments').get()!;
+  assert.equal(registry.revision, registered.revision);
+  assert.equal(registry.catalog_update_id, null);
+});
+
+test('an unclaimed mixed release can retry after another release kept the same catalog and advanced its revision', async t => {
+  const { getRevealCatalog, getRevealCatalogDescriptor } = await import('../../../../shared/ethereum/revealCatalogRegistry.ts');
+  const { mixedAllocationHash } = await import('../../../../shared/ethereum/revealMixedAllocation.ts');
+  const { EthereumMixedAllocationOperation } = await import('../src/ethereumMixedAllocationOperation.ts');
+  const registered = { ...deployment, chainId: 11155111, catalogVersion: '111k-v10' };
+  const { database, sql, env } = fixture(t, registered.catalogVersion, registered);
+  const catalog = getRevealCatalogDescriptor(registered.catalogVersion)!;
+  const definition = { version: 2 as const, batchId: 'retry-owners', deploymentId: registered.deploymentId,
+    chainId: registered.chainId, contractAddress: registered.contractAddress, deploymentBlock: registered.deploymentBlock,
+    metadataBaseUri: registered.metadataBaseUri, originCatalogVersion: registered.catalogVersion, predecessor: catalog, target: catalog, ordinaryCount: 1, groups: [],
+    sourceSha256: 'a'.repeat(64), collectionBlocksSha256: 'b'.repeat(64), ownerSupplementSha256: 'c'.repeat(64) };
+  const saved = new Map<string, {revision: number; sourceRevision: number}>();
+  const storage = { get: async (key: string) => saved.get(key),
+    put: async (key: string, value: {revision: number; sourceRevision: number}) => { saved.set(key, value); } } as unknown as DurableObjectStorage;
+  const coordinator = new EthereumMixedAllocationOperation({ db: env.OPS_DB, sql, storage,
+    operations: () => { throw new Error('Stopped after registry claim'); } },
+    { definition, batchId: definition.batchId, targetCatalog: getRevealCatalog(registered.catalogVersion)! });
+  const run = (action: 'begin' | 'status', expectedRevision: number) => coordinator.run({
+    action, deploymentId: registered.deploymentId, batchId: definition.batchId, expectedRevision, definitionSha256: mixedAllocationHash(definition),
+  });
+  database.exec(`CREATE TRIGGER first_claim BEFORE UPDATE ON ethereum_reveal_deployments
+    BEGIN SELECT RAISE(ABORT,'Interrupted before claim'); END`);
+  await assert.rejects(run('begin', 3), /Interrupted before claim/);
+  database.exec(`DROP TRIGGER first_claim;
+    UPDATE ethereum_reveal_deployments SET catalog_update_id='sibling',catalog_update_started_at_ms=4,revision=4;
+    UPDATE ethereum_reveal_deployments SET catalog_revision=1,effective_catalog_version=catalog_version,
+      effective_catalog_sha256='${catalog.manifestSha256}',revision=5;
+    UPDATE ethereum_reveal_deployments SET catalog_update_id=NULL,catalog_update_started_at_ms=NULL,revision=6;
+    UPDATE settings SET catalog_revision=1 WHERE id=1`);
+  await assert.rejects(run('status', 3), /Initial mixed claim lost/);
+  assert.equal((await run('status', 6)).phase, 'unstarted');
+  assert.equal([...saved.values()][0].revision, 3);
+  await assert.rejects(run('begin', 6), /Stopped after registry claim/);
+  assert.equal([...saved.values()][0].sourceRevision, 1);
+  assert.equal([...saved.values()][0].revision, 6);
+  assert.equal(database.prepare('SELECT catalog_update_id FROM ethereum_reveal_deployments').get()?.catalog_update_id, definition.batchId);
+  await assert.rejects(run('begin', 7), /original mixed allocation journal/);
+});
 
 async function completesWithin<T>(work: Promise<T>, milliseconds = 200): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

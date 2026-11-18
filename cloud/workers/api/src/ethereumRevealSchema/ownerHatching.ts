@@ -22,6 +22,11 @@ const SCHEMA = [
     egg_id INTEGER PRIMARY KEY,batch_id TEXT NOT NULL REFERENCES owner_hatching_batches(batch_id),
     token_id TEXT UNIQUE REFERENCES owner_hatching_tokens(token_id))`,
   `CREATE INDEX IF NOT EXISTS owner_hatching_fresh_batch ON owner_hatching_fresh_eggs(batch_id,egg_id) WHERE token_id IS NULL`,
+  `CREATE TABLE IF NOT EXISTS owner_hatching_ordinary_backing (
+    egg_id INTEGER PRIMARY KEY REFERENCES owner_hatching_fresh_eggs(egg_id),sponsor TEXT NOT NULL UNIQUE REFERENCES owner_hatching_tokens(token_id),
+    category TEXT NOT NULL,asset_id INTEGER NOT NULL,attributes_json TEXT,claimed_by TEXT UNIQUE REFERENCES owner_hatching_tokens(token_id),
+    UNIQUE(category,asset_id))`,
+  `CREATE INDEX IF NOT EXISTS owner_hatching_backing_available ON owner_hatching_ordinary_backing(egg_id) WHERE claimed_by IS NULL`,
   `CREATE TABLE IF NOT EXISTS owner_hatching_retired_eggs (
     egg_id INTEGER PRIMARY KEY,token_id TEXT NOT NULL UNIQUE REFERENCES owner_hatching_tokens(token_id),retired_at_ms INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS owner_hatching_artwork_claims (
@@ -56,12 +61,16 @@ const SCHEMA = [
         OR json_extract(NEW.canonical_json,'$.assetId') IS NOT json_extract(OLD.canonical_json,'$.assetId')))
     BEGIN SELECT RAISE(ABORT,'Owner hatching result is immutable'); END`,
   ...['owner_hatching_batches', 'owner_hatching_grails', 'owner_hatching_tokens', 'owner_hatching_fresh_eggs',
-    'owner_hatching_retired_eggs', 'owner_hatching_artwork_claims', 'owner_hatching_slot_history'].map(table =>
+    'owner_hatching_retired_eggs', 'owner_hatching_artwork_claims', 'owner_hatching_slot_history', 'owner_hatching_ordinary_backing'].map(table =>
     `CREATE TRIGGER IF NOT EXISTS ${table}_no_delete BEFORE DELETE ON ${table}
       BEGIN SELECT RAISE(ABORT,'Owner hatching history cannot be deleted'); END`),
   ...['owner_hatching_grails', 'owner_hatching_retired_eggs', 'owner_hatching_artwork_claims', 'owner_hatching_slot_history'].map(table =>
     `CREATE TRIGGER IF NOT EXISTS ${table}_immutable BEFORE UPDATE ON ${table}
       BEGIN SELECT RAISE(ABORT,'Owner hatching history is immutable'); END`),
+  `CREATE TRIGGER IF NOT EXISTS owner_hatching_backing_once BEFORE UPDATE ON owner_hatching_ordinary_backing
+    WHEN NEW.egg_id IS NOT OLD.egg_id OR NEW.sponsor IS NOT OLD.sponsor OR NEW.category IS NOT OLD.category
+      OR NEW.asset_id IS NOT OLD.asset_id OR NEW.attributes_json IS NOT OLD.attributes_json OR OLD.claimed_by IS NOT NULL OR NEW.claimed_by IS NULL
+    BEGIN SELECT RAISE(ABORT,'Ordinary hatch backing can only be claimed once'); END`,
   `CREATE TRIGGER IF NOT EXISTS owner_hatching_fresh_once BEFORE UPDATE ON owner_hatching_fresh_eggs
     WHEN NEW.egg_id IS NOT OLD.egg_id OR NEW.batch_id IS NOT OLD.batch_id OR OLD.token_id IS NOT NULL OR NEW.token_id IS NULL
     BEGIN SELECT RAISE(ABORT,'Fresh egg can only be used once'); END`,

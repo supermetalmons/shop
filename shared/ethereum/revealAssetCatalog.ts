@@ -9,6 +9,8 @@ export type RevealAssetRatios =
 export type RevealAssetVariant = RevealAssetRatios & { pathTemplate: string; assetIds?: readonly number[] };
 export type RevealAssetCategory = RevealAssetRatios & {
   count: number;
+  assetIds?: readonly number[];
+  gifAssetIds?: readonly number[];
   pathTemplate: string;
   imagePathTemplate?: string;
   baseUrl?: string;
@@ -109,11 +111,17 @@ export function validateRevealAssetCatalog(value: unknown, descriptor?: unknown)
   let total = 0;
   for (const [name, paths] of Object.entries(MEDIA_PATHS)) {
     const category = value.categories[name];
-    if (!record(category) || !keys(category, ['count', 'pathTemplate', 'imagePathTemplate', 'baseUrl', 'availableCount', 'variants',
+    if (!record(category) || !keys(category, ['count', 'assetIds', 'gifAssetIds', 'pathTemplate', 'imagePathTemplate', 'baseUrl', 'availableCount', 'variants',
       'aspectRatio', 'aspectRatioPalette', 'aspectRatioIndexById']) || !count(category.count) ||
       category.pathTemplate !== paths[0] && !(name === 'receipts' && Number(value.catalogVersion.slice(6)) <= 4 &&
         category.pathTemplate === 'receipts/{id}.webp') || category.imagePathTemplate !== paths[1] ||
       category.baseUrl !== undefined && !baseUrl(category.baseUrl)) invalid(`invalid ${name} media`);
+    const primaryIds = category.assetIds;
+    const gifIds = category.gifAssetIds;
+    if (primaryIds !== undefined && (name !== 'animated' || !Array.isArray(primaryIds) || primaryIds.length !== category.count ||
+      primaryIds.some((id, index) => !count(id) || id < 1 || id > 111_111 || index > 0 && id <= primaryIds[index - 1]))) invalid('invalid primary asset IDs');
+    if (gifIds !== undefined && (name !== 'animated' || !Array.isArray(gifIds) || !gifIds.length || gifIds.some((id, index) =>
+      !count(id) || !revealCatalogAssetOrdinal(category as RevealAssetCategory, id) || index > 0 && id <= gifIds[index - 1]))) invalid('invalid GIF asset IDs');
     validateRatios(category, category.count);
     if (name !== 'receipts') total += category.count;
     if (name === 'eggs') {
@@ -147,17 +155,38 @@ export function computeRevealCatalogDescriptor(catalog: RevealAssetCatalog): Rev
     manifestSha256: bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(catalog)))) };
 }
 
+export function revealCatalogAssetId(definition: Pick<RevealAssetCategory, 'count' | 'assetIds'>, ordinal: number): number {
+  if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > definition.count) return 0;
+  return definition.assetIds?.[ordinal - 1] ?? ordinal;
+}
+
+export function revealCatalogAssetOrdinal(definition: Pick<RevealAssetCategory, 'count' | 'assetIds'>, assetId: number): number {
+  if (!Number.isSafeInteger(assetId) || assetId < 1) return 0;
+  const ids = definition.assetIds;
+  if (!ids) return assetId <= definition.count ? assetId : 0;
+  let low = 0;
+  let high = ids.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (ids[middle] < assetId) low = middle + 1;
+    else high = middle;
+  }
+  return ids[low] === assetId ? low + 1 : 0;
+}
+
 export function revealCatalogMedia(catalog: RevealAssetCatalog, category: EthereumArtworkCategory, assetId: number): {
   image: string; animation_url?: string; aspectRatio: { width: number; height: number };
 } {
   if (!Object.hasOwn(REVEAL_ASSET_FAMILIES, category)) invalid('unknown artwork category');
   const definition = catalog.categories[REVEAL_ASSET_FAMILIES[category]];
-  if (!Number.isSafeInteger(assetId) || assetId < 1 || assetId > definition.count) invalid('invalid asset ID');
-  const pair = definition.aspectRatio ?? definition.aspectRatioPalette[definition.aspectRatioIndexById[assetId - 1]];
+  const ordinal = revealCatalogAssetOrdinal(definition, assetId);
+  if (!ordinal) invalid('invalid asset ID');
+  const pair = definition.aspectRatio ?? definition.aspectRatioPalette[definition.aspectRatioIndexById[ordinal - 1]];
+  const isGif = definition.gifAssetIds && revealCatalogAssetOrdinal({ count: definition.gifAssetIds.length, assetIds: definition.gifAssetIds }, assetId) > 0;
   const url = (path: string) => `${definition.baseUrl ?? catalog.baseUrl}${path.replace('{id}', String(assetId))}`;
   return {
     image: url(definition.imagePathTemplate ?? definition.pathTemplate),
-    ...(definition.imagePathTemplate ? { animation_url: url(definition.pathTemplate) } : {}),
+    ...(definition.imagePathTemplate ? { animation_url: url(isGif ? definition.pathTemplate.replace(/\.mp4$/, '.gif') : definition.pathTemplate) } : {}),
     aspectRatio: { width: pair[0], height: pair[1] },
   };
 }

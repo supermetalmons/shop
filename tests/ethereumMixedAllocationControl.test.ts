@@ -4,10 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { getInstalledMixedAllocation } from '../shared/ethereum/installedMixedAllocation.ts';
-import { MIXED_MAINNET_BATCH_ID, type MixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../shared/ethereum/mixedAllocationMaintenance.ts';
+import { MIXED_MAINNET_BATCH_ID } from '../shared/ethereum/mixedAllocation20261117.ts';
+import { type MixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../shared/ethereum/mixedAllocationMaintenance.ts';
 import type { EthereumRevealDeployment } from '../shared/ethereum/revealDeployment.ts';
-import { mixedAllocationControlMain } from '../scripts/ops/ethereumMixedAllocationControl.ts';
+import { mixedAllocationControlMain as command } from '../scripts/ops/ethereumMixedAllocationControl.ts';
 import { withEthereumRevealMaintenance } from '../scripts/shared/ethereumRevealMaintenance.ts';
+
+function mixedAllocationControlMain(args: string[], dependencies: Parameters<typeof command>[1]) {
+  return command([...args, '--batch-id', MIXED_MAINNET_BATCH_ID, '--deployment-id', 'mainnet-v1'], dependencies);
+}
 
 const { definition } = getInstalledMixedAllocation();
 const deployment: EthereumRevealDeployment = {
@@ -288,4 +293,99 @@ test('historical verification waits for republished metadata and a subsequent he
   });
   assert.equal(result.verificationPasses, 4);
   assert.deepEqual(actions, ['status','verify','status','verify']);
+});
+
+test('mainnet requires explicit selection and a different Sepolia storefront cannot use a reviewed release', async t => {
+  const path = await journalPath(t);
+  const registry = async () => { throw new Error('Unexpected registry read'); };
+  await assert.rejects(command(['apply','--batch-id',MIXED_MAINNET_BATCH_ID,'--journal',path,'--write'], {registry}),
+    /Mainnet requires explicit --deployment-id/);
+  const scoped = { ...definition, version: 2 as const, batchId: 'test-owners', deploymentId: 'active-test', chainId: 11155111,
+    contractAddress: '0x' + '11'.repeat(20), metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/active-test/', deploymentBlock: 50,
+    originCatalogVersion: deployment.catalogVersion, ordinaryCount:0 };
+  const deps = {registry, installed: () => ({definition: scoped, targetCatalog: getInstalledMixedAllocation().targetCatalog}),
+    storefront: async () => ({...scoped, enabled:true, contractAddress:'0x' + '22'.repeat(20)})};
+  await assert.rejects(command(['apply','--batch-id',scoped.batchId,'--journal',path,'--write'], deps), /active Sepolia storefront/);
+  await assert.rejects(stat(path), {code:'ENOENT'});
+});
+
+test('first apply checks the registered template before publishing a journal or acquiring the registry', async t => {
+  const path = await journalPath(t);
+  const release = { ...definition, version: 2 as const, batchId: 'template-check', deploymentId: deployment.deploymentId,
+    chainId: deployment.chainId, contractAddress: deployment.contractAddress, metadataBaseUri: deployment.metadataBaseUri,
+    deploymentBlock: deployment.deploymentBlock, originCatalogVersion: deployment.catalogVersion, ordinaryCount: 0 };
+  const registeredTemplate = JSON.stringify({ name: 'Artwork {{tokenId}}', description: 'Registered template' });
+  const actions: string[] = [];
+  const args = ['apply', '--write', '--batch-id', release.batchId, '--deployment-id', release.deploymentId,
+    '--expected-revision', '9', '--journal', path];
+  await assert.rejects(command(args, {
+    installed: () => ({ definition: release, targetCatalog: getInstalledMixedAllocation().targetCatalog }),
+    registry: async () => ({ ...deployment, templateJson: registeredTemplate }),
+    transport: async request => { actions.push(request.action); return status({ batchId: release.batchId }); },
+    preflight: async (_definition, _catalog, _fetch, template) => {
+      assert.equal(template, registeredTemplate);
+      throw new Error('Enriched metadata exceeds limit');
+    },
+  }), /Enriched metadata exceeds/);
+  assert.deepEqual(actions, ['status']);
+  await assert.rejects(stat(path), { code: 'ENOENT' });
+});
+
+test('first apply stops before the registry claim when a new painting alternate is missing', async t => {
+  const path = await journalPath(t);
+  const { definition, targetCatalog } = getInstalledMixedAllocation();
+  const groups = definition.groups.filter(group => group.category === 'painting');
+  const release = { ...definition, version: 2 as const, groups, batchId: 'alternate-check', deploymentId: deployment.deploymentId,
+    chainId: deployment.chainId, contractAddress: deployment.contractAddress, metadataBaseUri: deployment.metadataBaseUri,
+    deploymentBlock: deployment.deploymentBlock, originCatalogVersion: deployment.catalogVersion, ordinaryCount: 0 };
+  const actions: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes('/alt/')) return new Response(null, { status: 404 });
+    if (new Headers(init?.headers).has('Range')) {
+      assert.equal(init?.method, 'GET');
+      return new Response('sample', { headers: { 'content-type': 'image/png', 'access-control-allow-origin': '*' } });
+    }
+    const id = Number(url.pathname.split('/').at(-1)!.split('.')[0]);
+    const group = groups.find(group => id >= group.firstId && id <= group.lastId);
+    assert.ok(group);
+    return Response.json({ 'collection block': group.collectionBlock, attributes: [] });
+  });
+  const readyCount = groups.reduce((sum, group) => sum + group.ownerCount, 0);
+  await assert.rejects(command(['apply', '--write', '--batch-id', release.batchId, '--deployment-id', deployment.deploymentId,
+    '--expected-revision', '9', '--journal', path], {
+    installed: () => ({ definition: release, targetCatalog }),
+    registry: async () => ({ ...deployment, templateJson: '{"name":"Artwork {{tokenId}}"}' }),
+    transport: async request => {
+      actions.push(request.action);
+      return status({ batchId: release.batchId, readyCount, grailCount: readyCount });
+    },
+  }), /paintings\/alt\//);
+  assert.deepEqual(actions, ['status']);
+  await assert.rejects(stat(path), { code: 'ENOENT' });
+});
+
+test('first apply reports aggregate media evidence before begin and distinguishes a completed retry', async t => {
+  const path = await journalPath(t);
+  const release = { ...definition, version: 2 as const, batchId: 'media-evidence', deploymentId: deployment.deploymentId,
+    chainId: deployment.chainId, contractAddress: deployment.contractAddress, metadataBaseUri: deployment.metadataBaseUri,
+    deploymentBlock: deployment.deploymentBlock, originCatalogVersion: deployment.catalogVersion, ordinaryCount: 0 };
+  const { mixedAllocationHash } = await import('../shared/ethereum/revealMixedAllocation.ts');
+  const receipt = { mediaObjects: 9, traitSources: 7, checkedAt: new Date(0).toISOString(), definitionSha256: mixedAllocationHash(release) };
+  let complete = false;
+  const reported: typeof receipt[] = [];
+  const args = ['apply','--write','--batch-id',release.batchId,'--deployment-id',release.deploymentId,'--expected-revision','9','--journal',path];
+  const run = () => command(args, {
+    installed: () => ({ definition: release, targetCatalog: getInstalledMixedAllocation().targetCatalog }),
+    registry: async () => deployment,
+    preflight: async () => receipt,
+    onMediaPreflight: value => reported.push(value),
+    transport: async request => {
+      if (request.action === 'begin') { assert.deepEqual(reported, [receipt]); complete = true; }
+      return status({ batchId: release.batchId, ...(complete && { complete, phase:'complete', verificationPasses:2, catalogRevision:2, registryRevision:12 }) });
+    },
+  });
+  assert.deepEqual((await run()).mediaPreflight, receipt);
+  assert.equal((await run()).mediaPreflight, null);
+  assert.deepEqual(reported, [receipt]);
 });

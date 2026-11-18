@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { reconcileEthereumReveals } from '../src/ethereumRevealReconciliation.ts';
+import { getSupportedRevealCatalogVersions } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import type { ReconciliationResult } from '../src/reconciliationResult.ts';
 
@@ -27,8 +28,10 @@ function fixture(count: number, failId?: string) {
         bind(...values: unknown[]) {
           return {
             async all<T>() {
-              assert.match(sql, /WHERE COALESCE\(effective_catalog_version,catalog_version\)\s+IN \(\?,\?,\?,\?,\?,\?\) AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100/);
-              assert.deepEqual(values, ['111k-v5', '111k-v6', '111k-v7', '111k-v8', '111k-v9', '111k-v10']);
+              const versions = getSupportedRevealCatalogVersions();
+              const placeholders = sql.match(/WHERE COALESCE\(effective_catalog_version,catalog_version\)\s+IN \(([^)]*)\) AND retired_at_ms IS NULL ORDER BY updated_at_ms ASC LIMIT 100/)?.[1];
+              assert.equal(placeholders, versions.map(() => '?').join(','));
+              assert.deepEqual(values, versions);
               return { results: rows.filter(row => values.includes(row.effective_catalog_version ?? row.catalog_version) && row.retired_at_ms === null)
                 .sort((a, b) => a.updated_at_ms - b.updated_at_ms).slice(0, 100).map(row => ({ ...row })) as T[] };
             },
@@ -97,16 +100,14 @@ test('watchdog keeps normal recovery and publication running during an online ca
   assert.equal(rows[0].state, 'active');
 });
 
-test('watchdog serves the current v10 catalog and retained v5 through v9 deployments', async () => {
-  const { env, visited, rows } = fixture(6);
-  rows[1].catalog_version = '111k-v6';
-  rows[2].catalog_version = '111k-v7';
-  rows[3].catalog_version = '111k-v8';
-  rows[4].catalog_version = '111k-v9';
-  rows[5].catalog_version = '111k-v10';
-  const result = await reconcileEthereumReveals(env, new AbortController().signal);
-  assert.equal(result.completed, 6);
-  assert.deepEqual(visited, ['test-000', 'test-001', 'test-002', 'test-003', 'test-004', 'test-005']);
+test('watchdog serves deployments on each installed catalog', async () => {
+  const versions = getSupportedRevealCatalogVersions();
+  const { env, visited, rows } = fixture(versions.length);
+  rows.forEach((row, index) => { row.catalog_version = versions[index]; });
+  for (let offset = 0; offset < rows.length; offset += 100) {
+    await reconcileEthereumReveals(env, new AbortController().signal);
+  }
+  assert.deepEqual(new Set(visited), new Set(rows.map(row => row.deployment_id)));
 });
 
 for (const catalogVersion of ['111k-v1', '111k-v2', '111k-v3']) test(`watchdog excludes retired catalog ${catalogVersion} before its bounded page without changing historical rows`, async () => {

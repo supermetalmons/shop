@@ -33,11 +33,11 @@ import type { EthereumOwnerHatchRequest, EthereumOwnerHatchingReadyResponse } fr
 import { authorizeOwnerHatch, ownerHatchingRpcError } from './ethereumOwnerHatching.js';
 import { EthereumOwnerHatchingOperations } from './ethereumOwnerHatchingOperations.js';
 import type { OwnerHatchingEnrichmentError } from './ethereumOwnerHatchingTypes.js';
-import { parseOwnerHatchingMaintenanceRequest, type OwnerHatchingMaintenanceResult } from '../../../../shared/ethereum/ownerHatchingMaintenance.js';
+import { parseHistoricalOwnerHatchingRequest, type OwnerHatchingMaintenanceResult } from '../../../../shared/ethereum/ownerHatchingMaintenance.js';
 
 import { getInstalledMixedAllocation } from '../../../../shared/ethereum/installedMixedAllocation.js';
-import { MIXED_MAINNET_BATCH_ID, parseMixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
-import { EthereumMixedAllocationOperation, requireMixedMainnetDeployment } from './ethereumMixedAllocationOperation.js';
+import { parseMixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
+import { EthereumMixedAllocationOperation, requireMixedDeployment } from './ethereumMixedAllocationOperation.js';
 import type { MixedAllocationInput } from './ethereumRevealMixedAllocation.js';
 
 function unavailable(): EthereumApiError { return new EthereumApiError('unavailable', 'Artwork reveal is temporarily unavailable.'); }
@@ -45,7 +45,7 @@ function unavailable(): EthereumApiError { return new EthereumApiError('unavaila
 export class EthereumRevealObject extends DurableObject<Env> {
   private configuredStore: EthereumRevealStore | null = null;
   private retiring = false;
-  private mixedUpdater?: EthereumMixedAllocationOperation;
+  private mixedQueue: Promise<void> = Promise.resolve();
   private catalogUpdater: EthereumRevealCatalogUpdate | null = null;
   private emptyPoolUpdater: EthereumRevealEmptyPool | null = null;
   private emptyPoolFence: EthereumRevealEmptyPoolFence | null = null;
@@ -90,7 +90,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   }
 
   async ownerHatchingOperation(deployment: EthereumRevealDeployment, value: unknown): Promise<OwnerHatchingMaintenanceResult> {
-    const request = parseOwnerHatchingMaintenanceRequest(value);
+    const request = parseHistoricalOwnerHatchingRequest(value);
     deployment = await this.authorize(deployment);
     this.requireReady(deployment);
     if (request.deploymentId !== deployment.deploymentId) throw new Error('Owner hatching deployment does not match.');
@@ -118,16 +118,18 @@ export class EthereumRevealObject extends DurableObject<Env> {
 
   async mixedAllocationOperation(deployment: EthereumRevealDeployment, value: unknown): Promise<MixedAllocationMaintenanceResult> {
     const request = parseMixedAllocationMaintenanceRequest(value);
-    requireMixedMainnetDeployment(deployment);
+    const release = { ...getInstalledMixedAllocation(request.batchId), batchId: request.batchId };
+    requireMixedDeployment(deployment, release.definition);
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
-    if (deployment.deploymentId !== request.deploymentId || this.retiring || this.rebuildFence.status()) throw unavailable();
-    if (!this.mixedUpdater) {
-      const release = { ...getInstalledMixedAllocation(), batchId: MIXED_MAINNET_BATCH_ID };
-      this.mixedUpdater = new EthereumMixedAllocationOperation({ storage: this.ctx.storage, sql: this.ctx.storage.sql, db: this.env.OPS_DB,
+    const advance = this.mixedQueue.then(() => {
+      if (deployment.deploymentId !== request.deploymentId || this.retiring || this.rebuildFence.status()) throw unavailable();
+      const operation = new EthereumMixedAllocationOperation({ storage: this.ctx.storage, sql: this.ctx.storage.sql, db: this.env.OPS_DB,
         operations: (current, requireCurrent) => this.ownerOperations(current, requireCurrent, release),
       }, release);
-    }
-    return this.mixedUpdater.run(request);
+      return operation.run(request);
+    });
+    this.mixedQueue = advance.then(() => {}, () => {});
+    return advance;
   }
 
   async ownerHatch(deployment: EthereumRevealDeployment, request: Pick<EthereumOwnerHatchRequest, 'tokenId' | 'signature'>): Promise<EthereumRevealTokensResponse> {
@@ -185,10 +187,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   }
 
   private get updateController(): EthereumRevealCatalogUpdate {
-    this.catalogUpdater ??= new EthereumRevealCatalogUpdate({ env: this.env, storage: this.ctx.storage,
-      initializeStore: () => this.configuredStore ??= new EthereumRevealStore(this.ctx.storage.sql, action => this.transaction(action)),
-      wake: async deployment => { this.configure(deployment); await this.startBackground(deployment); await this.pruneCatalogIndexes(); await this.arm(); },
-    });
+    this.catalogUpdater ??= new EthereumRevealCatalogUpdate({ env: this.env, storage: this.ctx.storage });
     return this.catalogUpdater;
   }
 
@@ -196,7 +195,6 @@ export class EthereumRevealObject extends DurableObject<Env> {
     const request = parseCatalogUpdateRequest(value);
     requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
     if (request.deploymentId !== deployment.deploymentId || this.retiring || this.rebuildFence.status()) throw unavailable();
-    if (!['inspect', 'verify'].includes(request.action)) this.requireMaintenanceInventory(deployment);
     return this.updateController.run(request, deployment);
   }
 

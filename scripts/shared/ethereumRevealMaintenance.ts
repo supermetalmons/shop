@@ -99,7 +99,6 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
         published: result.published, frozen: result.frozen, retryAfterMs: result.retryAfterMs,
         conflicts: result.conflicts, retrying: result.retrying,
         ...(result.nextVerificationEggId !== undefined ? { nextVerificationEggId: result.nextVerificationEggId } : {}),
-        ...(result.eligibleEggIds !== undefined ? { eligibleEggIds: [...result.eligibleEggIds], nextEligibleEggId: result.nextEligibleEggId } : {}),
         ...(result.refreshTransaction ? { refreshTransaction: { chainId: result.refreshTransaction.chainId,
           to: result.refreshTransaction.to, data: result.refreshTransaction.data, value: result.refreshTransaction.value } } : {}) };
     }, async backfillAttributes(request) {
