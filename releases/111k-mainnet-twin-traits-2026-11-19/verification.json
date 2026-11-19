@@ -1,0 +1,223 @@
+{
+  "scope": {
+    "deployment": "mainnet-v1",
+    "chainId": 1,
+    "contract": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "registryRevision": 15,
+    "catalogRevision": 3
+  },
+  "cohortSha256": "b83888dc0cf2251b940548ecd4105f76b704308fb4d679876222cf0b6af9affd",
+  "before": {
+    "checkedUtc": "2026-11-19T09:06:57.755350+00:00",
+    "catalogRevision": 3,
+    "registryRevision": 15,
+    "reviewedGroups": 313,
+    "reviewedPaintings": 628,
+    "publishedPaintings": 247,
+    "qualifyingGroups": 47,
+    "twins": 94,
+    "singletonControls": 153,
+    "cohortSha256": "b83888dc0cf2251b940548ecd4105f76b704308fb4d679876222cf0b6af9affd",
+    "allPublishedOriginalsSha256": "8c000d3106804505de7c495fcb6bdf848db453eaadf6936164a8dd3167397b12",
+    "maxBeforeBytes": 1206,
+    "maxBeforeTraits": 18,
+    "maxTwinBeforeBytes": 1084,
+    "maxTwinBeforeTraits": 16,
+    "exactOriginalsAndCanonicalHashesMatch": true,
+    "existingRoleCollisions": 0
+  },
+  "publication": {
+    "operationId": "mainnet-revealed-twins-20261119",
+    "cohortSha256": "b83888dc0cf2251b940548ecd4105f76b704308fb4d679876222cf0b6af9affd",
+    "phase": "complete",
+    "total": 94,
+    "good": 47,
+    "evil": 47,
+    "groups": 47,
+    "published": 94,
+    "registryRevision": 15,
+    "catalogRevision": 3,
+    "checked": 2,
+    "next": null,
+    "observedUtc": "2026-11-19T09:30:54.095247+00:00"
+  },
+  "verifiedStorage": {
+    "operationId": "mainnet-revealed-twins-20261119",
+    "cohortSha256": "b83888dc0cf2251b940548ecd4105f76b704308fb4d679876222cf0b6af9affd",
+    "phase": "complete",
+    "total": 94,
+    "good": 47,
+    "evil": 47,
+    "groups": 47,
+    "published": 94,
+    "registryRevision": 15,
+    "catalogRevision": 3,
+    "checked": 94,
+    "next": null,
+    "observedUtc": "2026-11-19T09:36:41.348269+00:00"
+  },
+  "verifiedPublicDocuments": {
+    "checkedUtc": "2026-11-19T09:42:13.944555+00:00",
+    "mainnetRegistryRevision": 15,
+    "mainnetCatalogRevision": 3,
+    "cohortSha256": "b83888dc0cf2251b940548ecd4105f76b704308fb4d679876222cf0b6af9affd",
+    "eligibleGroups": 47,
+    "good": 47,
+    "evil": 47,
+    "verifiedCdnDocuments": 247,
+    "verifiedScopedMetadataApis": 94,
+    "previousSingletonsByteIdentical": 153,
+    "newSingletonsCanonicalAndRoleFree": 0,
+    "documentAndEtagDigest": "66df754cc2c34fc0e34fe1a5d2c72481b56ebeb28700383a8fae070d93e4cdf8",
+    "allOriginalNumericLexemesAndTraitOrderUnchanged": true,
+    "metadataRevisionIncreased": true,
+    "noUnexpectedTwinGroups": true,
+    "publicHealth": {
+      "config": true,
+      "stats": true,
+      "hatching/ready": true
+    }
+  },
+  "byCollectionBlock": {
+    "little swag": {
+      "good twin": 32,
+      "evil twin": 32
+    },
+    "Drilady 2": {
+      "good twin": 14,
+      "evil twin": 14
+    },
+    "Paint Me Like Your Old Models": {
+      "good twin": 1,
+      "evil twin": 1
+    }
+  },
+  "deployments": {
+    "api": {
+      "previousVersion": "d9bcbabd-d355-4468-a7a0-9bf35c0a6a51",
+      "version": "4815e3c0-3d4c-47cc-b66a-5651792cc83b",
+      "deployedUtc": "2026-11-19T09:23:53.816995Z"
+    },
+    "frontend": {
+      "previousVersion": "fafc17f3-be97-4508-b2de-5605b684a157",
+      "version": "38b0ac79-7269-4c4b-92a8-afdfd18e7c6d",
+      "deployedUtc": "2026-11-19T09:15:08.39837Z"
+    }
+  },
+  "validation": {
+    "frontendCommit": "ab9b0af9",
+    "apiCommit": "90fc8c14",
+    "frontendRootTests": 5508,
+    "apiTests": 3795,
+    "nativeWorkerTests": 95,
+    "toolsAndTestsTypechecksPassed": true,
+    "deadCodeChecksPassed": true
+  },
+  "verifiedFrontend": {
+    "version": "38b0ac79-7269-4c4b-92a8-afdfd18e7c6d",
+    "checkedUtc": "2026-11-19T09:16:59.009062+00:00",
+    "jsAndCssAssets": 66,
+    "entry": "/assets/index-DCoVpuZr.js",
+    "matchedAssetHashesSha256": "388280f07099d155b8ba59b62beedae4a796cacb98bd71d9f4ced86ec4a2e2b3"
+  },
+  "observation": {
+    "checkedUtc": "2026-11-19T09:41:27.734990+00:00",
+    "publicationAnchorUtc": "2026-11-19T09:30:54.096000+00:00",
+    "actualScheduler": {
+      "checkedUtc": "2026-11-19T09:41:18Z",
+      "activationUtc": "2026-11-19T09:30:54Z",
+      "observationDeadlineUtc": "2026-11-19T09:35:54Z",
+      "source": "Cloudflare Workers GraphQL scheduler analytics, scoped registry timestamps, reveal ledger SELECT",
+      "worker": "mons-shop-api",
+      "cron": "*/5 * * * *",
+      "events": [
+        {
+          "utc": "2026-11-19T09:35:00Z",
+          "outcome": "success",
+          "requests": 1,
+          "errors": 0
+        },
+        {
+          "utc": "2026-11-19T09:40:00Z",
+          "outcome": "success",
+          "requests": 1,
+          "errors": 0
+        }
+      ],
+      "registry": [
+        {
+          "deployment_id": "mainnet-v1",
+          "state": "active",
+          "revision": 15,
+          "catalog_revision": 3,
+          "updated_at_ms": 1795081208933,
+          "has_last_error": 0
+        },
+        {
+          "deployment_id": "v17",
+          "state": "active",
+          "revision": 12,
+          "catalog_revision": 3,
+          "updated_at_ms": 1795081209428,
+          "has_last_error": 0
+        }
+      ],
+      "ledger": {
+        "mainnet": {
+          "utc": "2026-11-19T09:41:22Z",
+          "ready": 1,
+          "catalog": "111k-v10",
+          "revision": 3,
+          "candidate_generations": 0,
+          "open_catalog_jobs": 0,
+          "open_owner_jobs": 0,
+          "unused_fresh_eggs": 19,
+          "unbacked_ordinary_claims": 19,
+          "reserved_ordinary_backing": 0,
+          "ordinary_claims_ready": 19,
+          "free_non_eggs": 48583,
+          "total_slots": 111111,
+          "publication": {
+            "baseConflicts": 0,
+            "ownerConflicts": 0,
+            "catalogConflicts": 0
+          }
+        },
+        "sepolia": {
+          "utc": "2026-11-19T09:41:25Z",
+          "ready": 1,
+          "catalog": "111k-v8",
+          "revision": 3,
+          "candidate_generations": 0,
+          "open_catalog_jobs": 0,
+          "open_owner_jobs": 0,
+          "unused_fresh_eggs": 0,
+          "unbacked_ordinary_claims": 0,
+          "reserved_ordinary_backing": 0,
+          "ordinary_claims_ready": 0,
+          "free_non_eggs": 51397,
+          "total_slots": 111111,
+          "publication": {
+            "baseConflicts": 0,
+            "ownerConflicts": 0,
+            "catalogConflicts": 0
+          }
+        }
+      },
+      "clockSkewFromLastSuccessfulCronMs": [
+        8933,
+        9428
+      ],
+      "healthy": true
+    },
+    "publicSamplesSincePublication": 90,
+    "successfulSamplesSincePublication": 90,
+    "wholeMonitorSuccessfulSamples": 309,
+    "wholeMonitorAllSamples": 309,
+    "freshPublicChecks": {
+      "config": true,
+      "stats": true,
+      "hatching/ready": true
+    }
+  }
+}

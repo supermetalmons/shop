@@ -98,6 +98,8 @@ Revealed media uses `https://cdn.lil.org/nft/111k/`. Eggs and paintings use PNGs
 See [111K Web Assets](111k_web_assets.md) to derive published thumbnails, mid images,
 painting alternatives and playable media from `metadata.image`.
 
+The [November 19 mainnet twin amendment](../../releases/111k-mainnet-twin-traits-2026-11-19/README.md) adds one native boolean attribute to each NFT in the 47 confirmed, publicly revealed duplicate painting pairs. The lower numeric ERC-721 token ID carries `good twin`; the other carries `evil twin`. See the [online metadata procedure](111k_reveal_ops.md#mainnet-twin-metadata) for verification and recovery.
+
 ## Templates
 
 Each template contains `name`, `description`, `image`, and `attributes`. The six updated media templates also include their measured `aspectRatio`. Artwork and receipt descriptions remain empty, and each template has one lowercase `type` trait:
