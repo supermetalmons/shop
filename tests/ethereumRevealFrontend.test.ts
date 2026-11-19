@@ -137,6 +137,21 @@ test('both reveal clients preserve collection blocks and accept legacy or unknow
   }
 });
 
+test('both reveal clients preserve boolean twin traits alongside precise number values', async t => {
+  let role = 'good twin';
+  mockMethod(t, globalThis, 'fetch', async input => {
+    const asset = { ...artwork(), attributes: [{ trait_type: 'seed', value: '__seed__' }, { trait_type: role, value: true }] };
+    const value = String(input).endsWith('/transaction') ? transactionResponse('revealed', [asset]) :
+      { ...responseScope, artworks: [asset], unresolved: [], retryAfterMs: 0 };
+    return new Response(JSON.stringify(value).replace('"__seed__"', '9007199254740993'));
+  });
+  for (role of ['good twin', 'evil twin']) {
+    const expected = [{ trait_type: 'seed', value: '9007199254740993' }, { trait_type: role, value: true }];
+    assert.deepEqual((await ethereumRevealApi.transaction(config, hash)).artworks[0].attributes, expected);
+    assert.deepEqual((await ethereumRevealApi.tokens(config, ['1'])).artworks[0].attributes, expected);
+  }
+});
+
 test('both reveal clients reject malformed collection blocks', async t => {
   let collectionBlock: unknown;
   mockMethod(t, globalThis, 'fetch', async input => {

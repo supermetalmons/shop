@@ -45,7 +45,8 @@ function parseArtwork(value: unknown): EthereumRevealedArtwork {
     Number(value.observation.blockNumber) < 0 || !validEthereumMetadataRevision(value.metadataRevision) ||
     value.attributes !== undefined && (!Array.isArray(value.attributes) || !value.attributes.every(attribute =>
       record(attribute) && typeof attribute.trait_type === 'string' &&
-      (typeof attribute.value === 'string' || typeof attribute.value === 'number' && Number.isFinite(attribute.value))))) return invalid();
+      (typeof attribute.value === 'string' || typeof attribute.value === 'boolean' ||
+        typeof attribute.value === 'number' && Number.isFinite(attribute.value))))) return invalid();
   return value as EthereumRevealedArtwork;
 }
 

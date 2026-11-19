@@ -8,6 +8,7 @@ export const ETHEREUM_REVEAL_RETRY_MS = 2_000;
 
 export const REVEAL_ENRICHMENT_VERSION = 'v0';
 export type EthereumArtworkCategory = 'egg' | 'painting' | 'video' | '3d' | 'animated';
+export type EthereumArtworkAttribute = { trait_type: string; value: string | number | boolean };
 export type EthereumArtworkAspectRatio = { width: number; height: number };
 export type EthereumRevealObservation = { transactionHash: string; blockNumber: number; blockHash: string };
 export type EthereumRevealScope = {
@@ -29,7 +30,7 @@ export type EthereumRevealedArtwork = {
   image: string;
   animation_url?: string;
   aspectRatio: EthereumArtworkAspectRatio;
-  attributes?: Array<{ trait_type: string; value: string | number }>;
+  attributes?: EthereumArtworkAttribute[];
   observation: EthereumRevealObservation;
 };
 export type EthereumRevealTransactionRequest = {
