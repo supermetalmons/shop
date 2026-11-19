@@ -1,12 +1,12 @@
 {
   "version": 2,
-  "catalogVersion": "111k-v10",
+  "catalogVersion": "111k-v11",
   "dropId": "111k_devnet",
   "baseUrl": "https://cdn.lil.org/nft/111k/",
   "artworkCount": 111111,
   "source": {
     "filename": "111k.json",
-    "sha256": "baabe4d52bb0d1ec920f2cb4f3593134f317ae28350c61e19e5c8dee9b32ae63"
+    "sha256": "17e62874c381981cd3a717e473b2eeee005c8d077d6811e78cc7df7dedeafc21"
   },
   "importSettings": {
     "availableEggs": 76700,
@@ -17,7 +17,7 @@
   },
   "categories": {
     "eggs": {
-      "count": 32190,
+      "count": 32176,
       "availableCount": 76700,
       "pathTemplate": "eggs/{id}.png",
       "aspectRatio": [
@@ -26,7 +26,7 @@
       ]
     },
     "paintings": {
-      "count": 75442,
+      "count": 75456,
       "pathTemplate": "paintings/{id}.png",
       "aspectRatioPalette": [
         [
@@ -68,6 +68,10 @@
         [
           1207,
           1303
+        ],
+        [
+          2500,
+          1923
         ]
       ],
       "aspectRatioIndexById": [
@@ -75512,7 +75516,21 @@
         5,
         5,
         5,
-        5
+        5,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
       ],
       "variants": {
         "alt": {

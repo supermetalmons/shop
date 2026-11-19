@@ -1,0 +1,118 @@
+{
+  "deploymentId": "mainnet-v1",
+  "chainId": 1,
+  "batchId": "mainnet-mixed-v11-20261119",
+  "definitionSha256": "5135d8fefa6339a2812c86ca74b4efcf34e85428888836c6d009066b14c84044",
+  "activatedUtc": "2026-11-19T10:54:05.118Z",
+  "verifiedUtc": "2026-11-19T11:00:55Z",
+  "registry": {
+    "state": "active",
+    "catalogVersion": "111k-v11",
+    "catalogSha256": "b682c4b7eca098cb2fef989f1ba3bff378b2ba595bda75ec1a3f0d827f9d9005",
+    "revision": 18,
+    "catalogRevision": 4,
+    "operationPointerCleared": true
+  },
+  "publication": {
+    "slots": 111111,
+    "readyAtActivation": 14,
+    "published": 14,
+    "publiclyReadyAtVerification": 14,
+    "hatchedAtVerification": 0,
+    "futureAllocations": 0,
+    "verificationPasses": 2,
+    "conflicts": 0,
+    "retrying": 0,
+    "pendingEnrichment": 0,
+    "failedEnrichment": 0
+  },
+  "applyMedia": {
+    "checkedUtc": "2026-11-19T10:38:13.300Z",
+    "originalImages": 14,
+    "traitSources": 14
+  },
+  "scheduler": {
+    "worker": "mons-shop-api",
+    "cadence": "*/5 * * * *",
+    "observationDeadlineUtc": "2026-11-19T10:59:19.597Z",
+    "successfulRuns": [
+      {
+        "utc": "2026-11-19T10:55:00Z",
+        "requests": 1,
+        "errors": 0
+      },
+      {
+        "utc": "2026-11-19T11:00:00Z",
+        "requests": 1,
+        "errors": 0
+      }
+    ]
+  },
+  "cleanup": {
+    "obsoleteFreeRows": 0,
+    "obsoletePoolRows": 0,
+    "legacyFreeRows": 0,
+    "legacyPoolRows": 0,
+    "temporaryCandidates": 0,
+    "temporaryActivationCandidates": 0,
+    "temporaryTraitStaging": 0,
+    "temporaryFreshEggs": 0,
+    "openCatalogJobs": 0,
+    "openHatchJobs": 0
+  },
+  "publicHealth": {
+    "firstCheckedUtc": "2026-11-19T10:26:31.959Z",
+    "lastCheckedUtc": "2026-11-19T11:00:53.919Z",
+    "checks": 294,
+    "failures": 0,
+    "catalogRevisions": [
+      3,
+      4
+    ],
+    "checksByRoute": [
+      {
+        "route": "config",
+        "checks": 98,
+        "failures": 0
+      },
+      {
+        "route": "hatching/ready",
+        "checks": 98,
+        "failures": 0
+      },
+      {
+        "route": "stats",
+        "checks": 98,
+        "failures": 0
+      }
+    ],
+    "scopedMetadataSamples": 1,
+    "storefronts": [
+      {
+        "host": "mons.shop",
+        "status": 200
+      },
+      {
+        "host": "www.mons.shop",
+        "status": 200
+      }
+    ]
+  },
+  "apiRollout": {
+    "rolloutId": "6a984032-4fcf-4c4b-8a26-17d0f5cfb07a",
+    "workerVersionId": "0a1bbc4b-2f80-443a-9d6b-ea1e8970c4a4",
+    "deployedUtc": "2026-11-19T10:32:09.517011Z",
+    "observedAtFullTrafficUtc": "2026-11-19T10:32:46Z",
+    "trafficPercentage": 100,
+    "coordinatorPropagationMs": 300000,
+    "validation": {
+      "command": "npm run deploy:api",
+      "unitTestsPassed": 3795,
+      "runtimeTestsPassed": 95,
+      "workerBundlePassed": true,
+      "workerStartupPassed": true,
+      "pendingD1Migrations": 0,
+      "commerceReadiness": "bounded release gate passed"
+    }
+  }
+}

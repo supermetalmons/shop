@@ -1,1 +1,34 @@
-[]
+[
+  {
+    "version": 2,
+    "batchId": "mainnet-mixed-v11-20261119",
+    "deploymentId": "mainnet-v1",
+    "chainId": 1,
+    "contractAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "metadataBaseUri": "https://cdn.mons.shop/111k/",
+    "deploymentBlock": 26387160,
+    "originCatalogVersion": "111k-v8",
+    "sourceSha256": "b6993ea8614061a70b186501000ea276812ed309c5792a48c142a9c107c4fda3",
+    "predecessor": {
+      "catalogVersion": "111k-v10",
+      "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec"
+    },
+    "target": {
+      "catalogVersion": "111k-v11",
+      "manifestSha256": "b682c4b7eca098cb2fef989f1ba3bff378b2ba595bda75ec1a3f0d827f9d9005"
+    },
+    "ordinaryCount": 0,
+    "collectionBlocksSha256": "60ffe0d2caf992b53418edde4ae4e5029338eba34eb44852cd9cc6818e6b34fd",
+    "ownerSupplementSha256": "5a31cbfedb39acb4368a9d4e36ce9effa979fba6693898676ba84a23dcbf4d63",
+    "groups": [
+      {
+        "category": "painting",
+        "collectionBlock": "In This World, We Walk on the Roof of Hell, Gazing at Flowers",
+        "firstId": 75443,
+        "lastId": 75456,
+        "ownerCount": 14,
+        "pool": "quota-0"
+      }
+    ]
+  }
+]

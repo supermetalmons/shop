@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "filename": "111k.json",
-    "sha256": "baabe4d52bb0d1ec920f2cb4f3593134f317ae28350c61e19e5c8dee9b32ae63"
+    "sha256": "17e62874c381981cd3a717e473b2eeee005c8d077d6811e78cc7df7dedeafc21"
   },
   "catalogs": [
     {
@@ -60,6 +60,16 @@
       "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec",
       "counts": {
         "painting": 75442,
+        "video": 58,
+        "3d": 3000,
+        "animated": 421
+      }
+    },
+    {
+      "catalogVersion": "111k-v11",
+      "manifestSha256": "b682c4b7eca098cb2fef989f1ba3bff378b2ba595bda75ec1a3f0d827f9d9005",
+      "counts": {
+        "painting": 75456,
         "video": 58,
         "3d": 3000,
         "animated": 421
@@ -175,6 +185,10 @@
       [
         75442,
         "Collage Paintings"
+      ],
+      [
+        75456,
+        "In This World, We Walk on the Roof of Hell, Gazing at Flowers"
       ]
     ],
     "video": [

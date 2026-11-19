@@ -1,0 +1,57 @@
+{
+  "deploymentId": "mainnet-v1",
+  "batchId": "mainnet-mixed-v11-20261119",
+  "catalog": {
+    "predecessor": {
+      "catalogVersion": "111k-v10",
+      "manifestSha256": "2c71c304784f9109e4c5c7297e3e97f52ffa0120f760e5fbe3622d993db456ec"
+    },
+    "target": {
+      "catalogVersion": "111k-v11",
+      "manifestSha256": "b682c4b7eca098cb2fef989f1ba3bff378b2ba595bda75ec1a3f0d827f9d9005"
+    }
+  },
+  "sourceSha256": "b6993ea8614061a70b186501000ea276812ed309c5792a48c142a9c107c4fda3",
+  "definitionSha256": "5135d8fefa6339a2812c86ca74b4efcf34e85428888836c6d009066b14c84044",
+  "additions": {
+    "paintings": 14,
+    "changedSourceRows": 0,
+    "removedSourceRows": 0
+  },
+  "policy": {
+    "preassigned": 14,
+    "ordinary": 0,
+    "future": 0
+  },
+  "promotionMedia": {
+    "checkedUtc": "2026-11-19T10:22:17.743Z",
+    "originalImages": 14,
+    "traitSources": 14
+  },
+  "storefrontWebps": {
+    "checkedUtc": "2026-11-19T10:22:51.234Z",
+    "range": "bytes=0-32",
+    "mediaType": "image/webp",
+    "checked": 56,
+    "passed": 56,
+    "failed": 0,
+    "passedByVariant": {
+      "mid": 14,
+      "thumbs": 14,
+      "thumbs/260": 14,
+      "thumbs/140": 14
+    },
+    "requestsByOrigin": {
+      "https://mons.shop": 56,
+      "https://vvv.so": 56,
+      "https://www.vvv.so": 56
+    }
+  },
+  "rehearsal": {
+    "runtime": "local Miniflare with SQLite, D1, R2 and simulated chain and traits",
+    "ready": 14,
+    "published": 14,
+    "supply": 111111,
+    "verificationPasses": 2
+  }
+}
