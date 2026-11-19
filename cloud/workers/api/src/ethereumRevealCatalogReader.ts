@@ -1,6 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
+import { isMainnet111kArtistDeployment } from '../../../../shared/ethereum/mainnet111kArtists.js';
 import type { EthereumArtworkCategory, EthereumRevealedArtwork } from '../../../../shared/ethereum/reveal.js';
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.js';
 import { REVEAL_ASSET_FAMILIES, revealCatalogAssetId, revealCatalogAssetOrdinal, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
@@ -26,6 +27,7 @@ import type {
   RevealPool,
 } from './ethereumRevealCatalogTypes.js';
 import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
+import { applyRevealArtistArtworks, applyRevealArtistMetadata } from './ethereumRevealArtistAnnotations.js';
 import { applyTwinArtworks, applyTwinMetadata } from './ethereumRevealTwinAnnotations.js';
 import { revealSlotOverrideTable, type RevealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import type { RevealSql } from './ethereumRevealStore.js';
@@ -48,6 +50,7 @@ export class EthereumRevealCatalogReader {
   private mappingOriginsAvailable: boolean | undefined;
   private mixedAssetsAvailable = false;
   private twinAnnotationsAvailable = false;
+  private artistAnnotationsAvailable = false;
   private slotOverrideSource: RevealSlotOverrideTable = 'owner_hatching_slot_overrides';
   private readonly catalogs = new Map<string, RevealAssetCatalog>();
   readonly ownerHatching: EthereumOwnerHatchingReader;
@@ -139,10 +142,12 @@ export class EthereumRevealCatalogReader {
   settings(): { deployment_json: string; catalog_revision: number; active_catalog_generation: string | null;
     candidate_catalog_generation: string | null; allocation_base_generation: string | null;
     effective_catalog_version: string | null; effective_catalog_sha256: string | null } | null {
-    const tables = this.sql.exec<{ name: string }>("SELECT name FROM sqlite_schema WHERE name IN ('settings','reveal_mixed_artworks','reveal_effective_slot_overrides','reveal_twin_annotations')").toArray();
+    const tables = this.sql.exec<{ name: string }>(`SELECT name FROM sqlite_schema WHERE name IN
+      ('settings','reveal_mixed_artworks','reveal_effective_slot_overrides','reveal_twin_annotations','reveal_artist_annotations')`).toArray();
     this.slotOverrideSource = tables.some(table => table.name === 'reveal_effective_slot_overrides')
       ? 'reveal_effective_slot_overrides' : 'owner_hatching_slot_overrides';
     this.twinAnnotationsAvailable = tables.some(table => table.name === 'reveal_twin_annotations');
+    this.artistAnnotationsAvailable = tables.some(table => table.name === 'reveal_artist_annotations');
     this.mixedAssetsAvailable = tables.some(table => table.name === 'reveal_mixed_artworks');
     if (!tables.some(table => table.name === 'settings')) return null;
     const row = this.sql.exec<{ deployment_json: string; catalog_revision?: number; active_catalog_generation?: string | null;
@@ -306,6 +311,7 @@ export class EthereumRevealCatalogReader {
       }
     }
     if (this.twinAnnotationsAvailable) applyTwinArtworks(this.sql, values);
+    if (this.artistAnnotationsAvailable) applyRevealArtistArtworks(this.sql, values);
     return tokenIds.flatMap(tokenId => values.has(tokenId) ? [values.get(tokenId)!] : []);
   }
 
@@ -408,6 +414,14 @@ export class EthereumRevealCatalogReader {
   }
 
   canonicalMetadata(tokenIds: readonly string[]): RevealCanonicalMetadata[] {
+    const values = this.canonicalMetadataBeforeArtists(tokenIds);
+    if (!this.artistAnnotationsAvailable) return values;
+    const byToken = new Map(values.map(value => [value.tokenId, value]));
+    applyRevealArtistMetadata(this.sql, byToken);
+    return values.map(value => byToken.get(value.tokenId)!);
+  }
+
+  canonicalMetadataBeforeArtists(tokenIds: readonly string[]): RevealCanonicalMetadata[] {
     const values = this.ownerHatching.canonicals(tokenIds);
     const remaining = [...new Set(tokenIds)].filter(tokenId => !values.has(tokenId));
     for (const value of this.canonicalMetadataBase(remaining)) values.set(value.tokenId, value);
@@ -470,11 +484,13 @@ export class EthereumRevealCatalogReader {
             category = mapping.category;
             assetId = mapping.asset_id;
             catalog ??= this.activeCatalog();
-            const built = row.assignment_revision >= mapping.target_revision && artwork.attributes?.some(attribute => attribute.trait_type === 'collection block')
+            const fresh = row.assignment_revision >= mapping.target_revision && artwork.attributes?.some(attribute => attribute.trait_type === 'collection block');
+            const built = fresh
               ? { artwork, metadataJson: row.metadata_json }
               : buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: row.crate_token_id,
                 category, assetId, observation: artwork.observation, catalog });
-            metadataJson = applyRevealAttributePayload(built.metadataJson, mapping.attributes_json).metadataJson;
+            metadataJson = applyRevealAttributePayload(built.metadataJson, mapping.attributes_json,
+              Boolean(fresh) && isMainnet111kArtistDeployment(deployment)).metadataJson;
             artwork = built.artwork;
             metadataRevision++;
           } else {

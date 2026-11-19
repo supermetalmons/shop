@@ -141,7 +141,9 @@ test('native mainnet enrichment retries across restart and preserves large trait
       const initial = await request('/seed');
       assert.equal(initial.assignment.asset_id, 41171);
       assert.deepEqual(initial.metadata.attributes, [
-        { trait_type: 'collection block', value: 'little swag' }, { trait_type: 'type', value: 'painting' },
+        { trait_type: 'collection block', value: 'little swag' },
+        { trait_type: 'artist', value: 'supermetalxbosch' },
+        { trait_type: 'type', value: 'painting' },
       ]);
       let failed = await waitFor(value => value.enrichment.attempts === 1 && value.enrichment.claim_id === null && value.enrichment.last_error === 'source-unavailable');
       for (const [mode, attempts] of [['missing', 2], ['malformed', 3]] as const) {

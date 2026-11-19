@@ -11,6 +11,8 @@ import type { EthereumArtworkCategory } from '../../../../shared/ethereum/reveal
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import { buildNewRevealedArtwork, buildRevealedArtwork } from '../src/ethereumRevealCatalog.ts';
 import { getOwnerHatchingGrails } from '../../../../shared/ethereum/ownerHatchingCatalog.ts';
+import artistMapping from '../../../../shared/ethereum/mainnet111kArtists.json';
+import { getMainnet111kArtists, requireMainnet111kArtistCoverage } from '../../../../shared/ethereum/mainnet111kArtists.ts';
 import { EthereumRevealStore, type RevealSql } from '../src/ethereumRevealStore.ts';
 import { applyRevealAttributePayload } from '../src/ethereumRevealAttributes.ts';
 
@@ -24,6 +26,58 @@ test('fresh grails resolve their collection block without a supplied or previous
     category: grail.category, assetId: grail.assetId, ownerHatching: true });
   assert.deepEqual(JSON.parse(value.metadataJson).attributes[0], { trait_type: 'collection block', value: grail.collectionBlock });
   assert.equal(value.artwork.image, grail.image);
+});
+
+test('mainnet artist credits cover the v11 ordinary catalog and the owner-hatch supplement', () => {
+  const catalogBlocks: unknown = source;
+  validateRevealCollectionBlocks(catalogBlocks);
+  const blocks = selectRevealCollectionBlocks(catalogBlocks, getRevealCatalogDescriptor('111k-v11'))!;
+  const labels = new Set(getOwnerHatchingGrails().map(grail => grail.collectionBlock));
+  for (const category of ['painting', 'video', '3d', 'animated'] as const) {
+    let start = 1;
+    for (const [end, label] of blocks.ranges[category]) {
+      if (start > blocks.counts[category]) break;
+      labels.add(label);
+      start = end + 1;
+    }
+  }
+  assert.ok([...labels].every(label => Object.hasOwn(artistMapping, label)));
+  requireMainnet111kArtistCoverage(blocks);
+  assert.throws(() => requireMainnet111kArtistCoverage({ ...blocks, ranges: { ...blocks.ranges,
+    painting: [[blocks.counts.painting, 'future block']] } }), /Missing 111k mainnet artist credits for future block/);
+  assert.deepEqual(getMainnet111kArtists('hyperstacks'), ['meinong', 'evil biscuit']);
+  assert.deepEqual(getMainnet111kArtists('In This World, We Walk on the Roof of Hell, Gazing at Flowers'), ['parker ito']);
+});
+
+test('fresh mainnet JSON includes each credit before all other traits and leaves eggs and legacy artwork intact', () => {
+  const deployment = { chainId: 1, dropId: '111k' };
+  const catalog = getRevealCatalog(currentDescriptor.catalogVersion)!;
+  const catalogBlocks: unknown = source;
+  validateRevealCollectionBlocks(catalogBlocks);
+  const paintings = catalogBlocks.ranges.painting;
+  const collageRange = paintings.findIndex(([, label]) => label === 'Collage Paintings');
+  const input = { templateJson: JSON.stringify({ ...JSON.parse(templateJson), attributes: [
+    { trait_type: 'artist', value: 'template artist' }, { trait_type: 'series', value: '111K' },
+  ] }), tokenId: '42', crateTokenId: '111112', category: 'painting' as const, assetId: (paintings[collageRange - 1]?.[0] ?? 0) + 1,
+  observation, catalog, deployment };
+  const block = { trait_type: 'collection block', value: 'Collage Paintings' };
+  const orderedArtists = ['evil biscuit', 'turtle', 'meinong'].map(value => ({ trait_type: 'artist', value }));
+  const baseTraits = [{ trait_type: 'series', value: '111K' }, { trait_type: 'type', value: 'painting' }];
+  const fresh = buildNewRevealedArtwork(input);
+  assert.deepEqual(fresh.artwork.attributes, [block, ...orderedArtists, ...baseTraits]);
+  assert.deepEqual(JSON.parse(fresh.metadataJson).attributes, fresh.artwork.attributes);
+  assert.deepEqual(buildNewRevealedArtwork({ ...input, deployment: { ...deployment, chainId: 11155111 } }).artwork.attributes,
+    [block, { trait_type: 'artist', value: 'template artist' }, ...baseTraits]);
+  assert.deepEqual(buildRevealedArtwork(input), buildRevealedArtwork({ ...input, deployment: undefined }));
+  const egg = { ...input, templateJson, category: 'egg' as const, assetId: 1 };
+  assert.deepEqual(buildNewRevealedArtwork(egg), buildRevealedArtwork(egg));
+  for (const collectionBlock of ['DROWEE', 'GAN videos']) {
+    const grail = getOwnerHatchingGrails().find(value => value.collectionBlock === collectionBlock)!;
+    const hatched = buildNewRevealedArtwork({ ...input, category: grail.category, assetId: grail.assetId, ownerHatching: true });
+    assert.deepEqual(hatched.artwork.attributes?.slice(0, 2), [
+      { trait_type: 'collection block', value: collectionBlock }, { trait_type: 'artist', value: 'evil biscuit' },
+    ]);
+  }
 });
 
 function fixture(t: TestContext, catalogVersion = '111k-v9') {

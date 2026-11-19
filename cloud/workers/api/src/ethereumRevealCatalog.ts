@@ -1,10 +1,11 @@
 import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 import descriptor from '../../../../shared/ethereum/revealCatalog.json';
 import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
-import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
+import type { EthereumArtworkAttribute, EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
+import { getMainnet111kArtists, isMainnet111kArtistDeployment, withMainnet111kArtistTraits } from '../../../../shared/ethereum/mainnet111kArtists.js';
 import { lookupRevealCollectionBlock, type RevealCollectionBlockLookup } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
 
@@ -63,6 +64,7 @@ type RevealArtworkInput = {
   templateJson: string; tokenId: string; crateTokenId: string; category: EthereumArtworkCategory;
   assetId: number; observation: EthereumRevealObservation;
   catalog?: RevealAssetCatalog;
+  deployment?: Pick<EthereumRevealDeployment, 'chainId' | 'dropId'>;
   ownerHatching?: boolean;
   allocatedEgg?: boolean;
 };
@@ -71,7 +73,7 @@ function buildArtwork(input: RevealArtworkInput, includeCollectionBlock: boolean
   artwork: EthereumRevealedArtwork; metadataJson: string; placeholderJson: string;
 } {
   const template = JSON.parse(input.templateJson.replaceAll('{{tokenId}}', input.tokenId).replaceAll('{{displayId}}', input.tokenId)) as {
-    name: string; description?: string; image: string; attributes?: Array<{ trait_type: string; value: string | number }>;
+    name: string; description?: string; image: string; attributes?: EthereumArtworkAttribute[];
   };
   const media = revealAssetMedia(input.category, input.assetId, input.catalog, input.ownerHatching, input.allocatedEgg);
   const name = input.category === 'egg' ? `Egg #${input.assetId}` : template.name;
@@ -88,8 +90,9 @@ function buildArtwork(input: RevealArtworkInput, includeCollectionBlock: boolean
     }
     const block = grail?.collectionBlock ?? lookupRevealCollectionBlock(blocks, input.category, input.assetId);
     if (!block) throw new Error('Reveal collection block is unavailable.');
-    attributes = [{ trait_type: 'collection block', value: block },
-      ...attributes.filter(attribute => attribute.trait_type !== 'collection block')];
+    attributes = input.deployment && isMainnet111kArtistDeployment(input.deployment)
+      ? withMainnet111kArtistTraits(attributes, block, getMainnet111kArtists(block))
+      : [{ trait_type: 'collection block', value: block }, ...attributes.filter(attribute => attribute.trait_type !== 'collection block')];
   }
   const metadata = { ...template, name, description, ...media, attributes, category: input.category, revealStatus: 'revealed' as const };
   return {

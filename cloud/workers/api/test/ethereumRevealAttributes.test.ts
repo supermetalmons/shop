@@ -20,6 +20,24 @@ test('enrichment keeps exactly one leading collection block and preserves every 
     applyRevealAttributePayload(frozen, payload).metadataJson);
 });
 
+test('mainnet enrichment retains the frozen artist order and disregards source artist values', async () => {
+  const block = { trait_type: 'collection block', value: 'Collage Paintings' };
+  const artists = ['historical credit', 'second credit'].map(value => ({ trait_type: 'artist', value }));
+  const frozen = JSON.stringify({ ...base, attributes: [block, ...artists, ...base.attributes] });
+  const conflicting = { trait_type: 'artist', value: 'source credit' };
+  const sourceTraits = [conflicting, trait, artists[1], trait];
+  const payload = JSON.stringify([block, ...sourceTraits]);
+  const expected = [block, ...artists, ...base.attributes, trait, trait];
+  assert.deepEqual(JSON.parse(applyRevealAttributePayload(frozen, payload, true).metadataJson).attributes, expected);
+  const fetched = await fetchRevealAttributes('painting', 8889, frozen, signal,
+    async () => Response.json({ 'collection block': block.value, attributes: sourceTraits }), undefined, true);
+  assert.deepEqual(JSON.parse(fetched.metadataJson).attributes, expected);
+  assert.deepEqual(JSON.parse(applyRevealAttributePayload(frozen, payload).metadataJson).attributes,
+    [block, ...artists, ...base.attributes, ...sourceTraits]);
+  assert.deepEqual(JSON.parse(applyRevealAttributePayload(body, payload, true).metadataJson).attributes,
+    [block, ...base.attributes, ...sourceTraits]);
+});
+
 test('enrichment retries source blocks that disagree with the frozen authoritative block', () => {
   const block = { trait_type: 'collection block', value: 'little swag' };
   const frozen = JSON.stringify({ ...base, attributes: [block, ...base.attributes] });

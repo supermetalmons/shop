@@ -4,6 +4,7 @@ import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.js
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
 import { excludeTwinAnnotations, hasTwinAnnotations } from './ethereumRevealTwinAnnotations.js';
+import { hasRevealArtistAnnotations } from './ethereumRevealArtistAnnotations.js';
 import { revealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum } from './ethereumRevealEnrichmentStore.js';
@@ -38,6 +39,10 @@ function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, f
   if (hasTwinAnnotations(sql) && sql.exec(`SELECT 1 FROM reveal_twin_annotations t JOIN assignments a ON a.token_id=t.token_id
       WHERE t.published=0 AND a.frozen_at_ms<=? LIMIT 1`, frozenThroughMs).toArray().length) {
     throw new Error('Attribute audit requires complete twin metadata publication for the frozen cutoff.');
+  }
+  if (hasRevealArtistAnnotations(sql) && sql.exec(`SELECT 1 FROM reveal_artist_annotations r JOIN assignments a ON a.token_id=r.token_id
+      WHERE r.published=0 AND a.frozen_at_ms<=? LIMIT 1`, frozenThroughMs).toArray().length) {
+    throw new Error('Attribute audit requires complete artist metadata publication for the frozen cutoff.');
   }
   const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');

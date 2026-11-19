@@ -141,6 +141,25 @@ npm run ethereum:twin-metadata -- verify --manifest "$manifest"
 
 Resume an interrupted publication with the same manifest. Verification checks every target in storage. Compare each public CDN document with the frozen original plus its one appended boolean, check the scoped metadata API and singleton controls, and repeat after the scheduler interval. Keep individual token records and source documents in the private operations directory.
 
+## Mainnet artwork artist credits
+
+Maintain the ordered artist names in [the mainnet credit mapping](../../shared/ethereum/mainnet111kArtists.json). Use the exact `collection block` label as the key. Add credits when preparing a new mainnet block. The first published artwork JSON places one `artist` trait per name immediately after `collection block`. Enrichment preserves the credits recorded for that artwork. Deploy mapping updates with the API Worker to use them for new reveals.
+
+Keep sales, reveal admission, and holder claims active during a credit release. Start with a scoped, read-only attribute audit and capture the CDN baseline in `.operations/`. Deploy the Worker with `npm run deploy:api`, verify adoption, then publish and check one small backfill page before continuing. The artist command pins the live deployment, mapping and cutoff in a private journal.
+
+```sh
+journal=.operations/111k-mainnet-artists/journal.json
+npm run ethereum:artist-metadata -- inspect --deployment-id mainnet-v1 --journal "$journal"
+npm run ethereum:artist-metadata -- apply --deployment-id mainnet-v1 --journal "$journal" --write --max-pages 1 --page-size 4
+npm run ethereum:artist-metadata -- apply --deployment-id mainnet-v1 --journal "$journal" --write --page-size 128 --parallel 4
+npm run ethereum:artist-metadata -- verify --deployment-id mainnet-v1 --journal "$journal" --parallel 4
+npm run ethereum:artist-metadata -- verify --deployment-id mainnet-v1 --journal "$journal" --parallel 4 --later-cutoff --evidence .operations/111k-mainnet-artists/verify.jsonl
+```
+
+Resume interruptions using the same journal. The Worker checks each authorized predecessor before publishing and defers tokens with another publication in progress. Watch scoped config, stats, and ready-egg reads during the operation. Reduce or stop the backfill if live publication or public reads slow down.
+
+Verify the canonical metadata checksum, CDN headers and ordered artist traits for the full cohort, then verify a later cutoff after a successful scheduled invocation. Compare against the baseline for stable artwork identities and preservation of existing traits, with holder hatches and enrichment accounted for. Run `npm run check:commerce-d1` once after production backfill and keep per-token evidence under `.operations/`.
+
 ## Empty mainnet pool rebuild
 
 For an explicitly requested prelaunch mainnet rebuild, `ethereum:empty-pool`

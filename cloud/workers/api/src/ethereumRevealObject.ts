@@ -1,4 +1,6 @@
 import { currentTwinDeployment, EthereumTwinMetadataOperation } from './ethereumTwinMetadata.js';
+import { currentArtistMetadataDeployment, EthereumArtistMetadataOperation } from './ethereumArtistMetadata.js';
+import { parseArtistMetadataRequest, type ArtistMetadataPage } from '../../../../shared/ethereum/artistMetadataMaintenance.js';
 import { parseTwinMetadataRequest, type TwinMetadataMaintenanceResult } from '../../../../shared/ethereum/twinMetadataMaintenance.js';
 import { parseDuplicateCorrectionRequest, requireDuplicateCorrectionScope, type DuplicateCorrectionResult } from '../../../../shared/ethereum/duplicateCorrection.js';
 import { duplicateCorrectionDefinition, duplicateCorrectionDefinitionSha256 } from '../../../../shared/ethereum/installedDuplicateCorrection.js';
@@ -28,6 +30,7 @@ import { parseRevealAttributeBackfillRequest, parseRevealMaintenanceRequest, par
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import { EthereumRevealCatalogUpdate, parseCatalogUpdateRequest } from './ethereumRevealCatalogUpdate.js';
 import { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
+import { validateRevealArtistEnrichment } from './ethereumRevealArtistAnnotations.js';
 import { EthereumRevealCatalogUpdateStore } from './ethereumRevealCatalogUpdateStore.js';
 import type { PublicationScope, MetadataWrite } from './ethereumRevealPublisherObject.js';
 import type { EthereumRevealCatalogUpdateResult } from '../../../../shared/ethereum/revealMaintenance.js';
@@ -52,6 +55,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
   private configuredStore: EthereumRevealStore | null = null;
   private retiring = false;
   private mixedQueue: Promise<void> = Promise.resolve();
+  private artistWave: { base: Promise<void>; barrier: Promise<void>; release(): void; pages: number; tokenIds: Set<string> } | null = null;
   private catalogUpdater: EthereumRevealCatalogUpdate | null = null;
   private emptyPoolUpdater: EthereumRevealEmptyPool | null = null;
   private emptyPoolFence: EthereumRevealEmptyPoolFence | null = null;
@@ -122,6 +126,50 @@ export class EthereumRevealObject extends DurableObject<Env> {
     }, mixed);
   }
 
+  async artistMetadata(deployment: EthereumRevealDeployment, value: unknown): Promise<ArtistMetadataPage> {
+    const request = parseArtistMetadataRequest(value);
+    requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, request.scope);
+    const run = () => {
+      const reader = new EthereumRevealCatalogReader(this.ctx.storage.sql);
+      const current = async () => {
+        const row = await currentArtistMetadataDeployment(this.env.OPS_DB, request);
+        if (this.retiring || this.rebuildFence.status() || row.deploymentId !== deployment.deploymentId) throw unavailable();
+        return row;
+      };
+      return new EthereumArtistMetadataOperation({ sql: this.ctx.storage.sql, transaction: action => this.transaction(action),
+        reader, bucket: this.env.ETHEREUM_REVEAL_METADATA, current }).run(request);
+    };
+    if (request.action === 'plan') return run();
+    const tokenIds = request.retryTokenIds;
+    if (!tokenIds) {
+      const work = this.mixedQueue.then(run);
+      this.mixedQueue = work.then(() => {}, () => {});
+      return work;
+    }
+    if (!this.artistWave) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      this.artistWave = { base: this.mixedQueue, barrier: promise, release: resolve, pages: 0, tokenIds: new Set() };
+      this.mixedQueue = promise;
+    }
+    const wave = this.artistWave;
+    if (this.mixedQueue !== wave.barrier || wave.pages >= 4 || tokenIds.some(tokenId => wave.tokenIds.has(tokenId))) {
+      throw new Error('Artist metadata page capacity is busy; retry the same page.');
+    }
+    wave.pages++;
+    for (const tokenId of tokenIds) wave.tokenIds.add(tokenId);
+    try {
+      await wave.base;
+      return await run();
+    } finally {
+      wave.pages--;
+      for (const tokenId of tokenIds) wave.tokenIds.delete(tokenId);
+      if (wave.pages === 0) {
+        this.artistWave = null;
+        wave.release();
+      }
+    }
+  }
+
   async twinMetadata(deployment: EthereumRevealDeployment, value: unknown): Promise<TwinMetadataMaintenanceResult> {
     const request = parseTwinMetadataRequest(value);
     requireDuplicateCorrectionScope(deployment, duplicateCorrectionDefinition);
@@ -134,7 +182,8 @@ export class EthereumRevealObject extends DurableObject<Env> {
       };
       const reader = new EthereumRevealCatalogReader(this.ctx.storage.sql);
       return new EthereumTwinMetadataOperation({sql:this.ctx.storage.sql,transaction:action=>this.transaction(action),
-        canonical:id=>reader.canonicalMetadata([id])[0],bucket:this.env.ETHEREUM_REVEAL_METADATA,current}).run(request);
+        canonical:id=>reader.canonicalMetadataBeforeArtists([id])[0], canonicalAfterArtists:id=>reader.canonicalMetadata([id])[0],
+        bucket:this.env.ETHEREUM_REVEAL_METADATA,current}).run(request);
     });
     this.mixedQueue = work.then(() => {}, () => {});
     return work;
@@ -813,6 +862,7 @@ export class EthereumRevealObject extends DurableObject<Env> {
         contractAddress: deployment.contractAddress, metadataBaseUri: deployment.metadataBaseUri };
       const writer = this.env.ETHEREUM_REVEAL_PUBLISHER.getByName(attributePublisherName(scope));
       let metadataJson = job.target_json;
+      let annotated: boolean;
       if (metadataJson === null) {
         if (job.target_sha256 !== null || job.acknowledged_sha256 !== null ||
           job.last_error === 'conflict-recheck' || job.last_error === 'publication-unavailable') return 'conflict';
@@ -824,13 +874,20 @@ export class EthereumRevealObject extends DurableObject<Env> {
         if (target.status !== 'prepared') return target.status;
         await this.authorize(deployment, deadlineMs);
         timeout.signal.throwIfAborted();
+        annotated = validateRevealArtistEnrichment(this.ctx.storage.sql, job.token_id, target.metadataJson);
         if (!this.store.enrichment.stage(job, target.metadataJson, target.metadataSha256)) return 'source-unavailable';
         metadataJson = target.metadataJson;
-      } else if (!matchesEnrichmentChecksum(metadataJson, job.target_sha256, job.acknowledged_sha256)) return 'conflict';
+      } else {
+        if (!matchesEnrichmentChecksum(metadataJson, job.target_sha256, job.acknowledged_sha256)) return 'conflict';
+        annotated = validateRevealArtistEnrichment(this.ctx.storage.sql, job.token_id, metadataJson);
+      }
       failure = 'publication-unavailable';
       timeout.signal.throwIfAborted();
+      const current = annotated ? this.store.catalogUpdate.reader.canonicalMetadata([job.token_id])[0] : undefined;
+      if (annotated && !current) return failure;
       const result = await raceWithSignal(writer.publishAttributes(scope, {
-        tokenId: job.token_id, baseJson: job.metadata_json, metadataJson, metadataRevision: job.metadata_revision,
+        tokenId: job.token_id, baseJson: job.metadata_json, metadataJson: current?.metadataJson ?? metadataJson,
+        metadataRevision: current?.metadataRevision ?? job.metadata_revision, expectedJsons: current?.expectedJsons,
       }, deadlineMs), timeout.signal);
       if (result.tokenId === job.token_id && (result.status === 'published' || result.status === 'conflict')) return result.status;
       return failure;

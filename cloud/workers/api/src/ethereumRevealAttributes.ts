@@ -79,7 +79,7 @@ export async function fetchRevealAttributePayload(category: EthereumArtworkCateg
   return payload;
 }
 
-export function applyRevealAttributePayload(baseJson: string, attributesJson: string): { metadataJson: string; metadataSha256: string } {
+export function applyRevealAttributePayload(baseJson: string, attributesJson: string, retainFrozenArtists = false): { metadataJson: string; metadataSha256: string } {
   if (!revealMetadataFits(attributesJson)) {
     throw new InvalidRevealAttributes('Invalid frozen attribute payload.');
   }
@@ -96,7 +96,11 @@ export function applyRevealAttributePayload(baseJson: string, attributesJson: st
   if (!record(base) || !Array.isArray(base.attributes)) throw new InvalidRevealAttributes('Invalid frozen artwork metadata.');
   const block = payload[0];
   const authoritativeBlock = base.attributes.some(attribute => record(attribute) && attribute.trait_type === 'collection block');
-  const remaining = [...base.attributes, ...payload.slice(1)].filter(attribute => {
+  const [first, second] = base.attributes;
+  const authoritativeArtists = retainFrozenArtists && record(first) && first.trait_type === 'collection block' &&
+    record(second) && second.trait_type === 'artist' && typeof second.value === 'string' && Boolean(second.value.trim());
+  const additional = authoritativeArtists ? payload.slice(1).filter(attribute => !record(attribute) || attribute.trait_type !== 'artist') : payload.slice(1);
+  const remaining = [...base.attributes, ...additional].filter(attribute => {
     if (!authoritativeBlock) return true;
     if (!record(attribute) || attribute.trait_type !== 'collection block') return true;
     if (attribute.value !== block.value) throw new RevealAttributeSourceUnavailable('collection-block-mismatch');
@@ -109,17 +113,17 @@ export function applyRevealAttributePayload(baseJson: string, attributesJson: st
   return { metadataJson, metadataSha256: bytesToHex(sha256(bytes)) };
 }
 
-export function validateStagedRevealMetadata(base: { metadataJson: string; placeholderJson: string }, traits: string): void {
+export function validateStagedRevealMetadata(base: { metadataJson: string; placeholderJson: string }, traits: string, retainFrozenArtists = false): void {
   if (!revealMetadataFits(base.metadataJson) || !revealMetadataFits(base.placeholderJson)) {
     throw new InvalidRevealAttributes('Base or placeholder metadata exceeds 512 KiB.');
   }
-  applyRevealAttributePayload(base.metadataJson, traits);
+  applyRevealAttributePayload(base.metadataJson, traits, retainFrozenArtists);
 }
 
 export async function fetchRevealAttributes(category: EthereumArtworkCategory, assetId: number, baseJson: string,
-  signal: AbortSignal, fetchSource: typeof fetch = fetch, catalog?: RevealAssetCatalog): Promise<{ metadataJson: string; metadataSha256: string }> {
+  signal: AbortSignal, fetchSource: typeof fetch = fetch, catalog?: RevealAssetCatalog, retainFrozenArtists = false): Promise<{ metadataJson: string; metadataSha256: string }> {
   const payload = await fetchRevealAttributePayload(category, assetId, signal, fetchSource, catalog);
-  try { return applyRevealAttributePayload(baseJson, payload); }
+  try { return applyRevealAttributePayload(baseJson, payload, retainFrozenArtists); }
   catch (error) {
     if (error instanceof EnrichedRevealMetadataTooLarge) throw new RevealAttributeSourceUnavailable('too-large');
     throw error;

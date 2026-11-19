@@ -1,0 +1,246 @@
+{
+  "checkedUtc": "2026-11-19T13:20:23.881Z",
+  "deploymentId": "mainnet-v1",
+  "chainId": 1,
+  "catalogVersion": "111k-v11",
+  "catalogRevision": 4,
+  "registryRevision": 18,
+  "mappingSha256": "01dce80defe69c5f8f3de97ba69b66c250706d616b5596ab4106827bdfadcb6d",
+  "apiDeployment": {
+    "deploymentId": "42dce847-5e9e-4c0e-b476-14fbf269f4aa",
+    "versionId": "1ced7d9f-b1be-4593-af84-1e213405d849",
+    "deployedUtc": "2026-11-19T12:21:37.855916Z",
+    "unitTestsPassed": 3802,
+    "runtimeTestsPassed": 95,
+    "trafficPercentage": 100
+  },
+  "backfill": {
+    "frozenThroughMs": 1795088868290,
+    "completedUtc": "2026-11-19T12:54:56Z",
+    "scanned": 41100,
+    "eggs": 10827,
+    "credited": 0,
+    "published": 30273,
+    "conflicts": 0,
+    "deferred": 0
+  },
+  "verification": {
+    "baseline": {
+      "checkedUtc": "2026-11-19T11:36:10.167Z",
+      "frozenThroughMs": 1795087207193,
+      "revision": 18,
+      "total": 41100,
+      "verified": 41100,
+      "byCategory": {
+        "painting": 28603,
+        "egg": 10827,
+        "animated": 415,
+        "3d": 1233,
+        "video": 22
+      },
+      "observations": {
+        "new": 41100
+      },
+      "goodTwins": 47,
+      "evilTwins": 47,
+      "failures": 0,
+      "failureReasons": {},
+      "absentBaseline": 0
+    },
+    "r2Fixed": {
+      "checked": 41100,
+      "artwork": 30274,
+      "eggs": 10826,
+      "frozenThroughMs": 1795088868290
+    },
+    "ledgerLater": {
+      "checked": 41100,
+      "artwork": 30275,
+      "eggs": 10825,
+      "frozenThroughMs": 1795093611488
+    },
+    "publicCdn": {
+      "checkedUtc": "2026-11-19T13:19:31.526Z",
+      "frozenThroughMs": 1795093611488,
+      "revision": 18,
+      "total": 41100,
+      "verified": 41100,
+      "byCategory": {
+        "painting": 28605,
+        "egg": 10825,
+        "animated": 415,
+        "3d": 1233,
+        "video": 22
+      },
+      "observations": {
+        "artwork-stable": 30273,
+        "egg-stable": 10825,
+        "holder-hatch": 2
+      },
+      "goodTwins": 47,
+      "evilTwins": 47,
+      "failures": 0,
+      "failureReasons": {},
+      "absentBaseline": 0
+    },
+    "publicApi": {
+      "samples": 11,
+      "passed": 11,
+      "failures": 0,
+      "checkedUtc": "2026-11-19T13:19:33.254Z"
+    },
+    "holderHatches": {
+      "checked": 2,
+      "frozenThroughMs": 1795093611488,
+      "checkedUtc": "2026-11-19T13:18:54.767Z",
+      "conflicts": 0
+    },
+    "privateEvidenceSha256": {
+      "baselineAudit": "a81549758531973f34a9c01d8d73991ec9753df4b7fb0c19e066b4d1553394d1",
+      "fixedR2": "be59ca169e52fd1bddb68d0389cbcca0fa8327a796837dc74ff1564b6d2349b2",
+      "laterLedger": "7cf333721f03eac668b91c345846e5051103203503d7fec4170e5beb1aab5b81",
+      "publicCdn": "0f2b895008f5ac198071e0d8a2f776ef2419326031615f78ad221e982d9faf45"
+    }
+  },
+  "availability": {
+    "noMaintenancePause": true,
+    "firstCheckedUtc": "2026-11-19T11:21:06.255Z",
+    "lastCheckedUtc": "2026-11-19T13:20:04.566Z",
+    "checks": 1340,
+    "failures": 4,
+    "transientFailures": [
+      {
+        "utc": "2026-11-19T12:56:31.726Z",
+        "failed": [
+          {
+            "route": "config",
+            "status": 503
+          },
+          {
+            "route": "stats",
+            "status": 503
+          }
+        ],
+        "recoveredOnNextCheck": true
+      },
+      {
+        "utc": "2026-11-19T13:11:51.179Z",
+        "failed": [
+          {
+            "route": "config",
+            "status": 503
+          },
+          {
+            "route": "stats",
+            "status": 503
+          }
+        ],
+        "recoveredOnNextCheck": true
+      }
+    ],
+    "scheduler": [
+      {
+        "utc": "2026-11-19T11:25:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T11:30:08Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T11:35:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T11:40:08Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T11:45:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T11:50:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T11:55:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:00:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:05:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:10:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:15:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:20:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:25:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:30:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:35:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:40:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:45:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:50:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T12:55:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T13:00:08Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T13:05:08Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T13:10:08Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T13:15:07Z",
+        "outcome": "ok"
+      },
+      {
+        "utc": "2026-11-19T13:20:07Z",
+        "outcome": "ok"
+      }
+    ]
+  },
+  "commerceAudit": {
+    "ok": true,
+    "command": "npm run check:commerce-d1",
+    "checkedUtc": "2026-11-19T13:00:29.416Z",
+    "backfillCompletedUtc": "2026-11-19T12:54:56Z"
+  }
+}

@@ -26,6 +26,7 @@
     "ethereum:catalog-history": "node --import tsx scripts/ethereum-metadata/catalogUpdateCli.ts",
     "ethereum:owner-hatch-history": "node --import tsx scripts/ops/ethereumOwnerHatchingControl.ts",
     "ethereum:twin-metadata": "node --import tsx scripts/ops/ethereumTwinMetadata.ts",
+    "ethereum:artist-metadata": "node --import tsx scripts/ops/ethereumArtistMetadata.ts",
     "ethereum:duplicate-correction": "node --import tsx scripts/ops/ethereumDuplicateCorrection.ts",
     "ethereum:mixed-allocation": "node --import tsx scripts/ethereum-metadata/mixedCli.ts",
     "ethereum:empty-pool": "node --import tsx scripts/ethereum-metadata/emptyPoolCli.ts",

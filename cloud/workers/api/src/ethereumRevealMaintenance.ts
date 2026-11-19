@@ -26,8 +26,21 @@ import { parseHistoricalOwnerHatchingRequest, type OwnerHatchingMaintenanceResul
 import { getInstalledMixedAllocation } from '../../../../shared/ethereum/installedMixedAllocation.js';
 import { requireMixedDeployment } from './ethereumMixedAllocationOperation.js';
 import { parseMixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
+import { parseArtistMetadataRequest, type ArtistMetadataPage } from '../../../../shared/ethereum/artistMetadataMaintenance.js';
+import { currentArtistMetadataDeployment } from './ethereumArtistMetadata.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async artistMetadata(value: unknown): Promise<ArtistMetadataPage> {
+    const request = parseArtistMetadataRequest(value);
+    const deployment = await currentArtistMetadataDeployment(this.env.OPS_DB, request);
+    if (request.action === 'start') {
+      const timeout = createTimedAbortScope(undefined, { timeoutMs: 25_000, timeoutMessage: 'Mainnet artist verification timed out.' });
+      try { await raceWithSignal(verifyRevealDeployment(this.env, deployment, timeout.signal), timeout.signal); }
+      finally { timeout.dispose(); }
+    }
+    return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).artistMetadata(deployment, request);
+  }
+
   async twinMetadata(value: unknown): Promise<TwinMetadataMaintenanceResult> {
     const request = parseTwinMetadataRequest(value);
     const row = await currentTwinDeployment(this.env.OPS_DB,request);

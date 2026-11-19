@@ -3,6 +3,7 @@ import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUr
 import { normalizeEthereumAddress } from '../../../../shared/ethereum/protocol.js';
 import { readEthereumRevealDeployment, type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
+import { isMainnet111kArtistDeployment } from '../../../../shared/ethereum/mainnet111kArtists.js';
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import type { EthereumArtworkCategory } from '../../../../shared/ethereum/reveal.js';
 import { REVEAL_ENRICHMENT_SLOTS } from './ethereumRevealEnrichmentStore.js';
@@ -14,6 +15,7 @@ import { revealDeploymentCatalog } from './ethereumRevealCatalog.js';
 import { MAX_RELIC_METADATA_BYTES, parseRelicImagesRequest, prepareRelicImagePatch, RELIC_IMAGE_TOKEN_IDS,
   type RelicImagePatch, type RelicImagesRequest, type RelicImagesResult } from '../../../../shared/ethereum/relicImages.js';
 import { requireRelicImagesDeployment } from './ethereumRelicImages.js';
+import { putRevealMetadataConditionally, REVEAL_JSON_HTTP_METADATA } from './ethereumRevealMetadataWrite.js';
 
 export type PublicationScope = Pick<EthereumRevealDeployment, 'deploymentId' | 'chainId' | 'contractAddress' | 'metadataBaseUri'>;
 export type RevealPublicationOutcome = { tokenId: string; status: 'published' | 'conflict' | 'retry' | 'superseded' };
@@ -22,8 +24,7 @@ type PublicationLane = 'normal' | 'replacement';
 type PendingPublication = { identity: string; revision: number; lane: PublicationLane; result: Promise<RevealPublicationOutcome> };
 export type PreparedAttributes = { status: 'prepared'; metadataJson: string; metadataSha256: string } | { status: 'invalid' | 'source-unavailable' };
 type AttributePreparation = { category: EthereumArtworkCategory; assetId: number; baseJson: string; catalogVersion?: string; catalogSha256?: string };
-type AttributeWrite = { tokenId: string; baseJson: string; metadataJson: string; metadataRevision: number };
-const JSON_HTTP_METADATA = { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' } as const;
+type AttributeWrite = { tokenId: string; baseJson: string; metadataJson: string; metadataRevision: number; expectedJsons?: string[] };
 
 export class EthereumRevealPublisherObject extends DurableObject<Env> {
   private readonly publications = new Map<string, PendingPublication>();
@@ -63,8 +64,8 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
       const key = new URL(ethereumTokenMetadataUri(request.scope, tokenId)).pathname.slice(1);
       const object = await raceWithSignal(this.trackStorage(this.env.ETHEREUM_REVEAL_METADATA.get(key)), signal);
       if (!object || object.size > MAX_RELIC_METADATA_BYTES) throw new Error('Relic metadata is missing or oversized.');
-      if (object.httpMetadata?.contentType !== JSON_HTTP_METADATA.contentType ||
-        object.httpMetadata.cacheControl !== JSON_HTTP_METADATA.cacheControl || object.httpMetadata.contentEncoding !== undefined) {
+      if (object.httpMetadata?.contentType !== REVEAL_JSON_HTTP_METADATA.contentType ||
+        object.httpMetadata.cacheControl !== REVEAL_JSON_HTTP_METADATA.cacheControl || object.httpMetadata.contentEncoding !== undefined) {
         throw new Error('Relic metadata HTTP headers are not canonical.');
       }
       const bytes = await raceWithSignal(this.trackStorage(object.arrayBuffer()), signal);
@@ -91,7 +92,7 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
       if (json === patch.afterJson) return { action: 'apply', tokenId: patch.tokenId, status: 'unchanged' };
       if (json !== patch.beforeJson || object.etag !== patch.etag) throw new Error('Relic metadata changed since preparation.');
       const written = await raceWithSignal(this.trackStorage(this.env.ETHEREUM_REVEAL_METADATA.put(key, patch.afterJson, {
-        onlyIf: { etagMatches: patch.etag }, httpMetadata: JSON_HTTP_METADATA,
+        onlyIf: { etagMatches: patch.etag }, httpMetadata: REVEAL_JSON_HTTP_METADATA,
         customMetadata: { ...object.customMetadata, sha256: patch.afterSha256 },
       })), signal);
       if (!written) throw new Error('Relic metadata conditional write conflicted.');
@@ -126,7 +127,8 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
       const catalog = job.catalogVersion ? getRevealCatalog(job.catalogVersion, job.catalogSha256) : revealDeploymentCatalog(deployment);
       if (!catalog) throw new RevealAttributeSourceUnavailable('catalog-unavailable');
       timeout.signal.throwIfAborted();
-      return fetchRevealAttributes(job.category, job.assetId, job.baseJson, timeout.signal, fetch, catalog);
+      return fetchRevealAttributes(job.category, job.assetId, job.baseJson, timeout.signal, fetch, catalog,
+        isMainnet111kArtistDeployment(deployment));
     };
     const work = prepare().finally(() => { this.sourceReads.delete(work); });
     this.sourceReads.add(work);
@@ -148,7 +150,7 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
       return this.env.ETHEREUM_REVEAL_PUBLISHER.getByName(`${scope.chainId}:${scope.contractAddress}`).publishAttributes(scope, job, deadlineMs);
     }
     const [outcome] = await this.publishJobs(scope, [{ write: { tokenId: job.tokenId, metadataRevision: job.metadataRevision,
-      expectedJsons: [job.baseJson], allowMissing: false, metadataJson: job.metadataJson }, lane: 'normal' }], deadlineMs);
+      expectedJsons: job.expectedJsons ?? [job.baseJson], allowMissing: false, metadataJson: job.metadataJson }, lane: 'normal' }], deadlineMs);
     return outcome;
   }
 
@@ -239,7 +241,7 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
         signal.throwIfAborted();
         if (body === job.metadataJson) {
           const headers = previous.httpMetadata;
-          if (headers?.contentType === JSON_HTTP_METADATA.contentType && headers.cacheControl === JSON_HTTP_METADATA.cacheControl &&
+          if (headers?.contentType === REVEAL_JSON_HTTP_METADATA.contentType && headers.cacheControl === REVEAL_JSON_HTTP_METADATA.cacheControl &&
             !headers.contentEncoding) return result(await this.isCurrentPublication(scope, job, signal) ? 'published' : 'superseded');
         } else if (!job.expectedJsons.includes(body)) return result('conflict');
       } else if (!job.allowMissing) return result('conflict');
@@ -248,11 +250,8 @@ export class EthereumRevealPublisherObject extends DurableObject<Env> {
       if (!await this.isCurrentPublication(scope, job, signal)) return result('superseded');
       if (this.retiring || this.resetting || Date.now() >= deadlineMs) return result('retry');
       signal.throwIfAborted();
-      const written = await raceWithSignal(this.trackStorage(this.env.ETHEREUM_REVEAL_METADATA.put(key, job.metadataJson, {
-        onlyIf: previous ? { etagMatches: previous.etag } : { etagDoesNotMatch: '*' },
-        httpMetadata: JSON_HTTP_METADATA,
-        customMetadata: { revealDeployment: scope.deploymentId, revealToken: job.tokenId, revealMetadataRevision: String(job.metadataRevision) },
-      })), signal);
+      const written = await raceWithSignal(this.trackStorage(putRevealMetadataConditionally(this.env.ETHEREUM_REVEAL_METADATA,
+        key, job.metadataJson, job.metadataRevision, { deploymentId: scope.deploymentId, tokenId: job.tokenId }, previous)), signal);
       return result(written ? 'published' : 'retry');
     } catch {
       if (timeout.timedOut() && !this.resetting) {

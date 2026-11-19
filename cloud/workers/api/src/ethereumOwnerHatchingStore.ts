@@ -4,6 +4,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
 import { parseMetadataJson } from './ethereumMetadataJson.js';
+import { revealArtistPublication, validateRevealArtistEnrichment } from './ethereumRevealArtistAnnotations.js';
 import { revealRandomInteger } from './ethereumRevealCatalog.js';
 import type { RevealOriginUnit } from './ethereumRevealCatalogTypes.js';
 import type { RevealPublicationJob, RevealPublicationResult, RevealSql } from './ethereumRevealStore.js';
@@ -265,7 +266,7 @@ export class EthereumOwnerHatchingStore {
         WHERE status='pending' AND next_check_ms<=? ORDER BY next_check_ms,CAST(token_id AS INTEGER) LIMIT ?`, now, limit).toArray();
       const claimId = crypto.randomUUID();
       return rows.map(row => {
-        const canonical = this.reader.canonical(row.token_id)!;
+        const canonical = revealArtistPublication(this.sql, this.reader.canonical(row.token_id)!);
         this.sql.exec(`UPDATE owner_hatching_publication SET next_check_ms=?,attempts=attempts+1,claim_id=? WHERE token_id=?`, now + 60_000, claimId, row.token_id);
         return { token_id: row.token_id, metadata_json: canonical.metadataJson, placeholder_json: canonical.expectedJsons[0],
           attempts: row.attempts, claim_id: claimId, metadata_revision: canonical.metadataRevision,
@@ -279,14 +280,16 @@ export class EthereumOwnerHatchingStore {
       const applied: RevealPublicationResult[] = [];
       for (const result of results) {
         const { job, status } = result;
-        const current = this.reader.canonical(job.token_id);
-        if (!current || current.metadataRevision !== job.metadata_revision || current.metadataJson !== job.metadata_json) continue;
+        const raw = this.reader.canonical(job.token_id);
+        if (!raw) continue;
+        const current = revealArtistPublication(this.sql, raw);
+        if (current.metadataRevision !== job.metadata_revision || current.metadataJson !== job.metadata_json) continue;
         const next = status === 'superseded' ? now : now + Math.min(300_000, 1_000 * 2 ** Math.min(job.attempts + 1, 8));
         const updated = this.sql.exec(`UPDATE owner_hatching_publication SET status=?,next_check_ms=?,claim_id=NULL,
           attempts=CASE WHEN ?='superseded' THEN ? ELSE attempts END
           WHERE token_id=? AND status='pending' AND metadata_revision=? AND attempts=? AND claim_id IS ? RETURNING token_id`,
           status === 'published' ? 'published' : status === 'conflict' ? 'conflict' : 'pending', next, status, job.attempts,
-          job.token_id, job.metadata_revision ?? 0, job.attempts + 1, job.claim_id ?? null).toArray().length;
+          job.token_id, raw.metadataRevision, job.attempts + 1, job.claim_id ?? null).toArray().length;
         if (updated) applied.push(result);
       }
       return applied;
@@ -333,6 +336,7 @@ export class EthereumOwnerHatchingStore {
       const withoutAttributes = (value: object) => JSON.stringify(Object.fromEntries(Object.entries(value)
         .filter(([key]) => key !== 'attributes').sort(([a], [b]) => a.localeCompare(b))));
       if (withoutAttributes(before) !== withoutAttributes(after)) throw new Error('Owner enrichment cannot change the revealed artwork.');
+      validateRevealArtistEnrichment(this.sql, tokenId, metadataJson);
       const metadataRevision = expectedRevision + 1;
       const canonical: OwnerHatchingCanonical = { ...previous, metadataJson, metadataRevision, targetSha256: metadataSha256,
         artwork: { ...previous.artwork, metadataRevision },

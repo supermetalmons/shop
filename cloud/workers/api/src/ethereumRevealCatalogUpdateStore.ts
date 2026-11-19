@@ -3,6 +3,7 @@ import type { EmptyPoolBatch } from '../../../../shared/ethereum/revealMaintenan
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { getOwnerHatchingGrail, requireOrdinaryCatalogTarget } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
+import { isMainnet111kArtistDeployment, requireMainnet111kArtistCoverage } from '../../../../shared/ethereum/mainnet111kArtists.js';
 import type { EthereumArtworkCategory } from '../../../../shared/ethereum/reveal.js';
 import { REVEAL_ASSET_FAMILIES, type RevealAssetCatalog, type RevealAssetCatalogDescriptor } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
@@ -46,12 +47,13 @@ export class EthereumRevealCatalogUpdateStore {
         const deployment = JSON.parse(this.reader.settings()!.deployment_json) as EthereumRevealDeployment;
         const built = buildNewRevealedArtwork({ templateJson: deployment.templateJson, tokenId,
           crateTokenId: original.artwork.crateTokenId, category: asset.category, assetId: asset.assetId,
-          observation: original.artwork.observation, catalog: this.reader.activeCatalog(), ownerHatching: true });
+          observation: original.artwork.observation, catalog: this.reader.activeCatalog(), deployment, ownerHatching: true });
         const grail = getOwnerHatchingGrail(asset.category, asset.assetId);
         const block = grail?.collectionBlock ?? lookupRevealCollectionBlock(revealCollectionBlocks(this.reader.effectiveCatalog()), asset.category, asset.assetId);
         built.artwork.collectionBlock = block;
         return { artwork: built.artwork,
-          metadataJson: asset.attributesJson ? applyRevealAttributePayload(built.metadataJson, asset.attributesJson).metadataJson : built.metadataJson };
+          metadataJson: asset.attributesJson ? applyRevealAttributePayload(built.metadataJson, asset.attributesJson,
+            isMainnet111kArtistDeployment(deployment)).metadataJson : built.metadataJson };
       },
       reservedAttributes: (batchId, asset) => this.reader.mixedAttributes(batchId, asset),
       takeOrdinary: () => {
@@ -218,7 +220,9 @@ export class EthereumRevealCatalogUpdateStore {
     return this.transaction(() => {
       this.reader.assertEmptyRebuildInventory();
       const saved = this.reader.settings()!;
-      requireOrdinaryCatalogTarget((JSON.parse(saved.deployment_json) as EthereumRevealDeployment).chainId, batch.target.descriptor);
+      const deployment: EthereumRevealDeployment = JSON.parse(saved.deployment_json);
+      requireOrdinaryCatalogTarget(deployment.chainId, batch.target.descriptor);
+      if (isMainnet111kArtistDeployment(deployment)) requireMainnet111kArtistCoverage(revealCollectionBlocks(batch.target.descriptor));
       const current = this.reader.effectiveCatalog()!;
       if (saved.candidate_catalog_generation || current.catalogVersion !== batch.predecessor.descriptor.catalogVersion ||
         current.manifestSha256 !== batch.predecessor.descriptor.manifestSha256) throw new Error('Empty pool rebuild predecessor changed.');

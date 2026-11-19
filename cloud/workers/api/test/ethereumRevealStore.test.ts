@@ -16,6 +16,7 @@ import { mixedReleaseBlockHash, type MixedAllocationDefinition, type MixedAlloca
 import { computeRevealCatalogDescriptor, revealCatalogMedia, validateRevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.ts';
 import catalog from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/manifest.json';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.ts';
+import { getMainnet111kArtists } from '../../../../shared/ethereum/mainnet111kArtists.ts';
 
 const v10Catalog = getRevealCatalog('111k-v10')!;
 const REVEAL_CATEGORY_COUNTS = revealCategoryCounts(v10Catalog);
@@ -299,6 +300,13 @@ for (const chainId of [1, 11155111]) for (const reserveFirst of [false, true]) t
     assert.equal(artworks.length, crate.tokenIds.length);
     assert.equal(artworks.filter(artwork => artwork.category === 'egg').length, 6);
     assert.deepEqual(artworks.slice(0, 6).map(artwork => artwork.category), Array(6).fill('egg'));
+    for (const artwork of restored.catalogUpdate.reader.canonicalMetadata(crate.tokenIds)) {
+      const { attributes } = JSON.parse(artwork.metadataJson);
+      const artists = attributes.filter((trait: { trait_type: string }) => trait.trait_type === 'artist');
+      const expected = artwork.category !== 'egg' && chainId === 1 ? getMainnet111kArtists(attributes[0].value) : [];
+      assert.deepEqual(artists, expected.map(value => ({ trait_type: 'artist', value })));
+      if (expected.length) assert.deepEqual(attributes.slice(1, 1 + expected.length), artists);
+    }
   }
   conservation(database, 71);
 });

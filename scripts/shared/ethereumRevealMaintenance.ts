@@ -1,4 +1,5 @@
 import type { TwinMetadataMaintenanceRequest, TwinMetadataMaintenanceResult } from '../../shared/ethereum/twinMetadataMaintenance.ts';
+import type { ArtistMetadataPage, ArtistMetadataRequest } from '../../shared/ethereum/artistMetadataMaintenance.ts';
 import type { DuplicateCorrectionRequest, DuplicateCorrectionResult } from '../../shared/ethereum/duplicateCorrection.ts';
 import { duplicateCorrectionLedgerSummary } from './duplicateCorrectionLedgerSummary.ts';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,7 @@ import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfi
   EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  artistMetadata?(request: ArtistMetadataRequest): Promise<ArtistMetadataPage>;
   twinMetadata?(request: TwinMetadataMaintenanceRequest): Promise<TwinMetadataMaintenanceResult>;
   duplicateCorrection?(request: DuplicateCorrectionRequest): Promise<DuplicateCorrectionResult>;
   mixedAllocation?(request: MixedAllocationMaintenanceRequest): Promise<MixedAllocationMaintenanceResult>;
@@ -70,7 +72,28 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async twinMetadata(request) {
+    return await run({ async artistMetadata(request) {
+      const r = await call(() => proxy.env.REVEAL_MAINTENANCE.artistMetadata!(request));
+      const s = r.scope;
+      return { scope: { deploymentId: s.deploymentId, chainId: s.chainId, contractAddress: s.contractAddress,
+        metadataBaseUri: s.metadataBaseUri, deploymentBlock: s.deploymentBlock, expectedRevision: s.expectedRevision,
+        catalogRevision: s.catalogRevision, catalogVersion: s.catalogVersion, catalogSha256: s.catalogSha256,
+        mappingSha256: s.mappingSha256, operationId: s.operationId, frozenThroughMs: s.frozenThroughMs },
+      action: r.action, started: r.started, frozenThroughMs: r.frozenThroughMs, next: r.next,
+      scanned: r.scanned, eggs: r.eggs, credited: r.credited, published: r.published,
+      ...(r.plannedTokenIds === undefined ? {} : {
+        plannedTokenIds: Array.from({ length: r.plannedTokenIds.length }, (_, index) => r.plannedTokenIds![index]),
+      }),
+      deferred: Array.from({ length: r.deferred.length }, (_, index) => r.deferred[index]),
+      conflicts: Array.from({ length: r.conflicts.length }, (_, index) => r.conflicts[index]),
+      records: Array.from({ length: r.records.length }, (_, index) => {
+        const row = r.records[index];
+        return { tokenId: row.tokenId, category: row.category, assetId: row.assetId, assignmentRevision: row.assignmentRevision,
+          metadataRevision: row.metadataRevision, metadataSha256: row.metadataSha256, frozenMetadataSha256: row.frozenMetadataSha256,
+          nonAttributeSha256: row.nonAttributeSha256, nonArtistSha256: row.nonArtistSha256, collectionBlock: row.collectionBlock,
+          artists: Array.from({ length: row.artists.length }, (_, artist) => row.artists[artist]) };
+      }) };
+    }, async twinMetadata(request) {
       const r = await call(() => proxy.env.REVEAL_MAINTENANCE.twinMetadata!(request));
       return { operationId: r.operationId, cohortSha256: r.cohortSha256, phase: r.phase,
         total: r.total, good: r.good, evil: r.evil, groups: r.groups, published: r.published,

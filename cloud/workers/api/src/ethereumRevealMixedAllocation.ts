@@ -3,12 +3,14 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import collectionBlocks from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/collection-blocks.json';
 import supplement from '../../../../shared/ethereum/ownerHatchingCatalog.json';
+import { isMainnet111kArtistDeployment, requireMainnet111kArtistCoverage } from '../../../../shared/ethereum/mainnet111kArtists.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { validateRevealAssetCatalog, type RevealAssetCatalog } from '../../../../shared/ethereum/revealAssetCatalog.js';
 import { getRevealCatalog } from '../../../../shared/ethereum/revealCatalogRegistry.js';
 import { drawMixedAllocation, mixedAllocationCounts, validateMixedAllocationDefinition, validateMixedAllocationRelease, type MixedAllocationArtwork, type MixedAllocationDefinition } from '../../../../shared/ethereum/revealMixedAllocation.js';
 import { validateStagedRevealMetadata } from './ethereumRevealAttributes.js';
 import { buildNewRevealedArtwork, REVEAL_ARTWORK_COUNT, revealRandomInteger } from './ethereumRevealCatalog.js';
+import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
 import type { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
 import { validateCatalogPageSize } from './ethereumRevealCatalogReader.js';
 import type { RevealCatalogMetadataStage, RevealCatalogUpdateStatus } from './ethereumRevealCatalogTypes.js';
@@ -128,6 +130,7 @@ export class EthereumRevealMixedAllocation {
         definition.contractAddress.toLowerCase() !== deployment.contractAddress.toLowerCase() || definition.deploymentBlock !== deployment.deploymentBlock ||
         definition.metadataBaseUri !== deployment.metadataBaseUri || definition.originCatalogVersion !== deployment.catalogVersion || definition.batchId !== batchId) ||
         definition.version === 1 && deployment.chainId !== 1) throw new Error('Mixed allocation deployment does not match.');
+      if (isMainnet111kArtistDeployment(deployment)) requireMainnet111kArtistCoverage(revealCollectionBlocks(definition.target));
       if (this.sql.exec("SELECT 1 FROM sqlite_schema WHERE name='reveal_duplicate_replacements' AND type='table'").toArray().length &&
         this.sql.exec(`SELECT 1 FROM json_each(?) g JOIN reveal_duplicate_replacements r ON r.origin_category='painting'
           AND r.origin_asset_id BETWEEN json_extract(g.value,'$.firstId') AND json_extract(g.value,'$.lastId')
@@ -194,10 +197,10 @@ export class EthereumRevealMixedAllocation {
         if (header.phase !== 'staging') throw new Error('Sealed mixed allocation is missing traits.');
         const base = buildNewRevealedArtwork({
           templateJson: deployment.templateJson, tokenId: String(REVEAL_ARTWORK_COUNT), crateTokenId: '116666',
-          category: row.category, assetId: row.assetId, catalog, ownerHatching: row.category === 'animated',
+          category: row.category, assetId: row.assetId, catalog, deployment, ownerHatching: row.category === 'animated',
           observation: { transactionHash: `0x${'0'.repeat(64)}`, blockHash: `0x${'0'.repeat(64)}`, blockNumber: 0 }
         });
-        validateStagedRevealMetadata(base, row.attributesJson);
+        validateStagedRevealMetadata(base, row.attributesJson, isMainnet111kArtistDeployment(deployment));
         this.sql.exec('UPDATE reveal_mixed_artworks SET attributes_json=?,attributes_sha256=? WHERE batch_id=? AND category=? AND asset_id=?',
           row.attributesJson, row.sha256, batchId, row.category, row.assetId);
       }

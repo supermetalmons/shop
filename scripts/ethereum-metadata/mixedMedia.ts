@@ -5,6 +5,7 @@ import { selectRevealCollectionBlocks, type RevealCollectionBlocks } from '../..
 import { checkRevealMedia } from '../../shared/ethereum/revealMediaPreflight.ts';
 import artworkTemplate from './templates/artwork.json';
 import { getOwnerHatchingGrail } from '../../shared/ethereum/ownerHatchingCatalog.ts';
+import { isMainnet111kArtistDeployment, requireMainnet111kArtistCoverage } from '../../shared/ethereum/mainnet111kArtists.ts';
 import { revealCatalogMedia, type RevealAssetCatalog } from '../../shared/ethereum/revealAssetCatalog.ts';
 import { getRevealCatalog } from '../../shared/ethereum/revealCatalogRegistry.ts';
 import { mixedAllocationHash, type MixedAllocationDefinition } from '../../shared/ethereum/revealMixedAllocation.ts';
@@ -26,6 +27,9 @@ export async function preflightMixedMedia(definition: MixedAllocationDefinition,
   const previousAlternates = new Set(paintingAlternateIds(predecessor));
   const blocks = preparedBlocks ? selectRevealCollectionBlocks(preparedBlocks, definition.target) : revealCollectionBlocks(definition.target);
   if (definition.groups.length && !blocks) throw new Error('Mixed release collection blocks are unavailable.');
+  const deployment = { chainId: definition.version === 1 ? 1 : definition.chainId, dropId: '111k' };
+  const includeArtists = isMainnet111kArtistDeployment(deployment);
+  if (includeArtists) requireMainnet111kArtistCoverage(blocks);
   let mediaObjects = 0;
   let traitSources = 0;
   async function checkMedia(url: string) {
@@ -48,11 +52,11 @@ export async function preflightMixedMedia(definition: MixedAllocationDefinition,
           const traits = await fetchRevealAttributePayload(group.category, id, AbortSignal.timeout(15_000), fetchSource, catalog, supplemental);
           const base = buildNewRevealedArtwork({
             templateJson, tokenId: String(REVEAL_ARTWORK_COUNT), crateTokenId: '116666', category: group.category, assetId: id,
-            catalog, ownerHatching: supplemental,
+            catalog, deployment, ownerHatching: supplemental,
             observation: { transactionHash: '0x' + '0'.repeat(64), blockHash: '0x' + '0'.repeat(64), blockNumber: 0 },
           }, blocks ?? undefined);
           if (base.artwork.attributes?.[0]?.value !== group.collectionBlock) throw new Error('Mixed release collection-block-mismatch.');
-          validateStagedRevealMetadata(base, traits);
+          validateStagedRevealMetadata(base, traits, includeArtists);
           traitSources++;
         };
       }

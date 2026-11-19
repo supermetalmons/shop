@@ -11,6 +11,7 @@ import type { RevealSql } from '../src/ethereumRevealStore.ts';
 import { parseMetadataJson } from '../src/ethereumMetadataJson.ts';
 import { EthereumRevealCatalogReader } from '../src/ethereumRevealCatalogReader.ts';
 import { MAX_REVEAL_METADATA_BYTES } from '../src/ethereumRevealAttributes.ts';
+import { initializeRevealArtistAnnotations, revealArtistPublication, stageRevealArtistAnnotation } from '../src/ethereumRevealArtistAnnotations.ts';
 
 const digest = (value: string) => bytesToHex(sha256(value));
 const observation = { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 123 };
@@ -23,7 +24,7 @@ function canonical(tokenId: string, eggId: number): OwnerHatchingCanonical {
     metadataJson, targetSha256: digest(metadataJson), expectedJsons: ['{"placeholder":true}\n', metadataJson], allowMissing: false, migration: false };
 }
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, ordinaryTraits: Array<{ trait_type: string; value: string }> = []) {
   const database = new DatabaseSync(':memory:');
   let observed: Array<{ query: string; bindings: number }> | undefined;
   database.exec('PRAGMA foreign_keys=ON');
@@ -75,7 +76,7 @@ function fixture(t: TestContext) {
       const artwork = { ...original.artwork, tokenId, category: asset.category, name: tokenId,
         image: `https://example.com/${asset.category}/${asset.assetId}.png` };
       const metadataJson = JSON.stringify({ name: tokenId, category: asset.category, image: artwork.image,
-        attributes: asset.attributesJson ? JSON.parse(asset.attributesJson) : [] }) + '\n';
+        attributes: asset.attributesJson ? JSON.parse(asset.attributesJson) : ordinaryTraits }) + '\n';
       return { artwork, metadataJson };
     },
     takeOrdinary() {
@@ -383,6 +384,32 @@ test('ordinary enrichment is durable, fenced by revision, and cannot change the 
   assert.equal(canonical.artwork.attributes, undefined);
   assert.equal(f.store.enrichmentPage(100_000).length, 0);
   assert.equal(f.draws(), 1);
+});
+
+test('artist credits remain on the publication after a legacy holder hatch receives enrichment', t => {
+  const block = { trait_type: 'collection block', value: 'hyperstacks' };
+  const f = fixture(t, [block]);
+  f.store.prepare(f.input, 1000);
+  f.store.hatch('4', 2000);
+  f.store.completePublications(f.store.claimPublications(2000).map(job => ({ job, status: 'published' })), 2000);
+  const [job] = f.store.enrichmentPage(3000);
+  f.database.exec("CREATE TABLE assignments(token_id TEXT UNIQUE); INSERT INTO assignments VALUES('4')");
+  initializeRevealArtistAnnotations(f.sql);
+  const raw = f.store.reader.canonical('4')!;
+  stageRevealArtistAnnotation(f.sql, raw, block.value, ['meinong', 'evil biscuit'], 'artist-test', 'etag-original');
+  const earlier = revealArtistPublication(f.sql, raw);
+  const additional = { trait_type: 'source', value: 'preserved' };
+  const enriched = JSON.stringify({ ...JSON.parse(job.baseJson), attributes: [block, { trait_type: 'artist', value: 'upstream' }, additional] });
+  assert.equal(f.store.acceptEnrichment(job.tokenId, job.metadataRevision, enriched), true);
+  const [publication] = f.reopen().claimPublications(4000);
+  assert.equal(publication.metadata_revision, earlier.metadataRevision + 1);
+  assert.deepEqual(JSON.parse(publication.metadata_json).attributes, [block, { trait_type: 'artist', value: 'meinong' },
+    { trait_type: 'artist', value: 'evil biscuit' }, additional]);
+  assert.deepEqual(JSON.parse(publication.expected_jsons_json!), [enriched, raw.metadataJson, earlier.metadataJson]);
+  assert.equal(f.store.completePublications([{ job: publication, status: 'published' }], 4000).length, 1);
+  assert.deepEqual({ ...f.database.prepare("SELECT status,metadata_revision FROM owner_hatching_publication WHERE token_id='4'").get() },
+    { status: 'published', metadata_revision: job.metadataRevision + 1 });
+  assert.equal(f.store.reader.canonical('4')?.metadataJson, enriched);
 });
 
 test('enrichment errors survive reopening, follow retry backoff, and clear only after accepted success', t => {

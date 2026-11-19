@@ -17,6 +17,7 @@ type Entry = { token_id: string; painting_id: number; role: TwinRole; predecesso
   target_json: string; target_sha256: string; metadata_revision: number; etag: string; published: number };
 type Journal = { operation_id: string; cohort_sha256: string; registry_revision: number; catalog_revision: number; group_count: number; token_count: number };
 type Host = { sql: RevealSql; transaction<T>(fn: () => T): T; canonical(id: string): RevealCanonicalMetadata | undefined;
+  canonicalAfterArtists?(id: string): RevealCanonicalMetadata | undefined;
   bucket: R2Bucket; current(): Promise<EthereumRevealDeployment>; };
 
 export async function currentTwinDeployment(db: D1Database, r: TwinMetadataMaintenanceRequest) {
@@ -135,15 +136,16 @@ export class EthereumTwinMetadataOperation {
     if (!current || current.assetId !== row.painting_id || current.category !== 'painting' || current.metadataRevision !== row.metadata_revision ||
       current.targetSha256 !== row.target_sha256 || current.metadataJson !== row.target_json ||
       hash(row.predecessor_json) !== row.predecessor_sha256 || hash(row.target_json) !== row.target_sha256) throw new Error('Twin metadata no longer matches the canonical ledger.');
+    const published = write ? current : this.host.canonicalAfterArtists?.(row.token_id) ?? current;
     const object = await this.host.bucket.get(key);
     if (!object || object.size > MAX_REVEAL_METADATA_BYTES || object.httpMetadata?.contentType !== 'application/json; charset=utf-8' ||
       object.httpMetadata.cacheControl !== 'no-store' || object.httpMetadata.contentEncoding) throw new Error('Unexpected twin metadata object or headers.');
     const bytes = await object.arrayBuffer();
     if (bytes.byteLength !== object.size) throw new Error('Incomplete twin metadata read.');
     const json = new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);
-    const target = json === row.target_json && object.etag === createHash('md5').update(row.target_json).digest('hex');
-    if (target && object.customMetadata?.sha256 === row.target_sha256 &&
-      object.customMetadata.revealMetadataRevision === String(row.metadata_revision)) return;
+    const target = json === published.metadataJson && object.etag === createHash('md5').update(published.metadataJson).digest('hex');
+    if (target && object.customMetadata?.sha256 === published.targetSha256 &&
+      object.customMetadata.revealMetadataRevision === String(published.metadataRevision)) return;
     const predecessor = json === row.predecessor_json && object.etag === row.etag &&
       (object.customMetadata?.sha256 === undefined || object.customMetadata.sha256 === row.predecessor_sha256);
     if (!write || !target && !predecessor) throw new Error('Twin metadata predecessor or storage headers conflict.');

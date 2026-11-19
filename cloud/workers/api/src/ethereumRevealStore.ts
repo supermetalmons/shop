@@ -207,7 +207,7 @@ export class EthereumRevealStore {
           if (!reservation) throw new Error('Reveal inventory invariant failed.');
           const effective = this.catalogUpdate.reader.resolveUnit({ category: reservation.category, assetId: reservation.asset_id });
           const value = buildNewRevealedArtwork({ templateJson: deployment.templateJson, tokenId, crateTokenId: crate.crateTokenId,
-            category: effective.category, assetId: effective.assetId, observation, catalog, allocatedEgg: effective.category === 'egg',
+            category: effective.category, assetId: effective.assetId, observation, catalog, deployment, allocatedEgg: effective.category === 'egg',
             ownerHatching: this.catalogUpdate.ownerHatching.reader.slotOverride({ category: reservation.category, assetId: reservation.asset_id }) !== null });
           this.sql.exec(`UPDATE assignments SET token_id=?,artwork_json=?,metadata_json=?,placeholder_json=?,frozen_at_ms=?,assignment_revision=?
             WHERE category=? AND asset_id=? AND token_id IS NULL`, tokenId, JSON.stringify(value.artwork), value.metadataJson,

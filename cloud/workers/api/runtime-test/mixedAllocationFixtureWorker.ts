@@ -20,6 +20,7 @@ import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 import { mixedAllocationScope, parseMixedAllocationMaintenanceRequest } from '../../../../shared/ethereum/mixedAllocationMaintenance.ts';
 import { EthereumMixedAllocationOperation } from '../src/ethereumMixedAllocationOperation.ts';
 import artworkTemplate from '../../../../scripts/ethereum-metadata/templates/artwork.json';
+import { getMainnet111kArtists } from '../../../../shared/ethereum/mainnet111kArtists.ts';
 const legacyBatch = 'previous-owner-batch';
 const templateJson = JSON.stringify(artworkTemplate);
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -348,6 +349,13 @@ export class LocalMixedPool extends DurableObject<FixtureEnv> {
     const canonical = this.update.ownerHatching.reader.canonical(tokenId)!;
     assert.equal(canonical.metadataJson.includes('9007199254740993'), true);
     assert.ok(!canonical.artwork.readyToHatch);
+    const artists = deployment.chainId === 1 ? getMainnet111kArtists(collection.collectionBlock) : [];
+    const { attributes } = JSON.parse(canonical.metadataJson);
+    assert.deepEqual(attributes.filter((value: { trait_type: string }) => value.trait_type === 'artist'),
+      artists.map(value => ({ trait_type: 'artist', value })));
+    assert.deepEqual(attributes.slice(0, 1 + artists.length), [
+      { trait_type: 'collection block', value: collection.collectionBlock }, ...artists.map(value => ({ trait_type: 'artist', value })),
+    ]);
     return hash(JSON.stringify(result));
   }
 

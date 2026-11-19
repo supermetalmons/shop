@@ -5,6 +5,10 @@ import { requireAttributeBackfillDeployment, requireRetiredRevealDeployment, req
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
 import { encodeAbi } from '../../../../shared/ethereum/abi.ts';
+import { MAINNET_111K_ARTISTS_SHA256 } from '../../../../shared/ethereum/mainnet111kArtists.ts';
+import type { ArtistMetadataScope, ArtistMetadataRequest, ArtistMetadataPage } from '../../../../shared/ethereum/artistMetadataMaintenance.ts';
+import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
+import { EthereumArtistMetadataOperation } from '../src/ethereumArtistMetadata.ts';
 
 const { EthereumRevealMaintenance } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealMaintenance.ts'));
 const { EthereumRevealObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealObject.ts'));
@@ -59,8 +63,9 @@ test('private reveal maintenance accepts only explicit identities and revisions'
   const f = fixture();
   await assert.rejects(f.maintenance.duplicateCorrection({ ...request, action: 'apply' }), /duplicate correction request/);
   await assert.rejects(f.maintenance.twinMetadata({ ...request, action: 'prepare' }), /twin metadata scope/);
+  await assert.rejects(f.maintenance.artistMetadata({ ...request, action: 'start' }), /artist maintenance scope/);
   assert.deepEqual(Object.getOwnPropertyNames(EthereumRevealMaintenance.prototype).sort(),
-    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'duplicateCorrection', 'inspectReplacement', 'inspectRetired', 'mixedAllocation', 'ownerHatching', 'purgeRetired', 'rebuildEmptyPool', 'relicImages', 'retireForReplacement', 'twinMetadata']);
+    ['artistMetadata', 'backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'duplicateCorrection', 'inspectReplacement', 'inspectRetired', 'mixedAllocation', 'ownerHatching', 'purgeRetired', 'rebuildEmptyPool', 'relicImages', 'retireForReplacement', 'twinMetadata']);
   for (const value of [null, {}, { ...request, expectedRevision: 0 }, { ...request, expectedRevision: '4' },
     { ...request, deploymentId: '../old' }, { ...request, contractAddress: currentContract }]) {
     await assert.rejects(f.maintenance.purgeRetired(value), /Invalid reveal maintenance/);
@@ -68,6 +73,45 @@ test('private reveal maintenance accepts only explicit identities and revisions'
     await assert.rejects(f.maintenance.mixedAllocation(value), /Invalid mixed allocation/);
   }
   assert.deepEqual(f.calls, []);
+});
+
+test('explicit artist pages run in parallel with disjoint reservations and keep the maintenance queue ordered', async t => {
+  const scope: ArtistMetadataScope = { deploymentId: 'mainnet-v1', chainId: 1, contractAddress: oldContract,
+    metadataBaseUri: 'https://cdn.mons.shop/111k/', deploymentBlock: 42, expectedRevision: 18, catalogRevision: 4,
+    catalogVersion: '111k-v11', catalogSha256: 'a'.repeat(64), mappingSha256: MAINNET_111K_ARTISTS_SHA256,
+    operationId: `artist-${'b'.repeat(32)}`, frozenThroughMs: 5 };
+  const started: string[] = [];
+  const work = new Map(Array.from({ length: 4 }, (_, index) => [String(index + 1), Promise.withResolvers<void>()]));
+  t.after(() => { for (const job of work.values()) job.resolve(); });
+  t.mock.method(EthereumArtistMetadataOperation.prototype, 'run', async (value: ArtistMetadataRequest): Promise<ArtistMetadataPage> => {
+    const tokenId = value.retryTokenIds?.[0] ?? value.action;
+    started.push(tokenId);
+    await work.get(tokenId)?.promise;
+    return { scope, action: value.action, started: true, frozenThroughMs: scope.frozenThroughMs,
+      next: null, scanned: 0, eggs: 0, credited: 0, published: 0, deferred: [], conflicts: [], records: [] };
+  });
+  const identity = { equals: () => true } as unknown as DurableObjectId;
+  const storage = { sql: { exec: () => ({ toArray: () => [] }) } };
+  const instance = new EthereumRevealObject({ id: identity, storage } as unknown as DurableObjectState,
+    { ETHEREUM_REVEAL: { idFromName: () => identity } } as unknown as Env);
+  const deployment = {} as EthereumRevealDeployment;
+  const send = (value: Omit<ArtistMetadataRequest, 'scope'>) => instance.artistMetadata(deployment, { scope, ...value });
+  const sendToken = (tokenId: string) => send({ action: 'apply', after: null, limit: 1, retryTokenIds: [tokenId] });
+  const first = sendToken('1');
+  await assert.rejects(sendToken('1'), /capacity is busy/);
+  const others = ['2', '3', '4'].map(sendToken);
+  await assert.rejects(sendToken('5'), /capacity is busy/);
+  const inspect = send({ action: 'inspect' });
+  await send({ action: 'plan', after: null, limit: 1024 });
+  assert.deepEqual(started, ['1', '2', '3', '4', 'plan']);
+  work.get('1')!.resolve();
+  await first;
+  await assert.rejects(sendToken('5'), /capacity is busy/);
+  for (const job of work.values()) job.resolve();
+  await Promise.all([...others, inspect]);
+  assert.equal(started.at(-1), 'inspect');
+  await sendToken('5');
+  assert.equal(started.at(-1), '5');
 });
 
 for (const chainId of [1, 11155111]) test(`private relic maintenance forwards only the verified ${chainId} identity`, async () => {

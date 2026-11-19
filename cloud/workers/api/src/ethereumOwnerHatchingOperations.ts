@@ -13,6 +13,7 @@ import { ethereumBlockSnapshot, ethereumCallBatch, verifyEthereumBlockSnapshot, 
 import { ethereumCollectionStatsFromData, ethereumTokenInfos } from './ethereumRead.js';
 import { fetchRevealAttributePayload, MAX_REVEAL_METADATA_BYTES, readPublishedRevealMetadata } from './ethereumRevealAttributes.js';
 import { REVEAL_ARTWORK_COUNT, revealRandomInteger } from './ethereumRevealCatalog.js';
+import { readRevealArtistAnnotation } from './ethereumRevealArtistAnnotations.js';
 import type { EthereumOwnerHatchingReader } from './ethereumOwnerHatchingReader.js';
 import type { MixedAllocationInput } from './ethereumRevealMixedAllocation.js';
 
@@ -552,8 +553,11 @@ export class EthereumOwnerHatchingOperations {
     const cursor = this.mixed && row.verification_hatched !== status.hatched ? 0 : Number(row.verification_cursor ?? 0);
     const tokens = this.options.sql.exec<{ token_id: string }>(`SELECT token_id FROM owner_hatching_tokens WHERE batch_id=?
       AND CAST(token_id AS INTEGER)>? ORDER BY CAST(token_id AS INTEGER) LIMIT 16`, row.batch_id, cursor).toArray();
+    const currentMetadata = (tokenId: string) => readRevealArtistAnnotation(this.options.sql, tokenId)
+      ? this.options.store.catalogUpdate.reader.canonicalMetadata([tokenId])[0]
+      : this.options.store.catalogUpdate.ownerHatching.reader.canonical(tokenId);
     const verified = await Promise.all(tokens.map(async ({ token_id: tokenId }, index) => {
-      const { metadataRevision, targetSha256 } = this.options.store.catalogUpdate.ownerHatching.reader.canonical(tokenId)!;
+      const { metadataRevision, targetSha256 } = currentMetadata(tokenId)!;
       const url = ethereumTokenMetadataUri(deployment, tokenId);
       const object = await this.options.env.ETHEREUM_REVEAL_METADATA.get(new URL(url).pathname.slice(1));
       let error: string | undefined;
@@ -573,7 +577,7 @@ export class EthereumOwnerHatchingOperations {
     await this.options.requireCurrent();
     let superseded = false;
     for (const value of verified) {
-      if (this.options.store.catalogUpdate.ownerHatching.reader.canonical(value.tokenId)?.metadataRevision !== value.metadataRevision) superseded = true;
+      if (currentMetadata(value.tokenId)?.metadataRevision !== value.metadataRevision) superseded = true;
       else if (value.error) throw new Error(value.error);
     }
     const latest = this.status(deployment, row.batch_id);
