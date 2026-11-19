@@ -128,6 +128,12 @@ export class EthereumRevealMixedAllocation {
         definition.contractAddress.toLowerCase() !== deployment.contractAddress.toLowerCase() || definition.deploymentBlock !== deployment.deploymentBlock ||
         definition.metadataBaseUri !== deployment.metadataBaseUri || definition.originCatalogVersion !== deployment.catalogVersion || definition.batchId !== batchId) ||
         definition.version === 1 && deployment.chainId !== 1) throw new Error('Mixed allocation deployment does not match.');
+      if (this.sql.exec("SELECT 1 FROM sqlite_schema WHERE name='reveal_duplicate_replacements' AND type='table'").toArray().length &&
+        this.sql.exec(`SELECT 1 FROM json_each(?) g JOIN reveal_duplicate_replacements r ON r.origin_category='painting'
+          AND r.origin_asset_id BETWEEN json_extract(g.value,'$.firstId') AND json_extract(g.value,'$.lastId')
+          WHERE json_extract(g.value,'$.category')='painting' LIMIT 1`, JSON.stringify(definition.groups)).toArray().length) {
+        throw new Error('Mixed allocation contains a retired painting.');
+      }
       const draw = drawMixedAllocation(definition, revealRandomInteger);
       this.reader.requireMixedCapacity(draw.future.length, mixedAllocationCounts(definition).ordinaryCount);
       for (let index = draw.owner.length - 1; index > 0; index--) {

@@ -1,3 +1,7 @@
+import { parseDuplicateCorrectionRequest, requireDuplicateCorrectionScope, type DuplicateCorrectionResult } from '../../../../shared/ethereum/duplicateCorrection.js';
+import { duplicateCorrectionDefinition, duplicateCorrectionDefinitionSha256 } from '../../../../shared/ethereum/installedDuplicateCorrection.js';
+import { EthereumDuplicateCorrectionStore } from './ethereumDuplicateCorrectionStore.js';
+import { runDuplicateCorrection } from './ethereumDuplicateCorrectionOperation.js';
 import { DurableObject } from 'cloudflare:workers';
 import { createHash } from 'node:crypto';
 import { REVEAL_ENRICHMENT_VERSION, type EthereumRevealResult, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
@@ -114,6 +118,27 @@ export class EthereumRevealObject extends DurableObject<Env> {
       },
       wake: async () => { await this.arm(); await this.startBackground(deployment); },
     }, mixed);
+  }
+
+  async duplicateCorrection(deployment: EthereumRevealDeployment, value: unknown): Promise<DuplicateCorrectionResult> {
+    const definition = duplicateCorrectionDefinition;
+    const request = parseDuplicateCorrectionRequest(value, definition, duplicateCorrectionDefinitionSha256);
+    requireDuplicateCorrectionScope(deployment, definition);
+    requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
+    const operation = this.mixedQueue.then(() => {
+      const assertAvailable = () => {
+        if (this.retiring || this.rebuildFence.status()) throw unavailable();
+      };
+      assertAvailable();
+      const transaction = <T>(action: () => T) => this.transaction(action);
+      const catalog = new EthereumRevealCatalogUpdateStore(this.ctx.storage.sql, transaction);
+      const store = new EthereumDuplicateCorrectionStore(this.ctx.storage.sql, transaction, catalog);
+      return runDuplicateCorrection({ db: this.env.OPS_DB, storage: this.ctx.storage, assertAvailable,
+        ledger: action => store.run(action, definition, request.definitionSha256, request.sourceCatalogRevision),
+      }, definition, request);
+    });
+    this.mixedQueue = operation.then(() => {}, () => {});
+    return operation;
   }
 
   async mixedAllocationOperation(deployment: EthereumRevealDeployment, value: unknown): Promise<MixedAllocationMaintenanceResult> {

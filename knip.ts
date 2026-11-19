@@ -25,7 +25,7 @@ const config = {
         'cloud/workers/api/src/index.ts!',
         'cloud/workers/api/test/*.test.ts',
         'cloud/workers/api/runtime-test/*.test.ts',
-        'cloud/workers/api/runtime-test/mixedAllocationFixtureWorker.ts',
+        'cloud/workers/api/runtime-test/*FixtureWorker.ts',
         'cloud/workers/frontend/test/*.test.ts',
         ...newDropEntries,
         'scripts/newPreorderCollections/*.ts',

@@ -128,6 +128,24 @@ export class EthereumRevealCatalogUpdateStore {
     this.sql.exec('UPDATE reveal_catalog_pools SET available=available-1 WHERE generation=? AND category=?', generation, selected.category);
   }
 
+  replaceFreePaintingWithEgg(origin: RevealOriginUnit, eggId: number, persist: () => void): void {
+    this.transaction(() => {
+      const saved = this.reader.settings();
+      if (!saved?.active_catalog_generation || saved.candidate_catalog_generation || origin.category !== 'painting' ||
+        !this.reader.freshOwnerEggAvailable(eggId)) throw new Error('Painting cannot be exchanged for this egg.');
+      const free = this.sql.exec(`SELECT 1 FROM reveal_catalog_free WHERE generation=? AND origin_category='painting' AND origin_asset_id=?
+        AND category='painting' AND asset_id=?`, saved.active_catalog_generation, origin.assetId, origin.assetId).toArray().length;
+      const effective = this.reader.resolveUnit(origin);
+      if (!free || effective.category !== 'painting' || effective.assetId !== origin.assetId) throw new Error('Painting is no longer free.');
+      this.removeFree(saved.active_catalog_generation, origin);
+      persist();
+      const egg = this.reader.resolveUnit(origin);
+      if (egg.category !== 'egg' || egg.assetId !== eggId) throw new Error('Replacement egg did not resolve.');
+      this.transitionOwnerSlot(origin, effective, egg);
+      this.insertFree(saved.active_catalog_generation, origin);
+    });
+  }
+
   takeFree(category: EthereumArtworkCategory, index: number): RevealOriginUnit {
     return this.transaction(() => {
       const saved = this.reader.settings()!;

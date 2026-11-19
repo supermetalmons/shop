@@ -26,8 +26,10 @@ import type {
   RevealPool,
 } from './ethereumRevealCatalogTypes.js';
 import { revealCollectionBlocks } from './ethereumRevealCollectionBlocks.js';
+import { revealSlotOverrideTable, type RevealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 
+const REPEATED_MAINNET_EGG_IMAGES = { first: 62_511, last: 76_700 } as const;
 const CANONICAL_METADATA_PAGE_SIZE = 99;
 const CANONICAL_METADATA_PAGE_BYTES = 1024 * 1024;
 const ALLOCATION_BASE_REVISION = `COALESCE((SELECT target_revision FROM reveal_catalog_generations
@@ -44,6 +46,7 @@ export class EthereumRevealCatalogReader {
   private originCounts: { generation: string | null; catalog: RevealAssetCatalog; counts: Record<EthereumArtworkCategory, number> } | undefined;
   private mappingOriginsAvailable: boolean | undefined;
   private mixedAssetsAvailable = false;
+  private slotOverrideSource: RevealSlotOverrideTable = 'owner_hatching_slot_overrides';
   private readonly catalogs = new Map<string, RevealAssetCatalog>();
   readonly ownerHatching: EthereumOwnerHatchingReader;
 
@@ -86,14 +89,23 @@ export class EthereumRevealCatalogReader {
       SELECT egg_id FROM owner_hatching_fresh_eggs WHERE egg_id>? AND egg_id<=?
       UNION SELECT egg_id FROM owner_hatching_retired_eggs WHERE egg_id>? AND egg_id<=?`,
       lastIssued, maximum, lastIssued, maximum).toArray().map(row => row.egg_id) : []);
-    if (maximum - lastIssued - used.size < count) throw new Error('Insufficient unused fresh egg inventory.');
+    if (this.slotOverrideSource === 'reveal_effective_slot_overrides') {
+      for (const row of this.sql.exec<{ egg_id: number }>('SELECT egg_id FROM reveal_duplicate_replacements WHERE egg_id>? AND egg_id<=?',
+        lastIssued, maximum).toArray()) used.add(row.egg_id);
+      const lastRepeated = Math.min(maximum, REPEATED_MAINNET_EGG_IMAGES.last);
+      for (let id = Math.max(lastIssued + 1, REPEATED_MAINNET_EGG_IMAGES.first); id <= lastRepeated; id++) used.add(id);
+    }
+    if (Math.max(0, maximum - lastIssued - used.size) < count) throw new Error('Insufficient unused fresh egg inventory.');
     return { lastIssued, maximum, used };
   }
 
   freshOwnerEggAvailable(eggId: number): boolean {
     const { lastIssued, maximum } = this.freshEggBounds();
     return Number.isSafeInteger(eggId) && eggId > lastIssued && eggId <= maximum &&
-      !this.ownerHatching.usedFreshEgg(eggId) && !this.ownerHatching.isRetiredEgg(eggId);
+      !this.ownerHatching.usedFreshEgg(eggId) && !this.ownerHatching.isRetiredEgg(eggId) &&
+      (this.slotOverrideSource !== 'reveal_effective_slot_overrides' ||
+        (eggId < REPEATED_MAINNET_EGG_IMAGES.first || eggId > REPEATED_MAINNET_EGG_IMAGES.last) &&
+        !this.sql.exec('SELECT 1 FROM reveal_duplicate_replacements WHERE egg_id=?', eggId).toArray().length);
   }
 
   mixedAttributes(batchId: string, asset: RevealOriginUnit): string | undefined {
@@ -125,7 +137,9 @@ export class EthereumRevealCatalogReader {
   settings(): { deployment_json: string; catalog_revision: number; active_catalog_generation: string | null;
     candidate_catalog_generation: string | null; allocation_base_generation: string | null;
     effective_catalog_version: string | null; effective_catalog_sha256: string | null } | null {
-    const tables = this.sql.exec<{ name: string }>("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('settings','reveal_mixed_artworks')").toArray();
+    const tables = this.sql.exec<{ name: string }>("SELECT name FROM sqlite_schema WHERE name IN ('settings','reveal_mixed_artworks','reveal_effective_slot_overrides')").toArray();
+    this.slotOverrideSource = tables.some(table => table.name === 'reveal_effective_slot_overrides')
+      ? 'reveal_effective_slot_overrides' : 'owner_hatching_slot_overrides';
     this.mixedAssetsAvailable = tables.some(table => table.name === 'reveal_mixed_artworks');
     if (!tables.some(table => table.name === 'settings')) return null;
     const row = this.sql.exec<{ deployment_json: string; catalog_revision?: number; active_catalog_generation?: string | null;
@@ -243,7 +257,7 @@ export class EthereumRevealCatalogReader {
   }
 
   resolveUnit(unit: RevealOriginUnit, assignmentRevision = this.settings()?.catalog_revision ?? 0, candidate?: string): RevealEffectiveUnit {
-    unit = this.ownerHatching.available ? this.ownerHatching.slotOverride(unit) ?? unit : unit;
+    unit = this.ownerHatching.available ? this.ownerHatching.slotOverride(unit, this.slotOverrideSource) ?? unit : unit;
     const mapping = unit.category === 'egg' ? this.sql.exec<{ category: EthereumArtworkCategory; asset_id: number; target_revision: number }>(
       `SELECT m.category,m.asset_id,g.target_revision FROM reveal_catalog_mappings m JOIN reveal_catalog_generations g ON g.batch_id=m.batch_id
         WHERE m.egg_id=? AND g.target_revision>${ALLOCATION_BASE_REVISION} AND (g.activated_at_ms IS NOT NULL OR g.batch_id=?) ORDER BY g.target_revision DESC LIMIT 1`,
@@ -278,7 +292,7 @@ export class EthereumRevealCatalogReader {
         if (effective.category !== row.category || effective.assetId !== row.asset_id) {
           catalog ??= this.activeCatalog();
           artwork = buildRevealedArtwork({ templateJson: deployment.templateJson, tokenId: row.token_id, crateTokenId: row.crate_token_id,
-            category: effective.category, assetId: effective.assetId, observation: artwork.observation, catalog,
+            category: effective.category, assetId: effective.assetId, observation: artwork.observation, catalog, allocatedEgg: effective.category === 'egg',
             ownerHatching: this.ownerHatching.slotOverride({ category: row.category, assetId: row.asset_id }) !== null }).artwork;
         }
         const metadataRevision = 2 * effective.assignmentRevision;
@@ -356,7 +370,7 @@ export class EthereumRevealCatalogReader {
     const invalid = this.sql.exec(`WITH bases AS (SELECT m.egg_id,COALESCE(m.origin_category,'egg') AS origin_category,
         COALESCE(m.origin_asset_id,m.egg_id) AS origin_asset_id,COALESCE(o.category,m.origin_category,'egg') AS effective_category,
         COALESCE(o.asset_id,m.origin_asset_id,m.egg_id) AS effective_asset_id FROM reveal_catalog_mappings m
-        LEFT JOIN owner_hatching_slot_overrides o ON o.origin_category=COALESCE(m.origin_category,'egg')
+        LEFT JOIN ${this.slotOverrideSource} o ON o.origin_category=COALESCE(m.origin_category,'egg')
           AND o.origin_asset_id=COALESCE(m.origin_asset_id,m.egg_id) WHERE m.batch_id=?)
       SELECT 1 FROM bases b WHERE b.effective_category!='egg' OR b.effective_asset_id!=b.egg_id
         OR EXISTS(SELECT 1 FROM owner_hatching_tokens t WHERE t.egg_id=b.egg_id)
@@ -415,7 +429,7 @@ export class EthereumRevealCatalogReader {
           FROM assignments a ${hasEnrichment ? 'LEFT JOIN reveal_enrichment e ON e.token_id=a.token_id AND e.version=?' : ''}
           WHERE a.token_id IN (${page.map(() => '?').join(',')})`, ...(hasEnrichment ? [REVEAL_ENRICHMENT_VERSION] : []), ...page).toArray();
       if (!sizes.length) continue;
-      const overrides = this.ownerHatching.slotOverrides(sizes.map(row => ({ category: row.category, assetId: row.asset_id })));
+      const overrides = this.ownerHatching.slotOverrides(sizes.map(row => ({ category: row.category, assetId: row.asset_id })), this.slotOverrideSource);
       const units = new Map(sizes.map((row, index) => [row.token_id, overrides[index] ?? { category: row.category, assetId: row.asset_id }]));
       const mappingSizes = this.canonicalMappings<{ egg_id: number; bytes: number }>([...units.values()],
         'bytes');
@@ -516,11 +530,12 @@ export class EthereumRevealCatalogReader {
 
   verifyGeneration(batchId: string): void {
     const allocation = this.generationAllocationContext(this.operation(batchId));
+    const overrides = revealSlotOverrideTable(this.sql);
     const categories = this.sql.exec<{ category: EthereumArtworkCategory; total: number; distinct_assets: number }>(
       `WITH units AS (SELECT origin_category AS category,origin_asset_id AS asset_id FROM reveal_catalog_free WHERE generation=?
         UNION ALL SELECT category,asset_id FROM assignments),
-      overlay AS (${this.ownerHatching.available ? `SELECT COALESCE(o.category,u.category) AS category,COALESCE(o.asset_id,u.asset_id) AS asset_id FROM units u
-        LEFT JOIN owner_hatching_slot_overrides o ON o.origin_category=u.category AND o.origin_asset_id=u.asset_id` : 'SELECT category,asset_id FROM units'}),
+      overlay AS (${overrides ? `SELECT COALESCE(o.category,u.category) AS category,COALESCE(o.asset_id,u.asset_id) AS asset_id FROM units u
+        LEFT JOIN ${overrides} o ON o.origin_category=u.category AND o.origin_asset_id=u.asset_id` : 'SELECT category,asset_id FROM units'}),
       effective AS (SELECT COALESCE(m.category,o.category) AS category,COALESCE(m.asset_id,o.asset_id) AS asset_id FROM overlay o
         LEFT JOIN reveal_catalog_mappings m ON m.rowid=(SELECT candidate.rowid FROM reveal_catalog_mappings candidate
           JOIN reveal_catalog_generations g ON g.batch_id=candidate.batch_id WHERE o.category='egg' AND candidate.egg_id=o.asset_id

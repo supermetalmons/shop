@@ -1,5 +1,6 @@
 import type { EthereumArtworkCategory } from '../../../../shared/ethereum/reveal.js';
 import type { RevealOriginUnit } from './ethereumRevealCatalogTypes.js';
+import type { RevealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 import { parseMetadataJson } from './ethereumMetadataJson.js';
 import {
@@ -73,14 +74,14 @@ export class EthereumOwnerHatchingReader {
     return this.sql.exec('SELECT 1 FROM owner_hatching_artwork_claims WHERE category=? AND asset_id=?', asset.category, asset.assetId).toArray().length > 0;
   }
 
-  slotOverride(origin: RevealOriginUnit): RevealOriginUnit | null {
+  slotOverride(origin: RevealOriginUnit, table: RevealSlotOverrideTable = 'owner_hatching_slot_overrides'): RevealOriginUnit | null {
     if (!this.available) return null;
     const row = this.sql.exec<{ category: EthereumArtworkCategory; asset_id: number }>(
-      'SELECT category,asset_id FROM owner_hatching_slot_overrides WHERE origin_category=? AND origin_asset_id=?', origin.category, origin.assetId).toArray()[0];
+      `SELECT category,asset_id FROM ${table} WHERE origin_category=? AND origin_asset_id=?`, origin.category, origin.assetId).toArray()[0];
     return row ? { category: row.category, assetId: row.asset_id } : null;
   }
 
-  slotOverrides(origins: readonly RevealOriginUnit[]): Array<RevealOriginUnit | null> {
+  slotOverrides(origins: readonly RevealOriginUnit[], table: RevealSlotOverrideTable = 'owner_hatching_slot_overrides'): Array<RevealOriginUnit | null> {
     if (!origins.length || !this.available) return origins.map(() => null);
     const values = new Map<string, RevealOriginUnit>();
     const unique = [...new Map(origins.map(origin => [`${origin.category}:${origin.assetId}`, origin])).values()];
@@ -88,7 +89,7 @@ export class EthereumOwnerHatchingReader {
       const page = unique.slice(offset, offset + 50);
       const rows = this.sql.exec<{ origin_category: EthereumArtworkCategory; origin_asset_id: number;
         category: EthereumArtworkCategory; asset_id: number }>(
-        `SELECT * FROM owner_hatching_slot_overrides
+        `SELECT origin_category,origin_asset_id,category,asset_id FROM ${table}
           WHERE (origin_category,origin_asset_id) IN (${page.map(() => '(?,?)').join(',')})`,
         ...page.flatMap(origin => [origin.category, origin.assetId])).toArray();
       for (const row of rows) values.set(`${row.origin_category}:${row.origin_asset_id}`, { category: row.category, assetId: row.asset_id });

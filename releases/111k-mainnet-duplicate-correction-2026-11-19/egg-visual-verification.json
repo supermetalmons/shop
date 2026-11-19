@@ -1,0 +1,29 @@
+{
+  "publishedEggIds": 76700,
+  "distinctPngAndWebpPairs": 62510,
+  "upperDuplicateIdsExcluded": 14190,
+  "allDistinctWebpsDecodedAndMd5Verified": true,
+  "sizes": [
+    64,
+    64
+  ],
+  "colorGrid": [
+    8,
+    8
+  ],
+  "perceptualHashBits": 64,
+  "comparisons": [
+    "full frame",
+    "foreground bounds"
+  ],
+  "minimumNearestColorRms": [
+    8.034431457519531,
+    20.163911819458008
+  ],
+  "minimumNearestPerceptualHashHamming": [
+    0,
+    6
+  ],
+  "eligibleCandidates": 768,
+  "candidateListSha256": "7b54a3388ac66a5421980be026b2f73c26cce9bf1ce49923b7c3ab8dd49b54b5"
+}

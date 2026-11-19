@@ -3,6 +3,7 @@ import type { EthereumRevealAttributeAuditToken, EthereumRevealAttributeBackfill
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.js';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
+import { revealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum } from './ethereumRevealEnrichmentStore.js';
 import { EthereumRevealCatalogReader } from './ethereumRevealCatalogReader.js';
@@ -18,8 +19,8 @@ function assignmentRevision(sql: RevealSql, table: string, alias: string): strin
 }
 
 function ownerOverrideGuard(sql: RevealSql): string {
-  return sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_slot_overrides'").toArray().length
-    ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)' : '';
+  const table = revealSlotOverrideTable(sql);
+  return table ? `AND NOT EXISTS(SELECT 1 FROM ${table} o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)` : '';
 }
 
 function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, frozenThroughMs: number): EthereumRevealAttributeBackfillPage {

@@ -8,9 +8,17 @@ import { revealCatalogAdditions, revealCatalogUpdateHash, type RevealCatalogUpda
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import type { RevealSql } from '../src/ethereumRevealStore.ts';
 import { HistoricalRevealStore as EthereumRevealStore } from './historicalCatalogFixture.ts';
-import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.ts';
+import { lookupRevealCollectionBlock, selectRevealCollectionBlocks, validateRevealCollectionBlocks } from '../../../../shared/ethereum/revealCollectionBlocks.ts';
 import { revealCollectionBlocks } from '../src/ethereumRevealCollectionBlocks.ts';
+import { backfillRevealAttributePage } from '../src/ethereumRevealAttributeBackfill.ts';
+import installedCollectionBlocks from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/collection-blocks.json';
+import supplement from '../../../../shared/ethereum/ownerHatchingCatalog.json';
+import { mixedReleaseBlockHash, type MixedAllocationGroup } from '../../../../shared/ethereum/revealMixedAllocation.ts';
+import { initializeDuplicateReplacementReads } from '../src/ethereumRevealSlotOverrides.ts';
 import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
+
+const originalCollectionBlocks = structuredClone(installedCollectionBlocks);
+test.afterEach(() => { Object.assign(installedCollectionBlocks, structuredClone(originalCollectionBlocks)); });
 
 const predecessor = getRevealCatalog('111k-v8')!;
 const target = getRevealCatalog('111k-v9')!;
@@ -59,7 +67,7 @@ function fixture(t: TestContext, chainId = 1, catalog = predecessor) {
   store.configure(deployment);
   while (!store.initializeChunk()) {}
   t.after(() => database.close());
-  return { database, store, deployment, random, open, fail: (value?: string) => { failSql = value; } };
+  return { database, sql, store, deployment, random, open, fail: (value?: string) => { failSql = value; } };
 }
 
 function stage(store: EthereumRevealStore) {
@@ -267,4 +275,133 @@ test('an existing store refreshes cached allocation counts after another store r
   assert.deepEqual(store.catalogUpdate.reader.resolveUnit({ category: 'egg', assetId: target.categories.eggs.count }),
     { category: 'video', assetId: 59, assignmentRevision: 2 });
   assert.equal(store.catalogUpdate.reader.pools().reduce((sum, pool) => sum + pool.available, 0), 111091);
+});
+
+function correctedInventory(t: TestContext) {
+  const f = fixture(t);
+  stage(f.store);
+  const catalog = f.store.catalogUpdate;
+  catalog.activateEmptyRebuild(operationId, 2000);
+  catalog.finalize(operationId);
+  while (catalog.pruneEmptyRebuild(operationId).remaining) {}
+  f.database.exec(`CREATE TABLE reveal_duplicate_replacements(origin_category TEXT, origin_asset_id INTEGER, egg_id INTEGER UNIQUE,
+    PRIMARY KEY(origin_category,origin_asset_id))`);
+  assert.equal(catalog.reader.freshEggBounds().maximum, 76_700);
+  initializeDuplicateReplacementReads(f.sql);
+  return f;
+}
+
+test('a corrected free painting stays an egg across draw, freeze, publication, restart and a later owner hatch', t => {
+  const f = correctedInventory(t);
+  const catalog = f.store.catalogUpdate;
+  const origin = { category: 'painting' as const, assetId: 1 };
+  const eggId = catalog.reader.freshEggBounds().lastIssued + 1;
+  const insert = () => { f.database.prepare('INSERT INTO reveal_duplicate_replacements VALUES(?,?,?)').run(origin.category, origin.assetId, eggId); };
+  const before = catalog.reader.pools();
+  assert.throws(() => catalog.replaceFreePaintingWithEgg(origin, eggId, () => { insert(); throw new Error('injected'); }), /injected/);
+  assert.deepEqual(catalog.reader.pools(), before);
+  assert.equal(catalog.reader.freshOwnerEggAvailable(eggId), true);
+  catalog.replaceFreePaintingWithEgg(origin, eggId, insert);
+  assert.equal(catalog.reader.freshOwnerEggAvailable(eggId), false);
+  const inventory = catalog.reader.requireFreshEggInventory(1);
+  assert.ok(inventory.used.has(eggId));
+  assert.equal(inventory.maximum, 76_700);
+  assert.equal(inventory.used.size, 14_191);
+  assert.equal(catalog.reader.freshOwnerEggAvailable(62_511), false);
+  const remaining = inventory.maximum - inventory.lastIssued - inventory.used.size;
+  assert.equal(catalog.reader.requireFreshEggInventory(remaining).maximum, inventory.maximum);
+  assert.throws(() => catalog.reader.requireFreshEggInventory(remaining + 1), /Insufficient unused/);
+  const expanded = t.mock.method(catalog.reader, 'activeCatalog', () => ({ ...target, importSettings: { ...target.importSettings, availableEggs: 76_701 } }));
+  assert.equal(catalog.reader.freshOwnerEggAvailable(76_700), false);
+  assert.equal(catalog.reader.freshOwnerEggAvailable(76_701), true);
+  assert.equal(catalog.reader.requireFreshEggInventory(remaining + 1).maximum, 76_701);
+  expanded.mock.restore();
+  assert.equal(catalog.reader.pools().find(pool => pool.category === 'painting')!.total, target.categories.paintings.count - 1);
+  const eggSlot = catalog.reader.pools().find(pool => pool.category === 'egg')!.available - 1;
+  assert.deepEqual(catalog.takeFree('egg', eggSlot), origin);
+  catalog.releaseFree(origin);
+  catalog.reader.verifyGeneration(operationId);
+  f.random.push(target.categories['3d'].count + target.categories.animated.count, eggSlot);
+  f.store.reserve(['111112']);
+  const tokens = Array.from({ length: 20 }, (_, i) => String(i + 1));
+  f.store.freeze(f.deployment, { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 },
+    [{ crateTokenId: '111112', tokenIds: tokens }], 3000);
+  assert.equal(f.store.frozen(['1'])[0].image, `https://cdn.lil.org/nft/111k/eggs/${eggId}.png`);
+  const frozen = catalog.reader.canonicalMetadata(['1'])[0];
+  assert.equal(frozen.category, 'egg');
+  assert.equal(frozen.assetId, eggId);
+  assert.equal(JSON.parse(frozen.metadataJson).name, `Egg #${eggId}`);
+  assert.equal(f.store.publicationComplete('1'), true);
+  assert.equal(f.database.prepare("SELECT COUNT(*) AS n FROM reveal_enrichment WHERE token_id='1'").get()!.n, 0);
+  assert.equal(backfillRevealAttributePage(f.sql, { afterTokenId: null, write: false, retryBlocked: false }).eligible, 0);
+  const reopened = f.open().catalogUpdate;
+  assert.deepEqual(reopened.reader.canonicalMetadata(['1'])[0].artwork, frozen.artwork);
+  reopened.ownerHatching.prepare({ batchId: 'owner-corrected-egg', sourceSha256: 'a'.repeat(64), candidateTokenIds: ['1'],
+    readyCount: 1, freshEggIds: [], grails: [{ category: 'animated', assetId: 422 }] });
+  const hatch = reopened.ownerHatching.hatch('1');
+  assert.equal(hatch.kind, 'hatched');
+  assert.equal(reopened.reader.canonicalMetadata(['1'])[0].assetId, 422);
+  assert.equal(reopened.reader.resolveUnit(origin).category, 'animated');
+  assert.equal(reopened.reader.freshOwnerEggAvailable(eggId), false);
+  reopened.reader.verifyGeneration(operationId);
+});
+
+test('the next mixed allocation can exchange a corrected egg and preserves its retired painting and fresh egg history', t => {
+  const f = correctedInventory(t);
+  const updates = f.store.catalogUpdate;
+  const origin = { category: 'painting' as const, assetId: target.categories.paintings.count };
+  const eggId = updates.reader.freshEggBounds().lastIssued + 1;
+  updates.replaceFreePaintingWithEgg(origin, eggId, () => {
+    f.database.prepare('INSERT INTO reveal_duplicate_replacements VALUES(?,?,?)').run(origin.category, origin.assetId, eggId);
+  });
+
+  const next = getRevealCatalog('111k-v10')!;
+  const descriptor = computeRevealCatalogDescriptor(next);
+  const sourceBlocks: unknown = installedCollectionBlocks;
+  validateRevealCollectionBlocks(sourceBlocks);
+  const blocks = selectRevealCollectionBlocks(sourceBlocks, descriptor);
+  const groups: MixedAllocationGroup[] = [];
+  for (const asset of revealCatalogAdditions(target, next)) {
+    const block = lookupRevealCollectionBlock(blocks, asset.category, asset.assetId)!;
+    const prior = groups.at(-1);
+    if (prior && prior.category === asset.category && prior.collectionBlock === block && prior.lastId + 1 === asset.assetId) prior.lastId++;
+    else groups.push({ category: asset.category, collectionBlock: block, firstId: asset.assetId, lastId: asset.assetId, ownerCount: 0 });
+  }
+  const batchId = 'next-after-correction';
+  const scope = f.deployment;
+  const definition = { version: 2 as const, batchId, deploymentId: scope.deploymentId, chainId: scope.chainId, contractAddress: scope.contractAddress,
+    metadataBaseUri: scope.metadataBaseUri, deploymentBlock: scope.deploymentBlock, originCatalogVersion: scope.catalogVersion,
+    sourceSha256: next.source.sha256, predecessor: computeRevealCatalogDescriptor(target), target: descriptor,
+    ownerSupplementSha256: digest(JSON.stringify(supplement)), collectionBlocksSha256: mixedReleaseBlockHash(sourceBlocks, descriptor), groups, ordinaryCount: 0 };
+  const mixed = updates.mixed;
+  mixed.begin({ batchId, definition, targetCatalog: next });
+  for (let pending = mixed.pendingTraits(batchId, 256); pending.length; pending = mixed.pendingTraits(batchId, 256)) {
+    mixed.stageTraits(batchId, pending.map(asset => {
+      const attributesJson = JSON.stringify([{ trait_type: 'collection block', value: lookupRevealCollectionBlock(blocks, asset.category, asset.assetId) }]);
+      return { ...asset, attributesJson, sha256: digest(attributesJson) };
+    }));
+  }
+  while (mixed.stageInventory(batchId, 4096).generationSeeded < 111_111) {}
+  mixed.seal(batchId);
+  mixed.activate(batchId, []);
+  const replacement = updates.reader.resolveUnit(origin);
+  assert.equal(replacement.category, 'painting');
+  assert.ok(replacement.assetId > target.categories.paintings.count);
+  mixed.verify(batchId);
+  assert.equal(updates.reader.freshOwnerEggAvailable(eggId), false);
+  assert.ok(updates.reader.requireFreshEggInventory(1).used.has(76_700));
+  const row = f.database.prepare(`SELECT slot,asset_id FROM reveal_catalog_free WHERE generation=? AND origin_category='painting'
+    AND origin_asset_id=? AND category='painting'`).get(batchId, origin.assetId);
+  assert.equal(row?.asset_id, replacement.assetId);
+  const counts = updates.reader.pools();
+  f.random.push(counts.filter(p => p.category < 'painting').reduce((sum, p) => sum + p.total, 0), Number(row!.slot));
+  f.store.freeze(scope, { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 },
+    [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, i) => String(i + 1)) }], 3000);
+  const published = updates.reader.canonicalMetadata(['1'])[0];
+  assert.equal(published.assetId, replacement.assetId);
+  assert.equal(published.artwork.image, `https://cdn.lil.org/nft/111k/paintings/${replacement.assetId}.png`);
+  assert.ok(JSON.parse(published.metadataJson).attributes.some((attr: { trait_type: string }) => attr.trait_type === 'collection block'));
+  f.store.publicationComplete('1');
+  assert.equal(f.database.prepare("SELECT COUNT(*) AS n FROM reveal_enrichment WHERE token_id='1'").get()!.n, 0);
+  assert.deepEqual(f.open().catalogUpdate.reader.canonicalMetadata(['1'])[0].artwork, published.artwork);
 });

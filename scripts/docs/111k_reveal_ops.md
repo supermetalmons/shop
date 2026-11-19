@@ -113,6 +113,20 @@ Before the first rollout, stop starting legacy operator jobs on **mainnet and ac
 
 `ethereum:catalog-history inspect|verify --bundle DIR` verifies a frozen historical cutoff bundle. Add `--deployment-id ID --expected-revision N` to inspect or verify the original deployment. `ethereum:owner-hatch-history status|verify` takes the historical deployment, batch and original revision (`verify` requires `--write` to advance its audit cursor). Use the mixed command and the original release journal for the November v10 batch. Its frozen archive can also be rehearsed locally with `npm run ethereum:mixed-allocation -- rehearse --bundle releases/111k-catalog-v10`. Existing claims continue on the same holder API.
 
+## Online mainnet duplicate painting correction
+
+The [reviewed definition](../../releases/111k-mainnet-duplicate-correction-2026-11-19/definition.json) binds the duplicate groups, keeper preference, eligible egg media and mainnet v10 deployment. Each group lists the highest-resolution painting first, breaking ties by lowest ID. A revealed or committed copy takes precedence. Only surplus free painting slots can move. The private ledger draws one unused egg per exchanged slot. This is an allocation correction within the existing catalog.
+
+Use the private maintenance service from the reviewed Worker release. Run the API deployment gate and allow the Durable Object code update interval before applying. Keep the collection active. Obtain the registry revision with a scoped status read. Use the same private journal and original revision across retries.
+
+```sh
+npm run ethereum:duplicate-correction -- inspect --deployment-id mainnet-v1
+npm run ethereum:duplicate-correction -- apply --deployment-id mainnet-v1 --expected-revision "$revision" --journal "$journal" --write
+npm run ethereum:duplicate-correction -- verify --deployment-id mainnet-v1 --journal "$journal"
+```
+
+The atomic exchange uses the then-current free inventory and owner commitments. A conflicting unresolved reservation leaves the pool intact for a retry after it settles. After a committed exchange resume the same journal forward; subsequent Workers must understand the stored slot replacements. Check healthy public reads across the five-minute scheduler interval, verify again, and retain aggregate counts, the definition digest, frozen painting identity proof and application version. Selected egg identities and assignments stay private.
+
 ## Empty mainnet pool rebuild
 
 For an explicitly requested prelaunch mainnet rebuild, `ethereum:empty-pool`

@@ -1,3 +1,4 @@
+import type { RevealSlotOverrideTable } from '../ethereumRevealSlotOverrides.js';
 import type { RevealSql } from '../ethereumRevealStore.js';
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../../shared/ethereum/reveal.js';
 
@@ -21,7 +22,7 @@ export const REVEAL_ENRICHMENT_SCHEMA = [
     END`,
 ];
 
-export function initializeRevealEnrichmentSchemaV1(sql: RevealSql, transaction: <T>(action: () => T) => T, ownerOverrides: boolean): void {
+export function initializeRevealEnrichmentSchemaV1(sql: RevealSql, transaction: <T>(action: () => T) => T, overrides: RevealSlotOverrideTable | null): void {
   transaction(() => {
     for (const table of ['reveal_enrichment', 'reveal_enrichment_acknowledgments']) {
       const columns = sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray();
@@ -29,10 +30,14 @@ export function initializeRevealEnrichmentSchemaV1(sql: RevealSql, transaction: 
         sql.exec(`ALTER TABLE ${table} ADD COLUMN assignment_revision INTEGER NOT NULL DEFAULT 0`);
       }
     }
-    sql.exec('DROP TRIGGER IF EXISTS enqueue_reveal_enrichment');
-    const trigger = REVEAL_ENRICHMENT_SCHEMA.at(-1)!;
-    sql.exec(ownerOverrides ? trigger.replace('ON CONFLICT(token_id,version)',
-      `AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=assignments.category AND o.origin_asset_id=assignments.asset_id)
-        ON CONFLICT(token_id,version)`) : trigger);
+    replaceRevealEnrichmentTrigger(sql, overrides);
   });
+}
+
+export function replaceRevealEnrichmentTrigger(sql: RevealSql, overrides: RevealSlotOverrideTable | null): void {
+  sql.exec('DROP TRIGGER IF EXISTS enqueue_reveal_enrichment');
+  const trigger = REVEAL_ENRICHMENT_SCHEMA.at(-1)!;
+  sql.exec(overrides ? trigger.replace('ON CONFLICT(token_id,version)',
+    `AND NOT EXISTS(SELECT 1 FROM ${overrides} o WHERE o.origin_category=assignments.category AND o.origin_asset_id=assignments.asset_id)
+      ON CONFLICT(token_id,version)`) : trigger);
 }

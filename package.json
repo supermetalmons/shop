@@ -25,6 +25,7 @@
     "ethereum:assets": "node --import tsx scripts/ethereum-metadata/assetCli.ts",
     "ethereum:catalog-history": "node --import tsx scripts/ethereum-metadata/catalogUpdateCli.ts",
     "ethereum:owner-hatch-history": "node --import tsx scripts/ops/ethereumOwnerHatchingControl.ts",
+    "ethereum:duplicate-correction": "node --import tsx scripts/ops/ethereumDuplicateCorrection.ts",
     "ethereum:mixed-allocation": "node --import tsx scripts/ethereum-metadata/mixedCli.ts",
     "ethereum:empty-pool": "node --import tsx scripts/ethereum-metadata/emptyPoolCli.ts",
     "ethereum:relic-images": "node --import tsx scripts/ethereum-metadata/relicImagesCli.ts",

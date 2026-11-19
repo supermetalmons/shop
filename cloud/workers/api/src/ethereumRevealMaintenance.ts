@@ -1,3 +1,6 @@
+import { duplicateCorrectionDefinition, duplicateCorrectionDefinitionSha256 } from '../../../../shared/ethereum/installedDuplicateCorrection.js';
+import { parseDuplicateCorrectionRequest, requireDuplicateCorrectionScope, type DuplicateCorrectionResult } from '../../../../shared/ethereum/duplicateCorrection.js';
+import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { EthereumRevealAttributeBackfillPage, EthereumRevealInspection, EthereumRevealMaintenanceRequest, EthereumRevealPurgeResult,
   EthereumRevealReplacementInspection, EthereumRevealRetirementResult,
@@ -23,6 +26,14 @@ import { requireMixedDeployment } from './ethereumMixedAllocationOperation.js';
 import { parseMixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async duplicateCorrection(value: unknown): Promise<DuplicateCorrectionResult> {
+    const definition = duplicateCorrectionDefinition;
+    const request = parseDuplicateCorrectionRequest(value, definition, duplicateCorrectionDefinitionSha256);
+    const deployment = await readEthereumRevealDeployment(this.env.OPS_DB, definition);
+    requireDuplicateCorrectionScope(deployment, definition);
+    return this.env.ETHEREUM_REVEAL.getByName(`${deployment.chainId}:${deployment.contractAddress}`).duplicateCorrection(deployment, request);
+  }
+
   async mixedAllocation(value: unknown): Promise<MixedAllocationMaintenanceResult> {
     const request = parseMixedAllocationMaintenanceRequest(value);
     const row = await this.env.OPS_DB.prepare(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id=?`)

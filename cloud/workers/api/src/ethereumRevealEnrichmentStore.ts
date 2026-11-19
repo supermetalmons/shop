@@ -1,3 +1,4 @@
+import { revealSlotOverrideTable, type RevealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import { initializeRevealEnrichmentSchemaV1 } from './ethereumRevealSchema/enrichment.js';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
@@ -30,15 +31,12 @@ export function acknowledgedEnrichmentHash(sql: RevealSql, tokenId: string, vers
 }
 
 export class EthereumRevealEnrichmentStore {
-  private readonly ownerOverrides: boolean;
   constructor(private readonly sql: RevealSql, private readonly transaction: <T>(action: () => T) => T) {
-    this.ownerOverrides = Boolean(this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='owner_hatching_slot_overrides'").toArray().length);
-    initializeRevealEnrichmentSchemaV1(this.sql, this.transaction, this.ownerOverrides);
+    initializeRevealEnrichmentSchemaV1(this.sql, this.transaction, revealSlotOverrideTable(sql));
   }
 
-  private ownerGuard(): string {
-    return this.ownerOverrides
-      ? 'AND NOT EXISTS(SELECT 1 FROM owner_hatching_slot_overrides o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)' : '';
+  private ownerGuard(table: RevealSlotOverrideTable | null = revealSlotOverrideTable(this.sql)): string {
+    return table ? `AND NOT EXISTS(SELECT 1 FROM ${table} o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)` : '';
   }
 
   claim(now: number, limit = REVEAL_ENRICHMENT_SLOTS): RevealEnrichmentClaim[] {
@@ -82,15 +80,17 @@ export class EthereumRevealEnrichmentStore {
 
   nextWake(now: number, busy: boolean): number | null {
     if (busy) return now + CLAIM_MS;
+    const overrides = revealSlotOverrideTable(this.sql);
     return this.sql.exec<{ due: number | null }>(`SELECT MIN(e.next_check_ms) AS due FROM reveal_enrichment e
-      ${this.ownerOverrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
-      WHERE e.version=? AND e.status='pending' ${this.ownerGuard()}`, REVEAL_ENRICHMENT_VERSION).toArray()[0].due;
+      ${overrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
+      WHERE e.version=? AND e.status='pending' ${this.ownerGuard(overrides)}`, REVEAL_ENRICHMENT_VERSION).toArray()[0].due;
   }
 
   summary(): Record<string, number> {
+    const overrides = revealSlotOverrideTable(this.sql);
     const rows = this.sql.exec<{ status: string; last_error: string | null; count: number }>(`SELECT e.status,e.last_error,COUNT(*) AS count
-      FROM reveal_enrichment e ${this.ownerOverrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
-      WHERE e.version=? ${this.ownerGuard()} GROUP BY e.status,e.last_error`, REVEAL_ENRICHMENT_VERSION).toArray();
+      FROM reveal_enrichment e ${overrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
+      WHERE e.version=? ${this.ownerGuard(overrides)} GROUP BY e.status,e.last_error`, REVEAL_ENRICHMENT_VERSION).toArray();
     return Object.fromEntries(rows.map(row => [row.last_error ?? row.status, row.count]));
   }
 }

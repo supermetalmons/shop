@@ -1,3 +1,5 @@
+import type { DuplicateCorrectionRequest, DuplicateCorrectionResult } from '../../shared/ethereum/duplicateCorrection.ts';
+import { duplicateCorrectionLedgerSummary } from './duplicateCorrectionLedgerSummary.ts';
 import { fileURLToPath } from 'node:url';
 import type { GetPlatformProxyOptions } from 'wrangler';
 import type { EthereumRevealEmptyPoolRequest, EthereumRevealEmptyPoolResult } from '../../shared/ethereum/revealMaintenance.ts';
@@ -9,6 +11,7 @@ import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfi
   EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  duplicateCorrection?(request: DuplicateCorrectionRequest): Promise<DuplicateCorrectionResult>;
   mixedAllocation?(request: MixedAllocationMaintenanceRequest): Promise<MixedAllocationMaintenanceResult>;
   ownerHatching?(request: OwnerHatchingMaintenanceRequest): Promise<OwnerHatchingMaintenanceResult>;
   rebuildEmptyPool?(request: EthereumRevealEmptyPoolRequest): Promise<EthereumRevealEmptyPoolResult>;
@@ -65,7 +68,12 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async mixedAllocation(request) {
+    return await run({ async duplicateCorrection(request) {
+      const r = await call(() => proxy.env.REVEAL_MAINTENANCE.duplicateCorrection!(request));
+      return { deploymentId: r.deploymentId, operationId: r.operationId, definitionSha256: r.definitionSha256,
+        expectedRevision: r.expectedRevision, sourceCatalogRevision: r.sourceCatalogRevision, registryRevision: r.registryRevision,
+        catalogRevision: r.catalogRevision, phase: r.phase, ledger: duplicateCorrectionLedgerSummary(r.ledger) };
+    }, async mixedAllocation(request) {
       const result = await call(() => proxy.env.REVEAL_MAINTENANCE.mixedAllocation!(request));
       return mixedAllocationProgress(result);
     }, async ownerHatching(request) {
