@@ -1,3 +1,4 @@
+import { metadataJsonSpan } from './metadataJsonSpan.ts';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { ethereumMetadataBaseUri } from './config.ts';
@@ -52,29 +53,6 @@ export function relicImageSha256(json: string): string {
   return bytesToHex(sha256(new TextEncoder().encode(json)));
 }
 
-function stringEnd(json: string, start: number): number {
-  for (let index = start + 1; index < json.length; index++) {
-    if (json[index] === '\\') index++;
-    else if (json[index] === '"') return index + 1;
-  }
-  return invalid('unterminated JSON string');
-}
-
-function valueEnd(json: string, start: number): number {
-  if (json[start] === '"') return stringEnd(json, start);
-  let depth = 0;
-  for (let index = start; index < json.length; index++) {
-    const character = json[index];
-    if (character === '"') index = stringEnd(json, index) - 1;
-    else if (character === '[' || character === '{') depth++;
-    else if (character === ']' || character === '}') {
-      if (!depth) return index;
-      if (--depth === 0) return index + 1;
-    } else if (character === ',' && !depth) return index;
-  }
-  return invalid('unterminated JSON value');
-}
-
 function relicMetadataJson(tokenId: string, json: string, field: 'image' | 'name'): string {
   if (!RELIC_IMAGE_TOKEN_IDS.includes(tokenId) || typeof json !== 'string' ||
     json.length > MAX_RELIC_METADATA_BYTES || new TextEncoder().encode(json).byteLength > MAX_RELIC_METADATA_BYTES) invalid('metadata');
@@ -87,22 +65,7 @@ function relicMetadataJson(tokenId: string, json: string, field: 'image' | 'name
   const target = field === 'name' ? relicTemplate.displayNames[displayId - 1] : `${base}.png`;
   if (typeof target !== 'string' || !target) invalid('relic display name');
   if (field === 'name' && metadata.name !== `Relic #${displayId}` && metadata.name !== target) invalid('noncanonical relic name');
-  const skipWhitespace = (index: number) => { while (/\s/.test(json[index] ?? '') && index < json.length) index++; return index; };
-  let cursor = skipWhitespace(0) + 1;
-  let literal: { start: number; end: number } | undefined;
-  const names = new Set<string>();
-  while (json[skipWhitespace(cursor)] !== '}') {
-    cursor = skipWhitespace(cursor);
-    const end = stringEnd(json, cursor);
-    const name: string = JSON.parse(json.slice(cursor, end));
-    if (names.has(name)) invalid('duplicate metadata property');
-    names.add(name);
-    const start = skipWhitespace(skipWhitespace(end) + 1);
-    const next = valueEnd(json, start);
-    if (name === field) literal = { start, end: next };
-    cursor = skipWhitespace(next);
-    if (json[cursor] === ',') cursor++;
-  }
+  const literal = metadataJsonSpan(json, field, invalid);
   if (!literal || json.slice(literal.start, literal.end) !== JSON.stringify(metadata[field])) invalid(`noncanonical ${field} literal`);
   const result = json.slice(0, literal.start) + JSON.stringify(target) + json.slice(literal.end);
   if (result.length > MAX_RELIC_METADATA_BYTES || new TextEncoder().encode(result).byteLength > MAX_RELIC_METADATA_BYTES) invalid('metadata');

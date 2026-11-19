@@ -14,6 +14,7 @@ import { backfillRevealAttributePage } from '../src/ethereumRevealAttributeBackf
 import installedCollectionBlocks from '../../../../scripts/ethereum-metadata/reveal-assets/111k_devnet/collection-blocks.json';
 import supplement from '../../../../shared/ethereum/ownerHatchingCatalog.json';
 import { mixedReleaseBlockHash, type MixedAllocationGroup } from '../../../../shared/ethereum/revealMixedAllocation.ts';
+import { appendTwinTrait, type TwinRole } from '../../../../shared/ethereum/twinMetadataTrait.ts';
 import { initializeDuplicateReplacementReads } from '../src/ethereumRevealSlotOverrides.ts';
 import { registerRevealCollectionBlocksFixture } from './revealCollectionBlocksFixture.ts';
 
@@ -404,4 +405,70 @@ test('the next mixed allocation can exchange a corrected egg and preserves its r
   f.store.publicationComplete('1');
   assert.equal(f.database.prepare("SELECT COUNT(*) AS n FROM reveal_enrichment WHERE token_id='1'").get()!.n, 0);
   assert.deepEqual(f.open().catalogUpdate.reader.canonicalMetadata(['1'])[0].artwork, published.artwork);
+});
+
+test('terminal twin traits survive ordinary and owner reveal reads, stale publication, and attribute repair', t => {
+  const f = correctedInventory(t), catalog = f.store.catalogUpdate, owner = catalog.ownerHatching;
+  const ids = Array.from({ length: 20 }, (_, i) => String(i + 1));
+  f.random.push(3421, 0, 3421 + target.categories.eggs.count, 0);
+  f.store.freeze(f.deployment, { transactionHash: `0x${'1'.repeat(64)}`, blockHash: `0x${'2'.repeat(64)}`, blockNumber: 101 },
+    [{ crateTokenId: '111112', tokenIds: ids }], 3000);
+  for (const id of ids) f.store.publicationComplete(id);
+  owner.prepare({ batchId: 'twin-test', sourceSha256: 'a'.repeat(64), candidateTokenIds: ['1'], readyCount: 1,
+    freshEggIds: [catalog.reader.freshEggBounds().lastIssued + 1], grails: [] });
+  const paintingPool = catalog.reader.pools().filter(pool => pool.category === 'painting');
+  const pools = t.mock.method(catalog.reader, 'pools', () => paintingPool);
+  assert.equal(owner.hatch('1', 4000).kind, 'hatched');
+  pools.mock.restore();
+  const hatched = owner.reader.canonical('1')!;
+  assert.equal(hatched.category, 'painting');
+  assert.ok(owner.acceptEnrichment('1', hatched.metadataRevision, hatched.metadataJson, hatched.targetSha256));
+  const ownerJobs = owner.claimPublications(5000);
+  owner.completePublications(ownerJobs.map(job => ({ job, status: 'published' })), 5000);
+  const base = catalog.reader.canonicalMetadata(['2'])[0];
+  assert.equal(base.category, 'painting');
+  const enriched = JSON.parse(base.metadataJson);
+  enriched.attributes.push({ trait_type: 'colour', value: 'ochre' });
+  const metadataJson = JSON.stringify(enriched) + '\n';
+  f.database.prepare(`UPDATE reveal_enrichment SET target_json=?,target_sha256=?,status='published' WHERE token_id='2'`).run(metadataJson, digest(metadataJson));
+  const before = catalog.reader.canonicalMetadata(['1', '2', '3']);
+  f.database.exec(`CREATE TABLE reveal_twin_annotations(token_id TEXT PRIMARY KEY,painting_id INTEGER UNIQUE,role TEXT,predecessor_sha256 TEXT,
+    target_sha256 TEXT,metadata_revision INTEGER,published INTEGER)`);
+  const roles: TwinRole[] = ['good twin', 'evil twin'];
+  for (const [index, value] of before.slice(0, 2).entries()) {
+    f.database.prepare('INSERT INTO reveal_twin_annotations VALUES(?,?,?,?,?,?,0)').run(value.tokenId, value.assetId, roles[index],
+      value.targetSha256, digest(appendTwinTrait(value.metadataJson, roles[index])), value.metadataRevision + 1);
+  }
+  assert.throws(() => backfillRevealAttributePage(f.sql, { audit: true, frozenThroughMs: 5000, afterTokenId: null, write: false }), /twin metadata publication/);
+  const reader = f.open().catalogUpdate.reader;
+  const current = reader.canonicalMetadata(['1','2','3']);
+  assert.deepEqual(current[2], before[2]);
+  const lightweight = reader.canonicalArtworks(['1','2','3']);
+  for (let i = 0; i < 2; i++) {
+    const value = current[i], previous = before[i];
+    const role = { trait_type: roles[i], value: true };
+    assert.equal(value.metadataJson, appendTwinTrait(previous.metadataJson, roles[i]));
+    assert.equal(value.metadataRevision, previous.metadataRevision + 1);
+    assert.deepEqual(value.expectedJsons, [previous.metadataJson]);
+    assert.equal(value.allowMissing, false);
+    assert.deepEqual(lightweight[i].attributes?.at(-1), role);
+    assert.equal(lightweight[i].metadataRevision, value.metadataRevision);
+    assert.deepEqual(value.artwork.attributes?.at(-1), role);
+    assert.ok(reader.validateMetadataWrite({ tokenId: value.tokenId, metadataRevision: value.metadataRevision,
+      metadataJson: value.metadataJson, expectedJsons: [previous.metadataJson], allowMissing: false }));
+    assert.equal(reader.validateMetadataWrite({ tokenId: value.tokenId, metadataRevision: previous.metadataRevision,
+      metadataJson: previous.metadataJson, expectedJsons: [], allowMissing: false }), false);
+  }
+  const retry = owner.hatch('1', 6000);
+  assert.equal(retry.kind, 'hatched');
+  if (retry.kind === 'hatched') assert.deepEqual(retry.artwork, lightweight[0]);
+  assert.deepEqual(reader.canonicalMetadata(['1', '1']), [current[0],current[0]]);
+  f.database.exec('UPDATE reveal_twin_annotations SET published=1');
+  const audit = backfillRevealAttributePage(f.sql, { audit: true, frozenThroughMs: 5000, afterTokenId: null, write: false });
+  assert.equal(audit.tokens!.find(token => token.tokenId === '2')!.metadataSha256, current[1].targetSha256);
+  assert.equal(backfillRevealAttributePage(f.sql, { afterTokenId: null, recheckTokenId: '2', write: true }).enqueued, 0);
+  f.database.exec("UPDATE reveal_enrichment SET status='pending' WHERE token_id='2'");
+  assert.ok(!f.store.enrichment.claim(6000).some(job => job.token_id === '2'));
+  f.database.exec("UPDATE reveal_twin_annotations SET predecessor_sha256='unexpected' WHERE token_id='1'");
+  assert.throws(() => reader.canonicalMetadata(['1']), /predecessor changed/);
 });

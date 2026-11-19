@@ -1,3 +1,5 @@
+import { currentTwinDeployment } from './ethereumTwinMetadata.js';
+import { parseTwinMetadataRequest, type TwinMetadataMaintenanceResult } from '../../../../shared/ethereum/twinMetadataMaintenance.js';
 import { duplicateCorrectionDefinition, duplicateCorrectionDefinitionSha256 } from '../../../../shared/ethereum/installedDuplicateCorrection.js';
 import { parseDuplicateCorrectionRequest, requireDuplicateCorrectionScope, type DuplicateCorrectionResult } from '../../../../shared/ethereum/duplicateCorrection.js';
 import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
@@ -26,6 +28,12 @@ import { requireMixedDeployment } from './ethereumMixedAllocationOperation.js';
 import { parseMixedAllocationMaintenanceRequest, type MixedAllocationMaintenanceResult } from '../../../../shared/ethereum/mixedAllocationMaintenance.js';
 
 export class EthereumRevealMaintenance extends WorkerEntrypoint<Env> {
+  async twinMetadata(value: unknown): Promise<TwinMetadataMaintenanceResult> {
+    const request = parseTwinMetadataRequest(value);
+    const row = await currentTwinDeployment(this.env.OPS_DB,request);
+    return this.env.ETHEREUM_REVEAL.getByName(`${row.chainId}:${row.contractAddress}`).twinMetadata(row,request);
+  }
+
   async duplicateCorrection(value: unknown): Promise<DuplicateCorrectionResult> {
     const definition = duplicateCorrectionDefinition;
     const request = parseDuplicateCorrectionRequest(value, definition, duplicateCorrectionDefinitionSha256);

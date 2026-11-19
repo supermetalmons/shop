@@ -58,8 +58,9 @@ function fixture() {
 test('private reveal maintenance accepts only explicit identities and revisions', async () => {
   const f = fixture();
   await assert.rejects(f.maintenance.duplicateCorrection({ ...request, action: 'apply' }), /duplicate correction request/);
+  await assert.rejects(f.maintenance.twinMetadata({ ...request, action: 'prepare' }), /twin metadata scope/);
   assert.deepEqual(Object.getOwnPropertyNames(EthereumRevealMaintenance.prototype).sort(),
-    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'duplicateCorrection', 'inspectReplacement', 'inspectRetired', 'mixedAllocation', 'ownerHatching', 'purgeRetired', 'rebuildEmptyPool', 'relicImages', 'retireForReplacement']);
+    ['backfillAttributes', 'cancelRetirement', 'catalogUpdate', 'constructor', 'duplicateCorrection', 'inspectReplacement', 'inspectRetired', 'mixedAllocation', 'ownerHatching', 'purgeRetired', 'rebuildEmptyPool', 'relicImages', 'retireForReplacement', 'twinMetadata']);
   for (const value of [null, {}, { ...request, expectedRevision: 0 }, { ...request, expectedRevision: '4' },
     { ...request, deploymentId: '../old' }, { ...request, contractAddress: currentContract }]) {
     await assert.rejects(f.maintenance.purgeRetired(value), /Invalid reveal maintenance/);

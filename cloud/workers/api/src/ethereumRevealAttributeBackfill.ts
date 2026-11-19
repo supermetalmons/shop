@@ -3,6 +3,7 @@ import type { EthereumRevealAttributeAuditToken, EthereumRevealAttributeBackfill
 import { REVEAL_ENRICHMENT_VERSION } from '../../../../shared/ethereum/reveal.js';
 import { getOwnerHatchingGrail } from '../../../../shared/ethereum/ownerHatchingCatalog.js';
 import { lookupRevealCollectionBlock } from '../../../../shared/ethereum/revealCollectionBlocks.js';
+import { excludeTwinAnnotations, hasTwinAnnotations } from './ethereumRevealTwinAnnotations.js';
 import { revealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import type { RevealSql } from './ethereumRevealStore.js';
 import { acknowledgedEnrichmentHash, matchesEnrichmentChecksum } from './ethereumRevealEnrichmentStore.js';
@@ -20,7 +21,8 @@ function assignmentRevision(sql: RevealSql, table: string, alias: string): strin
 
 function ownerOverrideGuard(sql: RevealSql): string {
   const table = revealSlotOverrideTable(sql);
-  return table ? `AND NOT EXISTS(SELECT 1 FROM ${table} o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)` : '';
+  const slotGuard = table ? `AND NOT EXISTS(SELECT 1 FROM ${table} o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)` : '';
+  return `${slotGuard} ${excludeTwinAnnotations(sql, 'a.token_id')}`;
 }
 
 function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, frozenThroughMs: number): EthereumRevealAttributeBackfillPage {
@@ -32,6 +34,10 @@ function auditRevealAttributePage(sql: RevealSql, afterTokenId: string | null, f
   if (sql.exec(`SELECT a.token_id FROM assignments a LEFT JOIN publication p ON p.token_id=a.token_id
       ${ownerPublication} WHERE a.token_id IS NOT NULL AND a.frozen_at_ms<=? AND ${publicationStatus} IS NOT 'published' LIMIT 1`, frozenThroughMs).toArray().length) {
     throw new Error('Attribute audit requires complete metadata publication for every artwork frozen through the cutoff.');
+  }
+  if (hasTwinAnnotations(sql) && sql.exec(`SELECT 1 FROM reveal_twin_annotations t JOIN assignments a ON a.token_id=t.token_id
+      WHERE t.published=0 AND a.frozen_at_ms<=? LIMIT 1`, frozenThroughMs).toArray().length) {
+    throw new Error('Attribute audit requires complete twin metadata publication for the frozen cutoff.');
   }
   const hasJobs = sql.exec("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='reveal_enrichment'").toArray().length > 0;
   const actualRevision = assignmentRevision(sql, 'assignments', 'a');

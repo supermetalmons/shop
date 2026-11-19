@@ -127,6 +127,20 @@ npm run ethereum:duplicate-correction -- verify --deployment-id mainnet-v1 --jou
 
 The atomic exchange uses the then-current free inventory and owner commitments. A conflicting unresolved reservation leaves the pool intact for a retry after it settles. After a committed exchange resume the same journal forward; subsequent Workers must understand the stored slot replacements. Check healthy public reads across the five-minute scheduler interval, verify again, and retain aggregate counts, the definition digest, frozen painting identity proof and application version. Selected egg identities and assignments stay private.
 
+## Mainnet twin metadata
+
+The November 2026 amendment marks published NFTs from the reviewed duplicate painting groups. Within a group with at least two published copies, the lowest numeric ERC-721 token ID gets `{"trait_type":"good twin","value":true}`. Each other published copy gets `{"trait_type":"evil twin","value":true}`. Singletons and unopened inventory keep their existing metadata.
+
+The manifest belongs in `.operations/`. It freezes the reviewed token/painting identities, role, original CDN SHA-256 and ETag, plus the original registry revision. Deploy boolean-compatible readers and the private maintenance operation before preparing the cohort. Keep sales, reveals and holder claims active. The ledger validates group membership and role order against the confirmed painting correction, then records the canonical amendment and publishes only those documents using conditional writes.
+
+```sh
+npm run ethereum:twin-metadata -- inspect --manifest "$manifest"
+npm run ethereum:twin-metadata -- apply --manifest "$manifest" --write
+npm run ethereum:twin-metadata -- verify --manifest "$manifest"
+```
+
+Resume an interrupted publication with the same manifest. Verification checks every target in storage. Compare each public CDN document with the frozen original plus its one appended boolean, check the scoped metadata API and singleton controls, and repeat after the scheduler interval. Keep individual token records and source documents in the private operations directory.
+
 ## Empty mainnet pool rebuild
 
 For an explicitly requested prelaunch mainnet rebuild, `ethereum:empty-pool`

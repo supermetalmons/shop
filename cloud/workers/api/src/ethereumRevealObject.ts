@@ -1,3 +1,5 @@
+import { currentTwinDeployment, EthereumTwinMetadataOperation } from './ethereumTwinMetadata.js';
+import { parseTwinMetadataRequest, type TwinMetadataMaintenanceResult } from '../../../../shared/ethereum/twinMetadataMaintenance.js';
 import { parseDuplicateCorrectionRequest, requireDuplicateCorrectionScope, type DuplicateCorrectionResult } from '../../../../shared/ethereum/duplicateCorrection.js';
 import { duplicateCorrectionDefinition, duplicateCorrectionDefinitionSha256 } from '../../../../shared/ethereum/installedDuplicateCorrection.js';
 import { EthereumDuplicateCorrectionStore } from './ethereumDuplicateCorrectionStore.js';
@@ -118,6 +120,24 @@ export class EthereumRevealObject extends DurableObject<Env> {
       },
       wake: async () => { await this.arm(); await this.startBackground(deployment); },
     }, mixed);
+  }
+
+  async twinMetadata(deployment: EthereumRevealDeployment, value: unknown): Promise<TwinMetadataMaintenanceResult> {
+    const request = parseTwinMetadataRequest(value);
+    requireDuplicateCorrectionScope(deployment, duplicateCorrectionDefinition);
+    requireRevealObjectIdentity(this.ctx.id, this.env.ETHEREUM_REVEAL, deployment);
+    const work = this.mixedQueue.then(() => {
+      const current = async () => {
+        const row = await currentTwinDeployment(this.env.OPS_DB,request);
+        if (this.retiring || this.rebuildFence.status()) throw unavailable();
+        return row;
+      };
+      const reader = new EthereumRevealCatalogReader(this.ctx.storage.sql);
+      return new EthereumTwinMetadataOperation({sql:this.ctx.storage.sql,transaction:action=>this.transaction(action),
+        canonical:id=>reader.canonicalMetadata([id])[0],bucket:this.env.ETHEREUM_REVEAL_METADATA,current}).run(request);
+    });
+    this.mixedQueue = work.then(() => {}, () => {});
+    return work;
   }
 
   async duplicateCorrection(deployment: EthereumRevealDeployment, value: unknown): Promise<DuplicateCorrectionResult> {

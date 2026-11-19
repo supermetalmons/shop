@@ -1,4 +1,5 @@
 import { initializeOwnerHatchingSchemaV1 } from './ethereumRevealSchema/ownerHatching.js';
+import { applyTwinArtworks, hasTwinAnnotations } from './ethereumRevealTwinAnnotations.js';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { MAX_REVEAL_METADATA_BYTES } from './ethereumRevealAttributes.js';
@@ -188,7 +189,12 @@ export class EthereumOwnerHatchingStore {
       const token = this.reader.token(tokenId);
       if (!token) return { kind: 'not-ready' };
       const previous = parseMetadataJson(token.canonical_json) as OwnerHatchingCanonical;
-      if (token.status === 'hatched') return { kind: 'hatched', artwork: previous.artwork };
+      if (token.status === 'hatched') {
+        if (!hasTwinAnnotations(this.sql)) return { kind: 'hatched', artwork: previous.artwork };
+        const artworks = new Map([[tokenId, previous.artwork]]);
+        applyTwinArtworks(this.sql, artworks);
+        return { kind: 'hatched', artwork: artworks.get(tokenId)! };
+      }
       if (!this.hooks.eligibleEgg(tokenId, token.egg_id)) return { kind: 'not-ready' };
       const original = parseMetadataJson(token.original_json) as OwnerHatchingCanonical;
       const origin = this.hooks.originForToken(tokenId);

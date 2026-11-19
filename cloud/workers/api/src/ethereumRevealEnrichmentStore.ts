@@ -1,3 +1,4 @@
+import { excludeTwinAnnotations } from './ethereumRevealTwinAnnotations.js';
 import { revealSlotOverrideTable, type RevealSlotOverrideTable } from './ethereumRevealSlotOverrides.js';
 import { initializeRevealEnrichmentSchemaV1 } from './ethereumRevealSchema/enrichment.js';
 import { sha256 } from '@noble/hashes/sha256';
@@ -35,8 +36,9 @@ export class EthereumRevealEnrichmentStore {
     initializeRevealEnrichmentSchemaV1(this.sql, this.transaction, revealSlotOverrideTable(sql));
   }
 
-  private ownerGuard(table: RevealSlotOverrideTable | null = revealSlotOverrideTable(this.sql)): string {
-    return table ? `AND NOT EXISTS(SELECT 1 FROM ${table} o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)` : '';
+  private ownerGuard(table: RevealSlotOverrideTable | null = revealSlotOverrideTable(this.sql), tokenColumn = 'a.token_id'): string {
+    const slotGuard = table ? `AND NOT EXISTS(SELECT 1 FROM ${table} o WHERE o.origin_category=a.category AND o.origin_asset_id=a.asset_id)` : '';
+    return `${slotGuard} ${excludeTwinAnnotations(this.sql, tokenColumn)}`;
   }
 
   claim(now: number, limit = REVEAL_ENRICHMENT_SLOTS): RevealEnrichmentClaim[] {
@@ -83,14 +85,14 @@ export class EthereumRevealEnrichmentStore {
     const overrides = revealSlotOverrideTable(this.sql);
     return this.sql.exec<{ due: number | null }>(`SELECT MIN(e.next_check_ms) AS due FROM reveal_enrichment e
       ${overrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
-      WHERE e.version=? AND e.status='pending' ${this.ownerGuard(overrides)}`, REVEAL_ENRICHMENT_VERSION).toArray()[0].due;
+      WHERE e.version=? AND e.status='pending' ${this.ownerGuard(overrides, 'e.token_id')}`, REVEAL_ENRICHMENT_VERSION).toArray()[0].due;
   }
 
   summary(): Record<string, number> {
     const overrides = revealSlotOverrideTable(this.sql);
     const rows = this.sql.exec<{ status: string; last_error: string | null; count: number }>(`SELECT e.status,e.last_error,COUNT(*) AS count
       FROM reveal_enrichment e ${overrides ? 'JOIN assignments a ON a.token_id=e.token_id' : ''}
-      WHERE e.version=? ${this.ownerGuard(overrides)} GROUP BY e.status,e.last_error`, REVEAL_ENRICHMENT_VERSION).toArray();
+      WHERE e.version=? ${this.ownerGuard(overrides, 'e.token_id')} GROUP BY e.status,e.last_error`, REVEAL_ENRICHMENT_VERSION).toArray();
     return Object.fromEntries(rows.map(row => [row.last_error ?? row.status, row.count]));
   }
 }

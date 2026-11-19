@@ -1,3 +1,4 @@
+import type { TwinMetadataMaintenanceRequest, TwinMetadataMaintenanceResult } from '../../shared/ethereum/twinMetadataMaintenance.ts';
 import type { DuplicateCorrectionRequest, DuplicateCorrectionResult } from '../../shared/ethereum/duplicateCorrection.ts';
 import { duplicateCorrectionLedgerSummary } from './duplicateCorrectionLedgerSummary.ts';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,7 @@ import type { EthereumRevealAttributeBackfillPage, EthereumRevealAttributeBackfi
   EthereumRevealReplacementInspection, EthereumRevealCatalogUpdateRequest, EthereumRevealCatalogUpdateResult } from '../../shared/ethereum/revealMaintenance.ts';
 
 export type EthereumRevealMaintenanceTransport = {
+  twinMetadata?(request: TwinMetadataMaintenanceRequest): Promise<TwinMetadataMaintenanceResult>;
   duplicateCorrection?(request: DuplicateCorrectionRequest): Promise<DuplicateCorrectionResult>;
   mixedAllocation?(request: MixedAllocationMaintenanceRequest): Promise<MixedAllocationMaintenanceResult>;
   ownerHatching?(request: OwnerHatchingMaintenanceRequest): Promise<OwnerHatchingMaintenanceResult>;
@@ -68,7 +70,12 @@ export async function withEthereumRevealMaintenance<T>(run: (transport: Ethereum
     const inspection = (value: EthereumRevealInspection): EthereumRevealInspection => ({ deploymentId: value.deploymentId,
       chainId: value.chainId, contractAddress: value.contractAddress, metadataBaseUri: value.metadataBaseUri,
       revision: value.revision, storageEmpty: value.storageEmpty, alarmCleared: value.alarmCleared });
-    return await run({ async duplicateCorrection(request) {
+    return await run({ async twinMetadata(request) {
+      const r = await call(() => proxy.env.REVEAL_MAINTENANCE.twinMetadata!(request));
+      return { operationId: r.operationId, cohortSha256: r.cohortSha256, phase: r.phase,
+        total: r.total, good: r.good, evil: r.evil, groups: r.groups, published: r.published,
+        registryRevision: r.registryRevision, catalogRevision: r.catalogRevision, checked: r.checked, next: r.next };
+    }, async duplicateCorrection(request) {
       const r = await call(() => proxy.env.REVEAL_MAINTENANCE.duplicateCorrection!(request));
       return { deploymentId: r.deploymentId, operationId: r.operationId, definitionSha256: r.definitionSha256,
         expectedRevision: r.expectedRevision, sourceCatalogRevision: r.sourceCatalogRevision, registryRevision: r.registryRevision,
