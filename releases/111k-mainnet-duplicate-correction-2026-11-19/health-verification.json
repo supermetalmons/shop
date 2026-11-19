@@ -1,0 +1,149 @@
+{
+  "fromStart": {
+    "samples": 102,
+    "checks": 306,
+    "successful": 299,
+    "first": "2026-11-19T08:08:53.288Z",
+    "last": "2026-11-19T08:46:47.184Z",
+    "failed": [
+      {
+        "at": "2026-11-19T08:15:35.311Z",
+        "endpoint": "stats",
+        "error": "The operation was aborted due to timeout"
+      },
+      {
+        "at": "2026-11-19T08:15:35.311Z",
+        "endpoint": "hatching/ready",
+        "error": "The operation was aborted due to timeout"
+      },
+      {
+        "at": "2026-11-19T08:20:01.814Z",
+        "endpoint": "stats",
+        "error": "The operation was aborted due to timeout"
+      },
+      {
+        "at": "2026-11-19T08:20:01.814Z",
+        "endpoint": "hatching/ready",
+        "error": "The operation was aborted due to timeout"
+      },
+      {
+        "at": "2026-11-19T08:21:22.988Z",
+        "endpoint": "config",
+        "error": "The operation was aborted due to timeout"
+      },
+      {
+        "at": "2026-11-19T08:21:22.988Z",
+        "endpoint": "stats",
+        "error": "The operation was aborted due to timeout"
+      },
+      {
+        "at": "2026-11-19T08:21:22.988Z",
+        "endpoint": "hatching/ready",
+        "error": "The operation was aborted due to timeout"
+      }
+    ]
+  },
+  "fromDeployment": {
+    "samples": 47,
+    "checks": 141,
+    "successful": 141,
+    "first": "2026-11-19T08:30:20.682Z",
+    "last": "2026-11-19T08:46:47.184Z",
+    "failed": []
+  },
+  "fromCutover": {
+    "samples": 28,
+    "checks": 84,
+    "successful": 84,
+    "first": "2026-11-19T08:37:10.318Z",
+    "last": "2026-11-19T08:46:47.184Z",
+    "failed": []
+  },
+  "scheduler": {
+    "checkedUtc": "2026-11-19T08:46:06Z",
+    "activationUtc": "2026-11-19T08:36:50Z",
+    "observationDeadlineUtc": "2026-11-19T08:41:50Z",
+    "source": "Cloudflare Workers GraphQL scheduler analytics, scoped registry timestamps, reveal ledger SELECT",
+    "worker": "mons-shop-api",
+    "cron": "*/5 * * * *",
+    "events": [
+      {
+        "utc": "2026-11-19T08:40:00Z",
+        "outcome": "success",
+        "requests": 1,
+        "errors": 0
+      },
+      {
+        "utc": "2026-11-19T08:45:00Z",
+        "outcome": "success",
+        "requests": 1,
+        "errors": 0
+      }
+    ],
+    "registry": [
+      {
+        "deployment_id": "mainnet-v1",
+        "state": "active",
+        "revision": 15,
+        "catalog_revision": 3,
+        "updated_at_ms": 1795077908471,
+        "has_last_error": 0
+      },
+      {
+        "deployment_id": "v17",
+        "state": "active",
+        "revision": 12,
+        "catalog_revision": 3,
+        "updated_at_ms": 1795077909034,
+        "has_last_error": 0
+      }
+    ],
+    "ledger": {
+      "mainnet": {
+        "utc": "2026-11-19T08:46:10Z",
+        "ready": 1,
+        "catalog": "111k-v10",
+        "revision": 3,
+        "candidate_generations": 0,
+        "open_catalog_jobs": 0,
+        "open_owner_jobs": 0,
+        "unused_fresh_eggs": 19,
+        "unbacked_ordinary_claims": 19,
+        "reserved_ordinary_backing": 0,
+        "ordinary_claims_ready": 19,
+        "free_non_eggs": 48583,
+        "total_slots": 111111,
+        "publication": {
+          "baseConflicts": 0,
+          "ownerConflicts": 0,
+          "catalogConflicts": 0
+        }
+      },
+      "sepolia": {
+        "utc": "2026-11-19T08:46:13Z",
+        "ready": 1,
+        "catalog": "111k-v8",
+        "revision": 3,
+        "candidate_generations": 0,
+        "open_catalog_jobs": 0,
+        "open_owner_jobs": 0,
+        "unused_fresh_eggs": 0,
+        "unbacked_ordinary_claims": 0,
+        "reserved_ordinary_backing": 0,
+        "ordinary_claims_ready": 0,
+        "free_non_eggs": 51397,
+        "total_slots": 111111,
+        "publication": {
+          "baseConflicts": 0,
+          "ownerConflicts": 0,
+          "catalogConflicts": 0
+        }
+      }
+    },
+    "clockSkewFromLastSuccessfulCronMs": [
+      8471,
+      9034
+    ],
+    "healthy": true
+  }
+}

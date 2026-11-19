@@ -1,0 +1,388 @@
+{
+  "deploymentId": "mainnet-v1",
+  "definitionSha256": "162459bc042c4454b1eacc5b3df19c1f6cbb74a83e45bad4eb5df2c6106d271b",
+  "worker": "d9bcbabd-d355-4468-a7a0-9bf35c0a6a51",
+  "previousWorker": "cb2800a0-65c5-4f37-af0c-4099573ecf75",
+  "workerDeployedAt": "2026-11-19T08:30:04.555647Z",
+  "implementationCommit": "a1c00f45f1e7",
+  "catalog": "111k-v10",
+  "cutoverAt": "2026-11-19T08:36:50Z",
+  "registryRevision": 15,
+  "catalogRevision": 3,
+  "before": {
+    "operationId": "mainnet-duplicate-paintings-20261119",
+    "definitionSha256": "162459bc042c4454b1eacc5b3df19c1f6cbb74a83e45bad4eb5df2c6106d271b",
+    "applied": false,
+    "catalogRevision": 2,
+    "appliedAtMs": null,
+    "totals": {
+      "groups": 313,
+      "paintings": 628,
+      "revealed": 247,
+      "reserved": 0,
+      "keptFree": 113,
+      "toReplace": 268,
+      "replaced": 0,
+      "conflicts": 0,
+      "extraRevealed": 47
+    },
+    "blocks": [
+      {
+        "block": "dratini fanart",
+        "counts": {
+          "groups": 1,
+          "paintings": 2,
+          "revealed": 1,
+          "reserved": 0,
+          "keptFree": 0,
+          "toReplace": 1,
+          "replaced": 0,
+          "conflicts": 0,
+          "extraRevealed": 0
+        }
+      },
+      {
+        "block": "gpt pixel",
+        "counts": {
+          "groups": 3,
+          "paintings": 8,
+          "revealed": 2,
+          "reserved": 0,
+          "keptFree": 1,
+          "toReplace": 5,
+          "replaced": 0,
+          "conflicts": 0,
+          "extraRevealed": 0
+        }
+      },
+      {
+        "block": "Paint Me Like Your Old Models",
+        "counts": {
+          "groups": 1,
+          "paintings": 2,
+          "revealed": 2,
+          "reserved": 0,
+          "keptFree": 0,
+          "toReplace": 0,
+          "replaced": 0,
+          "conflicts": 0,
+          "extraRevealed": 1
+        }
+      },
+      {
+        "block": "little swag",
+        "counts": {
+          "groups": 244,
+          "paintings": 488,
+          "revealed": 184,
+          "reserved": 0,
+          "keptFree": 92,
+          "toReplace": 212,
+          "replaced": 0,
+          "conflicts": 0,
+          "extraRevealed": 32
+        }
+      },
+      {
+        "block": "Drilady 2",
+        "counts": {
+          "groups": 64,
+          "paintings": 128,
+          "revealed": 58,
+          "reserved": 0,
+          "keptFree": 20,
+          "toReplace": 50,
+          "replaced": 0,
+          "conflicts": 0,
+          "extraRevealed": 14
+        }
+      }
+    ],
+    "pools": [
+      {
+        "category": "3d",
+        "total": 3000,
+        "available": 1769
+      },
+      {
+        "category": "animated",
+        "total": 666,
+        "available": 254
+      },
+      {
+        "category": "egg",
+        "total": 32021,
+        "available": 21200
+      },
+      {
+        "category": "painting",
+        "total": 75366,
+        "available": 46792
+      },
+      {
+        "category": "video",
+        "total": 58,
+        "available": 36
+      }
+    ]
+  },
+  "atCutover": {
+    "operationId": "mainnet-duplicate-paintings-20261119",
+    "definitionSha256": "162459bc042c4454b1eacc5b3df19c1f6cbb74a83e45bad4eb5df2c6106d271b",
+    "applied": true,
+    "catalogRevision": 3,
+    "appliedAtMs": 1795077410625,
+    "totals": {
+      "groups": 313,
+      "paintings": 628,
+      "revealed": 247,
+      "reserved": 0,
+      "keptFree": 113,
+      "toReplace": 0,
+      "replaced": 268,
+      "conflicts": 0,
+      "extraRevealed": 47
+    },
+    "blocks": [
+      {
+        "block": "dratini fanart",
+        "counts": {
+          "groups": 1,
+          "paintings": 2,
+          "revealed": 1,
+          "reserved": 0,
+          "keptFree": 0,
+          "toReplace": 0,
+          "replaced": 1,
+          "conflicts": 0,
+          "extraRevealed": 0
+        }
+      },
+      {
+        "block": "gpt pixel",
+        "counts": {
+          "groups": 3,
+          "paintings": 8,
+          "revealed": 2,
+          "reserved": 0,
+          "keptFree": 1,
+          "toReplace": 0,
+          "replaced": 5,
+          "conflicts": 0,
+          "extraRevealed": 0
+        }
+      },
+      {
+        "block": "Paint Me Like Your Old Models",
+        "counts": {
+          "groups": 1,
+          "paintings": 2,
+          "revealed": 2,
+          "reserved": 0,
+          "keptFree": 0,
+          "toReplace": 0,
+          "replaced": 0,
+          "conflicts": 0,
+          "extraRevealed": 1
+        }
+      },
+      {
+        "block": "little swag",
+        "counts": {
+          "groups": 244,
+          "paintings": 488,
+          "revealed": 184,
+          "reserved": 0,
+          "keptFree": 92,
+          "toReplace": 0,
+          "replaced": 212,
+          "conflicts": 0,
+          "extraRevealed": 32
+        }
+      },
+      {
+        "block": "Drilady 2",
+        "counts": {
+          "groups": 64,
+          "paintings": 128,
+          "revealed": 58,
+          "reserved": 0,
+          "keptFree": 20,
+          "toReplace": 0,
+          "replaced": 50,
+          "conflicts": 0,
+          "extraRevealed": 14
+        }
+      }
+    ],
+    "pools": [
+      {
+        "category": "3d",
+        "total": 3000,
+        "available": 1769
+      },
+      {
+        "category": "animated",
+        "total": 666,
+        "available": 254
+      },
+      {
+        "category": "egg",
+        "total": 32289,
+        "available": 21468
+      },
+      {
+        "category": "painting",
+        "total": 75098,
+        "available": 46524
+      },
+      {
+        "category": "video",
+        "total": 58,
+        "available": 36
+      }
+    ]
+  },
+  "afterObservation": {
+    "operationId": "mainnet-duplicate-paintings-20261119",
+    "definitionSha256": "162459bc042c4454b1eacc5b3df19c1f6cbb74a83e45bad4eb5df2c6106d271b",
+    "applied": true,
+    "catalogRevision": 3,
+    "appliedAtMs": 1795077410625,
+    "totals": {
+      "groups": 313,
+      "paintings": 628,
+      "revealed": 247,
+      "reserved": 0,
+      "keptFree": 113,
+      "toReplace": 0,
+      "replaced": 268,
+      "conflicts": 0,
+      "extraRevealed": 47
+    },
+    "blocks": [
+      {
+        "block": "dratini fanart",
+        "counts": {
+          "groups": 1,
+          "paintings": 2,
+          "revealed": 1,
+          "reserved": 0,
+          "keptFree": 0,
+          "toReplace": 0,
+          "replaced": 1,
+          "conflicts": 0,
+          "extraRevealed": 0
+        }
+      },
+      {
+        "block": "gpt pixel",
+        "counts": {
+          "groups": 3,
+          "paintings": 8,
+          "revealed": 2,
+          "reserved": 0,
+          "keptFree": 1,
+          "toReplace": 0,
+          "replaced": 5,
+          "conflicts": 0,
+          "extraRevealed": 0
+        }
+      },
+      {
+        "block": "Paint Me Like Your Old Models",
+        "counts": {
+          "groups": 1,
+          "paintings": 2,
+          "revealed": 2,
+          "reserved": 0,
+          "keptFree": 0,
+          "toReplace": 0,
+          "replaced": 0,
+          "conflicts": 0,
+          "extraRevealed": 1
+        }
+      },
+      {
+        "block": "little swag",
+        "counts": {
+          "groups": 244,
+          "paintings": 488,
+          "revealed": 184,
+          "reserved": 0,
+          "keptFree": 92,
+          "toReplace": 0,
+          "replaced": 212,
+          "conflicts": 0,
+          "extraRevealed": 32
+        }
+      },
+      {
+        "block": "Drilady 2",
+        "counts": {
+          "groups": 64,
+          "paintings": 128,
+          "revealed": 58,
+          "reserved": 0,
+          "keptFree": 20,
+          "toReplace": 0,
+          "replaced": 50,
+          "conflicts": 0,
+          "extraRevealed": 14
+        }
+      }
+    ],
+    "pools": [
+      {
+        "category": "3d",
+        "total": 3000,
+        "available": 1769
+      },
+      {
+        "category": "animated",
+        "total": 666,
+        "available": 254
+      },
+      {
+        "category": "egg",
+        "total": 32289,
+        "available": 21468
+      },
+      {
+        "category": "painting",
+        "total": 75098,
+        "available": 46524
+      },
+      {
+        "category": "video",
+        "total": 58,
+        "available": 36
+      }
+    ]
+  },
+  "independentCohort": {
+    "checkedAt": "2026-11-19T08:37:17Z",
+    "catalog": "111k-v10",
+    "catalogRevision": 3,
+    "groups": 313,
+    "paintings": 628,
+    "revealed": 247,
+    "published": 247,
+    "distinctRevealedImages": 200,
+    "extraRevealedPaintings": 47,
+    "privateCommitments": 0,
+    "freePaintings": 113,
+    "keepFreePaintings": 113,
+    "replaceableFreePaintings": 0,
+    "replaced": 268,
+    "inconsistent": 0,
+    "newMappingsToReviewedPaintings": 0,
+    "lostGroups": 0
+  },
+  "eggMediaPreflight": {
+    "verifiedAt": "2026-11-19T08:36:49.330Z",
+    "definitionSha256": "162459bc042c4454b1eacc5b3df19c1f6cbb74a83e45bad4eb5df2c6106d271b",
+    "mediaSha256": "265fd906a27ee88996a79687df2e9d1dd8235c7379d5933c9c982b66adc34774",
+    "objects": 1536
+  }
+}
