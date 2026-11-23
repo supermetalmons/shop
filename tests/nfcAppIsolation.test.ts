@@ -26,8 +26,9 @@ const auth: ReturnType<typeof useSolanaAuth> = {
   refreshProfileState: async () => false, awaitWalletSessionRestoration: async () => 'sign-in-required',
   beginDeliveryRecoveryScheduleUpdate: () => () => false, hasAuthenticatedWalletSession: () => false,
 };
+let activeAuth = auth;
 const bridgeKey = '__nfcAppIsolationTest';
-Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: { useSolanaAuth: () => auth } });
+Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: { useSolanaAuth: () => activeAuth } });
 const imports = registerHooks({
   load(url, context, nextLoad) {
     const source = url.endsWith('/hooks/useSolanaAuth.ts')
@@ -51,7 +52,7 @@ const wallet: WalletContextState = {
   signTransaction: undefined, signAllTransactions: undefined, signMessage: undefined, signIn: undefined,
 };
 
-afterEach(() => { cleanup(); mock.restoreAll(); window.sessionStorage.clear(); window.localStorage.clear(); });
+afterEach(() => { cleanup(); mock.restoreAll(); activeAuth = auth; window.sessionStorage.clear(); window.localStorage.clear(); });
 after(() => { Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
 function fixture(t: TestContext, setVisible: (visible: boolean) => void = () => {}) {
@@ -65,7 +66,7 @@ function fixture(t: TestContext, setVisible: (visible: boolean) => void = () => 
           createElement(BackgroundBlurProvider, null, createElement(App, { route }))))));
 }
 
-test('Tarot renders the standard header before validation and keeps it interactive after claiming', async t => {
+test('Tarot renders the standard header and artwork immediately and preserves both after validation', async t => {
   const validation = Promise.withResolvers<Awaited<ReturnType<typeof tarotApi.status>>>();
   mock.method(tarotApi, 'status', () => validation.promise);
   const setVisible = mock.fn();
@@ -78,7 +79,8 @@ test('Tarot renders the standard header before validation and keeps it interacti
   assert.equal(header.getByRole('heading', { name: 'mons.shop' }).textContent, 'mons.shop');
   assert.ok(home.querySelector('img.brand-icon'));
   assert.equal((header.getByRole('button', { name: 'Wallet' }) as HTMLButtonElement).disabled, false);
-  assert.equal(within(view.getByRole('main')).queryByRole('img'), null);
+  const artwork = within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img', { name: 'Mutating Card' });
+  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/bases/1.webp');
   assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
   assert.equal(setVisible.mock.callCount(), 0);
   await act(async () => validation.resolve({ config, tokenId: 1, receiptTokenId: 778, claimed: true,
@@ -87,9 +89,10 @@ test('Tarot renders the standard header before validation and keeps it interacti
   assert.equal(view.getByRole('banner'), banner);
   const main = view.getByRole('main', { name: 'Tarot card' });
   assert.equal(within(main).getAllByRole('img').length, 1);
+  assert.equal(within(main).getByRole('img', { name: 'Mutating Card' }), artwork);
   assert.equal(within(main).queryByRole('button'), null);
   assert.equal(view.queryByText(accountError), null);
-  assert.equal(main.textContent, '');
+  assert.equal(within(main).queryByRole('heading'), null);
   await act(async () => fireEvent.click(header.getByRole('button', { name: 'Wallet' })));
   await waitFor(() => assert.equal(setVisible.mock.calls.some(call => call.arguments[0] === true), true));
   await act(async () => fireEvent.click(home));
@@ -98,11 +101,57 @@ test('Tarot renders the standard header before validation and keeps it interacti
   assert.equal(view.getByText(accountError).className, 'error');
 });
 
-test('NFC validation errors remain visible without unrelated account errors', async t => {
+test('NFC validation failures remain silent alongside public artwork and the standard header', async t => {
   mock.method(tarotApi, 'status', async () => { throw new TarotApiError('This Tarot claim link is invalid.', 401); });
   const view = render(fixture(t)(tarotRoute));
-  assert.equal((await view.findByRole('alert')).textContent, 'This Tarot claim link is invalid.');
+  const image = within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img');
+  await act(async () => undefined);
+  assert.equal(within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img'), image);
+  assert.equal(view.queryByRole('alert'), null);
   assert.ok(view.getByRole('banner'));
   assert.equal(view.queryByText(accountError), null);
+  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
+});
+
+test('the actual header wallet popup retains focus while eligible validation waits to reveal claim controls', async t => {
+  activeAuth = { ...auth, authenticated: true, sessionWallet: '11111111111111111111111111111111', error: null };
+  mock.method(console, 'error', () => {});
+  mock.method(globalThis, 'fetch', async () => Response.json({ error: 'synthetic-unavailable' }, { status: 503 }));
+  const validation = Promise.withResolvers<Awaited<ReturnType<typeof tarotApi.status>>>();
+  const service = mock.method(tarotApi, 'status', () => validation.promise);
+  const view = render(fixture(t)(tarotRoute));
+  const header = view.getByRole('banner');
+  const image = within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img');
+  await act(async () => fireEvent.click(within(header).getByRole('button', { name: 'Wallet' })));
+  const popup = view.getByRole('dialog', { name: 'Wallet' });
+  assert.equal(popup.contains(document.activeElement), true);
+  await act(async () => validation.resolve({ config, tokenId: 1, receiptTokenId: 778, claimed: false,
+    observedBlock: 10, observedTimestamp: 1, blockHash: `0x${'b'.repeat(64)}` }));
+  assert.equal(within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img'), image);
+  assert.equal(view.getByRole('banner'), header);
+  assert.equal(view.getByRole('dialog', { name: 'Wallet' }), popup);
+  assert.equal(popup.contains(document.activeElement), true);
+  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
+  await act(async () => fireEvent.keyDown(popup, { key: 'Escape' }));
+  assert.equal(view.queryByRole('dialog', { name: 'Wallet' }), null);
+  assert.equal(within(view.getByRole('main', { name: 'NFC claim' })).getByRole('img', { name: 'Mutating Card' }), image);
+  assert.equal(view.getByRole('banner'), header);
+  assert.equal(document.activeElement, within(header).getByRole('button', { name: 'Wallet' }));
+  assert.ok(view.getByRole('button', { name: 'Claim' }));
+  assert.equal(service.mock.callCount(), 1);
+});
+
+test('public artwork navigation keeps the standard header and requires no Tarot backend request', async t => {
+  const service = mock.method(tarotApi, 'status');
+  const page = fixture(t);
+  const route = resolveAppRoute({ pathname: '/nfc', search: '?tokenId=777' });
+  const view = render(page(route));
+  const artwork = within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img');
+  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  await act(async () => view.rerender(page(resolveAppRoute({ pathname: '/nfc', search: '?tokenId=777&code=wrong&testnet=true' }))));
+  assert.ok(view.getByRole('banner'));
+  assert.equal(within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img').getAttribute('src'), artwork.getAttribute('src'));
+  assert.equal(service.mock.callCount(), 0);
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
 });

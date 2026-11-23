@@ -107,29 +107,48 @@
   border-radius: var(--interactive-card-radius);
   outline: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
   object-fit: contain;
+  transform-origin: top left;
 }
 
-body:has(.nfc-claim-page--claimed) {
+.nfc-tarot-page {
+  animation: none;
+}
+
+.nfc-claim-page--entering .nfc-tarot-card {
+  position: relative;
+  z-index: 1;
+}
+
+.nfc-claim-page--entering .nfc-claim-reveal {
+  animation: nfc-claim-enter 220ms ease-out 80ms both;
+}
+
+body:has(.nfc-claim-page--artwork) {
   --page-padding-bottom: clamp(8px, 1.4svh, 14px);
   min-height: 100svh;
 }
 
-.drop-page-frame:has(> .nfc-claim-page--claimed) {
+.drop-page-frame:has(> .nfc-claim-page--artwork) {
   height: calc(100svh - var(--page-padding-top) - var(--page-padding-bottom));
 }
 
-.drop-page-frame:has(> .nfc-claim-page--claimed) > .top--spacer {
+.drop-page-frame:has(> .nfc-claim-page--artwork) > .top--spacer {
   flex: 0 0 auto;
 }
 
-.nfc-claim-page--claimed {
+.nfc-claim-page--artwork {
   flex: 1 1 auto;
   min-height: 0;
   width: min(680px, 100%);
   align-items: center;
 }
 
-.nfc-tarot-card--large {
+.nfc-claim-page--artwork .nfc-claim-nfts,
+.nfc-claim-page--artwork .nfc-claim-nft {
+  display: contents;
+}
+
+.nfc-claim-page--artwork .nfc-tarot-card {
   display: block;
   width: auto;
   height: auto;
@@ -144,7 +163,7 @@ body:has(.nfc-claim-page--claimed) {
 }
 
 @media (max-width: 860px) {
-  body:has(.nfc-claim-page--claimed) {
+  body:has(.nfc-claim-page--artwork) {
     --page-padding-bottom: var(--page-padding-top);
   }
 }
@@ -182,7 +201,8 @@ body:has(.nfc-claim-page--claimed) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nfc-claim-page {
+  .nfc-claim-page,
+  .nfc-claim-page--entering .nfc-claim-reveal {
     animation: none;
   }
 }

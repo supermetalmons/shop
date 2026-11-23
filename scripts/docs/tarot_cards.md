@@ -9,11 +9,19 @@ Evolution and physical redemption are not part of this release.
 
 The live format is `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>&testnet=true`.
 `/nfc?code=basel` preserves the original video placeholder. The standard shop
-header appears immediately; the card and claim content wait for code validation.
-After three canonical confirmations, the same link shows one large card artwork
-below the header, including after either NFT is transferred. It fits the remaining
-viewport without extra page scrolling. The receipt and claim controls are removed.
-Invalid links never expose Tarot claim controls.
+header and large card artwork appear immediately for a single canonical token ID,
+without waiting for code validation. Missing or incorrect codes, already-claimed
+cards, and unavailable claims retain that artwork silently. It fits the remaining
+viewport without extra page scrolling. Invalid links never expose claim controls.
+Existing mainnet-only staff restrictions still apply to testnet claim links.
+
+Only a verified, enabled, unclaimed link reveals the two-NFT claim layout. The same
+card shrinks and moves into its slot while the other content fades in. Reduced
+motion skips the animation. If artwork loading or decoding stalls, the eligible
+claim layout appears without animation after 1.5 seconds. Wallet dialogs defer
+the start of the transition until they close. If a dialog opens during movement,
+the card settles into its final frame. After three canonical confirmations, the
+view returns to the large artwork, including after either NFT is transferred.
 
 Temporary initial validation failures retry automatically with bounded backoff
 and honor `Retry-After`, without opening a wallet or adding controls. Retries
@@ -24,7 +32,10 @@ retry after its cooldown. Unrelated shop account errors stay outside NFC pages.
 A later 401 or 403 invalidates unclaimed access and cancels queued wallet work
 without discarding pending recovery. Claim stays unavailable until validation
 succeeds again. Rate-limit cooldowns disable the existing Claim button and
-re-enable it at the retry deadline without automatically opening a wallet.
+show `Please wait…` when no claim is in progress. The button returns to Claim at
+the retry deadline without automatically opening a wallet. Wallet and transaction
+failures retain their feedback; temporary confirmation-read errors clear once
+confirmation polling recovers.
 
 Wallet submission records a public recovery intent before handing off to the
 wallet. A shared window cache preserves it across SPA navigation when browser

@@ -5,70 +5,66 @@ import type { NfcLink } from '../ethereum/tarotLink';
 import type { EthereumWallet } from '../ethereum/useEthereum111k';
 import { useTarotClaim } from '../ethereum/useTarotClaim';
 import { EthereumWalletPicker } from '../ethereum/EthereumWalletPicker';
+import { useTarotCardTransition } from '../hooks/useTarotCardTransition';
 import { NfcClaimPage } from './NfcClaimPage';
 
 type Props = {
-  link: NfcLink; wallet: EthereumWallet; header?: ReactNode; suspended?: boolean;
+  link: NfcLink; wallet: EthereumWallet; header?: ReactNode; suspended?: boolean; headerWalletOpen?: boolean;
   onModalOpenChange?: (open: boolean) => void;
 };
 
-function TarotCard({ tokenId, large = false }: { tokenId: number; large?: boolean }) {
-  return <img className={large ? 'nfc-tarot-card nfc-tarot-card--large' : 'nfc-tarot-card'}
-    src={`https://wip.lil.org/tarot/bases/${tokenId}.webp`} alt="Mutating Card" width={881} height={1400}
-    style={{ aspectRatio: '881 / 1400' }} decoding="async" draggable={false} referrerPolicy="no-referrer" />;
-}
-
-function TarotClaimPage({ request, wallet, header, suspended = false, onModalOpenChange }: Omit<Props, 'link'> & { request: TarotRequest }) {
-  const model = useTarotClaim(request, wallet, suspended);
+function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen = false, headerWalletOpen = false }: {
+  tokenId: number; header?: ReactNode; model?: ReturnType<typeof useTarotClaim>; suspended?: boolean; pickerOpen?: boolean; headerWalletOpen?: boolean;
+}) {
   const { visible: walletModalVisible } = useWalletModal();
+  const eligible = Boolean(model?.status && !model.status.claimed && model.status.config.enabled);
+  const { cardRef, compact, transitioning } = useTarotCardTransition(eligible, suspended || walletModalVisible || pickerOpen || headerWalletOpen);
   const initialScrollPending = useRef(true);
-  const pickerOpen = wallet.status === 'choosing' && !model.status?.claimed;
-  useLayoutEffect(() => { onModalOpenChange?.(pickerOpen && !suspended); }, [pickerOpen, suspended, onModalOpenChange]);
-  useLayoutEffect(() => () => { onModalOpenChange?.(false); }, [onModalOpenChange]);
   useEffect(() => {
-    if (walletModalVisible || pickerOpen || !initialScrollPending.current) return;
+    if (walletModalVisible || pickerOpen || headerWalletOpen || !initialScrollPending.current) return;
     const frame = requestAnimationFrame(() => {
       window.scrollTo({ top: 0, left: 0 });
       initialScrollPending.current = false;
     });
     return () => cancelAnimationFrame(frame);
-  }, [walletModalVisible, pickerOpen]);
-
-  if (model.status?.claimed) return <>
-    {header}
-    <main className="nfc-claim-page nfc-claim-page--claimed" aria-label="Tarot card">
-      <TarotCard tokenId={request.tokenId} large />
-    </main>
-  </>;
-  if (!model.status) return <>
-    {header}
-    <main className="nfc-claim-page" aria-label="NFC claim" aria-busy={model.loading}>
-      {model.error ? <p className="nfc-claim-error" role="alert">{model.error}</p> : null}
-    </main>
-  </>;
+  }, [walletModalVisible, pickerOpen, headerWalletOpen]);
 
   return <>
     {header}
-    <main className="nfc-claim-page" aria-label="NFC claim">
-      <h1 className="nfc-claim-page__title">You got 2 NFTs:</h1>
-      <ul className="nfc-claim-nfts" aria-label="Your NFTs" role="list">
-        <li className="nfc-claim-nft">
-          <TarotCard tokenId={request.tokenId} />
-          <div className="nfc-claim-nft__copy"><h2>Mutating Card</h2><p>Evolve it and get it physically delivered when you’re ready.</p></div>
+    <main className={`nfc-claim-page nfc-tarot-page${compact ? '' : ' nfc-claim-page--artwork'}${transitioning ? ' nfc-claim-page--entering' : ''}`}
+      aria-label={compact ? 'NFC claim' : 'Tarot card'}>
+      {compact && <h1 className="nfc-claim-page__title nfc-claim-reveal">You got 2 NFTs:</h1>}
+      <ul className="nfc-claim-nfts" aria-label={compact ? 'Your NFTs' : undefined} role={compact ? 'list' : 'presentation'}>
+        <li className="nfc-claim-nft" role={compact ? undefined : 'presentation'}>
+          <img ref={cardRef} className="nfc-tarot-card"
+            src={`https://wip.lil.org/tarot/bases/${tokenId}.webp`} alt="Mutating Card" width={881} height={1400}
+            style={{ aspectRatio: '881 / 1400' }} loading="eager" fetchPriority="high" decoding="async" draggable={false} referrerPolicy="no-referrer" />
+          {compact && <div className="nfc-claim-nft__copy nfc-claim-reveal"><h2>Mutating Card</h2><p>Evolve it and get it physically delivered when you’re ready.</p></div>}
         </li>
-        <li className="nfc-claim-nft">
-          <img className="nfc-claim-nft__image--certificate" src={`https://wip.lil.org/tarot/receipts/${request.tokenId}.webp`}
+        {compact && <li className="nfc-claim-nft nfc-claim-reveal">
+          <img className="nfc-claim-nft__image--certificate" src={`https://wip.lil.org/tarot/receipts/${tokenId}.webp`}
             alt="NFC Card Receipt" width={1400} height={1400} style={{ aspectRatio: '1 / 1' }}
             decoding="async" draggable={false} referrerPolicy="no-referrer" />
           <div className="nfc-claim-nft__copy"><h2>NFC Card Receipt</h2><p>Proves the authenticity of the physical card you just scanned.</p></div>
-        </li>
+        </li>}
       </ul>
-      <button type="button" className="nfc-claim-button" onClick={model.claim}
-        disabled={model.pending || model.loading || model.coolingDown || suspended || walletModalVisible || !model.status.config.enabled}>
-        {model.submitted ? 'Claiming…' : model.connecting ? 'Connecting…' : model.pending ? 'Confirm in wallet…' : 'Claim'}
-      </button>
-      {model.error ? <p className="nfc-claim-error" role="alert">{model.error}</p> : null}
+      {compact && model && <button type="button" className="nfc-claim-button nfc-claim-reveal" onClick={model.claim}
+        inert={transitioning} disabled={transitioning || model.pending || model.loading || model.coolingDown || suspended || walletModalVisible}>
+        {model.submitted ? 'Claiming…' : model.connecting ? 'Connecting…' : model.pending ? 'Confirm in wallet…' : model.coolingDown ? 'Please wait…' : 'Claim'}
+      </button>}
+      {compact && model?.claimError ? <p className="nfc-claim-error" role="alert">{model.claimError}</p> : null}
     </main>
+  </>;
+}
+
+function TarotClaimPage({ request, wallet, header, suspended = false, headerWalletOpen, onModalOpenChange }: Omit<Props, 'link'> & { request: TarotRequest }) {
+  const model = useTarotClaim(request, wallet, suspended);
+  const pickerOpen = wallet.status === 'choosing' && !model.status?.claimed;
+  useLayoutEffect(() => { onModalOpenChange?.(pickerOpen && !suspended); }, [pickerOpen, suspended, onModalOpenChange]);
+  useLayoutEffect(() => () => { onModalOpenChange?.(false); }, [onModalOpenChange]);
+
+  return <>
+    <TarotCardPage tokenId={request.tokenId} header={header} model={model} suspended={suspended} pickerOpen={pickerOpen} headerWalletOpen={headerWalletOpen} />
     <EthereumWalletPicker wallet={wallet} suspended={suspended} onClose={model.connecting ? model.cancel : wallet.cancel} />
   </>;
 }
@@ -78,5 +74,6 @@ export function NfcPage({ link, ...props }: Props) {
   if (link.kind === 'invalid') return <>{props.header}<main className="nfc-claim-page" aria-label="NFC claim">
     <p className="nfc-claim-error" role="alert">This Tarot claim link is invalid.</p>
   </main></>;
+  if (link.kind === 'artwork') return <TarotCardPage key={link.key} tokenId={link.tokenId} header={props.header} suspended={props.suspended} headerWalletOpen={props.headerWalletOpen} />;
   return <TarotClaimPage key={link.key} {...props} request={link.request} />;
 }

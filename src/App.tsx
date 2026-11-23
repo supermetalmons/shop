@@ -445,7 +445,7 @@ function App({ route, suspended = false }: AppProps) {
           {!isNfcPage && shopHeader}
           {isNfcPage ? (
             <NfcPage key={route.nfcLink!.key} link={route.nfcLink!} header={shopHeader} wallet={ethereumWallet}
-              suspended={suspended} onModalOpenChange={onEthereumModalOpenChange} />
+              suspended={suspended} headerWalletOpen={walletControl.open} onModalOpenChange={onEthereumModalOpenChange} />
           ) : (
             <ShopPurchaseSection
               {...drop}

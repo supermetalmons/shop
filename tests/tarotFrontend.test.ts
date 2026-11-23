@@ -50,21 +50,23 @@ function wallet(connected = false): EthereumWallet {
     cancel: mock.fn(), disconnect: mock.fn(),
   };
 }
-function page(linkSearch: string, value = wallet()) {
-  return createElement(WalletModalContext.Provider, { value: { visible: false, setVisible: () => {} } },
+function page(linkSearch: string, value = wallet(), presentation: { headerWalletOpen?: boolean; walletModalVisible?: boolean } = {}) {
+  return createElement(WalletModalContext.Provider, { value: { visible: presentation.walletModalVisible ?? false, setVisible: () => {} } },
     createElement(NfcPage, { link: resolveNfcLink(linkSearch), wallet: value,
+      headerWalletOpen: presentation.headerWalletOpen,
       header: createElement('header', null, createElement('button', null, 'Shop header')) }));
 }
-function assertClaimedPage(view: ReturnType<typeof render>) {
+function assertArtworkPage(view: ReturnType<typeof render>) {
   const main = view.getByRole('main', { name: 'Tarot card' });
   const card = within(main);
+  assert.equal(main.classList.contains('nfc-claim-page--artwork'), true);
   assert.equal(card.getAllByRole('img').length, 1);
   assert.equal(card.queryByRole('button'), null);
   assert.equal(card.queryByRole('heading'), null);
-  assert.equal(main.textContent, '');
+  assert.equal(card.queryByRole('alert'), null);
   assert.ok(view.getByRole('banner'));
   assert.ok(view.getByRole('button', { name: 'Shop header' }));
-  assert.equal(view.queryByText('NFC Card Receipt'), null);
+  assert.equal(card.queryByRole('img', { name: 'NFC Card Receipt' }), null);
   return card;
 }
 function mockService(claimed = false) {
@@ -126,18 +128,22 @@ beforeEach(() => { dom.window.close(); ({ dom } = setupFrontendDom()); });
 afterEach(() => { cleanup(); mock.restoreAll(); window.sessionStorage.clear(); window.localStorage.clear(); });
 after(() => dom.window.close());
 
-test('Tarot routing accepts boundary IDs and rejects malformed, duplicate and mainnet parameters', () => {
+test('Tarot routing separates public artwork IDs from valid testnet claim credentials', () => {
   assert.equal(resolveNfcLink('?code=basel').kind, 'placeholder');
   for (const tokenId of [1, 777]) {
     const link = resolveNfcLink(search(tokenId));
     assert.equal(link.kind, 'tarot');
     if (link.kind === 'tarot') assert.deepEqual(link.request, { ...request, tokenId });
   }
-  for (const query of ['', '?code=basel&testnet=true', '?code=basel&tokenId=1',
+  for (const query of ['', '?code=basel&testnet=true',
     ...['0', '778', '1.5', '01', '-1', '1e2', 'NaN'].map(id => `?code=${code}&tokenId=${id}&testnet=true`),
-    `?code=${code}&tokenId=1`, `?code=${code}&tokenId=1&testnet=false`, `?code=${code}&tokenId=1&testnet=TRUE`,
-    `?code=guess&tokenId=1&testnet=true`, `${search()}&code=${code}`, `${search()}&tokenId=1`, `${search()}&testnet=true`]) {
+    `${search()}&tokenId=1`]) {
     assert.equal(resolveNfcLink(query).kind, 'invalid', query);
+  }
+  for (const query of ['?tokenId=1', '?tokenId=777', '?code=basel&tokenId=1',
+    `?code=${code}&tokenId=1`, `?code=${code}&tokenId=1&testnet=false`, `?code=${code}&tokenId=1&testnet=TRUE`,
+    `?code=guess&tokenId=1&testnet=true`, `${search()}&code=${code}`, `${search()}&testnet=true`]) {
+    assert.equal(resolveNfcLink(query).kind, 'artwork', query);
   }
 });
 
@@ -151,10 +157,10 @@ test('NFC identity changes with token ID and testnet, while unrelated parameters
   act(() => { window.history.replaceState(null, '', `/nfc${search(777)}&from=wallet`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
   assert.equal(view.result.current, second);
   act(() => { window.history.replaceState(null, '', `/nfc${search(777).replace('true', 'false')}`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
-  assert.equal(view.result.current.nfcLink?.kind, 'invalid');
+  assert.equal(view.result.current.nfcLink?.kind, 'artwork');
 });
 
-test('Basel preserves the placeholder video and invalid links never contact the Tarot service', () => {
+test('Basel preserves the placeholder video and a supplied card ID switches to public artwork', () => {
   const service = mock.method(tarotApi, 'status');
   const open = mock.method(window, 'open', () => null);
   const value = wallet();
@@ -163,22 +169,21 @@ test('Basel preserves the placeholder video and invalid links never contact the 
   assert.deepEqual(open.mock.calls[0].arguments, ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank', 'noopener,noreferrer']);
   assert.equal(service.mock.callCount(), 0);
   view.rerender(page('?code=basel&tokenId=1&testnet=true', value));
-  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
-  assert.match(view.getByRole('alert').textContent ?? '', /invalid/);
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/1.webp');
   assert.equal(service.mock.callCount(), 0);
 });
 
-test('the header appears before validation while artwork and claim controls wait for it', async () => {
+test('the header and large artwork appear before validation and remain mounted when already claimed', async () => {
   let finish!: (value: TarotStatus) => void;
   mock.method(tarotApi, 'status', () => new Promise<TarotStatus>(resolve => { finish = resolve; }));
   const view = render(page(search(777)));
   const header = view.getByRole('banner');
   assert.ok(within(header).getByRole('button', { name: 'Shop header' }));
-  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
-  assert.equal(view.queryByRole('img'), null);
+  const artwork = assertArtworkPage(view).getByRole('img');
+  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
   await act(async () => finish(status(777, true)));
   assert.equal(view.getByRole('banner'), header);
-  assert.equal(assertClaimedPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(assertArtworkPage(view).getByRole('img'), artwork);
 });
 
 test('valid unclaimed links preserve the two-NFT composition using their own static media', async () => {
@@ -193,6 +198,311 @@ test('valid unclaimed links preserve the two-NFT composition using their own sta
   assert.equal(view.queryByRole('textbox'), null);
 });
 
+test('public artwork links render immediately without validation, receipt loading or wallet actions', () => {
+  const service = mock.method(tarotApi, 'status');
+  const prepare = mock.method(tarotApi, 'prepare');
+  const value = wallet();
+  const connect = mock.method(value, 'connect');
+  for (const query of ['?tokenId=1', '?tokenId=777&code=wrong', '?tokenId=1&code=&testnet=true',
+    '?tokenId=777&code=wrong&testnet=true', `?tokenId=1&code=${code}&testnet=false`, `?tokenId=777&code=${code}`]) {
+    const view = render(page(query, value));
+    const tokenId = new URLSearchParams(query).get('tokenId');
+    const image = assertArtworkPage(view).getByRole('img');
+    assert.equal(image.getAttribute('src'), `https://wip.lil.org/tarot/bases/${tokenId}.webp`);
+    assert.equal(image.getAttribute('referrerpolicy'), 'no-referrer');
+    assert.equal(view.container.querySelector('img[src*="/tarot/receipts/"]'), null);
+    assert.equal(view.queryByRole('alert'), null);
+    view.unmount();
+  }
+  assert.equal(service.mock.callCount(), 0);
+  assert.equal(prepare.mock.callCount(), 0);
+  assert.equal(connect.mock.callCount(), 0);
+});
+
+test('eligible validation moves the same artwork into the claim layout without replacing the header', async () => {
+  const validation = Promise.withResolvers<TarotStatus>();
+  const service = mock.method(tarotApi, 'status', () => validation.promise);
+  const value = wallet();
+  const connect = mock.method(value, 'connect');
+  const view = render(page(search(), value));
+  const image = assertArtworkPage(view).getByRole('img');
+  const header = view.getByRole('banner');
+  assert.equal(view.container.querySelector('img[src*="/tarot/receipts/"]'), null);
+  await act(async () => validation.resolve(status()));
+  const main = view.getByRole('main', { name: 'NFC claim' });
+  assert.equal(within(main).getByRole('img', { name: 'Mutating Card' }), image);
+  assert.equal(view.getByRole('banner'), header);
+  assert.ok(within(main).getByRole('heading', { name: 'You got 2 NFTs:' }));
+  assert.ok(within(main).getByRole('img', { name: 'NFC Card Receipt' }));
+  assert.equal((within(main).getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.getByRole('img', { name: 'Mutating Card' }), image);
+  assert.equal(view.getByRole('banner'), header);
+  assert.equal(service.mock.callCount(), 2);
+  assert.equal(connect.mock.callCount(), 0);
+});
+
+for (const blocker of ['headerWalletOpen', 'walletModalVisible'] as const) {
+  test(`eligible validation waits for ${blocker} to close without replacing artwork or header`, async () => {
+    const validation = Promise.withResolvers<TarotStatus>();
+    const service = mock.method(tarotApi, 'status', () => validation.promise);
+    const value = wallet();
+    const connect = mock.method(value, 'connect');
+    const view = render(page(search(), value, { [blocker]: true }));
+    const image = assertArtworkPage(view).getByRole('img');
+    const header = view.getByRole('banner');
+    const control = view.getByRole('button', { name: 'Shop header' });
+    control.focus();
+    assert.equal(service.mock.callCount(), 1);
+    await act(async () => validation.resolve(status()));
+    assert.equal(assertArtworkPage(view).getByRole('img'), image);
+    assert.equal(view.getByRole('banner'), header);
+    assert.equal(document.activeElement, control);
+    await act(async () => view.rerender(page(search(), value, { [blocker]: false })));
+    assert.equal(view.getByRole('img', { name: 'Mutating Card' }), image);
+    assert.equal(view.getByRole('banner'), header);
+    assert.equal(document.activeElement, control);
+    assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
+    assert.equal(service.mock.callCount(), 1);
+    assert.equal(connect.mock.callCount(), 0);
+  });
+}
+
+test('disabled unclaimed cards remain in the silent large artwork view', async () => {
+  mock.method(tarotApi, 'status', async () => ({ ...status(), config: { ...config, enabled: false } }));
+  const value = wallet();
+  const connect = mock.method(value, 'connect');
+  const view = render(page(search(), value));
+  const image = assertArtworkPage(view).getByRole('img');
+  await act(async () => undefined);
+  assert.equal(assertArtworkPage(view).getByRole('img'), image);
+  assert.equal(view.queryByRole('alert'), null);
+  assert.equal(connect.mock.callCount(), 0);
+});
+
+test('changing credentials for the same card resets validation without accepting a stale result', async () => {
+  const first = Promise.withResolvers<TarotStatus>();
+  let firstSignal: AbortSignal | undefined;
+  const service = mock.method(tarotApi, 'status', async (input: TarotRequest, signal?: AbortSignal) => {
+    if (input.code === code) { firstSignal = signal; return first.promise; }
+    throw new TarotApiError('This Tarot claim link is invalid.', 401);
+  });
+  const value = wallet();
+  const view = render(page('?tokenId=1', value));
+  const artworkSrc = 'https://wip.lil.org/tarot/bases/1.webp';
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
+  assert.equal(service.mock.callCount(), 0);
+  view.rerender(page(search(), value));
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
+  assert.equal(service.mock.callCount(), 1);
+  await act(async () => view.rerender(page(search().replace(code, '00000000-0000-4000-8000-000000000002'), value)));
+  assert.equal(firstSignal?.aborted, true);
+  await act(async () => first.resolve(status()));
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
+  assert.equal(view.queryByRole('alert'), null);
+  view.rerender(page(`?tokenId=1&code=${code}&testnet=false`, value));
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
+  assert.equal(service.mock.callCount(), 2);
+});
+
+test('background credential revocation silently restores the same large artwork', async () => {
+  let denied = false;
+  mock.method(tarotApi, 'status', async () => {
+    if (denied) throw new TarotApiError('This Tarot claim link is invalid.', 403);
+    return status();
+  });
+  const view = render(page(search()));
+  const image = assertArtworkPage(view).getByRole('img');
+  await view.findByRole('button', { name: 'Claim' });
+  denied = true;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(assertArtworkPage(view).getByRole('img'), image);
+  assert.equal(view.queryByRole('alert'), null);
+});
+
+test('background validation and wallet restoration errors are not user-initiated claim feedback', async () => {
+  const value = { ...wallet(), error: 'An old wallet connection failed.' };
+  mock.method(tarotApi, 'status', async () => { throw new TarotApiError('This Tarot claim link is invalid.', 401); });
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  assert.equal(view.result.current.error, 'This Tarot claim link is invalid.');
+  assert.equal(view.result.current.claimError, null);
+});
+
+test('a rejected manual claim remains visible independently of later background reads', async () => {
+  mockService();
+  const value = wallet(true);
+  const original = value.provider!.request;
+  mock.method(value.provider!, 'request', async (input: Parameters<typeof original>[0]) => {
+    if (input.method === 'eth_sendTransaction') throw Object.assign(new Error('Rejected'), { code: 4001 });
+    return original(input);
+  });
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  await act(async () => view.result.current.claim());
+  assert.equal(view.result.current.claimError, 'Request cancelled in your wallet.');
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.claimError, 'Request cancelled in your wallet.');
+});
+
+for (const denied of [401, 403]) {
+  test(`manual preparation ${denied} stays silent after successful background revalidation`, async () => {
+    const service = mockService();
+    service.prepare.mock.mockImplementation(async () => { throw new TarotApiError('This Tarot claim link is invalid.', denied); });
+    const value = wallet(true);
+    const provider = mock.method(value.provider!, 'request');
+    const view = render(page(search(), value));
+    fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
+    await waitFor(() => assertArtworkPage(view));
+    assert.equal(view.queryByRole('alert'), null);
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    const claim = await view.findByRole('button', { name: 'Claim' });
+    assert.equal((claim as HTMLButtonElement).disabled, false);
+    assert.equal(view.queryByRole('alert'), null);
+    assert.equal(provider.mock.calls.some(call => call.arguments[0].method === 'eth_sendTransaction'), false);
+  });
+
+  test(`confirmation ${denied} stays silent after revalidation and retains pending recovery`, async t => {
+    const f = pendingClaimFixture(t);
+    window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+    f.confirm.mock.mockImplementation(async () => { throw new TarotApiError('This Tarot claim link is invalid.', denied); });
+    const view = f.mount(wallet());
+    await act(async () => undefined);
+    assert.equal(view.result.current.status, null);
+    assert.equal(view.result.current.claimError, null);
+    assert.ok(window.sessionStorage.getItem(f.key));
+    f.confirm.mock.mockImplementation(async () => ({ ...confirmed(), status: 'pending' as const, confirmations: 0, blockNumber: null, blockHash: null }));
+    await f.focus();
+    assert.ok(view.result.current.status);
+    assert.equal(view.result.current.pending, true);
+    assert.equal(view.result.current.claimError, null);
+    assert.ok(window.sessionStorage.getItem(f.key));
+  });
+}
+
+test('a deployment change keeps the error from cancelling an active manual connection', async () => {
+  let activeConfig = config;
+  mock.method(tarotApi, 'status', async () => ({ ...status(), config: activeConfig }));
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  const value = wallet();
+  const connect = mock.method(value, 'connect', () => { value.status = 'connecting'; });
+  const cancel = mock.method(value, 'cancel', () => { value.status = 'disconnected'; });
+  const view = render(page(search(), value));
+  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
+  await view.findByRole('button', { name: 'Connecting…' });
+  activeConfig = { ...config, contractAddress: `0x${'3'.repeat(40)}` };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal((await view.findByRole('alert')).textContent, 'This Tarot drop changed. Please reload and try again.');
+  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
+  assert.equal(connect.mock.callCount(), 1);
+  assert.equal(cancel.mock.callCount(), 1);
+  assert.equal(prepare.mock.callCount(), 0);
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.getByRole('alert').textContent, 'This Tarot drop changed. Please reload and try again.');
+});
+
+test('restored availability removes only the obsolete connection availability error', async () => {
+  let enabled = true;
+  mock.method(tarotApi, 'status', async () => ({ ...status(), config: { ...config, enabled } }));
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  const value = wallet();
+  const connect = mock.method(value, 'connect', () => { value.status = 'connecting'; });
+  const cancel = mock.method(value, 'cancel', () => { value.status = 'disconnected'; });
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  await act(async () => view.result.current.claim());
+  assert.equal(view.result.current.connecting, true);
+  enabled = false;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.claimError, 'Tarot claims are unavailable.');
+  assert.equal(view.result.current.pending, false);
+  assert.equal(cancel.mock.callCount(), 1);
+  enabled = true;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.status?.config.enabled, true);
+  assert.equal(view.result.current.claimError, null);
+  assert.equal(view.result.current.error, null);
+  assert.equal(connect.mock.callCount(), 1);
+  assert.equal(prepare.mock.callCount(), 0);
+});
+
+test('availability recovery preserves an unrelated manual connection error', async () => {
+  let enabled = true;
+  mock.method(tarotApi, 'status', async () => ({ ...status(), config: { ...config, enabled } }));
+  const value = wallet();
+  mock.method(value, 'connect', () => { throw new Error('Unable to connect this wallet.'); });
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  await act(async () => view.result.current.claim());
+  assert.equal(view.result.current.claimError, 'Unable to connect this wallet.');
+  for (const available of [false, true]) {
+    enabled = available;
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    assert.equal(view.result.current.claimError, 'Unable to connect this wallet.');
+  }
+});
+
+test('a deployment change clears feedback from an inactive earlier manual attempt', async () => {
+  let activeConfig = config;
+  mock.method(tarotApi, 'status', async () => ({ ...status(), config: activeConfig }));
+  const value = wallet();
+  mock.method(value, 'connect', () => { throw new Error('Unable to connect this wallet.'); });
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  await act(async () => view.result.current.claim());
+  assert.equal(view.result.current.claimError, 'Unable to connect this wallet.');
+  assert.equal(view.result.current.connecting, false);
+  activeConfig = { ...config, contractAddress: `0x${'3'.repeat(40)}` };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.claimError, null);
+});
+
+test('manual connection failures are shown only after the holder clicks Claim', async () => {
+  mockService();
+  const value = wallet();
+  mock.method(value, 'connect', () => { value.status = 'connecting'; });
+  const view = render(page(search(), value));
+  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
+  await act(async () => view.rerender(page(search(), { ...value, status: 'disconnected', error: 'Wallet connection was cancelled.' })));
+  assert.equal((await view.findByRole('alert')).textContent, 'Wallet connection was cancelled.');
+  assert.equal(view.getAllByRole('img').length, 2);
+});
+
+test('manual preparation errors persist through background reads and clear when Claim is retried', async () => {
+  const { prepare } = mockService();
+  const second = Promise.withResolvers<TarotPrepareResponse>();
+  let attempts = 0;
+  prepare.mock.mockImplementation(async () => {
+    if (++attempts === 1) throw new TarotApiError('Couldn’t prepare this claim.', 503);
+    return second.promise;
+  });
+  const view = render(page(search(), wallet(true)));
+  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
+  assert.equal((await view.findByRole('alert')).textContent, 'Couldn’t prepare this claim.');
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.getByRole('alert').textContent, 'Couldn’t prepare this claim.');
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Claim' })));
+  assert.equal(view.queryByRole('alert'), null);
+  assert.equal(prepare.mock.callCount(), 2);
+  await act(async () => second.resolve(prepared()));
+  await waitFor(() => assertArtworkPage(view));
+});
+
+test('automatic read failures after eligibility do not create claim-error UI', async () => {
+  let fail = false;
+  mock.method(tarotApi, 'status', async () => {
+    if (fail) throw new TarotApiError('Automatic availability read failed.', 503);
+    return status();
+  });
+  const view = render(page(search()));
+  await view.findByRole('button', { name: 'Claim' });
+  const image = view.getByRole('img', { name: 'Mutating Card' });
+  fail = true;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.queryByRole('alert'), null);
+  assert.equal(view.getByRole('img', { name: 'Mutating Card' }), image);
+});
+
 test('one Claim click connects Ethereum, continues once, and replaces confirmed claim UI with artwork', async () => {
   mockService();
   const disconnected = wallet();
@@ -205,7 +515,7 @@ test('one Claim click connects Ethereum, continues once, and replaces confirmed 
   const connected = wallet(true);
   const provider = mock.method(connected.provider!, 'request');
   await act(async () => view.rerender(page(search(), connected)));
-  await waitFor(() => assertClaimedPage(view));
+  await waitFor(() => assertArtworkPage(view));
   assert.equal(provider.mock.calls.filter(call => call.arguments[0].method === 'eth_sendTransaction').length, 1);
   assert.equal(provider.mock.calls.some(call => /sign/i.test(call.arguments[0].method)), false);
   assert.equal(view.getAllByRole('img').length, 1);
@@ -227,7 +537,7 @@ test('wallet rejection preserves a retryable claim and cannot mint or hide the r
   assert.equal(view.getAllByRole('img').length, 2);
   fail = false;
   fireEvent.click(view.getByRole('button', { name: 'Claim' }));
-  await waitFor(() => assertClaimedPage(view));
+  await waitFor(() => assertArtworkPage(view));
 });
 
 test('a refreshed claimed status hides the entire claim UI without connecting a wallet', async () => {
@@ -239,7 +549,7 @@ test('a refreshed claimed status hides the entire claim UI without connecting a 
   await view.findByRole('button', { name: 'Claim' });
   claimed = true;
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assertClaimedPage(view);
+  assertArtworkPage(view);
   assert.equal(connect.mock.callCount(), 0);
 });
 
@@ -248,10 +558,14 @@ test('reload recovers a submitted receipt without storing a secret or requiring 
   window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`, JSON.stringify({ wallet: owner, transactionHash }));
   assert.equal(JSON.stringify(window.sessionStorage).includes(code), false);
   const view = render(page(search()));
-  await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
+  await waitFor(() => {
+    assert.equal(confirm.mock.callCount(), 1);
+    assert.equal(window.sessionStorage.length, 0);
+    assertArtworkPage(view);
+  });
   assert.equal(confirm.mock.calls[0].arguments[0].transactionHash, transactionHash);
   assert.equal(window.sessionStorage.length, 0);
-  assertClaimedPage(view);
+  assertArtworkPage(view);
 });
 
 test('a dropped or cancelled transaction becomes claimable only after confirmed onchain expiry', async () => {
@@ -287,9 +601,9 @@ test('a delayed status read cannot reopen the claim after transaction confirmati
   delayStatus = true;
   act(() => window.dispatchEvent(new dom.window.Event('focus')));
   await act(async () => finishConfirmation(confirmed()));
-  assertClaimedPage(view);
+  assertArtworkPage(view);
   await act(async () => finishStatus(status()));
-  assertClaimedPage(view);
+  assertArtworkPage(view);
 });
 
 test('new post-confirmation requests cannot move behind the receipt block or contradict its hash', async () => {
@@ -437,18 +751,21 @@ test('rejecting a network switch does not prepare or submit a claim', async () =
   assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
 });
 
-test('a rate limited or invalid code never reveals claim UI or requests wallet connection', async () => {
-  const service = mock.method(tarotApi, 'status', async () => { throw new TarotApiError('Too many attempts. Please wait.', 429, Date.now() + 60_000); });
-  const value = wallet();
-  const connect = mock.method(value, 'connect');
-  const view = render(page(search(), value));
-  await view.findByRole('alert');
-  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assert.equal(service.mock.callCount(), 1);
-  assert.ok(view.getByRole('banner'));
-  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
-  assert.equal(connect.mock.callCount(), 0);
-});
+for (const failure of [new TarotApiError('Invalid link.', 401), new TarotApiError('Forbidden.', 403),
+  new TarotApiError('Too many attempts.', 429), new TarotApiError('Temporarily unavailable.', 503), new TypeError('Network unavailable')]) {
+  test(`initial ${failure instanceof TarotApiError ? failure.status : 'network'} validation failures silently preserve the large artwork`, async () => {
+    const service = mock.method(tarotApi, 'status', async () => { throw failure; });
+    const value = wallet();
+    const connect = mock.method(value, 'connect');
+    const view = render(page(search(), value));
+    const image = assertArtworkPage(view).getByRole('img');
+    await act(async () => undefined);
+    assert.equal(assertArtworkPage(view).getByRole('img'), image);
+    assert.equal(service.mock.callCount(), 1);
+    assert.equal(view.queryByRole('alert'), null);
+    assert.equal(connect.mock.callCount(), 0);
+  });
+}
 
 test('route changes discard stale validation results', async () => {
   let finish!: (value: TarotStatus) => void;
@@ -458,7 +775,7 @@ test('route changes discard stale validation results', async () => {
   view.rerender(page(search(777)));
   await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
   await act(async () => finish(status(1, false)));
-  assert.equal(assertClaimedPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
 });
 
 test('API sends credentials only in a private POST and rejects another card or a mainnet response', async () => {
@@ -1074,7 +1391,161 @@ test('failed receipt reconciliation preserves a newer reorg observation and acce
   assert.equal(view.result.current.status?.claimed, false);
   assert.equal(view.result.current.status?.observedBlock, 105);
   assert.equal(view.result.current.status?.blockHash, reorgHash);
+  assert.equal(view.result.current.claimError, 'The claim transaction failed. Please try again.');
+  await f.focus();
+  assert.equal(view.result.current.claimError, 'The claim transaction failed. Please try again.');
 });
+
+for (const failure of ['unavailable', 'rate-limit', 'network', 'invalid-response'] as const) {
+  test(`successful pending confirmation clears recovered ${failure} feedback without clearing the claim`, async t => {
+    const f = pendingClaimFixture(t);
+    const message = failure === 'network' || failure === 'invalid-response'
+      ? 'Couldn’t verify this Tarot claim. Please try again.' : 'Confirmation is temporarily unavailable.';
+    const error = failure === 'invalid-response' ? new Error('Invalid confirmation response') : failure === 'network' ? new TypeError('Network unavailable') :
+      new TarotApiError(message, failure === 'rate-limit' ? 429 : 503, failure === 'rate-limit' ? (f.now + 60) * 1000 : null);
+    let reads = 0;
+    f.confirm.mock.mockImplementation(async () => {
+      if (++reads === 1) throw error;
+      return { ...confirmed(), status: 'pending' as const, confirmations: 0, blockNumber: null, blockHash: null };
+    });
+    window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+    const view = render(page(search(), wallet()));
+    await act(async () => undefined);
+    assert.equal(view.getByRole('alert').textContent, message);
+    assert.equal((view.getByRole('button', { name: 'Claiming…' }) as HTMLButtonElement).disabled, true);
+    await act(async () => t.mock.timers.tick(failure === 'rate-limit' ? 60_000 : 4_000));
+    assert.equal(reads, 2);
+    assert.equal(view.queryByRole('alert'), null);
+    assert.equal((view.getByRole('button', { name: 'Claiming…' }) as HTMLButtonElement).disabled, true);
+    assert.equal(JSON.parse(window.sessionStorage.getItem(f.key)!).transactionHash, transactionHash);
+  });
+}
+
+test('canonical expiry clears temporary confirmation feedback and stops receipt polling', async t => {
+  const f = pendingClaimFixture(t);
+  f.confirm.mock.mockImplementation(async () => { throw new TarotApiError('Confirmation unavailable.', 503); });
+  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  const view = f.mount(wallet());
+  await act(async () => undefined);
+  assert.equal(view.result.current.pending, true);
+  assert.equal(view.result.current.claimError, 'Confirmation unavailable.');
+  assert.equal(f.confirm.mock.callCount(), 1);
+  await f.expire();
+  assert.equal(view.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+  assert.equal(view.result.current.claimError, null);
+  await act(async () => t.mock.timers.tick(120_000));
+  assert.equal(f.confirm.mock.callCount(), 1);
+});
+
+test('canonical expiry preserves durable wallet feedback from an uncertain submission', async t => {
+  const f = pendingClaimFixture(t);
+  const view = await f.begin();
+  await act(async () => { f.emit('disconnect'); view.rerender({ wallet: wallet() }); });
+  const message = view.result.current.claimError;
+  assert.match(message ?? '', /wallet changed/);
+  await f.expire();
+  assert.equal(view.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+  assert.equal(view.result.current.claimError, message);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  assert.equal(view.result.current.claimError, message);
+  assert.equal(f.confirm.mock.callCount(), 0);
+});
+
+test('a pending confirmation begun before a newer chain observation cannot clear transient feedback', async t => {
+  const f = pendingClaimFixture(t);
+  const delayed = Promise.withResolvers<TarotConfirmResponse>();
+  let reads = 0;
+  const pending: TarotConfirmResponse = { ...confirmed(), status: 'pending', confirmations: 0, blockNumber: null, blockHash: null };
+  f.confirm.mock.mockImplementation(async () => {
+    if (++reads === 1) throw new TarotApiError('Confirmation unavailable.', 503);
+    return reads === 2 ? delayed.promise : pending;
+  });
+  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  const view = f.mount(wallet());
+  await act(async () => undefined);
+  assert.equal(view.result.current.claimError, 'Confirmation unavailable.');
+  await act(async () => t.mock.timers.tick(4_000));
+  assert.equal(reads, 2);
+  f.setSnapshot({ observedBlock: 105, blockHash: `0x${'e'.repeat(64)}`, observedTimestamp: f.now });
+  await f.focus();
+  await act(async () => delayed.resolve(pending));
+  assert.equal(view.result.current.claimError, 'Confirmation unavailable.');
+  assert.equal(view.result.current.pending, true);
+  await act(async () => t.mock.timers.tick(4_000));
+  assert.equal(reads, 3);
+  assert.equal(view.result.current.claimError, null);
+  assert.equal(view.result.current.pending, true);
+});
+
+test('a pending confirmation from before a new cooldown cannot clear transient feedback', async t => {
+  const f = pendingClaimFixture(t);
+  const delayed = Promise.withResolvers<TarotConfirmResponse>();
+  let reads = 0;
+  f.confirm.mock.mockImplementation(async () => {
+    if (++reads === 1) throw new TarotApiError('Confirmation unavailable.', 503);
+    return delayed.promise;
+  });
+  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  const view = f.mount(wallet());
+  await act(async () => undefined);
+  await act(async () => t.mock.timers.tick(4_000));
+  assert.equal(reads, 2);
+  mock.method(tarotApi, 'status', async () => { throw new TarotApiError('Rate limited.', 429, Date.now() + 60_000); });
+  await f.focus();
+  await act(async () => delayed.resolve({ ...confirmed(), status: 'pending', confirmations: 0, blockNumber: null, blockHash: null }));
+  assert.equal(view.result.current.claimError, 'Confirmation unavailable.');
+  assert.equal(view.result.current.coolingDown, true);
+  assert.equal(view.result.current.pending, true);
+});
+
+test('a successful pending confirmation preserves a wallet error from an uncertain submission', async t => {
+  const f = pendingClaimFixture(t);
+  const view = await f.begin();
+  await act(async () => {
+    f.emit('disconnect');
+    view.rerender({ wallet: wallet() });
+  });
+  const message = view.result.current.claimError;
+  assert.match(message ?? '', /wallet changed/);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  assert.ok(f.confirm.mock.callCount() > 0);
+  assert.equal(view.result.current.pending, true);
+  assert.equal(view.result.current.claimError, message);
+});
+
+for (const failure of ['unavailable', 'rate-limit', 'network'] as const) {
+  test(`a recovered ${failure} confirmation read preserves preceding durable wallet feedback`, async t => {
+    const f = pendingClaimFixture(t);
+    const view = await f.begin();
+    await act(async () => {
+      f.emit('disconnect');
+      view.rerender({ wallet: wallet() });
+    });
+    const message = view.result.current.claimError;
+    assert.match(message ?? '', /wallet changed/);
+    let reads = 0;
+    f.confirm.mock.mockImplementation(async () => {
+      if (++reads === 1) throw failure === 'network' ? new TypeError('Network unavailable') :
+        new TarotApiError('Confirmation unavailable.', failure === 'rate-limit' ? 429 : 503,
+          failure === 'rate-limit' ? (f.now + 60) * 1000 : null);
+      return { ...confirmed(), status: 'pending' as const, confirmations: 0, blockNumber: null, blockHash: null };
+    });
+    await act(async () => f.waits[0].resolve(transactionHash));
+    assert.equal(reads, 1);
+    assert.equal(view.result.current.claimError, message);
+    await act(async () => t.mock.timers.tick(failure === 'rate-limit' ? 60_000 : 4_000));
+    assert.equal(reads, 2);
+    assert.equal(view.result.current.pending, true);
+    assert.equal(view.result.current.claimError, message);
+    assert.equal(JSON.parse(window.sessionStorage.getItem(f.key)!).transactionHash, transactionHash);
+    f.confirm.mock.mockImplementation(async () => confirmed(1, 105));
+    await act(async () => t.mock.timers.tick(4_000));
+    assert.equal(view.result.current.status?.claimed, true);
+    assert.equal(view.result.current.claimError, null);
+  });
+}
 
 for (const denied of [401, 403]) {
   test(`a later ${denied} blocks Claim until successful revalidation`, async () => {
@@ -1203,7 +1674,7 @@ test('a later credential denial preserves an already-claimed card and its header
   await act(async () => undefined);
   allowed = false;
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assertClaimedPage(view);
+  assertArtworkPage(view);
 });
 
 test('a later 429 disables Claim and reenables it at Retry-After without wallet interaction', async t => {
@@ -1218,14 +1689,17 @@ test('a later 429 disables Claim and reenables it at Retry-After without wallet 
   const view = render(page(search(), value));
   await act(async () => undefined);
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  const button = view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement;
+  const button = view.getByRole('button', { name: 'Please wait…' }) as HTMLButtonElement;
   assert.equal(button.disabled, true);
+  assert.equal(view.queryByRole('alert'), null);
   fireEvent.click(button);
   assert.equal(connect.mock.callCount(), 0);
   await act(async () => t.mock.timers.tick(59_999));
   assert.equal(button.disabled, true);
   await act(async () => t.mock.timers.tick(1));
   assert.equal(button.disabled, false);
+  assert.equal(view.getByRole('button', { name: 'Claim' }), button);
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(service.mock.callCount(), 2);
   assert.equal(connect.mock.callCount(), 0);
   fireEvent.click(button);

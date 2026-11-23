@@ -12,6 +12,7 @@ type PendingClaim = { id: string; wallet: string; transactionHash: string | null
 type ChainObservation = { blockNumber: number; blockHash: string; claimed: boolean };
 const pendingMemory = new WeakMap<Window, Map<string, { value: PendingClaim | null; baseline: string | null }>>();
 const INITIAL_RETRY_DELAYS = [2_000, 4_000, 8_000, 16_000, 30_000];
+const CLAIMS_UNAVAILABLE = 'Tarot claims are unavailable.';
 const recoveryKey = (config: TarotConfig, tokenId: number) => `mons.shop.tarot.pending:${config.chainId}:${config.contractAddress}:${tokenId}`;
 const deploymentKey = (config: TarotConfig) => `${config.chainId}:${config.contractAddress}`;
 
@@ -82,6 +83,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
   const lifecycle = useRef<AbortController | null>(null);
   const pendingRef = useRef<PendingClaim | null>(null);
   const walletWait = useRef<{ id: string | null; scope: string; controller: AbortController } | null>(null);
+  const connectingClaim = useRef(false);
   const retryAt = useRef(0);
   const loading = useRef(false);
   const deployment = useRef<string | null>(null);
@@ -93,6 +95,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
     identity, status: null, loading: true, error: null,
   });
   const [pending, setPending] = useState<PendingClaim | null>(null);
+  const [claimFeedback, setClaimFeedback] = useState<{ identity: string; error: string | null; transientConfirmation?: boolean } | null>(null);
   const currentStatus = state.identity === identity ? state.status : null;
   const current = () => lifecycle.current !== null && !lifecycle.current.signal.aborted && latest.current.identity === identity;
 
@@ -102,6 +105,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
     const previous = pendingRef.current;
     pendingRef.current = value;
     setPending(value);
+    if (!value) setClaimFeedback(feedback => feedback?.identity === identity && feedback.transientConfirmation ? null : feedback);
     if (!value && previous && walletWait.current?.id === previous.id) {
       walletWait.current.controller.abort(new Error('This claim expired or changed. Please try again.'));
     }
@@ -117,6 +121,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
   const recordError = (error: unknown) => {
     if (!current()) return;
     const denied = isCredentialDenial(error);
+    if (denied) setClaimFeedback(null);
     const deadline = error instanceof TarotApiError ? error.retryAt ?? (error.status === 429 ? Date.now() + 60_000 : 0) : 0;
     retryAt.current = denied ? Math.max(retryAt.current, deadline) : deadline;
     if (denied || retryAt.current > Date.now()) {
@@ -147,6 +152,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
       chainObservation.current = null;
       pendingRef.current = null;
       setPending(null);
+      setClaimFeedback(connectingClaim.current ? { identity, error: null } : null);
     }
     return acceptChainObservation(status.observedBlock, status.blockHash, status.claimed, observedBeforeRequest);
   };
@@ -172,6 +178,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
       setRetryDeadline(null);
       setState({ identity, status, loading: false, error: null });
       if (status.claimed) {
+        setClaimFeedback(null);
         updatePending(status.config, null);
         walletWait.current?.controller.abort(new Error('This card has already been claimed.'));
       }
@@ -212,6 +219,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
     retryAt.current = 0;
     loading.current = false;
     setPending(null);
+    setClaimFeedback(null);
     setState({ identity, status: null, loading: true, error: null });
     void refresh();
     const focus = () => { if (document.visibilityState !== 'hidden') void refresh(); };
@@ -285,18 +293,31 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
           if (reconciliationEpoch.current === epoch && result.status === 'confirmed' && result.blockNumber !== null && result.blockHash !== null &&
             acceptChainObservation(result.blockNumber, result.blockHash, true, observation)) {
             reconciliationEpoch.current++;
+            setClaimFeedback(null);
             updatePending(currentStatus.config, null);
             setState(previous => ({ ...previous, status: previous.status ? { ...previous.status, claimed: true } : null, loading: false, error: null }));
             return;
           }
           if (reconciliationEpoch.current === epoch && result.status === 'failed' && chainObservation.current === observation) {
             updatePending(currentStatus.config, null);
+            setClaimFeedback({ identity, error: 'The claim transaction failed. Please try again.' });
             setState(previous => ({ ...previous, error: 'The claim transaction failed. Please try again.' }));
             void refresh();
             return;
           }
+          if (reconciliationEpoch.current === epoch && result.status === 'pending' && chainObservation.current === observation) {
+            setClaimFeedback(previous => previous?.identity === identity && previous.transientConfirmation ? null : previous);
+          }
         }
-      } catch (error) { if (!controller.signal.aborted && active && reconciliationEpoch.current === epoch) recordError(error); }
+      } catch (error) {
+        if (!controller.signal.aborted && active && reconciliationEpoch.current === epoch) {
+          recordError(error);
+          if (!isCredentialDenial(error)) setClaimFeedback(previous => previous?.identity === identity &&
+            previous.error && !previous.transientConfirmation ? previous : { identity,
+              error: error instanceof TarotApiError ? error.message : 'Couldn’t verify this Tarot claim. Please try again.',
+              transientConfirmation: true });
+        }
+      }
       if (active) timer = setTimeout(() => { void check(); }, Math.max(4_000, retryAt.current - Date.now()));
     };
     void check();
@@ -329,7 +350,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
         return false;
       }
       setState({ identity, status, loading: false, error: null });
-      if (status.claimed) return true;
+      if (status.claimed) { setClaimFeedback(null); return true; }
       const authorization = await tarotApi.prepare({ ...request, wallet: operation.address }, config, signal);
       operation.assertCurrent();
       signal.throwIfAborted();
@@ -350,11 +371,14 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
         throw error;
       });
       await abortableEthereumOperation(submission, signal);
+      if (current() && deployment.current === wait.scope) setClaimFeedback(null);
       return true;
     } catch (error) {
       if (current() && deployment.current === wait.scope && reconciliationEpoch.current === epoch) {
         if (error instanceof TarotApiError) recordError(error);
         else setState(previous => ({ ...previous, loading: false, error: ethereumWalletError(error) }));
+        if (!isCredentialDenial(error)) setClaimFeedback({ identity,
+          error: error instanceof TarotApiError ? error.message : ethereumWalletError(error) });
         if (error instanceof TarotApiError && error.status === 409) void refresh();
       }
       return false;
@@ -370,17 +394,23 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
     loadError: !currentStatus ? state.error : null,
   }, {
     canStart: () => Boolean(currentStatus && !state.loading && retryAt.current <= Date.now()),
-    capture: () => ({ data: identity }),
+    capture: () => {
+      setClaimFeedback({ identity, error: null });
+      return { data: identity };
+    },
     isCurrent: attempt => attempt === latest.current.identity,
     validate: (attempt, options) => captureEthereumWalletActionConfig(attempt, options.config,
-      'This Tarot drop changed. Please reload and try again.', 'Tarot claims are unavailable.') ||
+      'This Tarot drop changed. Please reload and try again.', CLAIMS_UNAVAILABLE) ||
       (ethereumWalletActionChanged(attempt, options.wallet) ? 'Your Ethereum wallet changed. Please try again.' : null),
     ready: () => Boolean(currentStatus && !currentStatus.claimed),
     submit,
     connectionError: 'Unable to connect your Ethereum wallet. Please try again.',
   });
+  connectingClaim.current = action.connecting;
 
-  return { status: currentStatus, loading: state.loading, coolingDown, error: state.error || action.error || wallet.error,
+  const actionError = currentStatus?.config.enabled && action.error === CLAIMS_UNAVAILABLE ? null : action.error;
+  const claimError = !currentStatus?.claimed && claimFeedback?.identity === identity ? claimFeedback.error || actionError : null;
+  return { status: currentStatus, loading: state.loading, coolingDown, error: state.error || actionError || wallet.error, claimError,
     claim: action.start, cancel: action.cancel, connecting: action.connecting,
     pending: Boolean(pending) || action.pending,
     submitted: Boolean(pending && (!action.pending || pending.transactionHash !== null)), refresh };
