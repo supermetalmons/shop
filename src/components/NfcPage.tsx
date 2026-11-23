@@ -18,7 +18,8 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
 }) {
   const { visible: walletModalVisible } = useWalletModal();
   const eligible = Boolean(model?.status && !model.status.claimed && model.status.config.enabled);
-  const { cardRef, compact, transitioning } = useTarotCardTransition(eligible, suspended || walletModalVisible || pickerOpen || headerWalletOpen);
+  const { cardRef, receiptRef, receiptState, compact, transitioning } =
+    useTarotCardTransition(eligible, suspended || walletModalVisible || pickerOpen || headerWalletOpen);
   const initialScrollPending = useRef(true);
   useEffect(() => {
     if (walletModalVisible || pickerOpen || headerWalletOpen || !initialScrollPending.current) return;
@@ -41,17 +42,24 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
             style={{ aspectRatio: '881 / 1400' }} loading="eager" fetchPriority="high" decoding="async" draggable={false} referrerPolicy="no-referrer" />
           {compact && <div className="nfc-claim-nft__copy nfc-claim-reveal"><h2>Mutating Card</h2><p>Evolve it and get it physically delivered when you’re ready.</p></div>}
         </li>
-        {compact && <li className="nfc-claim-nft nfc-claim-reveal">
-          <img className="nfc-claim-nft__image--certificate" src={`https://wip.lil.org/tarot/receipts/${tokenId}.webp`}
+        {eligible && <li className="nfc-claim-nft nfc-claim-reveal" hidden={!compact}>
+          <img ref={receiptRef} className="nfc-claim-nft__image--certificate nfc-tarot-receipt"
+            data-ready={receiptState === 'ready'} hidden={receiptState === 'failed'}
+            src={`https://wip.lil.org/tarot/receipts/${tokenId}.webp`}
             alt="NFC Card Receipt" width={1400} height={1400} style={{ aspectRatio: '1 / 1' }}
-            decoding="async" draggable={false} referrerPolicy="no-referrer" />
+            loading="eager" decoding="async" draggable={false} referrerPolicy="no-referrer" />
+          {receiptState === 'failed' && <span className="nfc-claim-nft__image--certificate nfc-tarot-receipt__fallback">
+            Receipt image unavailable
+          </span>}
           <div className="nfc-claim-nft__copy"><h2>NFC Card Receipt</h2><p>Proves the authenticity of the physical card you just scanned.</p></div>
         </li>}
       </ul>
-      {compact && model && <button type="button" className="nfc-claim-button nfc-claim-reveal" onClick={model.claim}
-        inert={transitioning} disabled={transitioning || model.pending || model.loading || model.coolingDown || suspended || walletModalVisible}>
-        {model.submitted ? 'Claiming…' : model.connecting ? 'Connecting…' : model.pending ? 'Confirm in wallet…' : model.coolingDown ? 'Please wait…' : 'Claim'}
-      </button>}
+      {compact && model && <div className="nfc-tarot-page__action nfc-claim-reveal">
+        <button type="button" className="nfc-claim-button" onClick={transitioning ? undefined : model.claim}
+          inert={transitioning} disabled={model.pending || model.loading || model.coolingDown || suspended || walletModalVisible}>
+          {model.submitted ? 'Claiming…' : model.connecting ? 'Connecting…' : model.pending ? 'Confirm in wallet…' : model.coolingDown ? 'Please wait…' : 'Claim'}
+        </button>
+      </div>}
       {compact && model?.claimError ? <p className="nfc-claim-error" role="alert">{model.claimError}</p> : null}
     </main>
   </>;

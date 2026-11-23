@@ -11,16 +11,21 @@ beforeEach(() => { environment.dom.window.close(); environment = setupFrontendDo
 afterEach(() => { cleanup(); mock.restoreAll(); });
 after(() => environment.dom.window.close());
 
-function Card({ eligible = false, paused = false }: { eligible?: boolean; paused?: boolean }) {
-  const { cardRef, compact, transitioning } = useTarotCardTransition(eligible, paused);
+function Card({ eligible = false, paused = false, withReceipt = false }: {
+  eligible?: boolean; paused?: boolean; withReceipt?: boolean;
+}) {
+  const { cardRef, receiptRef, receiptState, compact, transitioning } = useTarotCardTransition(eligible, paused);
   return createElement('main', null,
     createElement('img', { ref: cardRef, src: 'https://example.test/card.webp', alt: 'Tarot card',
       'data-layout': compact ? 'compact' : 'artwork' }),
+    withReceipt && eligible && createElement('img', { ref: receiptRef, src: 'https://example.test/receipt.webp',
+      alt: 'Receipt', hidden: !compact, 'data-state': receiptState }),
     compact && createElement('button', { disabled: transitioning }, 'Claim'));
 }
 
 function controls({ cached = false } = {}) {
   const loaded = new WeakSet<HTMLImageElement>();
+  const failed = new WeakSet<HTMLImageElement>();
   const decodes: PromiseWithResolvers<void>[] = [];
   const frames = new Map<number, FrameRequestCallback>();
   const animations: Array<{ node: HTMLImageElement; keyframes: Keyframe[]; finished: PromiseWithResolvers<void>;
@@ -28,7 +33,8 @@ function controls({ cached = false } = {}) {
   let frameId = 0;
   let measured = false;
   Object.defineProperties(HTMLImageElement.prototype, {
-    complete: { configurable: true, get(this: HTMLImageElement) { return cached || loaded.has(this); } },
+    complete: { configurable: true, get(this: HTMLImageElement) { return cached || loaded.has(this) || failed.has(this); } },
+    naturalWidth: { configurable: true, get(this: HTMLImageElement) { return cached || loaded.has(this) ? 881 : 0; } },
     decode: { configurable: true, value() {
       const decode = Promise.withResolvers<void>();
       decodes.push(decode);
@@ -64,7 +70,9 @@ function controls({ cached = false } = {}) {
   };
   return { animations, decodes, frames, paint,
     async load(image: HTMLImageElement) { await act(async () => { loaded.add(image); fireEvent.load(image); }); },
+    async fail(image: HTMLImageElement) { await act(async () => { failed.add(image); fireEvent.error(image); }); },
     async decode() { await act(async () => decodes.forEach(decode => decode.resolve())); },
+    async failDecode() { await act(async () => decodes.forEach(decode => decode.reject(new Error('Decode failed')))); },
   };
 }
 
@@ -103,6 +111,102 @@ test('cached artwork with initially unmeasured geometry still animates after dec
   await controlled.paint();
   assert.equal(controlled.animations.length, 1);
   assert.equal(controlled.animations[0].node, image);
+});
+
+test('the receipt loads and decodes while the large artwork remains visible', async () => {
+  const controlled = controls();
+  const view = render(createElement(Card, { eligible: true, withReceipt: true }));
+  const card = view.getByRole('img', { name: 'Tarot card' }) as HTMLImageElement;
+  const receipt = view.container.querySelector<HTMLImageElement>('img[alt="Receipt"]')!;
+  assert.equal(receipt.hidden, true);
+
+  await controlled.load(card);
+  await controlled.decode();
+  await controlled.paint();
+  await controlled.load(receipt);
+  assert.equal(card.dataset.layout, 'artwork');
+  assert.equal(receipt.hidden, true);
+  assert.equal(controlled.animations.length, 0);
+
+  await controlled.decode();
+  assert.equal(controlled.animations.length, 1);
+  assert.equal(view.getByRole('img', { name: 'Receipt' }), receipt);
+  assert.equal(receipt.dataset.state, 'ready');
+});
+
+test('drawable artwork and receipt still enter together when decode rejects', async () => {
+  const controlled = controls();
+  const view = render(createElement(Card, { eligible: true, withReceipt: true }));
+  const card = view.getByRole('img', { name: 'Tarot card' }) as HTMLImageElement;
+  const receipt = view.container.querySelector<HTMLImageElement>('img[alt="Receipt"]')!;
+
+  await controlled.load(card);
+  await controlled.load(receipt);
+  await controlled.failDecode();
+  await controlled.paint();
+
+  assert.equal(controlled.animations.length, 1);
+  assert.equal(controlled.animations[0].node, card);
+  assert.equal(view.getByRole('img', { name: 'Receipt' }), receipt);
+  assert.equal(receipt.dataset.state, 'ready');
+});
+
+test('a receipt network error settles its state and lets the card enter immediately', async () => {
+  const controlled = controls();
+  const view = render(createElement(Card, { eligible: true, withReceipt: true }));
+  const card = view.getByRole('img', { name: 'Tarot card' }) as HTMLImageElement;
+  const receipt = view.container.querySelector<HTMLImageElement>('img[alt="Receipt"]')!;
+
+  await controlled.load(card);
+  await controlled.decode();
+  await controlled.paint();
+  assert.equal(controlled.animations.length, 0);
+
+  await controlled.fail(receipt);
+  assert.equal(controlled.animations.length, 1);
+  assert.equal(view.getByRole('img', { name: 'Receipt' }), receipt);
+  assert.equal(receipt.dataset.state, 'failed');
+});
+
+test('a stalled receipt does not hold the card back and can appear after Claim is ready', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const controlled = controls();
+  const view = render(createElement(Card, { eligible: true, withReceipt: true }));
+  const card = view.getByRole('img', { name: 'Tarot card' }) as HTMLImageElement;
+  const receipt = view.container.querySelector<HTMLImageElement>('img[alt="Receipt"]')!;
+  await controlled.load(card);
+  await controlled.decode();
+  await controlled.paint();
+  await act(async () => t.mock.timers.tick(250));
+  assert.equal(controlled.animations.length, 1);
+  assert.equal(view.getByRole('img', { name: 'Receipt' }), receipt);
+  assert.equal(receipt.dataset.state, 'loading');
+
+  await act(async () => controlled.animations[0].finished.resolve());
+  assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, false);
+  await controlled.load(receipt);
+  await controlled.decode();
+  assert.equal(receipt.dataset.state, 'ready');
+  assert.equal(controlled.animations.length, 1);
+});
+
+test('a slow card that paints before the deadline still animates when the receipt is pending', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const controlled = controls();
+  const view = render(createElement(Card, { eligible: true, withReceipt: true }));
+  const card = view.getByRole('img', { name: 'Tarot card' }) as HTMLImageElement;
+
+  await act(async () => t.mock.timers.tick(1_380));
+  await controlled.load(card);
+  await controlled.decode();
+  await controlled.paint();
+  assert.equal(card.dataset.layout, 'artwork');
+  assert.equal(controlled.animations.length, 0);
+
+  await act(async () => t.mock.timers.tick(120));
+  assert.equal(controlled.animations.length, 1);
+  assert.equal(controlled.animations[0].node, card);
+  assert.equal(view.getByRole('img', { name: 'Receipt' }).dataset.state, 'loading');
 });
 
 for (const stalledAt of ['loading', 'decoding']) {
@@ -165,6 +269,28 @@ test('resize settles the eligible layout and cancels the obsolete animation', as
   await act(async () => window.dispatchEvent(new environment.dom.window.Event('resize')));
   assert.equal(controlled.animations.length, 1);
 });
+
+for (const property of ['width', 'height', 'scale'] as const) {
+  test(`visual viewport resize settles an animation only when ${property} changes`, async () => {
+    const viewport = Object.assign(new window.EventTarget(), { width: 390, height: 780, scale: 1 });
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport });
+    const controlled = controls({ cached: true });
+    const view = render(createElement(Card, { eligible: true }));
+    await controlled.decode();
+    await controlled.paint();
+    const animation = controlled.animations[0];
+    const resize = () => act(async () => viewport.dispatchEvent(new window.Event('resize')));
+
+    await resize();
+    assert.equal(animation.cancel.mock.callCount(), 0);
+    assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, true);
+
+    viewport[property] += property === 'scale' ? 0.25 : 10;
+    await resize();
+    assert.equal(animation.cancel.mock.callCount(), 1);
+    assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, false);
+  });
+}
 
 test('a dialog opened during movement settles the card into its final frame without replaying', async () => {
   const controlled = controls({ cached: true });
