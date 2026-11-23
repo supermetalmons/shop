@@ -2,7 +2,7 @@
 
 Activated on 22 November 2026. Current API version
 `480190bd-43be-4138-aca9-1908b2d198e2`; storefront version
-`fc6e07d7-88e5-49c5-b3ee-4da870d9abef`.
+`9e3d63fe-0856-4751-b019-18a6e8b83e0a`.
 
 The review fixes add bounded initial-validation retries, isolate NFC pages from
 unrelated account errors, and serialize deployment operations with exclusive
@@ -45,10 +45,12 @@ application deployments passed their release gates, live API checks, and five
 published-browser scenarios. No claim transactions were broadcast. See
 [final-release.json](final-release.json).
 
-The claimed-card header update keeps the standard mons.shop title, logo, and
-wallet controls above the large artwork. All 5,622 frontend tests passed, and
-published desktop/mobile checks verified layout, wallet interaction, and home
-navigation using synthetic claim status without broadcasting transactions.
+The claimed-card view keeps the standard mons.shop title, logo, and wallet
+controls above artwork sized to the remaining viewport without extra scrolling.
+All 5,622 frontend tests passed. Published checks verified the full card fits on
+desktop, short windows, mobile, and landscape, including resizing, wallet
+interaction, and home navigation, using synthetic claim status without
+broadcasting transactions.
 
 Contract: [`0x63fef7c4867c558b91fda48899580a89d9f8cde1`](https://sepolia.etherscan.io/address/0x63fef7c4867c558b91fda48899580a89d9f8cde1#code).
 Deployment block: `12190005`.
