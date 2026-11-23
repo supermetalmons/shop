@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-23",
+  "timezone": "Asia/Yerevan",
+  "frontendVersion": "da212839-e4ad-492a-9908-c009c00053de",
+  "apiVersion": "79332dda-a4f8-4ac8-94a2-dc5b74b18cfd",
+  "apiAndContractUnchanged": true,
+  "findingsAddressed": [
+    "cancellable wallet submission with safe late recovery",
+    "stale failed receipt fencing",
+    "case-insensitive private UUID scanning"
+  ],
+  "validation": {
+    "frontendTests": 5587,
+    "focusedTarotTests": 57,
+    "independentRecoveryCases": 9,
+    "bundleValidationTests": 5,
+    "frontendAndTestTypechecks": true,
+    "frontendDeploymentGates": true
+  },
+  "walletBrowser": {
+    "checkedAt": "2026-11-23T08:30:34.003Z",
+    "publishedFrontendVerified": true,
+    "syntheticWalletAndChain": true,
+    "disconnectExpiryRecovery": true,
+    "expiredLateHashIgnored": true,
+    "hashlessConfirmRequests": 0,
+    "claimTransactionsBroadcast": 0
+  },
+  "failedReceiptBrowser": {
+    "checkedAt": "2026-11-23T08:31:21.922Z",
+    "publishedFrontendVerified": true,
+    "syntheticChain": true,
+    "staleFailedReceiptRetained": true,
+    "freshCanonicalFailureCleared": true,
+    "claimTransactionsBroadcast": 0
+  },
+  "claimTransactionsBroadcast": 0
+}

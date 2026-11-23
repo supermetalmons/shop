@@ -2,10 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { ethereumItemDisplayIdMaximum, formatEtherAmount, type EthereumContainerKind } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
 import { InventoryGrid } from '../components/InventoryGrid';
-import { Modal } from '../components/Modal';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 import { ShopSelectionBar } from '../shop/ui/ShopSelectionBar';
-import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
+import { EthereumWalletPicker } from './EthereumWalletPicker';
 import type { InventoryItem } from '../types';
 import { EthereumMintPanel } from './EthereumMintPanel';
 import { ethereumMintPrice, ethereumMintRemaining } from './mint';
@@ -222,15 +221,8 @@ export default function Ethereum111kPage({
       handleOpenShip={() => {}} walletActionBusy={actionBlocked || selectedPending} startOpenLoading={null}
       openActionLabelForDropId={() => 'Open'} openActionProgressForDropId={() => 'Opening…'} />
     <EthereumInventoryOverlays presentation={presentation} suspended={suspended} />
-    <Modal open={walletPickerOpen} title="Connect wallet" onClose={() => {
+    <EthereumWalletPicker wallet={wallet} onClose={() => {
       if (mintAction.connecting) mintAction.cancel(); else if (relicAction.connecting) relicAction.cancel(); else wallet.cancel();
-    }} suspended={suspended}>
-      <div className="ethereum111k__wallets">{wallet.wallets.map(candidate => {
-        const icon = getInjectedWalletIconSrc(candidate.info.icon);
-        return <button key={candidate.info.uuid} type="button" onClick={() => wallet.selectWallet(candidate)}>
-          {icon ? <img src={icon} alt="" /> : null}{candidate.info.name}
-        </button>;
-      })}</div>
-    </Modal>
+    }} suspended={suspended} />
   </>;
 }

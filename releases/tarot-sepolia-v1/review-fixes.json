@@ -1,0 +1,53 @@
+{
+  "checkedAt": "2026-11-22T17:29:09.096Z",
+  "frontendVersion": "c322837e-def2-4b4f-ab02-9f836f1cb6db",
+  "apiVersion": "0ba16b9d-04c8-4f82-984a-d4e991d2eae4",
+  "contractAddress": "0x63fef7c4867c558b91fda48899580a89d9f8cde1",
+  "contractAndApiUnchanged": true,
+  "findingsAddressed": [
+    "bounded initial validation recovery",
+    "NFC account-error isolation",
+    "exclusive deployment release ownership"
+  ],
+  "validation": {
+    "frontendTests": 5560,
+    "focusedTarotTests": 34,
+    "nfcRegressions": 18,
+    "appIsolationTests": 2,
+    "deploymentSourceAndSharedLockTests": 42,
+    "frontendAndTestTypechecks": true,
+    "frontendDeploymentGates": true
+  },
+  "liveBrowser": {
+    "checkedAt": "2026-11-22T17:29:09.096Z",
+    "scenarios": [
+      {
+        "scenario": "503",
+        "automaticallyRecovered": true,
+        "statusRequests": 2,
+        "retryDelayMs": 2015,
+        "automaticClaimPreparations": 0,
+        "privateReferrers": 0
+      },
+      {
+        "scenario": "429",
+        "automaticallyRecovered": true,
+        "statusRequests": 2,
+        "retryDelayMs": 3010,
+        "automaticClaimPreparations": 0,
+        "privateReferrers": 0
+      },
+      {
+        "scenario": "network",
+        "automaticallyRecovered": true,
+        "statusRequests": 2,
+        "retryDelayMs": 2010,
+        "automaticClaimPreparations": 0,
+        "privateReferrers": 0
+      }
+    ],
+    "claimTransactionsBroadcast": 0,
+    "injectedTransientFailures": true
+  },
+  "claimTransactionsBroadcast": 0
+}

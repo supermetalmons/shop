@@ -1,0 +1,24 @@
+{
+  "contract": 19,
+  "deploymentAndSourceTools": 27,
+  "sharedProtocol": 5,
+  "frontend": 5540,
+  "frontendWorker": 5,
+  "api": 3813,
+  "nativeWorkerRuntime": 96,
+  "localAnvilEndToEnd": true,
+  "desktopAndMobileVisualChecks": true,
+  "generatedSchemaAndTypes": true,
+  "frontendAndApiDeploymentChecks": true,
+  "privateCredentialScan": {
+    "codes": 777,
+    "matches": 0
+  },
+  "additionalChecks": [
+    {
+      "name": "check:dead-code",
+      "status": "pre-existing failure",
+      "detail": "Unused export ARTIST_METADATA_PLAN_PAGE_SIZE in shared/ethereum/artistMetadataMaintenance.ts; source file unchanged."
+    }
+  ]
+}

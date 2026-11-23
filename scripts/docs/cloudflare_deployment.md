@@ -26,13 +26,28 @@ variable or the gitignored `cloud/workers/frontend/.env.bundle-scan` file. Only
 the validator loads that file; Vite and the frontend Worker do not. Missing or
 invalid scan configuration fails validation, and diagnostics never print codes.
 
+Publishing and release dry runs additionally require the private Tarot manifest
+through `validate:browser-bundle:release`. It checks the configured Sepolia
+contract and all 777 unique, ordered claim links before scanning the output.
+It also matches the credential-set fingerprint recorded in
+`releases/tarot-sepolia-v1/credential-set.json` after successful provisioning
+verification. The pin is read from the repository, independently of the private
+manifest path. A missing or mismatched pin blocks release scans; the check does
+not contact D1. Run `npm run tarot:ops -- verify-codes` to establish a missing
+pin from the fully verified deployment. Existing conflicting pins are never
+overwritten automatically.
+Use the default `.operations/tarot-sepolia-v1/claim-links.private.json` or set
+`ETHEREUM_TAROT_PRIVATE_MANIFEST` for the validator. Keep this file outside
+`dist`; only the Node validator reads it, and it is never a Vite input or Worker
+upload. Ordinary builds and local scans do not require a Tarot manifest.
+
 ```bash
 npm run check:frontend
 npm run dry-run:frontend
 npm run deploy
 ```
 
-`dry-run:frontend` performs all frontend checks and a native
+`dry-run:frontend` performs all frontend checks, the strict release scan, and a native
 `wrangler deploy --dry-run`. `deploy` repeats the checks and publishes with
 `wrangler deploy --strict`. It changes only the frontend Worker and does not
 deploy the API.

@@ -183,6 +183,7 @@ function integrityInput(
       authWalletBindingColumns: queryRows(db, 'PRAGMA table_info(auth_wallet_bindings)'),
       authWalletBindingCounts: queryRows(db, 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings'),
       workerControlColumns: queryRows(db, 'PRAGMA table_info(worker_controls)'),
+      tarotClaimCodeColumns: queryRows(db, 'PRAGMA table_info(tarot_claim_codes)'),
       ...overrides,
     };
   } finally {
@@ -203,7 +204,7 @@ test('Ops integrity reads all checks in one command without changing the report'
       calls += 1;
       assert.equal(args.includes('--file'), false);
       const statements = unstable_splitSqlQuery(args[args.indexOf('--command') + 1]);
-      assert.equal(statements.length, 31);
+      assert.equal(statements.length, 32);
       return JSON.stringify(statements.map((sql) => ({ success: true, results: queryRows(db, sql) })));
     });
     assert.deepEqual(readRemoteOpsD1Integrity(runner.queryBatch), assertOpsD1Integrity(expected));

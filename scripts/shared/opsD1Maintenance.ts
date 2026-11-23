@@ -96,6 +96,7 @@ export type OpsD1IntegrityInput = {
   authWalletBindingColumns: OpsD1Row[];
   authWalletBindingCounts: OpsD1Row[];
   workerControlColumns: OpsD1Row[];
+  tarotClaimCodeColumns: OpsD1Row[];
 };
 
 export type OpsD1IntegrityReport = {
@@ -131,6 +132,15 @@ const expectedWorkerControlColumns: readonly ExpectedColumn[] = [
   ['created_at_ms', 'INTEGER', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],
   ['cursor_updated_at_ms', 'INTEGER', 0, 0],
+];
+
+const expectedTarotClaimCodeColumns: readonly ExpectedColumn[] = [
+  ['chain_id', 'INTEGER', 1, 1],
+  ['contract_address', 'TEXT', 1, 2],
+  ['token_id', 'INTEGER', 1, 3],
+  ['code_hash', 'TEXT', 1, 0],
+  ['created_at_ms', 'INTEGER', 1, 0],
+  ['revoked_at_ms', 'INTEGER', 0, 0],
 ];
 
 const expectedAnonymousAuthSessionColumns: readonly ExpectedColumn[] = [
@@ -403,6 +413,7 @@ export function assertOpsD1Integrity(
   );
   assertExactSchema(input.schema);
   assertStrictTables(input.tableList);
+  assertExactColumns(input.tarotClaimCodeColumns, expectedTarotClaimCodeColumns, 'tarot_claim_codes');
   assertExactColumns(
     input.anonymousAuthSessionColumns,
     expectedAnonymousAuthSessionColumns,
@@ -576,6 +587,7 @@ export function readRemoteOpsD1Integrity(
     authWalletBindingColumns: 'PRAGMA table_info(auth_wallet_bindings)',
     authWalletBindingCounts: 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings',
     workerControlColumns: 'PRAGMA table_info(worker_controls)',
+    tarotClaimCodeColumns: 'PRAGMA table_info(tarot_claim_codes)',
   });
   return assertOpsD1Integrity({
     ...rows,

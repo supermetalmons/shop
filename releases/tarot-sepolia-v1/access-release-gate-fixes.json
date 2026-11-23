@@ -1,0 +1,58 @@
+{
+  "checkedAt": "2026-11-23T11:05:29.575Z",
+  "frontendVersion": "b7ad3149-9934-43d1-9c95-8bc001639ad2",
+  "apiVersion": "79332dda-a4f8-4ac8-94a2-dc5b74b18cfd",
+  "apiAndContractUnchanged": true,
+  "staffTestRoutePolicyUnchanged": true,
+  "settlementConfirmations": 3,
+  "findingsAddressed": [
+    "later credential denial invalidates unclaimed eligibility",
+    "reactive Claim cooldown state",
+    "required scoped private manifest at publication"
+  ],
+  "validation": {
+    "frontendTests": 5617,
+    "focusedTarotTests": 80,
+    "independentAuthCooldownRaceCases": 14,
+    "strictManifestTests": 11,
+    "scannerAndProvisioningTests": 17,
+    "frontendAndTestTypechecks": true,
+    "frontendDeploymentGates": true,
+    "actualStrictReleaseScan": true
+  },
+  "publishedBrowser": {
+    "syntheticWalletAndResponses": true,
+    "passed": true,
+    "liveMutationsSent": 0,
+    "outcomes": [
+      {
+        "httpStatus": 401,
+        "claimDisabledAfterFailure": true,
+        "cooldownReenabledWithoutClick": null,
+        "walletConnections": 0,
+        "transactions": 0,
+        "statusCalls": 2,
+        "unrelatedPostsIntercepted": 3
+      },
+      {
+        "httpStatus": 403,
+        "claimDisabledAfterFailure": true,
+        "cooldownReenabledWithoutClick": null,
+        "walletConnections": 0,
+        "transactions": 0,
+        "statusCalls": 2,
+        "unrelatedPostsIntercepted": 3
+      },
+      {
+        "httpStatus": 429,
+        "claimDisabledAfterFailure": true,
+        "cooldownReenabledWithoutClick": true,
+        "walletConnections": 0,
+        "transactions": 0,
+        "statusCalls": 2,
+        "unrelatedPostsIntercepted": 3
+      }
+    ]
+  },
+  "liveMutationsSent": 0
+}

@@ -7,6 +7,7 @@ import {
 } from './lib/dropConfig';
 import { normalizePathname } from './navigation';
 import { isMainnetOnlyStaffWallet } from '../shared/fulfillmentAccess';
+import { resolveNfcLink, type NfcLink } from './ethereum/tarotLink';
 
 const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
 
@@ -70,6 +71,7 @@ export type ResolvedAppRoute = {
   replacementHref: string | null;
   claimDeepLinkCode: string | null;
   nfcDeepLinkCode: string | null;
+  nfcLink: NfcLink | null;
   drop: FrontendDropConfig | null;
   upcoming: UpcomingDropRouteConfig | null;
   wipExperience: ShopWipExperience | null;
@@ -103,6 +105,7 @@ function createRoute(
     replacementHref,
     claimDeepLinkCode: null,
     nfcDeepLinkCode: null,
+    nfcLink: null,
     drop: null,
     upcoming: null,
     wipExperience: null,
@@ -125,6 +128,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (requestedPath === '/nfc') {
     return createRoute('nfc', requestedPath, null, {
       nfcDeepLinkCode: new URLSearchParams(search).get('code') ?? '',
+      nfcLink: resolveNfcLink(search),
     });
   }
 
@@ -191,7 +195,7 @@ export function walletVisibleShopRoute(
   if (
     (isMainnetOnlyStaffWallet(connectedWallet) || isMainnetOnlyStaffWallet(staffWallet)) &&
     (route.drop?.solanaCluster === 'devnet' || route.upcoming?.solanaCluster === 'devnet' ||
-      route.kind === 'ethereum-drop' || route.wipExperience === 'mi_note_cards_demo')
+      route.kind === 'ethereum-drop' || route.nfcLink?.kind === 'tarot' || route.wipExperience === 'mi_note_cards_demo')
   ) return resolveAppRoute({ pathname: '/' });
   return route;
 }

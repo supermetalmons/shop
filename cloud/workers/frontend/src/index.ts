@@ -23,7 +23,14 @@ export async function handleFrontendRequest(
       throw error;
     }
   }
-  return env.ASSETS.fetch(request);
+  const response = await env.ASSETS.fetch(request);
+  const path = new URL(request.url).pathname;
+  if (path.replace(/\/+$/, '') !== '/nfc') return response;
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', 'no-store');
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 export default {

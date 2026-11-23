@@ -1,7 +1,7 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { NfcClaimPage } from './components/NfcClaimPage';
+import { NfcPage } from './components/NfcPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
 import { ADDRESS_ENCRYPTION_PUBLIC_KEY } from './config/addressEncryption';
@@ -81,7 +81,7 @@ function App({ route, suspended = false }: AppProps) {
   const isNfcPage = route.kind === 'nfc';
   const commerceUiSuspended = suspended || isNfcPage;
   const isEthereum111kPage = route.kind === 'ethereum-drop';
-  const ethereumWallet = useMiNoteEthereumWallet(isEthereum111kPage && !commerceUiSuspended);
+  const ethereumWallet = useMiNoteEthereumWallet((isEthereum111kPage || route.nfcLink?.kind === 'tarot') && !suspended);
   const feedback = useShopFeedback(statusUiSuspended);
   const { showToast, showSuccessHud } = feedback;
   const purchaseState = useShopPurchaseState(drop);
@@ -408,7 +408,7 @@ function App({ route, suspended = false }: AppProps) {
 
   return (
     <div className="page">
-      <ShopStatus feedback={feedback} suspended={statusUiSuspended} toastAboveModal={toastAboveModal} />
+      {!isNfcPage && <ShopStatus feedback={feedback} suspended={statusUiSuspended} toastAboveModal={toastAboveModal} />}
       {!isNfcPage && (
         <NotifySubscription
           open={notifications.notifyOpen}
@@ -442,9 +442,10 @@ function App({ route, suspended = false }: AppProps) {
         />
       ) : (
         <div className={primaryFrameClassName}>
-          {shopHeader}
+          {!isNfcPage && shopHeader}
           {isNfcPage ? (
-            <NfcClaimPage key={route.nfcDeepLinkCode} />
+            <NfcPage key={route.nfcLink!.key} link={route.nfcLink!} header={shopHeader} wallet={ethereumWallet}
+              suspended={suspended} onModalOpenChange={onEthereumModalOpenChange} />
           ) : (
             <ShopPurchaseSection
               {...drop}
@@ -503,7 +504,7 @@ function App({ route, suspended = false }: AppProps) {
         />
       )}
       <ShopRevealLayer reveal={controlledReveal} suspended={revealOverlaySuspended} receiptControls={receiptControls} />
-      {activeError ? <div className="error">{activeError}</div> : null}
+      {!isNfcPage && activeError ? <div className="error">{activeError}</div> : null}
       {!isNfcPage && (
         <>
           <ShopShipmentsSection

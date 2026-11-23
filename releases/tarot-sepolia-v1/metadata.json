@@ -1,0 +1,11 @@
+{
+  "metadataBaseUri": "https://cdn.mons.shop/tarot-sepolia/v1/",
+  "cards": 777,
+  "receipts": 777,
+  "objectCount": 1555,
+  "catalogSha256": "d578ea968d91416de75e728ad688b67fd8f5c68ff3c3ce83518c8daa7167851c",
+  "artworkCount": 1554,
+  "allMediaVerified": true,
+  "allStoredMetadataVerified": true,
+  "allPublicMetadataVerified": true
+}

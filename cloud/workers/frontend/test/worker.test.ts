@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { apiServiceRequest, handleFrontendRequest } from '../src/index.ts';
 
 function fetcher(fetch: Fetcher['fetch']): Fetcher {
@@ -99,4 +100,26 @@ test('gateway preserves non-cancellation service failures', async () => {
     handleFrontendRequest(new Request('https://mons.shop/api/inventory'), env),
     (error: unknown) => error === failure,
   );
+});
+
+test('NFC HTML is never cached or sent as a referrer, including slash and placeholder URLs', async () => {
+  const env = {
+    MONS_API: fetcher(async () => { assert.fail('NFC HTML must not reach the API'); }),
+    ASSETS: fetcher(async () => new Response('<html>app</html>', {
+      headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public, max-age=86400' },
+    })),
+  };
+  for (const path of ['/nfc?code=basel', '/nfc?code=private&tokenId=1&testnet=true', '/nfc/?code=private', '/nfc///?code=private']) {
+    const response = await handleFrontendRequest(new Request(`https://mons.shop${path}`), env);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
+    assert.equal(response.headers.get('X-Robots-Tag'), 'noindex, nofollow');
+    assert.equal(await response.text(), '<html>app</html>');
+  }
+  const ordinary = await handleFrontendRequest(new Request('https://mons.shop/111k_devnet'), env);
+  assert.equal(ordinary.headers.get('Cache-Control'), 'public, max-age=86400');
+  const config = JSON.parse(readFileSync(new URL('../../../../wrangler.jsonc', import.meta.url), 'utf8'));
+  assert.ok(config.assets.run_worker_first.includes('/nfc'));
+  assert.ok(config.assets.run_worker_first.includes('/nfc/*'));
+  assert.equal(config.assets.run_worker_first.includes('/nfc/'), false);
 });

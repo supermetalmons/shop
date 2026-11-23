@@ -34,6 +34,7 @@ import { profileRoutes } from './workerRoutes/profile.js';
 import { staffRoutes } from './workerRoutes/staff.js';
 import { ethereumRoutes } from './ethereumRoutes.js';
 import { pre111kRoutes } from './pre111kRoutes.js';
+import { tarotRoutes } from './tarotRoutes.js';
 import { applyWorkerRouteCors, applyWorkerRouteProfileErrorCors } from './workerRoutes/cors.js';
 
 export type { MatchedWorkerRoute, WorkerRouteResult } from './workerRoutes/support.js';
@@ -51,6 +52,7 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
   ...staffRoutes,
   ...ethereumRoutes,
   ...pre111kRoutes,
+  ...tarotRoutes,
 ];
 
 function compileExactRoutes(entries: readonly ExactWorkerRoute[]): ReadonlyMap<string, MatchedWorkerRoute> {

@@ -135,6 +135,11 @@ function env(options: {
     ETHEREUM_PRE111K_SEPOLIA_CONTRACT_ADDRESS: '', ETHEREUM_PRE111K_SEPOLIA_DEPLOYMENT_BLOCK: '0', ETHEREUM_PRE111K_SEPOLIA_ENABLED: 'false',
     ETHEREUM_PRE111K_MAINNET_SIGNER_SECRET: '', ETHEREUM_PRE111K_SEPOLIA_SIGNER_SECRET: '',
     ETHEREUM_PRE111K_ACCESS_CODES: '["TESTACCESS"]',
+    ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS: '', ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK: '0',
+    ETHEREUM_TAROT_SEPOLIA_ENABLED: 'false', ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET: '',
+    TAROT_ACCESS_IP_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    TAROT_PREPARE_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    TAROT_CONFIRM_IP_RATE_LIMITER: { limit: async () => ({ success: true }) },
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
@@ -2371,6 +2376,9 @@ test('internal notification enqueue rejects signed invalid jobs and surfaces que
 test('production config has exact authentication rate limits', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   assert.deepEqual(config.ratelimits, [
+    { name: 'TAROT_ACCESS_IP_RATE_LIMITER', namespace_id: '1950264152', simple: { limit: 30, period: 60 } },
+    { name: 'TAROT_PREPARE_RATE_LIMITER', namespace_id: '1950264153', simple: { limit: 5, period: 60 } },
+    { name: 'TAROT_CONFIRM_IP_RATE_LIMITER', namespace_id: '1950264154', simple: { limit: 60, period: 60 } },
     { name: 'ETHEREUM_REVEAL_READ_RATE_LIMITER', namespace_id: '1950264150', simple: { limit: 120000, period: 60 } },
     { name: 'ETHEREUM_REVEAL_ADMISSION_RATE_LIMITER', namespace_id: '1950264151', simple: { limit: 10000, period: 60 } },
     { name: 'PREORDER_PREPARE_RATE_LIMITER', namespace_id: '2185819631', simple: { limit: 10, period: 60 } },

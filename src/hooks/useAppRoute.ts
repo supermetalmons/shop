@@ -8,6 +8,7 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
   a.shopPath === b.shopPath &&
   a.claimDeepLinkCode === b.claimDeepLinkCode &&
   a.nfcDeepLinkCode === b.nfcDeepLinkCode &&
+  a.nfcLink?.key === b.nfcLink?.key &&
   a.drop === b.drop &&
   a.upcoming === b.upcoming &&
   a.wipExperience === b.wipExperience &&

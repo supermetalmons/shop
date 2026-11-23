@@ -103,6 +103,29 @@
   font-size: 18px;
 }
 
+.nfc-tarot-card {
+  border-radius: var(--interactive-card-radius);
+  outline: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  object-fit: contain;
+}
+
+.nfc-claim-page--claimed {
+  width: min(680px, 100%);
+  align-items: center;
+}
+
+.nfc-tarot-card--large {
+  display: block;
+  width: min(100%, calc(88svh * 881 / 1400));
+  height: auto;
+}
+
+.nfc-claim-error {
+  margin: 0;
+  text-align: center;
+  color: color-mix(in srgb, var(--fg) 80%, transparent);
+}
+
 @media (max-width: 639px) {
   .nfc-claim-page {
     gap: 24px;

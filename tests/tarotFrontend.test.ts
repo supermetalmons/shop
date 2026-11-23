@@ -1,0 +1,1347 @@
+import assert from 'node:assert/strict';
+import test, { after, afterEach, beforeEach, mock, type TestContext } from 'node:test';
+import { createElement } from 'react';
+import { encodeTarotClaim, resolveTarotConfig, type TarotConfirmRequest, type TarotConfirmResponse, type TarotPrepareResponse, type TarotRequest, type TarotStatus } from '../shared/ethereum/tarot.ts';
+import type { EthereumWallet } from '../src/ethereum/useEthereum111k.ts';
+import type { EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
+import { setupFrontendDom } from './helpers/frontendDom.ts';
+
+let { dom } = setupFrontendDom();
+const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { WalletModalContext } = await import('@solana/wallet-adapter-react-ui');
+const { NfcPage } = await import('../src/components/NfcPage.tsx');
+const { resolveNfcLink } = await import('../src/ethereum/tarotLink.ts');
+const { tarotApi, TarotApiError } = await import('../src/ethereum/tarotApi.ts');
+const { useAppRoute } = await import('../src/hooks/useAppRoute.ts');
+const { useTarotClaim } = await import('../src/ethereum/useTarotClaim.ts');
+const { renderHook } = await import('@testing-library/react');
+const code = '00000000-0000-4000-8000-000000000001';
+const owner = '0x1111111111111111111111111111111111111111';
+const contract = '0x2222222222222222222222222222222222222222';
+const transactionHash = `0x${'a'.repeat(64)}`;
+const receiptBlockHash = `0x${'d'.repeat(64)}`;
+const config = resolveTarotConfig({ contractAddress: contract, enabled: true, deploymentBlock: 1 });
+const request: TarotRequest = { code, tokenId: 1, testnet: true };
+const search = (tokenId = 1) => `?code=${code}&tokenId=${tokenId}&testnet=true`;
+const status = (tokenId = 1, claimed = false): TarotStatus => ({
+  config, tokenId, receiptTokenId: tokenId + 777, claimed, observedBlock: 5,
+  observedTimestamp: Math.floor(Date.now() / 1000), blockHash: `0x${'b'.repeat(64)}`,
+});
+function prepared(tokenId = 1): TarotPrepareResponse {
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const signature = `0x${'c'.repeat(130)}`;
+  return { tokenId, receiptTokenId: tokenId + 777, wallet: owner, deadline, expiresAtMs: deadline * 1000, signature,
+    transaction: { to: contract, chainId: config.chainId, value: '0x0', data: encodeTarotClaim(tokenId, deadline, signature) } };
+}
+function confirmed(tokenId = 1, blockNumber = 6): TarotConfirmResponse {
+  return { status: 'confirmed', transactionHash, confirmations: 3, tokenId, receiptTokenId: tokenId + 777,
+    blockNumber, blockHash: receiptBlockHash };
+}
+function wallet(connected = false): EthereumWallet {
+  return {
+    address: connected ? owner : null, status: connected ? 'connected' : 'disconnected', ready: true, wallets: [], error: null,
+    provider: connected ? { request: mock.fn(async ({ method }) => {
+      if (method === 'eth_accounts') return [owner];
+      if (method === 'eth_chainId') return '0xaa36a7';
+      if (method === 'eth_sendTransaction') return transactionHash;
+      assert.fail(`Unexpected wallet method ${method}`);
+    }) } : null,
+    connect: mock.fn(), chooseWallet: mock.fn(), changeAccount: mock.fn(), checkAccount: mock.fn(), selectWallet: mock.fn(),
+    cancel: mock.fn(), disconnect: mock.fn(),
+  };
+}
+function page(linkSearch: string, value = wallet()) {
+  return createElement(WalletModalContext.Provider, { value: { visible: false, setVisible: () => {} } },
+    createElement(NfcPage, { link: resolveNfcLink(linkSearch), wallet: value,
+      header: createElement('header', null, createElement('button', null, 'Shop header')) }));
+}
+function mockService(claimed = false) {
+  const statusMock = mock.method(tarotApi, 'status', async (input: TarotRequest) => status(input.tokenId, claimed));
+  const prepareMock = mock.method(tarotApi, 'prepare', async (input: TarotRequest) => prepared(input.tokenId));
+  const confirm = mock.method(tarotApi, 'confirm', async (input: TarotConfirmRequest) => confirmed(input.tokenId));
+  return { status: statusMock, prepare: prepareMock, confirm };
+}
+
+function pendingClaimFixture(t: TestContext, method = 'eth_sendTransaction') {
+  const now = 2_000_000_000;
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: now * 1000 });
+  const value = wallet(true);
+  const provider = value.provider!;
+  const originalRequest = provider.request;
+  const waits: PromiseWithResolvers<unknown>[] = [];
+  const listeners = new Map<string, Set<EthereumProviderListener>>();
+  provider.on = (event, listener) => {
+    if (!listeners.has(event)) listeners.set(event, new Set());
+    listeners.get(event)!.add(listener);
+  };
+  provider.removeListener = (event, listener) => listeners.get(event)?.delete(listener);
+  mock.method(provider, 'request', async (input: Parameters<typeof originalRequest>[0]) => {
+    if (input.method !== method) return originalRequest(input);
+    const wait = Promise.withResolvers<unknown>();
+    waits.push(wait);
+    return wait.promise;
+  });
+  let snapshot = { ...status(), observedBlock: 100, observedTimestamp: now - 24 };
+  mock.method(tarotApi, 'status', async () => snapshot);
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  const confirm = mock.method(tarotApi, 'confirm', async (input: TarotConfirmRequest): Promise<TarotConfirmResponse> => ({
+    status: 'pending', tokenId: 1, receiptTokenId: 778, transactionHash: input.transactionHash,
+    confirmations: 0, blockNumber: null, blockHash: null,
+  }));
+  const mount = (input = value) => renderHook(({ wallet: current }) => useTarotClaim(request, current), { initialProps: { wallet: input } });
+  const focus = () => act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  return {
+    now, value, waits, prepare, confirm, mount, focus,
+    key: `mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
+    emit(event: string, ...args: unknown[]) { for (const listener of listeners.get(event) ?? []) listener(...args); },
+    setSnapshot(next: Partial<TarotStatus>) { snapshot = { ...snapshot, ...next }; },
+    async begin() {
+      const view = mount();
+      await act(async () => undefined);
+      assert.ok(view.result.current.status);
+      await act(async () => view.result.current.claim());
+      assert.equal(waits.length, 1);
+      return view;
+    },
+    async expire() {
+      t.mock.timers.setTime((now + 720) * 1000);
+      snapshot = { ...snapshot, observedBlock: 160, observedTimestamp: now + 696, blockHash: `0x${'e'.repeat(64)}` };
+      await focus();
+    },
+  };
+}
+beforeEach(() => { dom.window.close(); ({ dom } = setupFrontendDom()); });
+afterEach(() => { cleanup(); mock.restoreAll(); window.sessionStorage.clear(); window.localStorage.clear(); });
+after(() => dom.window.close());
+
+test('Tarot routing accepts boundary IDs and rejects malformed, duplicate and mainnet parameters', () => {
+  assert.equal(resolveNfcLink('?code=basel').kind, 'placeholder');
+  for (const tokenId of [1, 777]) {
+    const link = resolveNfcLink(search(tokenId));
+    assert.equal(link.kind, 'tarot');
+    if (link.kind === 'tarot') assert.deepEqual(link.request, { ...request, tokenId });
+  }
+  for (const query of ['', '?code=basel&testnet=true', '?code=basel&tokenId=1',
+    ...['0', '778', '1.5', '01', '-1', '1e2', 'NaN'].map(id => `?code=${code}&tokenId=${id}&testnet=true`),
+    `?code=${code}&tokenId=1`, `?code=${code}&tokenId=1&testnet=false`, `?code=${code}&tokenId=1&testnet=TRUE`,
+    `?code=guess&tokenId=1&testnet=true`, `${search()}&code=${code}`, `${search()}&tokenId=1`, `${search()}&testnet=true`]) {
+    assert.equal(resolveNfcLink(query).kind, 'invalid', query);
+  }
+});
+
+test('NFC identity changes with token ID and testnet, while unrelated parameters preserve it', () => {
+  window.history.replaceState(null, '', `/nfc${search()}`);
+  const view = renderHook(useAppRoute);
+  const first = view.result.current;
+  act(() => { window.history.replaceState(null, '', `/nfc${search(777)}`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
+  assert.notEqual(view.result.current, first);
+  const second = view.result.current;
+  act(() => { window.history.replaceState(null, '', `/nfc${search(777)}&from=wallet`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
+  assert.equal(view.result.current, second);
+  act(() => { window.history.replaceState(null, '', `/nfc${search(777).replace('true', 'false')}`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
+  assert.equal(view.result.current.nfcLink?.kind, 'invalid');
+});
+
+test('Basel preserves the placeholder video and invalid links never contact the Tarot service', () => {
+  const service = mock.method(tarotApi, 'status');
+  const open = mock.method(window, 'open', () => null);
+  const value = wallet();
+  const view = render(page('?code=basel', value));
+  fireEvent.click(view.getByRole('button', { name: 'Claim' }));
+  assert.deepEqual(open.mock.calls[0].arguments, ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank', 'noopener,noreferrer']);
+  assert.equal(service.mock.callCount(), 0);
+  view.rerender(page('?code=basel&tokenId=1&testnet=true', value));
+  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
+  assert.match(view.getByRole('alert').textContent ?? '', /invalid/);
+  assert.equal(service.mock.callCount(), 0);
+});
+
+test('page validation prevents claim/header flash and claimed cards show only one large artwork', async () => {
+  let finish!: (value: TarotStatus) => void;
+  mock.method(tarotApi, 'status', () => new Promise<TarotStatus>(resolve => { finish = resolve; }));
+  const view = render(page(search(777)));
+  assert.equal(view.queryByRole('button'), null);
+  assert.equal(view.queryByRole('img'), null);
+  await act(async () => finish(status(777, true)));
+  assert.equal(view.getAllByRole('img').length, 1);
+  assert.equal(view.getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(view.queryByRole('button'), null);
+  assert.equal(view.queryByRole('heading'), null);
+  assert.equal(view.queryByRole('banner'), null);
+  assert.equal(view.queryByText('NFC Card Receipt'), null);
+  assert.equal(view.container.textContent, '');
+});
+
+test('valid unclaimed links preserve the two-NFT composition using their own static media', async () => {
+  mockService();
+  const view = render(page(search(777)));
+  await view.findByRole('button', { name: 'Claim' });
+  assert.equal(view.getAllByRole('img').length, 2);
+  assert.equal(view.getByRole('img', { name: 'Mutating Card' }).getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(view.getByRole('img', { name: 'NFC Card Receipt' }).getAttribute('src'), 'https://wip.lil.org/tarot/receipts/777.webp');
+  assert.equal(view.container.querySelector('.nfc-mutating-card'), null);
+  for (const image of view.getAllByRole('img')) assert.equal(image.getAttribute('referrerpolicy'), 'no-referrer');
+  assert.equal(view.queryByRole('textbox'), null);
+});
+
+test('one Claim click connects Ethereum, continues once, and replaces confirmed claim UI with artwork', async () => {
+  mockService();
+  const disconnected = wallet();
+  const connect = mock.method(disconnected, 'connect', () => { disconnected.status = 'connecting'; });
+  const view = render(page(search(), disconnected));
+  const claim = await view.findByRole('button', { name: 'Claim' });
+  fireEvent.click(claim);
+  fireEvent.click(claim);
+  assert.equal(connect.mock.callCount(), 1);
+  const connected = wallet(true);
+  const provider = mock.method(connected.provider!, 'request');
+  await act(async () => view.rerender(page(search(), connected)));
+  await waitFor(() => assert.equal(view.queryByRole('button'), null));
+  assert.equal(provider.mock.calls.filter(call => call.arguments[0].method === 'eth_sendTransaction').length, 1);
+  assert.equal(provider.mock.calls.some(call => /sign/i.test(call.arguments[0].method)), false);
+  assert.equal(view.getAllByRole('img').length, 1);
+  assert.equal(window.sessionStorage.length, 0);
+});
+
+test('wallet rejection preserves a retryable claim and cannot mint or hide the receipt', async () => {
+  mockService();
+  const connected = wallet(true);
+  const original = connected.provider!.request;
+  let fail = true;
+  mock.method(connected.provider!, 'request', async (input: Parameters<typeof original>[0]) => {
+    if (input.method === 'eth_sendTransaction' && fail) throw Object.assign(new Error('Rejected'), { code: 4001 });
+    return original(input);
+  });
+  const view = render(page(search(), connected));
+  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
+  await view.findByRole('alert');
+  assert.equal(view.getAllByRole('img').length, 2);
+  fail = false;
+  fireEvent.click(view.getByRole('button', { name: 'Claim' }));
+  await waitFor(() => assert.equal(view.queryByRole('button'), null));
+});
+
+test('a refreshed claimed status hides the entire claim UI without connecting a wallet', async () => {
+  let claimed = false;
+  mock.method(tarotApi, 'status', async () => status(1, claimed));
+  const value = wallet();
+  const connect = mock.method(value, 'connect');
+  const view = render(page(search(), value));
+  await view.findByRole('button', { name: 'Claim' });
+  claimed = true;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.queryByRole('button'), null);
+  assert.equal(view.getAllByRole('img').length, 1);
+  assert.equal(connect.mock.callCount(), 0);
+});
+
+test('reload recovers a submitted receipt without storing a secret or requiring a connected wallet', async () => {
+  const { confirm } = mockService();
+  window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`, JSON.stringify({ wallet: owner, transactionHash }));
+  assert.equal(JSON.stringify(window.sessionStorage).includes(code), false);
+  const view = render(page(search()));
+  await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
+  assert.equal(confirm.mock.calls[0].arguments[0].transactionHash, transactionHash);
+  assert.equal(window.sessionStorage.length, 0);
+  assert.equal(view.queryByRole('button'), null);
+});
+
+test('a dropped or cancelled transaction becomes claimable only after confirmed onchain expiry', async () => {
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  let observedTimestamp = deadline;
+  mock.method(tarotApi, 'status', async () => ({ ...status(), observedTimestamp }));
+  mock.method(tarotApi, 'confirm', async () => ({ status: 'pending' as const, transactionHash, confirmations: 0, tokenId: 1,
+    receiptTokenId: 778, blockNumber: null, blockHash: null }));
+  const key = `mons.shop.tarot.pending:${config.chainId}:${contract}:1`;
+  window.sessionStorage.setItem(key, JSON.stringify({ wallet: owner, transactionHash, deadline }));
+  const view = render(page(search()));
+  const claiming = await view.findByRole('button', { name: 'Claiming…' });
+  assert.equal((claiming as HTMLButtonElement).disabled, true);
+  assert.ok(window.sessionStorage.getItem(key));
+  observedTimestamp = deadline + 1;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  assert.equal(window.sessionStorage.getItem(key), null);
+  assert.equal(view.getAllByRole('img').length, 2);
+});
+
+test('a delayed status read cannot reopen the claim after transaction confirmation', async () => {
+  let delayStatus = false;
+  let finishStatus!: (value: TarotStatus) => void;
+  let finishConfirmation!: (value: TarotConfirmResponse) => void;
+  mock.method(tarotApi, 'status', () => delayStatus
+    ? new Promise<TarotStatus>(resolve => { finishStatus = resolve; }) : Promise.resolve(status()));
+  mock.method(tarotApi, 'prepare', async () => prepared());
+  const confirm = mock.method(tarotApi, 'confirm', () => new Promise<TarotConfirmResponse>(resolve => { finishConfirmation = resolve; }));
+  const view = render(page(search(), wallet(true)));
+  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
+  await waitFor(() => assert.equal(confirm.mock.callCount(), 1));
+  delayStatus = true;
+  act(() => window.dispatchEvent(new dom.window.Event('focus')));
+  await act(async () => finishConfirmation(confirmed()));
+  assert.equal(view.queryByRole('button'), null);
+  await act(async () => finishStatus(status()));
+  assert.equal(view.queryByRole('button'), null);
+  assert.equal(view.getAllByRole('img').length, 1);
+  assert.equal(view.container.textContent, '');
+});
+
+test('new post-confirmation requests cannot move behind the receipt block or contradict its hash', async () => {
+  let snapshot = { ...status(), observedBlock: 100 };
+  mock.method(tarotApi, 'status', async () => snapshot);
+  mock.method(tarotApi, 'confirm', async () => confirmed(1, 105));
+  window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
+    JSON.stringify({ wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
+  const value = wallet();
+  const view = renderHook(() => useTarotClaim(request, value));
+  await waitFor(() => assert.equal(view.result.current.status?.claimed, true));
+  for (const observedBlock of [99, 103, 105]) {
+    snapshot = { ...status(), observedBlock, blockHash: receiptBlockHash };
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    assert.equal(view.result.current.status?.claimed, true);
+    assert.equal(view.result.current.pending, false);
+    assert.equal(view.result.current.loading, false);
+    assert.equal(view.result.current.error, null);
+  }
+  snapshot = { ...status(1, true), observedBlock: 105, blockHash: receiptBlockHash };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.status?.observedBlock, 105);
+});
+
+for (const observedBlock of [105, 107]) {
+  test(`a fresh canonical reorg snapshot at block ${observedBlock} can undo a confirmed claim`, async () => {
+    let snapshot = { ...status(), observedBlock: 100 };
+    mock.method(tarotApi, 'status', async () => snapshot);
+    mock.method(tarotApi, 'confirm', async () => confirmed(1, 105));
+    window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
+      JSON.stringify({ wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
+    const value = wallet();
+    const view = renderHook(() => useTarotClaim(request, value));
+    await waitFor(() => assert.equal(view.result.current.status?.claimed, true));
+    snapshot = { ...status(), observedBlock, blockHash: `0x${'e'.repeat(64)}` };
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    assert.equal(view.result.current.status?.claimed, false);
+    assert.equal(view.result.current.status?.observedBlock, observedBlock);
+    snapshot = { ...status(1, true), observedBlock: observedBlock - 1 };
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    assert.equal(view.result.current.status?.claimed, false);
+    assert.equal(view.result.current.status?.observedBlock, observedBlock);
+  });
+}
+
+test('direct claim validation rejects older availability without preparing or clearing its existing error', async () => {
+  let response: TarotStatus | Error = { ...status(), observedBlock: 100 };
+  const service = mock.method(tarotApi, 'status', async () => { if (response instanceof Error) throw response; return response; });
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  const value = wallet(true);
+  const provider = mock.method(value.provider!, 'request');
+  const view = renderHook(() => useTarotClaim(request, value));
+  await waitFor(() => assert.equal(view.result.current.status?.observedBlock, 100));
+  response = new TarotApiError('Temporary read failure', 503);
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.error, 'Temporary read failure');
+  response = { ...status(), observedBlock: 99 };
+  await act(async () => view.result.current.claim());
+  await waitFor(() => assert.equal(view.result.current.pending, false));
+  assert.equal(view.result.current.status?.observedBlock, 100);
+  assert.equal(view.result.current.loading, false);
+  assert.equal(view.result.current.error, 'Temporary read failure');
+  assert.equal(service.mock.callCount(), 3);
+  assert.equal(prepare.mock.callCount(), 0);
+  assert.equal(provider.mock.calls.some(call => call.arguments[0].method === 'eth_sendTransaction'), false);
+});
+
+test('a stale status preserves pending recovery and polling continues until a fresh snapshot arrives', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let calls = 0;
+  let caughtUp = false;
+  const service = mock.method(tarotApi, 'status', async () => ({ ...status(), observedBlock: ++calls === 1 || caughtUp ? 100 : 99 }));
+  const confirm = mock.method(tarotApi, 'confirm', async () => ({ ...confirmed(), status: 'pending' as const,
+    confirmations: 0, blockNumber: null, blockHash: null }));
+  const key = `mons.shop.tarot.pending:${config.chainId}:${contract}:1`;
+  window.sessionStorage.setItem(key, JSON.stringify({ wallet: owner, transactionHash, deadline: 2_000_000_600 }));
+  const value = wallet();
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  assert.equal(service.mock.callCount(), 2);
+  assert.equal(confirm.mock.callCount(), 0);
+  assert.equal(view.result.current.status?.observedBlock, 100);
+  assert.equal(view.result.current.pending, true);
+  assert.equal(view.result.current.loading, false);
+  assert.ok(window.sessionStorage.getItem(key));
+  caughtUp = true;
+  await act(async () => t.mock.timers.tick(4_000));
+  assert.equal(confirm.mock.callCount(), 1);
+  assert.equal(view.result.current.pending, true);
+});
+
+for (const observedBlock of [105, 110]) {
+  test(`an in-flight confirmation cannot replace a newer reorg observation at block ${observedBlock}`, async () => {
+    let snapshot = { ...status(), observedBlock: 100 };
+    let finish!: (value: TarotConfirmResponse) => void;
+    mock.method(tarotApi, 'status', async () => snapshot);
+    const confirm = mock.method(tarotApi, 'confirm', () => new Promise<TarotConfirmResponse>(resolve => { finish = resolve; }));
+    window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
+      JSON.stringify({ wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
+    const value = wallet();
+    const view = renderHook(() => useTarotClaim(request, value));
+    await waitFor(() => assert.equal(confirm.mock.callCount(), 1));
+    snapshot = { ...status(), observedBlock, blockHash: `0x${'e'.repeat(64)}` };
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    await act(async () => finish(confirmed(1, 105)));
+    assert.equal(view.result.current.status?.claimed, false);
+    assert.equal(view.result.current.status?.blockHash, snapshot.blockHash);
+    assert.equal(view.result.current.status?.observedBlock, observedBlock);
+    assert.equal(view.result.current.pending, true);
+  });
+}
+
+test('link identity and deployment changes reset chain observations', async () => {
+  let snapshot = { ...status(1, true), observedBlock: 100 };
+  mock.method(tarotApi, 'status', async (input: TarotRequest) => ({ ...snapshot, tokenId: input.tokenId, receiptTokenId: input.tokenId + 777 }));
+  const value = wallet();
+  const view = renderHook(({ input }) => useTarotClaim(input, value), { initialProps: { input: request } });
+  await waitFor(() => assert.equal(view.result.current.status?.claimed, true));
+  snapshot = { ...status(), observedBlock: 5 };
+  await act(async () => view.rerender({ input: { ...request, code: '00000000-0000-4000-8000-000000000002' } }));
+  assert.equal(view.result.current.status?.claimed, false);
+  assert.equal(view.result.current.status?.observedBlock, 5);
+  snapshot = { ...status(1, true), observedBlock: 100 };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  snapshot = { ...status(), observedBlock: 2, config: { ...config, contractAddress: `0x${'3'.repeat(40)}` } };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.status?.claimed, false);
+  assert.equal(view.result.current.status?.observedBlock, 2);
+  assert.equal(view.result.current.status?.config.contractAddress, snapshot.config.contractAddress);
+});
+
+test('rejecting a network switch does not prepare or submit a claim', async () => {
+  const { prepare } = mockService();
+  const connected = wallet(true);
+  mock.method(connected.provider!, 'request', async ({ method }: { method: string }) => {
+    if (method === 'eth_accounts') return [owner];
+    if (method === 'eth_chainId') return '0x1';
+    if (method === 'wallet_switchEthereumChain') throw Object.assign(new Error('Cancelled'), { code: 4001 });
+    assert.fail(`Unexpected wallet method ${method}`);
+  });
+  const view = render(page(search(), connected));
+  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
+  await view.findByRole('alert');
+  assert.equal(prepare.mock.callCount(), 0);
+  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
+});
+
+test('a rate limited or invalid code never reveals claim UI or requests wallet connection', async () => {
+  const service = mock.method(tarotApi, 'status', async () => { throw new TarotApiError('Too many attempts. Please wait.', 429, Date.now() + 60_000); });
+  const value = wallet();
+  const connect = mock.method(value, 'connect');
+  const view = render(page(search(), value));
+  await view.findByRole('alert');
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(service.mock.callCount(), 1);
+  assert.equal(view.queryByRole('button'), null);
+  assert.equal(connect.mock.callCount(), 0);
+});
+
+test('route changes discard stale validation results', async () => {
+  let finish!: (value: TarotStatus) => void;
+  mock.method(tarotApi, 'status', async (input: TarotRequest) => input.tokenId === 1
+    ? new Promise<TarotStatus>(resolve => { finish = resolve; }) : status(777, true));
+  const view = render(page(search()));
+  view.rerender(page(search(777)));
+  await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
+  await act(async () => finish(status(1, false)));
+  assert.equal(view.getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(view.queryByRole('button'), null);
+});
+
+test('API sends credentials only in a private POST and rejects another card or a mainnet response', async () => {
+  let response: unknown = status();
+  const fetch = mock.method(globalThis, 'fetch', async () => Response.json(response));
+  await tarotApi.status(request);
+  const [url, init] = fetch.mock.calls[0].arguments as unknown as [string, RequestInit];
+  assert.equal(url, '/api/ethereum/tarot/status');
+  assert.equal(init.method, 'POST');
+  assert.equal(init.cache, 'no-store');
+  assert.equal(init.referrerPolicy, 'no-referrer');
+  assert.equal(init.credentials, 'omit');
+  assert.deepEqual(JSON.parse(String(init.body)), request);
+  response = status(2);
+  await assert.rejects(tarotApi.status(request), /verify/);
+  response = { ...status(), config: { ...config, chainId: 1 } };
+  await assert.rejects(tarotApi.status(request), /verify/);
+});
+
+test('prepared transactions must mint this exact pair on Sepolia for zero ETH', async () => {
+  let response = prepared();
+  mock.method(globalThis, 'fetch', async () => Response.json(response));
+  await tarotApi.prepare({ ...request, wallet: owner }, config);
+  for (const transaction of [
+    { ...response.transaction, chainId: 1 }, { ...response.transaction, value: '0x1' },
+    { ...response.transaction, to: owner }, { ...response.transaction, data: '0x' },
+  ]) {
+    response = { ...prepared(), transaction };
+    await assert.rejects(tarotApi.prepare({ ...request, wallet: owner }, config), /verify/);
+  }
+});
+
+test('confirmation responses require paired canonical receipt proof for terminal results', async () => {
+  let response: unknown = confirmed();
+  mock.method(globalThis, 'fetch', async () => Response.json(response));
+  const input = { ...request, wallet: owner, transactionHash };
+  for (const result of [confirmed(), { ...confirmed(), status: 'failed' },
+    { ...confirmed(), status: 'pending', confirmations: 1 },
+    { ...confirmed(), status: 'pending', confirmations: 0, blockNumber: null, blockHash: null }]) {
+    response = result;
+    assert.deepEqual(await tarotApi.confirm(input), result);
+  }
+  for (const result of [
+    { ...confirmed(), blockNumber: null, blockHash: null }, { ...confirmed(), blockNumber: undefined },
+    { ...confirmed(), blockHash: undefined }, { ...confirmed(), blockNumber: -1 }, { ...confirmed(), blockNumber: 1.5 },
+    { ...confirmed(), blockNumber: 0 }, { ...confirmed(), blockHash: 'wrong' }, { ...confirmed(), confirmations: 2 },
+    { ...confirmed(), status: 'failed', blockHash: null }, { ...confirmed(), status: 'pending', blockNumber: null },
+  ]) {
+    response = result;
+    await assert.rejects(tarotApi.confirm(input), /verify/);
+  }
+});
+
+test('initial rate limits retry automatically at Retry-After without wallet interaction and stop after success', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let attempts = 0;
+  const fetch = mock.method(globalThis, 'fetch', async () => ++attempts === 1
+    ? Response.json({ error: { message: 'Rate limited' } }, { status: 429, headers: { 'Retry-After': '60' } })
+    : Response.json(status()));
+  const value = wallet();
+  const connect = mock.method(value, 'connect');
+  const prepare = mock.method(tarotApi, 'prepare');
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  assert.equal(Boolean(view.result.current.status), false);
+  assert.match(view.result.current.error ?? '', /Too many attempts/);
+  await act(async () => { t.mock.timers.tick(59_999); window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(fetch.mock.callCount(), 1);
+  await act(async () => { t.mock.timers.tick(1); window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(fetch.mock.callCount(), 2);
+  assert.equal(view.result.current.status?.claimed, false);
+  assert.equal(view.result.current.error, null);
+  await act(async () => t.mock.timers.tick(120_000));
+  assert.equal(fetch.mock.callCount(), 2);
+  assert.equal(connect.mock.callCount(), 0);
+  assert.equal(prepare.mock.callCount(), 0);
+});
+
+for (const [label, error] of [
+  ['unavailable', new TarotApiError('Temporarily unavailable', 503)],
+  ['network failure', new TypeError('Failed to fetch')],
+  ['request timeout', new DOMException('Request timed out', 'TimeoutError')],
+] as const) {
+  test(`initial ${label} retries with increasing backoff and recovers without focus`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+    let attempts = 0;
+    const service = mock.method(tarotApi, 'status', async () => {
+      if (++attempts <= 2) throw error;
+      return status(1, true);
+    });
+    const view = renderHook(() => useTarotClaim(request, wallet()));
+    await act(async () => undefined);
+    assert.equal(service.mock.callCount(), 1);
+    for (const [index, delay] of [2_000, 4_000].entries()) {
+      await act(async () => t.mock.timers.tick(delay - 1));
+      assert.equal(service.mock.callCount(), index + 1);
+      await act(async () => t.mock.timers.tick(1));
+      assert.equal(service.mock.callCount(), index + 2);
+    }
+    assert.equal(view.result.current.status?.claimed, true);
+    await act(async () => t.mock.timers.tick(120_000));
+    assert.equal(service.mock.callCount(), 3);
+  });
+}
+
+for (const code of [400, 401, 403, 404]) {
+  test(`initial permanent ${code} responses do not retry on timers or focus`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+    const service = mock.method(tarotApi, 'status', async () => { throw new TarotApiError('Invalid link', code); });
+    const view = renderHook(() => useTarotClaim(request, wallet()));
+    await act(async () => undefined);
+    await act(async () => {
+      t.mock.timers.tick(180_000);
+      window.dispatchEvent(new dom.window.Event('focus'));
+      window.dispatchEvent(new dom.window.Event('pageshow'));
+      document.dispatchEvent(new dom.window.Event('visibilitychange'));
+    });
+    assert.equal(service.mock.callCount(), 1);
+    assert.equal(view.result.current.status, null);
+    assert.equal(view.result.current.error, 'Invalid link');
+  });
+}
+
+test('initial retry budget stops automatic retries but allows later focus recovery after the cooldown', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let recovered = false;
+  const service = mock.method(tarotApi, 'status', async () => {
+    if (!recovered) throw new TarotApiError('Unavailable', 503);
+    return status();
+  });
+  const view = renderHook(() => useTarotClaim(request, wallet()));
+  await act(async () => undefined);
+  for (const [index, delay] of [2_000, 4_000, 8_000, 16_000, 30_000].entries()) {
+    await act(async () => { t.mock.timers.tick(delay - 1); window.dispatchEvent(new dom.window.Event('focus')); });
+    assert.equal(service.mock.callCount(), index + 1);
+    await act(async () => t.mock.timers.tick(1));
+    assert.equal(service.mock.callCount(), index + 2);
+  }
+  await act(async () => { t.mock.timers.tick(29_999); window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(service.mock.callCount(), 6);
+  await act(async () => { t.mock.timers.tick(1); window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(service.mock.callCount(), 7);
+  await act(async () => t.mock.timers.tick(180_000));
+  assert.equal(service.mock.callCount(), 7);
+  recovered = true;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(service.mock.callCount(), 8);
+  assert.ok(view.result.current.status);
+});
+
+test('initial retry deadlines survive hidden and suspended periods without duplicate focus requests', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let visibility = 'visible';
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+  t.after(() => Reflect.deleteProperty(document, 'visibilityState'));
+  let attempts = 0;
+  const service = mock.method(tarotApi, 'status', async () => {
+    if (++attempts <= 2) throw new TarotApiError('Unavailable', 503);
+    return status();
+  });
+  const value = wallet();
+  const view = renderHook(({ suspended }) => useTarotClaim(request, value, suspended), { initialProps: { suspended: false } });
+  await act(async () => undefined);
+  visibility = 'hidden';
+  act(() => document.dispatchEvent(new dom.window.Event('visibilitychange')));
+  await act(async () => t.mock.timers.tick(10_000));
+  assert.equal(service.mock.callCount(), 1);
+  visibility = 'visible';
+  await act(async () => {
+    document.dispatchEvent(new dom.window.Event('visibilitychange'));
+    window.dispatchEvent(new dom.window.Event('focus'));
+    t.mock.timers.tick(0);
+  });
+  assert.equal(service.mock.callCount(), 2);
+  view.rerender({ suspended: true });
+  await act(async () => { t.mock.timers.tick(10_000); window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(service.mock.callCount(), 2);
+  view.rerender({ suspended: false });
+  await act(async () => t.mock.timers.tick(0));
+  assert.equal(service.mock.callCount(), 3);
+  assert.equal(view.result.current.status?.claimed, false);
+});
+
+test('a page mounted while suspended waits to start validation until it becomes active', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  const service = mock.method(tarotApi, 'status', async () => status());
+  const value = wallet();
+  const view = renderHook(({ suspended }) => useTarotClaim(request, value, suspended), { initialProps: { suspended: true } });
+  await act(async () => { t.mock.timers.tick(120_000); window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(service.mock.callCount(), 0);
+  await act(async () => view.rerender({ suspended: false }));
+  assert.equal(service.mock.callCount(), 1);
+  assert.ok(view.result.current.status);
+});
+
+test('unmount and credential changes cancel scheduled initial retries', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  const service = mock.method(tarotApi, 'status', async (input: TarotRequest) => {
+    if (input.tokenId === 1) throw new TarotApiError('Unavailable', 503);
+    return status(input.tokenId, true);
+  });
+  const value = wallet();
+  const first = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  first.unmount();
+  await act(async () => t.mock.timers.tick(120_000));
+  assert.equal(service.mock.callCount(), 1);
+  const second = renderHook(({ input }) => useTarotClaim(input, value), { initialProps: { input: request } });
+  await act(async () => undefined);
+  await act(async () => second.rerender({ input: { ...request, tokenId: 777 } }));
+  assert.equal(second.result.current.status?.tokenId, 777);
+  await act(async () => t.mock.timers.tick(120_000));
+  assert.equal(service.mock.callCount(), 3);
+});
+
+test('aborting an in-flight initial retry on unmount never schedules another request', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let attempts = 0;
+  let retrySignal: AbortSignal | undefined;
+  const service = mock.method(tarotApi, 'status', async (_input: TarotRequest, signal?: AbortSignal) => {
+    if (++attempts === 1) throw new TypeError('Network unavailable');
+    retrySignal = signal;
+    return await new Promise<TarotStatus>((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  const view = renderHook(() => useTarotClaim(request, wallet()));
+  await act(async () => undefined);
+  await act(async () => t.mock.timers.tick(2_000));
+  assert.equal(service.mock.callCount(), 2);
+  await act(async () => view.unmount());
+  assert.equal(retrySignal?.aborted, true);
+  await act(async () => t.mock.timers.tick(120_000));
+  assert.equal(service.mock.callCount(), 2);
+});
+
+test('a response body timeout remains retryable instead of becoming an invalid-response error', async () => {
+  const timeout = new DOMException('Response timed out', 'TimeoutError');
+  const response = Response.json(status());
+  mock.method(response, 'json', async () => { throw timeout; });
+  mock.method(globalThis, 'fetch', async () => response);
+  await assert.rejects(tarotApi.status(request), error => error === timeout);
+});
+
+test('an interrupted rate-limit body preserves the HTTP Retry-After deadline', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 2_000_000_000_000 });
+  const response = new Response(new ReadableStream({
+    start(controller) { controller.error(new DOMException('Response timed out', 'TimeoutError')); },
+  }), { status: 429, headers: { 'Retry-After': '90' } });
+  mock.method(globalThis, 'fetch', async () => response);
+  await assert.rejects(tarotApi.status(request), error => error instanceof TarotApiError &&
+    error.status === 429 && error.retryAt === Date.now() + 90_000);
+});
+
+for (const [label, error] of [
+  ['network error', new TypeError('Response interrupted')],
+  ['timeout', new DOMException('Response timed out', 'TimeoutError')],
+] as const) {
+  test(`an interrupted Response stream ${label} recovers through the actual API client`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+    let attempts = 0;
+    const fetch = mock.method(globalThis, 'fetch', async () => ++attempts === 1
+      ? new Response(new ReadableStream({ start(controller) { controller.error(error); } }), { headers: { 'Content-Type': 'application/json' } })
+      : Response.json(status()));
+    const view = renderHook(() => useTarotClaim(request, wallet()));
+    await act(async () => undefined);
+    assert.equal(fetch.mock.callCount(), 1);
+    assert.ok(view.result.current.error);
+    await act(async () => t.mock.timers.tick(2_000));
+    assert.equal(fetch.mock.callCount(), 2);
+    assert.ok(view.result.current.status);
+    assert.equal(view.result.current.error, null);
+  });
+}
+
+test('malformed successful JSON stops validation retries instead of accepting an invalid status', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  const fetch = mock.method(globalThis, 'fetch', async () => new Response('{', { headers: { 'Content-Type': 'application/json' } }));
+  const view = renderHook(() => useTarotClaim(request, wallet()));
+  await act(async () => undefined);
+  await act(async () => { t.mock.timers.tick(180_000); window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(view.result.current.status, null);
+  assert.ok(view.result.current.error);
+});
+
+for (const disconnect of [false, true]) {
+  test(`an unresolved wallet submission remains guarded until canonical expiry (disconnect=${disconnect})`, async t => {
+    const f = pendingClaimFixture(t);
+    const view = await f.begin();
+    const intent = JSON.parse(window.sessionStorage.getItem(f.key)!);
+    assert.equal(intent.transactionHash, null);
+    assert.equal(intent.wallet, owner);
+    assert.equal(intent.deadline, f.now + 600);
+    assert.ok(intent.id);
+    assert.equal(JSON.stringify(intent).includes(code), false);
+    assert.equal(view.result.current.submitted, false);
+    if (disconnect) {
+      await act(async () => { f.emit('disconnect', { code: 4900 }); view.rerender({ wallet: wallet() }); });
+      assert.equal(view.result.current.submitted, true);
+    }
+    assert.equal(view.result.current.pending, true);
+    await act(async () => view.result.current.claim());
+    assert.equal(f.waits.length, 1);
+    assert.equal(f.confirm.mock.callCount(), 0);
+    await f.expire();
+    assert.equal(view.result.current.pending, false);
+    assert.equal(window.sessionStorage.getItem(f.key), null);
+    await act(async () => f.waits[0].resolve(transactionHash));
+    assert.equal(view.result.current.pending, false);
+    assert.equal(window.sessionStorage.getItem(f.key), null);
+  });
+}
+
+test('disconnect aborts a hung network check before any claim intent is created', async t => {
+  const f = pendingClaimFixture(t, 'eth_chainId');
+  const view = await f.begin();
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+  assert.equal(f.prepare.mock.callCount(), 0);
+  await act(async () => { f.emit('disconnect', { code: 4900 }); view.rerender({ wallet: wallet() }); });
+  assert.equal(view.result.current.pending, false);
+  await act(async () => f.waits[0].resolve('0xaa36a7'));
+  assert.equal(f.prepare.mock.callCount(), 0);
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+});
+
+test('account changes release the wallet wait without discarding an uncertain submission', async t => {
+  const f = pendingClaimFixture(t);
+  const view = await f.begin();
+  await act(async () => {
+    const address = `0x${'3'.repeat(40)}`;
+    f.emit('accountsChanged', [address]);
+    view.rerender({ wallet: { ...f.value, address } });
+  });
+  assert.equal(view.result.current.submitted, true);
+  assert.equal(view.result.current.pending, true);
+  assert.equal(JSON.parse(window.sessionStorage.getItem(f.key)!).wallet, owner);
+  await act(async () => view.result.current.claim());
+  assert.equal(f.waits.length, 1);
+  await f.expire();
+  assert.equal(view.result.current.pending, false);
+  await act(async () => f.waits[0].reject(Object.assign(new Error('Cancelled'), { code: 4001 })));
+});
+
+for (const outcome of ['reverted transaction', 'wallet rejection']) {
+  test(`a remount reconciles a late ${outcome} from the original intent`, async t => {
+    const f = pendingClaimFixture(t);
+    const first = await f.begin();
+    const original = JSON.parse(window.sessionStorage.getItem(f.key)!);
+    await act(async () => first.unmount());
+    const second = f.mount(wallet());
+    await act(async () => undefined);
+    assert.equal(second.result.current.pending, true);
+    assert.equal(f.confirm.mock.callCount(), 0);
+    if (outcome === 'reverted transaction') {
+      await act(async () => f.waits[0].resolve(transactionHash));
+      const updated = JSON.parse(window.sessionStorage.getItem(f.key)!);
+      assert.equal(updated.id, original.id);
+      assert.equal(updated.deadline, original.deadline);
+      assert.equal(updated.transactionHash, transactionHash);
+      f.confirm.mock.mockImplementation(async () => ({ ...confirmed(1, 99), status: 'failed' as const }));
+    } else await act(async () => f.waits[0].reject(Object.assign(new Error('Rejected'), { code: 4001 })));
+    await f.focus();
+    assert.equal(second.result.current.pending, false);
+    assert.equal(window.sessionStorage.getItem(f.key), null);
+  });
+}
+
+test('an expired intent’s late hash cannot overwrite a newer wallet attempt', async t => {
+  const f = pendingClaimFixture(t);
+  const view = await f.begin();
+  const first = JSON.parse(window.sessionStorage.getItem(f.key)!);
+  await f.expire();
+  assert.equal(view.result.current.pending, false);
+  await act(async () => view.result.current.claim());
+  assert.equal(f.waits.length, 2);
+  const second = JSON.parse(window.sessionStorage.getItem(f.key)!);
+  assert.notEqual(second.id, first.id);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  assert.deepEqual(JSON.parse(window.sessionStorage.getItem(f.key)!), second);
+  const secondHash = `0x${'f'.repeat(64)}`;
+  await act(async () => f.waits[1].resolve(secondHash));
+  assert.equal(JSON.parse(window.sessionStorage.getItem(f.key)!).id, second.id);
+  assert.equal(JSON.parse(window.sessionStorage.getItem(f.key)!).transactionHash, secondHash);
+});
+
+test('a late hash after unmount cannot revive an intent expired by the replacement page', async t => {
+  const f = pendingClaimFixture(t);
+  const first = await f.begin();
+  await act(async () => first.unmount());
+  const second = f.mount(wallet());
+  await act(async () => undefined);
+  assert.equal(second.result.current.pending, true);
+  await f.expire();
+  assert.equal(second.result.current.pending, false);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+  await f.focus();
+  assert.equal(second.result.current.pending, false);
+});
+
+test('uncertain wallet errors retain the intent while definite rejection clears it', async t => {
+  const f = pendingClaimFixture(t);
+  const view = await f.begin();
+  await act(async () => f.waits[0].reject(new TypeError('Wallet connection interrupted')));
+  assert.equal(view.result.current.pending, true);
+  assert.ok(window.sessionStorage.getItem(f.key));
+  await f.expire();
+  await act(async () => view.result.current.claim());
+  assert.equal(f.waits.length, 2);
+  await act(async () => f.waits[1].reject(Object.assign(new Error('Rejected'), { code: 4001 })));
+  assert.equal(view.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+  assert.equal(view.result.current.error, 'Request cancelled in your wallet.');
+});
+
+test('storage quota failure keeps an unknown intent in memory and tracks its eventual hash', async t => {
+  const f = pendingClaimFixture(t);
+  mock.method(dom.window.Storage.prototype, 'setItem', () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); });
+  const view = await f.begin();
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+  await f.focus();
+  assert.equal(view.result.current.pending, true);
+  await act(async () => view.result.current.claim());
+  assert.equal(f.waits.length, 1);
+  f.confirm.mock.mockImplementation(async () => confirmed(1, 105));
+  await act(async () => f.waits[0].resolve(transactionHash));
+  assert.equal(view.result.current.status?.claimed, true);
+  assert.equal(view.result.current.pending, false);
+});
+
+for (const failure of ['writes', 'reads after persistence', 'reads and writes']) {
+  test(`same-Window remount preserves an unresolved intent when ${failure} fail`, async t => {
+    const f = pendingClaimFixture(t);
+    if (failure !== 'reads after persistence') {
+      mock.method(dom.window.Storage.prototype, 'setItem', () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); });
+    }
+    const first = await f.begin();
+    if (failure !== 'writes') {
+      mock.method(dom.window.Storage.prototype, 'getItem', () => { throw new DOMException('Storage unavailable', 'SecurityError'); });
+    }
+    await act(async () => first.unmount());
+    const second = f.mount();
+    await act(async () => undefined);
+    assert.equal(second.result.current.pending, true);
+    await act(async () => second.result.current.claim());
+    assert.equal(f.waits.length, 1);
+    await f.expire();
+    assert.equal(second.result.current.pending, false);
+    await act(async () => f.waits[0].resolve(transactionHash));
+    await f.focus();
+    assert.equal(second.result.current.pending, false);
+  });
+}
+
+for (const failure of ['writes', 'reads']) {
+  for (const outcome of ['hash', 'rejection']) {
+    test(`a remount receives a late ${outcome} while storage ${failure} fail`, async t => {
+      const f = pendingClaimFixture(t);
+      if (failure === 'writes') {
+        mock.method(dom.window.Storage.prototype, 'setItem', () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); });
+      }
+      const first = await f.begin();
+      if (failure === 'reads') {
+        mock.method(dom.window.Storage.prototype, 'getItem', () => { throw new DOMException('Storage unavailable', 'SecurityError'); });
+      }
+      await act(async () => first.unmount());
+      const second = f.mount(wallet());
+      await act(async () => undefined);
+      assert.equal(second.result.current.pending, true);
+      if (outcome === 'hash') {
+        f.confirm.mock.mockImplementation(async () => confirmed(1, 105));
+        await act(async () => f.waits[0].resolve(transactionHash));
+      } else await act(async () => f.waits[0].reject(Object.assign(new Error('Rejected'), { code: 4001 })));
+      await f.focus();
+      assert.equal(second.result.current.pending, false);
+      assert.equal(second.result.current.status?.claimed, outcome === 'hash');
+      assert.equal(f.waits.length, 1);
+    });
+  }
+}
+
+test('failed removal tombstones survive remount and honor later real storage changes', async t => {
+  const f = pendingClaimFixture(t);
+  const first = await f.begin();
+  const original = window.sessionStorage.getItem(f.key);
+  const remove = dom.window.Storage.prototype.removeItem;
+  mock.method(dom.window.Storage.prototype, 'removeItem', () => { throw new DOMException('Storage unavailable', 'SecurityError'); });
+  await act(async () => f.waits[0].reject(Object.assign(new Error('Rejected'), { code: 4001 })));
+  await act(async () => first.unmount());
+  const second = f.mount(wallet());
+  await act(async () => undefined);
+  assert.equal(second.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), original);
+  window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'newer-intent', wallet: owner, transactionHash: null, deadline: f.now + 600 }));
+  await f.focus();
+  assert.equal(second.result.current.pending, true);
+  remove.call(window.sessionStorage, f.key);
+  await f.focus();
+  assert.equal(second.result.current.pending, false);
+});
+
+test('a remounted expiry tombstone blocks the original late hash when stored removal fails', async t => {
+  const f = pendingClaimFixture(t);
+  const first = await f.begin();
+  const original = window.sessionStorage.getItem(f.key);
+  mock.method(dom.window.Storage.prototype, 'removeItem', () => { throw new DOMException('Storage unavailable', 'SecurityError'); });
+  await act(async () => first.unmount());
+  const second = f.mount(wallet());
+  await act(async () => undefined);
+  await f.expire();
+  assert.equal(second.result.current.pending, false);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  await f.focus();
+  assert.equal(second.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), original);
+});
+
+test('fallback intents stay within their card, deployment and captured Window', async t => {
+  const f = pendingClaimFixture(t);
+  mock.method(dom.window.Storage.prototype, 'setItem', () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); });
+  const first = await f.begin();
+  await act(async () => first.unmount());
+  let activeConfig = config;
+  mock.method(tarotApi, 'status', async (input: TarotRequest) => ({ ...status(input.tokenId), config: activeConfig,
+    observedBlock: 100, observedTimestamp: f.now - 24 }));
+  const otherCard = renderHook(() => useTarotClaim({ ...request, tokenId: 2 }, f.value));
+  await act(async () => undefined);
+  assert.equal(otherCard.result.current.pending, false);
+  otherCard.unmount();
+  activeConfig = { ...config, contractAddress: `0x${'3'.repeat(40)}` };
+  const otherDeployment = f.mount();
+  await act(async () => undefined);
+  assert.equal(otherDeployment.result.current.pending, false);
+  otherDeployment.unmount();
+  activeConfig = config;
+  const restored = f.mount();
+  await act(async () => undefined);
+  assert.equal(restored.result.current.pending, true);
+  restored.unmount();
+  const previousDom = dom;
+  t.after(() => previousDom.window.close());
+  ({ dom } = setupFrontendDom());
+  const otherWindow = f.mount();
+  await act(async () => undefined);
+  assert.equal(otherWindow.result.current.pending, false);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  await f.focus();
+  assert.equal(otherWindow.result.current.pending, false);
+  assert.equal(window.sessionStorage.length, 0);
+});
+
+test('a late hash cannot revive a cleared local intent when removing its stored record fails', async t => {
+  const f = pendingClaimFixture(t);
+  const view = await f.begin();
+  const original = window.sessionStorage.getItem(f.key);
+  mock.method(dom.window.Storage.prototype, 'removeItem', () => { throw new DOMException('Storage unavailable', 'SecurityError'); });
+  await f.expire();
+  assert.equal(view.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), original);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  assert.equal(view.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), original);
+});
+
+test('legacy hash recovery does not extend its in-memory expiry when migration storage fails', async t => {
+  const f = pendingClaimFixture(t);
+  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash }));
+  mock.method(dom.window.Storage.prototype, 'setItem', () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); });
+  const view = f.mount(wallet());
+  await act(async () => undefined);
+  assert.equal(view.result.current.pending, true);
+  await f.expire();
+  assert.equal(view.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+});
+
+test('legacy hash recovery persists its identity and deadline once across reloads', async t => {
+  const f = pendingClaimFixture(t);
+  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash }));
+  const first = f.mount(wallet());
+  await act(async () => undefined);
+  const migrated = JSON.parse(window.sessionStorage.getItem(f.key)!);
+  assert.ok(migrated.id);
+  assert.equal(migrated.deadline, f.now + 600);
+  await act(async () => first.unmount());
+  t.mock.timers.setTime((f.now + 120) * 1000);
+  f.setSnapshot({ observedBlock: 110, observedTimestamp: f.now + 96, blockHash: `0x${'e'.repeat(64)}` });
+  const second = f.mount(wallet());
+  await act(async () => undefined);
+  assert.equal(second.result.current.pending, true);
+  assert.deepEqual(JSON.parse(window.sessionStorage.getItem(f.key)!), migrated);
+});
+
+test('failed receipt reconciliation preserves a newer reorg observation and accepts a later fresh failure', async t => {
+  const f = pendingClaimFixture(t);
+  f.setSnapshot({ observedTimestamp: f.now - 60 });
+  const delayed = Promise.withResolvers<TarotConfirmResponse>();
+  f.confirm.mock.mockImplementation(() => delayed.promise);
+  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  const view = f.mount(wallet());
+  await act(async () => undefined);
+  assert.equal(f.confirm.mock.callCount(), 1);
+  t.mock.timers.setTime((f.now + 24) * 1000);
+  const reorgHash = `0x${'e'.repeat(64)}`;
+  f.setSnapshot({ observedBlock: 105, observedTimestamp: f.now, blockHash: reorgHash });
+  await f.focus();
+  await act(async () => delayed.resolve({ ...confirmed(1, 105), status: 'failed' }));
+  assert.equal(view.result.current.pending, true);
+  assert.ok(window.sessionStorage.getItem(f.key));
+  f.confirm.mock.mockImplementation(async () => ({ ...confirmed(1, 103), status: 'failed' as const, confirmations: 5 }));
+  await act(async () => t.mock.timers.tick(4_000));
+  assert.equal(view.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(f.key), null);
+  assert.equal(view.result.current.status?.claimed, false);
+  assert.equal(view.result.current.status?.observedBlock, 105);
+  assert.equal(view.result.current.status?.blockHash, reorgHash);
+});
+
+for (const denied of [401, 403]) {
+  test(`a later ${denied} blocks Claim until successful revalidation`, async () => {
+    let allowed = true;
+    mock.method(tarotApi, 'status', async () => {
+      if (!allowed) throw new TarotApiError('This Tarot claim link is invalid.', denied);
+      return status();
+    });
+    const value = wallet();
+    const connect = mock.method(value, 'connect');
+    const view = renderHook(() => useTarotClaim(request, value));
+    await act(async () => undefined);
+    allowed = false;
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    assert.equal(view.result.current.status, null);
+    await act(async () => view.result.current.claim());
+    assert.equal(connect.mock.callCount(), 0);
+    allowed = true;
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    assert.ok(view.result.current.status);
+    assert.equal(view.result.current.error, null);
+    await act(async () => view.result.current.claim());
+    assert.equal(connect.mock.callCount(), 1);
+  });
+}
+
+test('revocation cancels a queued connection without resuming it after revalidation', async () => {
+  let allowed = true;
+  mock.method(tarotApi, 'status', async () => {
+    if (!allowed) throw new TarotApiError('This Tarot claim link is invalid.', 401);
+    return status();
+  });
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  const value = wallet();
+  mock.method(value, 'connect', () => { value.status = 'connecting'; });
+  const cancel = mock.method(value, 'cancel');
+  const view = renderHook(({ current }) => useTarotClaim(request, current), { initialProps: { current: value } });
+  await act(async () => undefined);
+  await act(async () => view.result.current.claim());
+  assert.equal(view.result.current.connecting, true);
+  assert.equal(cancel.mock.callCount(), 0);
+  allowed = false;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(cancel.mock.callCount(), 1);
+  await act(async () => view.rerender({ current: wallet(true) }));
+  allowed = true;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.pending, false);
+  assert.equal(prepare.mock.callCount(), 0);
+});
+
+for (const stage of ['status', 'prepare']) {
+  test(`revocation fences a delayed pre-submit ${stage} response`, async () => {
+    let denied = false;
+    let reads = 0;
+    const statusWait = Promise.withResolvers<TarotStatus>();
+    const prepareWait = Promise.withResolvers<TarotPrepareResponse>();
+    mock.method(tarotApi, 'status', async () => {
+      if (denied) throw new TarotApiError('This Tarot claim link is invalid.', 401);
+      return ++reads === 2 && stage === 'status' ? statusWait.promise : status();
+    });
+    const prepare = mock.method(tarotApi, 'prepare', () => prepareWait.promise);
+    const value = wallet(true);
+    const provider = mock.method(value.provider!, 'request');
+    const view = renderHook(() => useTarotClaim(request, value));
+    await act(async () => undefined);
+    await act(async () => view.result.current.claim());
+    assert.equal(reads, 2);
+    denied = true;
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    await act(async () => { statusWait.resolve(status()); prepareWait.resolve(prepared()); });
+    assert.equal(view.result.current.status, null);
+    assert.equal(view.result.current.error, 'This Tarot claim link is invalid.');
+    assert.equal(prepare.mock.callCount(), stage === 'prepare' ? 1 : 0);
+    assert.equal(provider.mock.calls.some(call => call.arguments[0].method === 'eth_sendTransaction'), false);
+  });
+}
+
+for (const result of ['confirmed', 'failed'] as const) {
+  test(`revocation fences an in-flight ${result} confirmation without deleting recovery`, async t => {
+    const f = pendingClaimFixture(t);
+    const confirmation = Promise.withResolvers<TarotConfirmResponse>();
+    f.confirm.mock.mockImplementation(() => confirmation.promise);
+    const recovery = JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 });
+    window.sessionStorage.setItem(f.key, recovery);
+    const view = f.mount(wallet());
+    await act(async () => undefined);
+    assert.equal(f.confirm.mock.callCount(), 1);
+    mock.method(tarotApi, 'status', async () => { throw new TarotApiError('This Tarot claim link is invalid.', 403); });
+    await act(async () => {
+      window.dispatchEvent(new dom.window.Event('focus'));
+      await Promise.resolve();
+      confirmation.resolve({ ...confirmed(1, 105), status: result });
+    });
+    assert.equal(view.result.current.status, null);
+    assert.equal(view.result.current.error, 'This Tarot claim link is invalid.');
+    assert.equal(view.result.current.pending, true);
+    assert.equal(window.sessionStorage.getItem(f.key), recovery);
+  });
+}
+
+test('revocation retains an uncertain wallet submission and accepts its late hash only as recovery data', async t => {
+  const f = pendingClaimFixture(t);
+  const view = await f.begin();
+  const original = JSON.parse(window.sessionStorage.getItem(f.key)!);
+  mock.method(tarotApi, 'status', async () => { throw new TarotApiError('This Tarot claim link is invalid.', 401); });
+  await f.focus();
+  assert.equal(view.result.current.status, null);
+  assert.equal(view.result.current.pending, true);
+  await act(async () => f.waits[0].resolve(transactionHash));
+  const recovered = JSON.parse(window.sessionStorage.getItem(f.key)!);
+  assert.equal(recovered.id, original.id);
+  assert.equal(recovered.transactionHash, transactionHash);
+  assert.equal(view.result.current.status, null);
+  assert.equal(view.result.current.error, 'This Tarot claim link is invalid.');
+  assert.equal(f.confirm.mock.callCount(), 0);
+});
+
+test('a later credential denial preserves an already-claimed card-only view', async () => {
+  let allowed = true;
+  mock.method(tarotApi, 'status', async () => {
+    if (!allowed) throw new TarotApiError('This Tarot claim link is invalid.', 401);
+    return status(1, true);
+  });
+  const view = render(page(search()));
+  await act(async () => undefined);
+  allowed = false;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.getAllByRole('img').length, 1);
+  assert.equal(view.container.textContent, '');
+  assert.equal(view.queryByRole('button'), null);
+});
+
+test('a later 429 disables Claim and reenables it at Retry-After without wallet interaction', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let reads = 0;
+  const service = mock.method(tarotApi, 'status', async () => {
+    if (++reads > 1) throw new TarotApiError('Too many attempts.', 429, Date.now() + 60_000);
+    return status();
+  });
+  const value = wallet();
+  const connect = mock.method(value, 'connect');
+  const view = render(page(search(), value));
+  await act(async () => undefined);
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  const button = view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement;
+  assert.equal(button.disabled, true);
+  fireEvent.click(button);
+  assert.equal(connect.mock.callCount(), 0);
+  await act(async () => t.mock.timers.tick(59_999));
+  assert.equal(button.disabled, true);
+  await act(async () => t.mock.timers.tick(1));
+  assert.equal(button.disabled, false);
+  assert.equal(service.mock.callCount(), 2);
+  assert.equal(connect.mock.callCount(), 0);
+  fireEvent.click(button);
+  assert.equal(connect.mock.callCount(), 1);
+});
+
+test('a status response begun before a prepare 429 cannot clear the signing cooldown', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let reads = 0;
+  const oldStatus = Promise.withResolvers<TarotStatus>();
+  const quote = Promise.withResolvers<TarotPrepareResponse>();
+  const service = mock.method(tarotApi, 'status', async () => ++reads === 3 ? oldStatus.promise : status());
+  const prepare = mock.method(tarotApi, 'prepare', () => quote.promise);
+  const value = wallet(true);
+  const view = renderHook(() => useTarotClaim(request, value));
+  await act(async () => undefined);
+  await act(async () => view.result.current.claim());
+  act(() => window.dispatchEvent(new dom.window.Event('focus')));
+  await act(async () => quote.reject(new TarotApiError('Too many attempts.', 429, Date.now() + 60_000)));
+  await act(async () => oldStatus.resolve(status()));
+  assert.equal(view.result.current.coolingDown, true);
+  assert.equal(view.result.current.error, 'Too many attempts.');
+  await act(async () => view.result.current.claim());
+  assert.equal(prepare.mock.callCount(), 1);
+  await act(async () => t.mock.timers.tick(60_000));
+  assert.equal(view.result.current.coolingDown, false);
+  assert.equal(service.mock.callCount(), 3);
+});
+
+for (const deniedStatus of [401, 403]) {
+  test(`a late ${deniedStatus} still revokes claim access after a prepare cooldown`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+    let reads = 0;
+    const validation = Promise.withResolvers<TarotStatus>();
+    const quote = Promise.withResolvers<TarotPrepareResponse>();
+    const service = mock.method(tarotApi, 'status', async () => ++reads === 3 ? validation.promise : status());
+    const prepare = mock.method(tarotApi, 'prepare', () => quote.promise);
+    const connected = wallet(true);
+    const provider = mock.method(connected.provider!, 'request');
+    const disconnected = wallet();
+    const connect = mock.method(disconnected, 'connect');
+    const view = renderHook(({ current }) => useTarotClaim(request, current), { initialProps: { current: connected } });
+    await act(async () => undefined);
+    await act(async () => view.result.current.claim());
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    assert.equal(service.mock.callCount(), 3);
+    assert.equal(prepare.mock.callCount(), 1);
+    await act(async () => quote.reject(new TarotApiError('Too many attempts.', 429, Date.now() + 60_000)));
+    await act(async () => validation.reject(new TarotApiError('This Tarot claim link is invalid.', deniedStatus)));
+    assert.equal(view.result.current.status, null);
+    assert.equal(view.result.current.error, 'This Tarot claim link is invalid.');
+    assert.equal(view.result.current.coolingDown, true);
+    await act(async () => view.rerender({ current: disconnected }));
+    await act(async () => t.mock.timers.tick(60_000));
+    assert.equal(view.result.current.coolingDown, false);
+    await act(async () => view.result.current.claim());
+    assert.equal(connect.mock.callCount(), 0);
+    assert.equal(service.mock.callCount(), 3);
+    assert.equal(prepare.mock.callCount(), 1);
+    assert.equal(provider.mock.calls.some(call => call.arguments[0].method === 'eth_sendTransaction'), false);
+  });
+}
+
+test('pending confirmation polling resumes after concurrent 429 invalidates its previous response', async t => {
+  const f = pendingClaimFixture(t);
+  const oldConfirmation = Promise.withResolvers<TarotConfirmResponse>();
+  f.confirm.mock.mockImplementation(() => oldConfirmation.promise);
+  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  const view = f.mount(wallet());
+  await act(async () => undefined);
+  let limited = true;
+  const service = mock.method(tarotApi, 'status', async () => {
+    if (limited) throw new TarotApiError('Too many attempts.', 429, Date.now() + 60_000);
+    return { ...status(), observedBlock: 100, observedTimestamp: f.now - 24 };
+  });
+  await f.focus();
+  const pendingResult = { ...confirmed(), status: 'pending' as const, confirmations: 0, blockNumber: null, blockHash: null };
+  await act(async () => oldConfirmation.resolve(pendingResult));
+  assert.equal(view.result.current.pending, true);
+  assert.equal(view.result.current.coolingDown, true);
+  limited = false;
+  f.confirm.mock.mockImplementation(async () => pendingResult);
+  await act(async () => t.mock.timers.tick(60_000));
+  assert.equal(service.mock.callCount(), 2);
+  assert.equal(f.confirm.mock.callCount(), 2);
+  assert.equal(view.result.current.pending, true);
+});
+
+test('later cooldowns respect hidden and suspended state and reset on a new link', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let visible = true;
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visible ? 'visible' : 'hidden' });
+  let limited = false;
+  const service = mock.method(tarotApi, 'status', async (input: TarotRequest) => {
+    if (limited && input.tokenId === 1) throw new TarotApiError('Too many attempts.', 429, Date.now() + 60_000);
+    return status(input.tokenId);
+  });
+  const value = wallet();
+  const view = renderHook(({ input, suspended }) => useTarotClaim(input, value, suspended),
+    { initialProps: { input: request, suspended: false } });
+  await act(async () => undefined);
+  limited = true;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  visible = false;
+  act(() => document.dispatchEvent(new dom.window.Event('visibilitychange')));
+  view.rerender({ input: request, suspended: true });
+  await act(async () => t.mock.timers.tick(70_000));
+  assert.equal(service.mock.callCount(), 2);
+  visible = true;
+  view.rerender({ input: request, suspended: false });
+  await act(async () => t.mock.timers.tick(0));
+  assert.equal(view.result.current.coolingDown, false);
+  assert.equal(service.mock.callCount(), 2);
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.coolingDown, true);
+  await act(async () => view.rerender({ input: { ...request, tokenId: 777 }, suspended: false }));
+  assert.equal(view.result.current.status?.tokenId, 777);
+  assert.equal(view.result.current.coolingDown, false);
+  const reads = service.mock.callCount();
+  view.unmount();
+  await act(async () => t.mock.timers.tick(120_000));
+  assert.equal(service.mock.callCount(), reads);
+});
