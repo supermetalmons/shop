@@ -7,7 +7,7 @@ import type { EthereumProviderListener } from '../src/wallet/injectedEthereumPro
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 let { dom } = setupFrontendDom();
-const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, waitFor, within } = await import('@testing-library/react');
 const { WalletModalContext } = await import('@solana/wallet-adapter-react-ui');
 const { NfcPage } = await import('../src/components/NfcPage.tsx');
 const { resolveNfcLink } = await import('../src/ethereum/tarotLink.ts');
@@ -54,6 +54,18 @@ function page(linkSearch: string, value = wallet()) {
   return createElement(WalletModalContext.Provider, { value: { visible: false, setVisible: () => {} } },
     createElement(NfcPage, { link: resolveNfcLink(linkSearch), wallet: value,
       header: createElement('header', null, createElement('button', null, 'Shop header')) }));
+}
+function assertClaimedPage(view: ReturnType<typeof render>) {
+  const main = view.getByRole('main', { name: 'Tarot card' });
+  const card = within(main);
+  assert.equal(card.getAllByRole('img').length, 1);
+  assert.equal(card.queryByRole('button'), null);
+  assert.equal(card.queryByRole('heading'), null);
+  assert.equal(main.textContent, '');
+  assert.ok(view.getByRole('banner'));
+  assert.ok(view.getByRole('button', { name: 'Shop header' }));
+  assert.equal(view.queryByText('NFC Card Receipt'), null);
+  return card;
 }
 function mockService(claimed = false) {
   const statusMock = mock.method(tarotApi, 'status', async (input: TarotRequest) => status(input.tokenId, claimed));
@@ -156,20 +168,14 @@ test('Basel preserves the placeholder video and invalid links never contact the 
   assert.equal(service.mock.callCount(), 0);
 });
 
-test('page validation prevents claim/header flash and claimed cards show only one large artwork', async () => {
+test('page validation prevents claim/header flash and claimed cards retain the header above one large artwork', async () => {
   let finish!: (value: TarotStatus) => void;
   mock.method(tarotApi, 'status', () => new Promise<TarotStatus>(resolve => { finish = resolve; }));
   const view = render(page(search(777)));
   assert.equal(view.queryByRole('button'), null);
   assert.equal(view.queryByRole('img'), null);
   await act(async () => finish(status(777, true)));
-  assert.equal(view.getAllByRole('img').length, 1);
-  assert.equal(view.getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
-  assert.equal(view.queryByRole('button'), null);
-  assert.equal(view.queryByRole('heading'), null);
-  assert.equal(view.queryByRole('banner'), null);
-  assert.equal(view.queryByText('NFC Card Receipt'), null);
-  assert.equal(view.container.textContent, '');
+  assert.equal(assertClaimedPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
 });
 
 test('valid unclaimed links preserve the two-NFT composition using their own static media', async () => {
@@ -196,7 +202,7 @@ test('one Claim click connects Ethereum, continues once, and replaces confirmed 
   const connected = wallet(true);
   const provider = mock.method(connected.provider!, 'request');
   await act(async () => view.rerender(page(search(), connected)));
-  await waitFor(() => assert.equal(view.queryByRole('button'), null));
+  await waitFor(() => assertClaimedPage(view));
   assert.equal(provider.mock.calls.filter(call => call.arguments[0].method === 'eth_sendTransaction').length, 1);
   assert.equal(provider.mock.calls.some(call => /sign/i.test(call.arguments[0].method)), false);
   assert.equal(view.getAllByRole('img').length, 1);
@@ -218,7 +224,7 @@ test('wallet rejection preserves a retryable claim and cannot mint or hide the r
   assert.equal(view.getAllByRole('img').length, 2);
   fail = false;
   fireEvent.click(view.getByRole('button', { name: 'Claim' }));
-  await waitFor(() => assert.equal(view.queryByRole('button'), null));
+  await waitFor(() => assertClaimedPage(view));
 });
 
 test('a refreshed claimed status hides the entire claim UI without connecting a wallet', async () => {
@@ -230,8 +236,7 @@ test('a refreshed claimed status hides the entire claim UI without connecting a 
   await view.findByRole('button', { name: 'Claim' });
   claimed = true;
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assert.equal(view.queryByRole('button'), null);
-  assert.equal(view.getAllByRole('img').length, 1);
+  assertClaimedPage(view);
   assert.equal(connect.mock.callCount(), 0);
 });
 
@@ -243,7 +248,7 @@ test('reload recovers a submitted receipt without storing a secret or requiring 
   await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
   assert.equal(confirm.mock.calls[0].arguments[0].transactionHash, transactionHash);
   assert.equal(window.sessionStorage.length, 0);
-  assert.equal(view.queryByRole('button'), null);
+  assertClaimedPage(view);
 });
 
 test('a dropped or cancelled transaction becomes claimable only after confirmed onchain expiry', async () => {
@@ -279,11 +284,9 @@ test('a delayed status read cannot reopen the claim after transaction confirmati
   delayStatus = true;
   act(() => window.dispatchEvent(new dom.window.Event('focus')));
   await act(async () => finishConfirmation(confirmed()));
-  assert.equal(view.queryByRole('button'), null);
+  assertClaimedPage(view);
   await act(async () => finishStatus(status()));
-  assert.equal(view.queryByRole('button'), null);
-  assert.equal(view.getAllByRole('img').length, 1);
-  assert.equal(view.container.textContent, '');
+  assertClaimedPage(view);
 });
 
 test('new post-confirmation requests cannot move behind the receipt block or contradict its hash', async () => {
@@ -451,8 +454,7 @@ test('route changes discard stale validation results', async () => {
   view.rerender(page(search(777)));
   await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
   await act(async () => finish(status(1, false)));
-  assert.equal(view.getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
-  assert.equal(view.queryByRole('button'), null);
+  assert.equal(assertClaimedPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
 });
 
 test('API sends credentials only in a private POST and rejects another card or a mainnet response', async () => {
@@ -1187,7 +1189,7 @@ test('revocation retains an uncertain wallet submission and accepts its late has
   assert.equal(f.confirm.mock.callCount(), 0);
 });
 
-test('a later credential denial preserves an already-claimed card-only view', async () => {
+test('a later credential denial preserves an already-claimed card and its header', async () => {
   let allowed = true;
   mock.method(tarotApi, 'status', async () => {
     if (!allowed) throw new TarotApiError('This Tarot claim link is invalid.', 401);
@@ -1197,9 +1199,7 @@ test('a later credential denial preserves an already-claimed card-only view', as
   await act(async () => undefined);
   allowed = false;
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assert.equal(view.getAllByRole('img').length, 1);
-  assert.equal(view.container.textContent, '');
-  assert.equal(view.queryByRole('button'), null);
+  assertClaimedPage(view);
 });
 
 test('a later 429 disables Claim and reenables it at Retry-After without wallet interaction', async t => {

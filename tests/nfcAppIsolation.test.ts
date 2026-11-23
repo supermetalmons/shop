@@ -14,7 +14,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
 Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
-const { cleanup, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, waitFor, within } = await import('@testing-library/react');
 const { BackgroundBlurProvider } = await import('../src/components/BackgroundBlurLayer.tsx');
 const accountError = 'Unable to refresh profile';
 const auth: ReturnType<typeof useSolanaAuth> = {
@@ -34,6 +34,8 @@ const imports = registerHooks({
       ? `export const useSolanaAuth = globalThis.${bridgeKey}.useSolanaAuth;`
       : url.endsWith('/lib/discounts.ts')
         ? 'export async function isDiscountListed() { return false; } export async function getDiscountProof() { return null; }'
+        : url.endsWith('/lib/SoundPlayer.ts')
+          ? 'export const soundPlayer = { isInitialized: false, initializeOnUserInteraction: async () => {}, playSound: async () => {}, preloadSound: async () => {} };'
         : url.endsWith('.css') ? '' : undefined;
     return source === undefined ? nextLoad(url, context) : { format: 'module', source, shortCircuit: true };
   },
@@ -52,27 +54,39 @@ const wallet: WalletContextState = {
 afterEach(() => { cleanup(); mock.restoreAll(); window.sessionStorage.clear(); window.localStorage.clear(); });
 after(() => { Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, setVisible: (visible: boolean) => void = () => {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   t.after(() => queryClient.clear());
   const connection = new Connection('http://127.0.0.1:9999');
   return (route: ResolvedAppRoute) => createElement(QueryClientProvider, { client: queryClient },
     createElement(ConnectionContext.Provider, { value: { connection } },
       createElement(WalletContext.Provider, { value: wallet },
-        createElement(WalletModalContext.Provider, { value: { visible: false, setVisible: () => {} } },
+        createElement(WalletModalContext.Provider, { value: { visible: false, setVisible } },
           createElement(BackgroundBlurProvider, null, createElement(App, { route }))))));
 }
 
-test('claimed Tarot artwork excludes account errors while ordinary shop navigation preserves them', async t => {
+test('claimed Tarot keeps the standard header interactive while excluding unrelated account errors', async t => {
   mock.method(tarotApi, 'status', async () => ({ config, tokenId: 1, receiptTokenId: 778, claimed: true,
     observedBlock: 10, observedTimestamp: 1, blockHash: `0x${'b'.repeat(64)}` }));
-  const page = fixture(t);
+  const setVisible = mock.fn();
+  const page = fixture(t, setVisible);
+  window.history.replaceState(null, '', '/nfc');
   const view = render(page(tarotRoute));
   await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
-  assert.equal(view.getAllByRole('img').length, 1);
+  const main = view.getByRole('main', { name: 'Tarot card' });
+  assert.equal(within(main).getAllByRole('img').length, 1);
+  assert.equal(within(main).queryByRole('button'), null);
   assert.equal(view.queryByText(accountError), null);
-  assert.equal(view.container.textContent, '');
-  view.rerender(page(resolveAppRoute({ pathname: '/' })));
+  assert.equal(main.textContent, '');
+  const header = within(view.getByRole('banner'));
+  const home = header.getByRole('link', { name: 'Go to mons.shop home' });
+  assert.equal(header.getByRole('heading', { name: 'mons.shop' }).textContent, 'mons.shop');
+  assert.ok(home.querySelector('img.brand-icon'));
+  await act(async () => fireEvent.click(header.getByRole('button', { name: 'Wallet' })));
+  await waitFor(() => assert.equal(setVisible.mock.calls.some(call => call.arguments[0] === true), true));
+  await act(async () => fireEvent.click(home));
+  assert.equal(window.location.pathname, '/');
+  await act(async () => view.rerender(page(resolveAppRoute({ pathname: '/' }))));
   assert.equal(view.getByText(accountError).className, 'error');
 });
 

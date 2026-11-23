@@ -34,9 +34,12 @@ function TarotClaimPage({ request, wallet, header, suspended = false, onModalOpe
     return () => cancelAnimationFrame(frame);
   }, [walletModalVisible, pickerOpen]);
 
-  if (model.status?.claimed) return <main className="nfc-claim-page nfc-claim-page--claimed" aria-label="Tarot card">
-    <TarotCard tokenId={request.tokenId} large />
-  </main>;
+  if (model.status?.claimed) return <>
+    {header}
+    <main className="nfc-claim-page nfc-claim-page--claimed" aria-label="Tarot card">
+      <TarotCard tokenId={request.tokenId} large />
+    </main>
+  </>;
   if (!model.status) return <main className="nfc-claim-page" aria-label="NFC claim" aria-busy={model.loading}>
     {model.error ? <p className="nfc-claim-error" role="alert">{model.error}</p> : null}
   </main>;
