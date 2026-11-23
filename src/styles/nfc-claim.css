@@ -124,7 +124,7 @@
 }
 
 body:has(.nfc-claim-page--artwork) {
-  --page-padding-bottom: clamp(8px, 1.4svh, 14px);
+  --page-padding-bottom: clamp(32px, 5svh, 48px);
   min-height: 100svh;
 }
 
@@ -160,12 +160,6 @@ body:has(.nfc-claim-page--artwork) {
   margin: 0;
   text-align: center;
   color: color-mix(in srgb, var(--fg) 80%, transparent);
-}
-
-@media (max-width: 860px) {
-  body:has(.nfc-claim-page--artwork) {
-    --page-padding-bottom: var(--page-padding-top);
-  }
 }
 
 @media (max-width: 639px) {
