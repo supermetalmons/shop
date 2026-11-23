@@ -8,13 +8,12 @@ Evolution and physical redemption are not part of this release.
 ## NFC links
 
 The live format is `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>&testnet=true`.
-`/nfc?code=basel` preserves the original video placeholder. The live page validates
-the code before showing the existing two-NFT claim layout. After three canonical
-confirmations, the same link shows the standard mons.shop header with its title,
-logo, and wallet controls above one large card artwork, including after either
-NFT is transferred. The artwork fits the available viewport below the header
-without extra page scrolling. The receipt and claim controls are removed.
-Invalid links cannot connect or claim.
+`/nfc?code=basel` preserves the original video placeholder. The standard shop
+header appears immediately; the card and claim content wait for code validation.
+After three canonical confirmations, the same link shows one large card artwork
+below the header, including after either NFT is transferred. It fits the remaining
+viewport without extra page scrolling. The receipt and claim controls are removed.
+Invalid links never expose Tarot claim controls.
 
 Temporary initial validation failures retry automatically with bounded backoff
 and honor `Retry-After`, without opening a wallet or adding controls. Retries

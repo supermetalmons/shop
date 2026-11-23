@@ -65,23 +65,31 @@ function fixture(t: TestContext, setVisible: (visible: boolean) => void = () => 
           createElement(BackgroundBlurProvider, null, createElement(App, { route }))))));
 }
 
-test('claimed Tarot keeps the standard header interactive while excluding unrelated account errors', async t => {
-  mock.method(tarotApi, 'status', async () => ({ config, tokenId: 1, receiptTokenId: 778, claimed: true,
-    observedBlock: 10, observedTimestamp: 1, blockHash: `0x${'b'.repeat(64)}` }));
+test('Tarot renders the standard header before validation and keeps it interactive after claiming', async t => {
+  const validation = Promise.withResolvers<Awaited<ReturnType<typeof tarotApi.status>>>();
+  mock.method(tarotApi, 'status', () => validation.promise);
   const setVisible = mock.fn();
   const page = fixture(t, setVisible);
   window.history.replaceState(null, '', '/nfc');
   const view = render(page(tarotRoute));
+  const banner = view.getByRole('banner');
+  const header = within(banner);
+  const home = header.getByRole('link', { name: 'Go to mons.shop home' });
+  assert.equal(header.getByRole('heading', { name: 'mons.shop' }).textContent, 'mons.shop');
+  assert.ok(home.querySelector('img.brand-icon'));
+  assert.equal((header.getByRole('button', { name: 'Wallet' }) as HTMLButtonElement).disabled, false);
+  assert.equal(within(view.getByRole('main')).queryByRole('img'), null);
+  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
+  assert.equal(setVisible.mock.callCount(), 0);
+  await act(async () => validation.resolve({ config, tokenId: 1, receiptTokenId: 778, claimed: true,
+    observedBlock: 10, observedTimestamp: 1, blockHash: `0x${'b'.repeat(64)}` }));
   await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
+  assert.equal(view.getByRole('banner'), banner);
   const main = view.getByRole('main', { name: 'Tarot card' });
   assert.equal(within(main).getAllByRole('img').length, 1);
   assert.equal(within(main).queryByRole('button'), null);
   assert.equal(view.queryByText(accountError), null);
   assert.equal(main.textContent, '');
-  const header = within(view.getByRole('banner'));
-  const home = header.getByRole('link', { name: 'Go to mons.shop home' });
-  assert.equal(header.getByRole('heading', { name: 'mons.shop' }).textContent, 'mons.shop');
-  assert.ok(home.querySelector('img.brand-icon'));
   await act(async () => fireEvent.click(header.getByRole('button', { name: 'Wallet' })));
   await waitFor(() => assert.equal(setVisible.mock.calls.some(call => call.arguments[0] === true), true));
   await act(async () => fireEvent.click(home));
@@ -94,6 +102,7 @@ test('NFC validation errors remain visible without unrelated account errors', as
   mock.method(tarotApi, 'status', async () => { throw new TarotApiError('This Tarot claim link is invalid.', 401); });
   const view = render(fixture(t)(tarotRoute));
   assert.equal((await view.findByRole('alert')).textContent, 'This Tarot claim link is invalid.');
+  assert.ok(view.getByRole('banner'));
   assert.equal(view.queryByText(accountError), null);
   assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
 });

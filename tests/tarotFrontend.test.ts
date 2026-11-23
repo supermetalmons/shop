@@ -168,13 +168,16 @@ test('Basel preserves the placeholder video and invalid links never contact the 
   assert.equal(service.mock.callCount(), 0);
 });
 
-test('page validation prevents claim/header flash and claimed cards retain the header above one large artwork', async () => {
+test('the header appears before validation while artwork and claim controls wait for it', async () => {
   let finish!: (value: TarotStatus) => void;
   mock.method(tarotApi, 'status', () => new Promise<TarotStatus>(resolve => { finish = resolve; }));
   const view = render(page(search(777)));
-  assert.equal(view.queryByRole('button'), null);
+  const header = view.getByRole('banner');
+  assert.ok(within(header).getByRole('button', { name: 'Shop header' }));
+  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
   assert.equal(view.queryByRole('img'), null);
   await act(async () => finish(status(777, true)));
+  assert.equal(view.getByRole('banner'), header);
   assert.equal(assertClaimedPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
 });
 
@@ -442,7 +445,8 @@ test('a rate limited or invalid code never reveals claim UI or requests wallet c
   await view.findByRole('alert');
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
   assert.equal(service.mock.callCount(), 1);
-  assert.equal(view.queryByRole('button'), null);
+  assert.ok(view.getByRole('banner'));
+  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
   assert.equal(connect.mock.callCount(), 0);
 });
 
