@@ -1,8 +1,8 @@
 # Tarot Cards — Sepolia v1
 
-Activated on 22 November 2026. API version
-`79332dda-a4f8-4ac8-94a2-dc5b74b18cfd`; storefront version
-`b7ad3149-9934-43d1-9c95-8bc001639ad2`.
+Activated on 22 November 2026. Current API version
+`480190bd-43be-4138-aca9-1908b2d198e2`; storefront version
+`c1fe689d-fcef-4205-b15c-f4f1a9f59f62`.
 
 The review fixes add bounded initial-validation retries, isolate NFC pages from
 unrelated account errors, and serialize deployment operations with exclusive
@@ -38,6 +38,12 @@ Release scans now also require the private manifest to match the aggregate
 [credential-set fingerprint](credential-set.json), recorded after verifying all
 777 live database rows. The pin contains no codes or individual code hashes;
 subsequent scans check it offline and reject alternate same-contract manifests.
+
+The final reviewed release pins contract reads to canonical block hashes and
+preserves credential denials when a concurrent request starts a cooldown. Both
+application deployments passed their release gates, live API checks, and five
+published-browser scenarios. No claim transactions were broadcast. See
+[final-release.json](final-release.json).
 
 Contract: [`0x63fef7c4867c558b91fda48899580a89d9f8cde1`](https://sepolia.etherscan.io/address/0x63fef7c4867c558b91fda48899580a89d9f8cde1#code).
 Deployment block: `12190005`.
