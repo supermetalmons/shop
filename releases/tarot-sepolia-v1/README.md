@@ -2,7 +2,7 @@
 
 Activated on 22 November 2026. Current API version
 `480190bd-43be-4138-aca9-1908b2d198e2`; storefront version
-`1a379afa-0895-47ea-adb4-1e604189a373`.
+`64d8c927-d91b-4ef9-8273-2fda2adfc0e1`.
 
 The review fixes add bounded initial-validation retries, isolate NFC pages from
 unrelated account errors, and serialize deployment operations with exclusive
@@ -60,6 +60,11 @@ and cooldown feedback. All 5,672 frontend tests and the strict release bundle sc
 passed. Both public domains serve the verified build. See
 [artwork-first-ui.json](artwork-first-ui.json). The API and contract are unchanged;
 no claim transactions were broadcast.
+
+The spacing update (`357d8a33`) gives full-height artwork 32–48px of responsive
+bottom padding. All 5,672 frontend tests and release scans passed. Four published
+viewport checks confirmed the spacing and scrolling behavior on desktop, short
+windows, mobile, and landscape, including resizing and wallet interaction.
 
 Contract: [`0x63fef7c4867c558b91fda48899580a89d9f8cde1`](https://sepolia.etherscan.io/address/0x63fef7c4867c558b91fda48899580a89d9f8cde1#code).
 Deployment block: `12190005`.
