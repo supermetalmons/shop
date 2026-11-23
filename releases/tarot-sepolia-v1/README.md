@@ -2,7 +2,7 @@
 
 Activated on 22 November 2026. Current API version
 `480190bd-43be-4138-aca9-1908b2d198e2`; storefront version
-`c2cc12a8-0b77-4bfc-9079-d30f3da774d8`.
+`1a379afa-0895-47ea-adb4-1e604189a373`.
 
 The review fixes add bounded initial-validation retries, isolate NFC pages from
 unrelated account errors, and serialize deployment operations with exclusive
@@ -52,10 +52,14 @@ desktop, short windows, mobile, and landscape, including resizing, wallet
 interaction, and home navigation, using synthetic claim status without
 broadcasting transactions.
 
-The header now appears before Tarot validation completes. Eight published
-desktop/mobile checks held the status request open, verified working header
-controls, and confirmed claimed, unclaimed, and error responses preserve the
-same header while card and claim content remain gated by validation.
+The header and large card artwork now appear before Tarot validation completes.
+Eligible cards animate into the two-NFT layout while invalid or unavailable
+claims retain the artwork silently. Six published desktop/mobile checks verified
+immediate artwork, silent denial, the same image and header through the transition,
+and cooldown feedback. All 5,672 frontend tests and the strict release bundle scan
+passed. Both public domains serve the verified build. See
+[artwork-first-ui.json](artwork-first-ui.json). The API and contract are unchanged;
+no claim transactions were broadcast.
 
 Contract: [`0x63fef7c4867c558b91fda48899580a89d9f8cde1`](https://sepolia.etherscan.io/address/0x63fef7c4867c558b91fda48899580a89d9f8cde1#code).
 Deployment block: `12190005`.
