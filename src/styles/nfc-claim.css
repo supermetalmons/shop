@@ -109,21 +109,44 @@
   object-fit: contain;
 }
 
+body:has(.nfc-claim-page--claimed) {
+  --page-padding-bottom: clamp(8px, 1.4svh, 14px);
+  min-height: 100svh;
+}
+
+.drop-page-frame:has(> .nfc-claim-page--claimed) {
+  height: calc(100svh - var(--page-padding-top) - var(--page-padding-bottom));
+}
+
+.drop-page-frame:has(> .nfc-claim-page--claimed) > .top--spacer {
+  flex: 0 0 auto;
+}
+
 .nfc-claim-page--claimed {
+  flex: 1 1 auto;
+  min-height: 0;
   width: min(680px, 100%);
   align-items: center;
 }
 
 .nfc-tarot-card--large {
   display: block;
-  width: min(100%, calc(88svh * 881 / 1400));
+  width: auto;
   height: auto;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .nfc-claim-error {
   margin: 0;
   text-align: center;
   color: color-mix(in srgb, var(--fg) 80%, transparent);
+}
+
+@media (max-width: 860px) {
+  body:has(.nfc-claim-page--claimed) {
+    --page-padding-bottom: var(--page-padding-top);
+  }
 }
 
 @media (max-width: 639px) {

@@ -12,8 +12,9 @@ The live format is `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>&testnet=t
 the code before showing the existing two-NFT claim layout. After three canonical
 confirmations, the same link shows the standard mons.shop header with its title,
 logo, and wallet controls above one large card artwork, including after either
-NFT is transferred. The receipt and claim controls are removed. Invalid links
-cannot connect or claim.
+NFT is transferred. The artwork fits the available viewport below the header
+without extra page scrolling. The receipt and claim controls are removed.
+Invalid links cannot connect or claim.
 
 Temporary initial validation failures retry automatically with bounded backoff
 and honor `Retry-After`, without opening a wallet or adding controls. Retries
