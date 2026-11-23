@@ -2,7 +2,7 @@
 
 Activated on 22 November 2026. Current API version
 `480190bd-43be-4138-aca9-1908b2d198e2`; storefront version
-`c1fe689d-fcef-4205-b15c-f4f1a9f59f62`.
+`fc6e07d7-88e5-49c5-b3ee-4da870d9abef`.
 
 The review fixes add bounded initial-validation retries, isolate NFC pages from
 unrelated account errors, and serialize deployment operations with exclusive
@@ -45,6 +45,11 @@ application deployments passed their release gates, live API checks, and five
 published-browser scenarios. No claim transactions were broadcast. See
 [final-release.json](final-release.json).
 
+The claimed-card header update keeps the standard mons.shop title, logo, and
+wallet controls above the large artwork. All 5,622 frontend tests passed, and
+published desktop/mobile checks verified layout, wallet interaction, and home
+navigation using synthetic claim status without broadcasting transactions.
+
 Contract: [`0x63fef7c4867c558b91fda48899580a89d9f8cde1`](https://sepolia.etherscan.io/address/0x63fef7c4867c558b91fda48899580a89d9f8cde1#code).
 Deployment block: `12190005`.
 Transaction: [`0x5df93dd90f6e4b1d9a642affe1b87515495136bee8fa979423bdd0678b572742`](https://sepolia.etherscan.io/tx/0x5df93dd90f6e4b1d9a642affe1b87515495136bee8fa979423bdd0678b572742).
@@ -57,7 +62,7 @@ redemption functionality.
 The NFC link format is `/nfc?code=<private-UUID>&tokenId=<card-ID>&testnet=true`.
 The original `/nfc?code=basel` retains its video placeholder. Valid unclaimed
 links use the existing two-NFT layout and Ethereum wallet picker; confirmed
-links show only the large card artwork.
+links retain the standard shop header above one large card artwork.
 
 The public [collection metadata](https://cdn.mons.shop/tarot-sepolia/v1/collection.json)
 and all 1,554 token metadata records have been published and verified. All 1,554
