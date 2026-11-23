@@ -2,7 +2,7 @@
 
 Activated on 22 November 2026. Current API version
 `480190bd-43be-4138-aca9-1908b2d198e2`; storefront version
-`9e3d63fe-0856-4751-b019-18a6e8b83e0a`.
+`c2cc12a8-0b77-4bfc-9079-d30f3da774d8`.
 
 The review fixes add bounded initial-validation retries, isolate NFC pages from
 unrelated account errors, and serialize deployment operations with exclusive
@@ -51,6 +51,11 @@ All 5,622 frontend tests passed. Published checks verified the full card fits on
 desktop, short windows, mobile, and landscape, including resizing, wallet
 interaction, and home navigation, using synthetic claim status without
 broadcasting transactions.
+
+The header now appears before Tarot validation completes. Eight published
+desktop/mobile checks held the status request open, verified working header
+controls, and confirmed claimed, unclaimed, and error responses preserve the
+same header while card and claim content remain gated by validation.
 
 Contract: [`0x63fef7c4867c558b91fda48899580a89d9f8cde1`](https://sepolia.etherscan.io/address/0x63fef7c4867c558b91fda48899580a89d9f8cde1#code).
 Deployment block: `12190005`.
