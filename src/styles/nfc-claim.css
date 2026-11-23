@@ -115,7 +115,6 @@
 }
 
 .nfc-tarot-page__action {
-  --nfc-reveal-delay: 180ms;
   display: flex;
   justify-content: center;
 }
@@ -146,19 +145,7 @@
 }
 
 .nfc-claim-page--entering .nfc-claim-reveal {
-  animation: nfc-tarot-reveal 220ms cubic-bezier(.2,.72,.25,1) var(--nfc-reveal-delay) both;
-}
-
-.nfc-claim-page__title.nfc-claim-reveal {
-  --nfc-reveal-delay: 70ms;
-}
-
-.nfc-claim-nft__copy.nfc-claim-reveal {
-  --nfc-reveal-delay: 110ms;
-}
-
-.nfc-claim-nft.nfc-claim-reveal {
-  --nfc-reveal-delay: 140ms;
+  animation: nfc-claim-enter 394ms cubic-bezier(.24,.42,.2,1) 16ms both;
 }
 
 body:has(.nfc-claim-page--artwork) {
@@ -230,11 +217,6 @@ body:has(.nfc-claim-page--artwork) {
 @keyframes nfc-claim-enter {
   from { opacity: 0; }
   to { opacity: 1; }
-}
-
-@keyframes nfc-tarot-reveal {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
