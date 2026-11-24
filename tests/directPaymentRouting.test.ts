@@ -135,8 +135,8 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
 
   await t.test('leaving for a loading route cancels an outstanding authorization', async () => {
     prepareGate = deferred<Pre111kPrepareResponse>();
-    fireEvent.click(reserveButton('devnet'));
-    await waitFor(() => assert.equal(prepareCalls, 1));
+    await act(async () => fireEvent.click(reserveButton('devnet')));
+    assert.equal(prepareCalls, 1);
     await act(async () => navigate('/fulfillment'));
     await waitFor(() => assert.equal(bridge.loads, 1));
     await act(async () => prepareGate!.resolve(prepared('devnet', OWNER)));
@@ -153,8 +153,8 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
     });
     await act(async () => navigate('/checkout/11111111-1111-4111-8111-111111111111'));
     const arrow = await waitFor(() => getByRole(document.body, 'button', { name: 'return' }));
-    fireEvent.click(arrow);
-    await waitFor(() => assert.equal(status.mock.callCount(), 1));
+    await act(async () => fireEvent.click(arrow));
+    assert.equal(status.mock.callCount(), 1);
     await act(async () => navigate('/fulfillment'));
     await act(async () => lookup.resolve());
     assert.equal(window.location.pathname, '/fulfillment');
@@ -165,8 +165,8 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
     await act(async () => navigate('/111k/relics_devnet'));
     await ready('devnet');
     prepareGate = deferred<Pre111kPrepareResponse>();
-    fireEvent.click(reserveButton('devnet'));
-    await waitFor(() => assert.equal(prepareCalls, 2));
+    await act(async () => fireEvent.click(reserveButton('devnet')));
+    assert.equal(prepareCalls, 2);
     await act(async () => { address = OTHER; for (const listener of listeners.get('accountsChanged') ?? []) listener([OTHER]); });
     await act(async () => prepareGate!.resolve(prepared('devnet', OWNER)));
     prepareGate = null;
@@ -180,14 +180,14 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
   await t.test('network navigation releases the old attempt and late wallet responses cannot finish the next attempt', async () => {
     const abandonedSend = deferred<string>();
     pendingSend = abandonedSend;
-    fireEvent.click(reserveButton('devnet'));
-    await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 1));
+    await act(async () => fireEvent.click(reserveButton('devnet')));
+    assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 1);
     await visitMainnet();
     await act(async () => navigate('/111k/relics_devnet'));
     await ready('devnet');
     pendingSend = deferred<string>();
-    fireEvent.click(reserveButton('devnet'));
-    await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 2));
+    await act(async () => fireEvent.click(reserveButton('devnet')));
+    assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 2);
     assert.equal(prepareCalls, 4);
     await act(async () => abandonedSend.resolve(HASH));
     assert.equal((getByRole(document.body, 'button', { name: 'Confirm in your wallet…' }) as HTMLButtonElement).disabled, true);
@@ -216,8 +216,8 @@ test('relic and checkout routes discard abandoned wallet and return requests', a
     await ready('devnet');
     assert.equal(queryByRole(document.body, 'link', { name: 'View transaction ↗' }), null);
     assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 2);
-    fireEvent.click(reserveButton('devnet'));
-    await waitFor(() => assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3));
+    await act(async () => fireEvent.click(reserveButton('devnet')));
+    assert.equal(requests.filter(request => request.method === 'eth_sendTransaction').length, 3);
     await ready('devnet');
     assert.equal(window.localStorage.getItem(transactionKey('devnet')), null);
     assert.equal(getByRole(document.body, 'link', { name: 'View transaction ↗' }).getAttribute('href'), `https://sepolia.etherscan.io/tx/${HASH}`);
