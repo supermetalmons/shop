@@ -32,7 +32,7 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient {
     event QuoteSignerUpdated(address indexed signer);
 
     constructor(address initialOwner, address signer, string memory baseURI_)
-        ERC721("Tarot Cards", "TAROT")
+        ERC721("divination machina x", "DMX")
         Ownable(initialOwner)
         EIP712("Tarot Cards", "1")
     {

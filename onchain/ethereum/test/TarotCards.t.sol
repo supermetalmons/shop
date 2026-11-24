@@ -80,8 +80,8 @@ contract TarotCardsTest is TestSupport {
     }
 
     function testConfigurationAndEip712Domain() public {
-        assertEq(token.name(), "Tarot Cards");
-        assertEq(token.symbol(), "TAROT");
+        assertEq(token.name(), "divination machina x");
+        assertEq(token.symbol(), "DMX");
         assertEq(token.owner(), address(this));
         assertEq(token.quoteSigner(), vm.addr(SIGNER_KEY));
         assertEq(token.MAX_CARDS(), 777);
