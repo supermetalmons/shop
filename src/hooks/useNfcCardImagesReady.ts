@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 
-export function useNfcCardImagesReady(getImages: () => readonly (HTMLImageElement | null)[]): boolean {
+export function useNfcCardImagesReady(
+  getImages: () => readonly (HTMLImageElement | null)[],
+  { allowLoadedFallback = false }: { allowLoadedFallback?: boolean } = {},
+): boolean {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -32,7 +35,13 @@ export function useNfcCardImagesReady(getImages: () => readonly (HTMLImageElemen
         else failed();
       }
     }).then(async () => {
-      if (active && image?.decode) await image.decode();
+      if (active && image?.decode) {
+        try {
+          await image.decode();
+        } catch (error) {
+          if (!allowLoadedFallback || !image.complete || image.naturalWidth === 0) throw error;
+        }
+      }
     }));
 
     void Promise.all(imagePromises).then(() => {
@@ -45,7 +54,7 @@ export function useNfcCardImagesReady(getImages: () => readonly (HTMLImageElemen
       active = false;
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, [getImages]);
+  }, [getImages, allowLoadedFallback]);
 
   return ready;
 }

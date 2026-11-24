@@ -114,6 +114,10 @@
   forced-color-adjust: none;
 }
 
+.nfc-tarot-card-stack[data-ready="false"] {
+  visibility: hidden;
+}
+
 .nfc-tarot-card {
   --nfc-card-ring-color: color-mix(in srgb, var(--fg) 20%, transparent);
   background: white;

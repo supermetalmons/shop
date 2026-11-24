@@ -16,13 +16,13 @@ function selectLayers() {
 
 type HeroRef = RefObject<HTMLImageElement | null>;
 
-function TarotLayers({ layers, heroRef }: { layers: ReturnType<typeof selectLayers>; heroRef: HeroRef }) {
+function TarotLayers({ layers, heroReady }: { layers: ReturnType<typeof selectLayers>; heroReady: boolean }) {
   const imagesRef = useRef<Array<HTMLImageElement | null>>([]);
-  const getImages = useCallback(() => [heroRef.current, ...imagesRef.current], [heroRef]);
+  const getImages = useCallback(() => imagesRef.current, []);
   const ready = useNfcCardImagesReady(getImages);
 
   return (
-    <div className="nfc-tarot-layers" data-ready={ready} aria-hidden="true">
+    <div className="nfc-tarot-layers" data-ready={heroReady && ready} aria-hidden="true">
       {layers.map(({ category, id }, index) => (
         <img key={category} ref={image => { imagesRef.current[index] = image; }}
           data-layer={category} src={`https://wip.lil.org/tarot/layers/${id}.webp`}
@@ -34,9 +34,11 @@ function TarotLayers({ layers, heroRef }: { layers: ReturnType<typeof selectLaye
 
 export function NfcTarotCard({ tokenId, heroRef, animate }: { tokenId: number; heroRef: HeroRef; animate: boolean }) {
   const [layers] = useState(selectLayers);
+  const getHeroImage = useCallback(() => [heroRef.current], [heroRef]);
+  const ready = useNfcCardImagesReady(getHeroImage, { allowLoadedFallback: true });
   return (
-    <div className="nfc-tarot-card-stack">
-      {animate && <TarotLayers layers={layers} heroRef={heroRef} />}
+    <div className="nfc-tarot-card-stack" data-ready={ready}>
+      {animate && <TarotLayers layers={layers} heroReady={ready} />}
       <img ref={heroRef} className="nfc-tarot-card" src={`https://wip.lil.org/tarot/heros/${tokenId}.webp`}
         alt="Mutating Card" width={1008} height={1600} loading="eager" fetchPriority="high"
         decoding="async" draggable={false} referrerPolicy="no-referrer" />
