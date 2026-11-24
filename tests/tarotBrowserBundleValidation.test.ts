@@ -26,7 +26,8 @@ function validate(content: string, options: {
   const directory = mkdtempSync(join(tmpdir(), 'tarot-browser-bundle-'));
   try {
     for (const filename of ['scripts/validate-browser-bundle.ts', 'scripts/tarot/claimLinks.ts',
-      'shared/ethereum/tarot.ts', 'shared/ethereum/abi.ts', 'shared/ethereum/protocol.ts', 'cloud/workers/api/wrangler.jsonc']) {
+      'shared/ethereum/tarot.ts', 'shared/ethereum/tarotCard.ts', 'shared/ethereum/abi.ts', 'shared/ethereum/protocol.ts',
+      'cloud/workers/api/wrangler.jsonc']) {
       mkdirSync(dirname(join(directory, filename)), { recursive: true });
       copyFileSync(resolve(filename), join(directory, filename));
     }

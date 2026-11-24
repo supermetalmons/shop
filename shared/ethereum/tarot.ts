@@ -1,13 +1,15 @@
 import { encodeCall } from './abi.ts';
 import type { EthereumPreparedTransaction } from './api.ts';
 import { normalizeEthereumAddress } from './protocol.ts';
+import { isTarotClaimCode, isTarotTokenId, TAROT_MAX_CARDS } from './tarotCard.ts';
+
+export { TAROT_MAX_CARDS } from './tarotCard.ts';
 
 export const TAROT_API_PATHS = {
   status: '/ethereum/tarot/status',
   prepare: '/ethereum/tarot/prepare',
   confirm: '/ethereum/tarot/confirm',
 } as const;
-export const TAROT_MAX_CARDS = 777;
 export const TAROT_RECEIPT_OFFSET = 777;
 export const TAROT_AUTHORIZATION_TTL_SECONDS = 600;
 export const TAROT_CHAIN_ID = 11155111;
@@ -35,10 +37,6 @@ export type TarotConfirmResponse = {
   tokenId: number; receiptTokenId: number; blockNumber: number | null; blockHash: string | null;
 };
 
-export function isTarotTokenId(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= TAROT_MAX_CARDS;
-}
-
 export function tarotReceiptTokenId(tokenId: number): number {
   if (!isTarotTokenId(tokenId)) throw new Error('Invalid Tarot card ID');
   return tokenId + TAROT_RECEIPT_OFFSET;
@@ -47,7 +45,7 @@ export function tarotReceiptTokenId(tokenId: number): number {
 export function tarotCodeHashInput(args: { chainId: number; contractAddress: string; tokenId: number; code: string }): string {
   const contractAddress = normalizeEthereumAddress(args.contractAddress);
   if (args.chainId !== TAROT_CHAIN_ID || !contractAddress || /^0x0{40}$/.test(contractAddress) ||
-    !isTarotTokenId(args.tokenId) || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(args.code)) {
+    !isTarotTokenId(args.tokenId) || !isTarotClaimCode(args.code)) {
     throw new Error('Invalid Tarot claim code scope');
   }
   return `mons:tarot:claim:v1:${args.chainId}:${contractAddress}:${args.tokenId}:${args.code.toLowerCase()}`;

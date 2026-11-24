@@ -5,7 +5,8 @@ import { normalizeEthereumAddress } from '../../shared/ethereum/protocol';
 import { ethereumRetryAfterMs } from './retryAfter';
 
 export class TarotApiError extends Error {
-  constructor(message: string, readonly status: number, readonly retryAt: number | null = null) { super(message); }
+  constructor(message: string, readonly status: number, readonly retryAt: number | null = null,
+    readonly credentialRejected = false) { super(message); }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -51,7 +52,8 @@ async function post(path: string, body: TarotRequest, signal?: AbortSignal): Pro
       response.status === 400 || response.status === 401 || response.status === 403 || response.status === 404 ?
         'This Tarot claim link is invalid.' : response.status === 409 ? 'This card’s claim changed. Please try again.' :
           'Couldn’t load this Tarot claim. Please try again.';
-    throw new TarotApiError(message, response.status, delay === null ? null : Date.now() + delay);
+    throw new TarotApiError(message, response.status, delay === null ? null : Date.now() + delay,
+      response.status === 401 && detail?.code === 'unauthenticated');
   }
   return value;
 }

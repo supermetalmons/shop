@@ -1,6 +1,30 @@
 import { defineConfig, loadEnv, type Plugin, type UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { build } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 import { normalizeMonsApiOrigin } from './src/lib/monsApiOrigin.ts';
+
+function inlineNfcScan(): Plugin {
+  const placeholder = '<script data-nfc-scan></script>';
+  return {
+    name: 'inline-nfc-scan',
+    transformIndexHtml: {
+      order: 'pre',
+      async handler(html) {
+        if (!html.includes(placeholder)) return;
+        const result = await build({
+          stdin: {
+            contents: "import { captureNfcScan } from './src/ethereum/nfcScan'; captureNfcScan(window);",
+            resolveDir: fileURLToPath(new URL('.', import.meta.url)),
+          },
+          alias: { tweetnacl: 'tweetnacl/nacl.js' },
+          bundle: true, write: false, minify: true, format: 'iife', target: 'es2022',
+        });
+        return html.replace(placeholder, () => `<script>${result.outputFiles[0].text}</script>`);
+      },
+    },
+  };
+}
 
 function publicSolanaRpcReplacements(apiOrigin: string): ReadonlyMap<string, string> {
   return new Map([
@@ -60,7 +84,7 @@ export function createViteConfig(
   const settings = resolveViteClientSettings(mode, environmentDirectory, buildTimeMilliseconds);
 
   return {
-    plugins: [redirectDependencyPublicRpcFallbacks(settings.apiOrigin), react()],
+    plugins: [redirectDependencyPublicRpcFallbacks(settings.apiOrigin), react(), inlineNfcScan()],
 
     envDir: settings.envDir,
     envPrefix: settings.envPrefix,

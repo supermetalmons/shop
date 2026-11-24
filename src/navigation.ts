@@ -12,15 +12,22 @@ const buildUrl = (pathname: string): string => {
 const getNormalizedPathname = (pathname = window.location.pathname): string =>
   normalizePathname(pathname);
 
+export function withoutNfcScan(state: History['state']) {
+  if (!state || !Object.hasOwn(state, 'nfcScan')) return state;
+  const { nfcScan: _entry, ...rest } = state;
+  return rest;
+}
+
 export const navigate = (pathname: string, options?: { replace?: boolean }): void => {
   const targetPath = normalizePathname(pathname.startsWith('/') ? pathname : `/${pathname}`);
   if (getNormalizedPathname() === targetPath) return;
 
   const url = buildUrl(targetPath);
+  const state = withoutNfcScan(window.history.state);
   if (options?.replace) {
-    window.history.replaceState(window.history.state, '', url);
+    window.history.replaceState(state, '', url);
   } else {
-    window.history.pushState(window.history.state, '', url);
+    window.history.pushState(state, '', url);
   }
 
   window.dispatchEvent(new Event(NAVIGATION_EVENT));

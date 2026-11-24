@@ -56,6 +56,23 @@ function page(linkSearch: string, value = wallet(), presentation: { headerWallet
       headerWalletOpen: presentation.headerWalletOpen,
       header: createElement('header', null, createElement('button', null, 'Shop header')) }));
 }
+function RoutedCard({ value }: { value: EthereumWallet }) {
+  const { nfcLink } = useAppRoute();
+  assert.ok(nfcLink);
+  return createElement(WalletModalContext.Provider, { value: { visible: false, setVisible: () => {} } },
+    createElement(NfcPage, { link: nfcLink, wallet: value }));
+}
+function snapshotTab() {
+  return { local: Object.entries(window.localStorage), session: Object.entries(window.sessionStorage), state: window.history.state };
+}
+function openTab(href: string, { local = [], session = [], state = null }: Partial<ReturnType<typeof snapshotTab>> = {}) {
+  dom.window.close();
+  ({ dom, setMediaQueryMatches } = setupFrontendDom());
+  for (const [key, value] of local) window.localStorage.setItem(key, value);
+  for (const [key, value] of session) window.sessionStorage.setItem(key, value);
+  window.history.replaceState(state, '', href);
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
+}
 function cardLayers(root: ParentNode) {
   return Array.from(root.querySelectorAll<HTMLImageElement>('img[src*="/tarot/layers/"]'));
 }
@@ -160,8 +177,332 @@ test('NFC identity changes with token ID and testnet, while unrelated parameters
   const second = view.result.current;
   act(() => { window.history.replaceState(null, '', `/nfc${search(777)}&from=wallet`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
   assert.equal(view.result.current, second);
+  const newCode = crypto.randomUUID();
+  act(() => {
+    window.history.replaceState(null, '', `/nfc${search(777).replace(code, newCode.toUpperCase())}`);
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  const rescanned = view.result.current.nfcLink;
+  assert.ok(rescanned?.kind === 'tarot');
+  assert.deepEqual(rescanned.request, { code: newCode, tokenId: 777, testnet: true });
+  act(() => window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })));
+  assert.equal(view.result.current.nfcLink, rescanned);
+  act(() => {
+    window.history.replaceState(null, '', '/nfc?tokenId=1&testnet=true');
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  const original = view.result.current.nfcLink;
+  assert.ok(original?.kind === 'tarot');
+  assert.deepEqual(original.request, request);
   act(() => { window.history.replaceState(null, '', `/nfc${search(777).replace('true', 'false')}`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
   assert.equal(view.result.current.nfcLink?.kind, 'artwork');
+});
+
+test('a scanned card can be claimed after reloading its shareable URL, while a recipient sees only artwork', async () => {
+  const service = mockService();
+  const value = wallet(true);
+  window.history.replaceState({ retained: true }, '', `/nfc/${search()}&from=tag&from=card#receipt`);
+  const historyLength = window.history.length;
+  const scanned = render(createElement(RoutedCard, { value }), { reactStrictMode: true });
+  const shareUrl = window.location.href;
+  assert.equal(shareUrl, 'https://mons.shop/nfc/?tokenId=1&testnet=true&from=tag&from=card#receipt');
+  assert.equal(window.history.length, historyLength);
+  assert.deepEqual(window.history.state, { retained: true });
+  await scanned.findByRole('button', { name: 'Claim' });
+  scanned.unmount();
+
+  openTab(shareUrl, snapshotTab());
+  const reloaded = render(createElement(RoutedCard, { value }));
+  fireEvent.click(await reloaded.findByRole('button', { name: 'Claim' }));
+  await waitFor(() => assert.equal(service.prepare.mock.callCount(), 1));
+  assert.deepEqual(service.prepare.mock.calls[0].arguments[0], { ...request, wallet: owner });
+  reloaded.unmount();
+
+  openTab(shareUrl);
+  const previousRequests = service.status.mock.callCount();
+  const recipient = render(createElement(RoutedCard, { value }));
+  const artwork = within(recipient.getByRole('main', { name: 'Tarot card' }));
+  assert.equal(artwork.getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/heros/1.webp');
+  assert.equal(artwork.queryByRole('button', { name: 'Claim' }), null);
+  assert.equal(service.status.mock.callCount(), previousRequests);
+});
+
+test('browser history restores only an unambiguous matching card and ignores malformed scans', () => {
+  window.history.replaceState(null, '', `/nfc${search()}`);
+  const view = renderHook(useAppRoute);
+  const visit = (query: string) => {
+    act(() => {
+      window.history.replaceState(null, '', `/nfc${query}`);
+      window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+    });
+    return view.result.current.nfcLink;
+  };
+  for (const query of ['?tokenId=2&testnet=true', '?tokenId=1', '?tokenId=1&testnet=false',
+    '?tokenId=1&testnet=true&testnet=true', '?tokenId=1&testnet=true&code=',
+    '?tokenId=1&testnet=true&code=wrong', `${search()}&%63ode=${code}`]) {
+    assert.equal(visit(query)?.kind, 'artwork');
+    assert.equal(new URLSearchParams(window.location.search).has('code'), false);
+    act(() => window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })));
+    assert.equal(view.result.current.nfcLink?.kind, 'artwork');
+  }
+  assert.equal(visit(`${search()}&tokenId=2`)?.kind, 'invalid');
+  assert.equal(new URLSearchParams(window.location.search).has('code'), false);
+  const link = visit('?tokenId=1&testnet=true');
+  assert.ok(link?.kind === 'tarot');
+  assert.deepEqual(link.request, request);
+  assert.equal(visit('?code=basel')?.kind, 'placeholder');
+  assert.equal(window.location.search, '?code=basel');
+});
+
+for (const outcome of ['accepted', 'rejected', 'accepted with session storage blocked'] as const) test(`same-card rescan across reloads: ${outcome}`, async t => {
+  const accepted = outcome !== 'rejected';
+  const replacement = crypto.randomUUID();
+  const validating = Promise.withResolvers<TarotStatus>();
+  const service = mock.method(tarotApi, 'status', async ({ code: supplied }: TarotRequest) =>
+    supplied === replacement ? validating.promise : status());
+  const value = wallet();
+  window.history.replaceState(null, '', `/nfc${search()}`);
+  const scanned = render(createElement(RoutedCard, { value }));
+  await scanned.findByRole('button', { name: 'Claim' });
+  const cleanHref = window.location.href;
+  const blocked = outcome === 'accepted with session storage blocked'
+    ? t.mock.getter(window, 'sessionStorage', () => { throw new DOMException('Storage unavailable', 'SecurityError'); })
+    : null;
+  act(() => {
+    window.history.pushState(null, '', `${cleanHref}&code=${replacement}`);
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  blocked?.mock.restore();
+  assert.equal(window.location.href, cleanHref);
+  assert.equal(service.mock.calls.at(-1)?.arguments[0].code, replacement);
+  assert.equal(JSON.stringify(window.history.state).includes(replacement), false);
+  const rescanningTab = snapshotTab();
+  scanned.unmount();
+
+  openTab(cleanHref, { local: rescanningTab.local });
+  const separate = render(createElement(RoutedCard, { value }));
+  assert.equal(service.mock.calls.at(-1)?.arguments[0].code, code);
+  await separate.findByRole('button', { name: 'Claim' });
+  separate.unmount();
+
+  openTab(cleanHref, rescanningTab);
+  const reloaded = render(createElement(RoutedCard, { value }));
+  assert.equal(service.mock.calls.at(-1)?.arguments[0].code, replacement);
+  await act(async () => {
+    if (accepted) validating.resolve(status());
+    else validating.reject(new TarotApiError('Invalid Tarot claim link', 401, null, true));
+  });
+  await act(async () => { window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })); });
+  if (accepted) await reloaded.findByRole('button', { name: 'Claim' });
+  else {
+    assert.equal(service.mock.calls.at(-1)?.arguments[0].code, replacement);
+    assert.ok(reloaded.getByRole('main', { name: 'Tarot card' }));
+    assert.equal(reloaded.queryByRole('button', { name: 'Claim' }), null);
+  }
+  reloaded.unmount();
+
+  openTab(cleanHref, snapshotTab());
+  const reopened = render(createElement(RoutedCard, { value }));
+  assert.equal(service.mock.calls.at(-1)?.arguments[0].code, accepted ? replacement : code);
+  await reopened.findByRole('button', { name: 'Claim' });
+});
+
+test('interrupted rescans do not accumulate local credentials and each history entry can resume', t => {
+  const primary = 'mons.shop.tarot.claim:sepolia:1';
+  window.localStorage.setItem(primary, code);
+  const blocked = t.mock.getter(window, 'sessionStorage', () => { throw new DOMException('Blocked', 'SecurityError'); });
+  const entries = Array.from({ length: 3 }, () => {
+    const replacement = crypto.randomUUID();
+    window.history.pushState(null, '', `/nfc${search().replace(code, replacement)}`);
+    const view = renderHook(useAppRoute);
+    view.unmount();
+    return { replacement, state: window.history.state };
+  });
+  blocked.mock.restore();
+  const local = Object.entries(window.localStorage);
+  assert.equal(local.length, 2);
+  const href = window.location.href;
+  for (const { replacement, state } of entries) {
+    assert.equal(JSON.stringify([state, local]).includes(replacement), false);
+    openTab(href, { local, state });
+    const view = renderHook(useAppRoute);
+    const link = view.result.current.nfcLink;
+    assert.ok(link?.kind === 'tarot');
+    assert.equal(link.request.code, replacement);
+    view.unmount();
+  }
+});
+
+function blockLocalWrites(t: TestContext) {
+  const local = window.localStorage;
+  const prototype: Storage = Object.getPrototypeOf(local);
+  const setItem = prototype.setItem;
+  t.mock.method(prototype, 'setItem', function (this: Storage, key: string, value: string) {
+    if (this === local) throw new DOMException('Local storage full', 'QuotaExceededError');
+    setItem.call(this, key, value);
+  });
+}
+
+test('a first scan survives reload in the same tab when local storage is full', t => {
+  blockLocalWrites(t);
+  window.history.replaceState(null, '', `/nfc${search()}`);
+  const scan = renderHook(useAppRoute);
+  assert.equal(scan.result.current.nfcLink?.kind, 'tarot');
+  assert.equal(window.location.search, '?tokenId=1&testnet=true');
+  scan.unmount();
+
+  openTab(window.location.href, snapshotTab());
+  const restored = renderHook(useAppRoute).result.current.nfcLink;
+  assert.ok(restored?.kind === 'tarot');
+  assert.deepEqual(restored.request, request);
+  act(() => {
+    window.history.replaceState(null, '', `/nfc${search()}`);
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  assert.equal(window.localStorage.getItem('mons.shop.tarot.claim:sepolia:1'), code);
+});
+
+test('reopening the clean URL in the same tab uses the verified replacement when local writes failed', async t => {
+  window.localStorage.setItem('mons.shop.tarot.claim:sepolia:1', code);
+  blockLocalWrites(t);
+  const replacement = crypto.randomUUID();
+  window.history.replaceState(null, '', `/nfc${search().replace(code, replacement)}`);
+  mockService();
+  const scan = render(createElement(RoutedCard, { value: wallet() }));
+  await scan.findByRole('button', { name: 'Claim' });
+  scan.unmount();
+  openTab(window.location.href, { ...snapshotTab(), state: null });
+  const view = renderHook(useAppRoute);
+  const restored = view.result.current.nfcLink;
+  assert.ok(restored?.kind === 'tarot');
+  assert.equal(restored.request.code, replacement);
+  window.localStorage.removeItem('mons.shop.tarot.claim:sepolia:1');
+  act(() => window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })));
+  const retained = view.result.current.nfcLink;
+  assert.ok(retained?.kind === 'tarot');
+  assert.equal(retained.request.code, replacement);
+  const newer = crypto.randomUUID();
+  window.localStorage.setItem('mons.shop.tarot.claim:sepolia:1', newer);
+  act(() => window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })));
+  const updated = view.result.current.nfcLink;
+  assert.ok(updated?.kind === 'tarot');
+  assert.equal(updated.request.code, newer);
+});
+
+for (const accepted of [true, false]) test(`a conflicting rescan revalidates before ${accepted ? 'promotion' : 'rejection'}`, async () => {
+  const primary = 'mons.shop.tarot.claim:sepolia:1';
+  window.localStorage.setItem(primary, code);
+  const candidate = crypto.randomUUID();
+  const newer = crypto.randomUUID();
+  const first = Promise.withResolvers<TarotStatus>();
+  const second = Promise.withResolvers<TarotStatus>();
+  const service = mock.method(tarotApi, 'status', (_request: TarotRequest) => first.promise);
+  window.history.replaceState(null, '', `/nfc${search().replace(code, candidate)}`);
+  render(createElement(RoutedCard, { value: wallet() }));
+  assert.equal(service.mock.calls[0].arguments[0].code, candidate);
+  window.localStorage.setItem(primary, newer);
+  service.mock.mockImplementation(() => second.promise);
+  await act(async () => first.resolve(status()));
+  assert.equal(window.localStorage.getItem(primary), newer);
+  await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(service.mock.callCount(), 2);
+  assert.equal(service.mock.calls[1].arguments[0].code, candidate);
+  await act(async () => {
+    if (accepted) second.resolve(status());
+    else second.reject(new TarotApiError('Revoked', 401, null, true));
+  });
+  assert.equal(window.localStorage.getItem(primary), accepted ? candidate : newer);
+});
+
+test('repeated concurrent credential changes retry after the bounded validation attempt', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  const primary = 'mons.shop.tarot.claim:sepolia:1';
+  window.localStorage.setItem(primary, crypto.randomUUID());
+  window.history.replaceState(null, '', `/nfc${search()}`);
+  const route = renderHook(useAppRoute).result.current.nfcLink;
+  assert.ok(route?.kind === 'tarot');
+  let calls = 0;
+  mock.method(tarotApi, 'status', async () => {
+    if (++calls <= 2) window.localStorage.setItem(primary, crypto.randomUUID());
+    return status();
+  });
+  const claim = renderHook(() => useTarotClaim(route.request, wallet()));
+  await act(async () => undefined);
+  assert.equal(calls, 2);
+  assert.equal(claim.result.current.status, null);
+  assert.notEqual(window.localStorage.getItem(primary), code);
+  await act(async () => t.mock.timers.tick(2_000));
+  assert.equal(calls, 3);
+  assert.ok(claim.result.current.status);
+  assert.equal(window.localStorage.getItem(primary), code);
+});
+
+for (const changed of [false, true]) test(`a revalidated scan ${changed ? 'preserves a newer code' : 'restores the original code'} for reload`, async () => {
+  let allowed = true;
+  mock.method(tarotApi, 'status', async () => {
+    if (!allowed) throw new TarotApiError('Revoked', 401, null, true);
+    return status();
+  });
+  window.history.replaceState(null, '', `/nfc${search()}`);
+  const scan = render(createElement(RoutedCard, { value: wallet() }));
+  await scan.findByRole('button', { name: 'Claim' });
+  allowed = false;
+  await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+  assert.equal(scan.queryByRole('button', { name: 'Claim' }), null);
+  const newer = crypto.randomUUID();
+  if (changed) window.localStorage.setItem('mons.shop.tarot.claim:sepolia:1', newer);
+  allowed = true;
+  await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+  await scan.findByRole('button', { name: 'Claim' });
+  scan.unmount();
+  openTab(window.location.href, snapshotTab());
+  const restored = renderHook(useAppRoute).result.current.nfcLink;
+  assert.ok(restored?.kind === 'tarot');
+  assert.equal(restored.request.code, changed ? newer : code);
+});
+
+for (const [response, apiCode, replaced] of [
+  [401, 'unauthenticated', false], [401, 'unauthenticated', true], [401, undefined, false],
+  [403, 'permission-denied', false], [503, 'unavailable', false],
+] as const) {
+  const cleared = response === 401 && apiCode === 'unauthenticated' && !replaced;
+  test(`status ${response} ${cleared ? 'clears the rejected' : 'preserves the'} ${replaced ? 'newer' : 'saved'} scan on reload`, async () => {
+    const validation = Promise.withResolvers<Response>();
+    mock.method(globalThis, 'fetch', () => validation.promise);
+    window.history.replaceState(null, '', `/nfc${search()}`);
+    const scan = render(createElement(RoutedCard, { value: wallet() }));
+    const replacement = crypto.randomUUID();
+    if (replaced) window.localStorage.setItem('mons.shop.tarot.claim:sepolia:1', replacement);
+    await act(async () => validation.resolve(Response.json({ error: { code: apiCode } }, { status: response })));
+    scan.unmount();
+    openTab(window.location.href, snapshotTab());
+    const restored = renderHook(useAppRoute).result.current.nfcLink;
+    if (cleared) assert.equal(restored?.kind, 'artwork');
+    else {
+      assert.ok(restored?.kind === 'tarot');
+      assert.equal(restored.request.code, replaced ? replacement : code);
+    }
+  });
+}
+
+test('blocked storage still scrubs the code and retains the scan in the current window', t => {
+  const storage = Object.getPrototypeOf(window.localStorage);
+  const blocked = () => { throw new DOMException('Storage unavailable', 'SecurityError'); };
+  t.mock.method(storage, 'getItem', blocked);
+  t.mock.method(storage, 'setItem', blocked);
+  window.history.replaceState(null, '', `/nfc${search()}`);
+  const view = renderHook(useAppRoute, { reactStrictMode: true });
+  assert.equal(window.location.search, '?tokenId=1&testnet=true');
+  act(() => window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })));
+  const link = view.result.current.nfcLink;
+  assert.ok(link?.kind === 'tarot');
+  assert.deepEqual(link.request, request);
+  view.unmount();
+
+  dom.window.close();
+  ({ dom, setMediaQueryMatches } = setupFrontendDom());
+  window.history.replaceState(null, '', '/nfc?tokenId=1&testnet=true');
+  assert.equal(renderHook(useAppRoute).result.current.nfcLink?.kind, 'artwork');
 });
 
 test('Basel preserves the placeholder video and a supplied card ID switches to public artwork', () => {

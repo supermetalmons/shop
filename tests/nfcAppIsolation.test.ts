@@ -6,6 +6,7 @@ import { Connection } from '@solana/web3.js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConnectionContext, WalletContext, type WalletContextState } from '@solana/wallet-adapter-react';
 import { WalletModalContext } from '@solana/wallet-adapter-react-ui';
+import { useAppRoute } from '../src/hooks/useAppRoute.ts';
 import type { useSolanaAuth } from '../src/hooks/useSolanaAuth.ts';
 import { resolveAppRoute, type ResolvedAppRoute } from '../src/routes.ts';
 import { resolveTarotConfig } from '../shared/ethereum/tarot.ts';
@@ -13,6 +14,8 @@ import { tarotApi, TarotApiError } from '../src/ethereum/tarotApi.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
+function blockLocalStorage(): never { throw new DOMException('Storage unavailable', 'SecurityError'); }
+const startupStorage = mock.getter(window, 'localStorage', blockLocalStorage);
 Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
 const { act, cleanup, fireEvent, render, waitFor, within } = await import('@testing-library/react');
 const { BackgroundBlurProvider } = await import('../src/components/BackgroundBlurLayer.tsx');
@@ -42,6 +45,7 @@ const imports = registerHooks({
   },
 });
 const { default: App } = await import('../src/App.tsx');
+startupStorage.mock.restore();
 imports.deregister();
 
 const config = resolveTarotConfig({ contractAddress: '0x2222222222222222222222222222222222222222', enabled: true, deploymentBlock: 1 });
@@ -65,6 +69,22 @@ function fixture(t: TestContext, setVisible: (visible: boolean) => void = () => 
         createElement(WalletModalContext.Provider, { value: { visible: false, setVisible } },
           createElement(BackgroundBlurProvider, null, createElement(App, { route }))))));
 }
+
+test('a scanned card reaches Claim when the browser denies local storage', async t => {
+  mock.getter(window, 'localStorage', blockLocalStorage);
+  const status = mock.method(tarotApi, 'status', async (request: Parameters<typeof tarotApi.status>[0]) => ({
+    config, tokenId: request.tokenId, receiptTokenId: request.tokenId + 777, claimed: false,
+    observedBlock: 10, observedTimestamp: 1, blockHash: `0x${'b'.repeat(64)}`,
+  }));
+  const page = fixture(t);
+  function RoutedApp() { return page(useAppRoute()); }
+  const code = crypto.randomUUID();
+  window.history.replaceState(null, '', `/nfc?code=${code}&tokenId=1&testnet=true`);
+  const view = render(createElement(RoutedApp));
+  await view.findByRole('button', { name: 'Claim' }, { timeout: 3000 });
+  assert.equal(window.location.search, '?tokenId=1&testnet=true');
+  assert.deepEqual(status.mock.calls[0].arguments[0], { code, tokenId: 1, testnet: true });
+});
 
 test('Tarot renders the standard header and artwork immediately and preserves both after validation', async t => {
   const validation = Promise.withResolvers<Awaited<ReturnType<typeof tarotApi.status>>>();

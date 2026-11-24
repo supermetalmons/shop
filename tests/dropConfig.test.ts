@@ -330,13 +330,13 @@ test('claim deep links render the home shop without replacing their URL', () => 
   assert.equal(route.shopPath, '/');
   assert.equal('preorderId' in route, false);
   assert.equal(route.claimDeepLinkCode, 'claim/123');
-  assert.equal(route.nfcDeepLinkCode, null);
+  assert.equal(route.nfcLink, null);
   assert.equal(route.replacementHref, null);
   assert.equal(route.walletCluster, 'mainnet-beta');
   assert.equal(resolveAppRoute({ pathname: '/claim' }).claimDeepLinkCode, '');
 });
 
-test('NFC deep links render a dedicated page without replacing their URL or opening real claims', () => {
+test('NFC links without a card ID resolve to a dedicated invalid-link page', () => {
   for (const pathname of ['/nfc', '/nfc/']) {
     const route = resolveAppRoute({
       pathname,
@@ -348,7 +348,7 @@ test('NFC deep links render a dedicated page without replacing their URL or open
     assert.equal(route.path, '/nfc');
     assert.equal(route.shopPath, '/nfc');
     assert.equal('preorderId' in route, false);
-    assert.equal(route.nfcDeepLinkCode, 'stub/123+abc xyz');
+    assert.equal(route.nfcLink?.kind, 'invalid');
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, null);
     assert.equal(route.walletCluster, 'mainnet-beta');
@@ -358,18 +358,18 @@ test('NFC deep links render a dedicated page without replacing their URL or open
   }
 });
 
-test('NFC links without a code still open the placeholder and do not affect other routes', () => {
+test('NFC routing requires a card ID or Basel link and does not affect other routes', () => {
   for (const search of ['', '?code=', '?unrelated=1']) {
     const route = resolveAppRoute({ pathname: '/nfc/', search });
     assert.equal(route.kind, 'nfc');
     assert.equal(route.path, '/nfc');
-    assert.equal(route.nfcDeepLinkCode, '');
+    assert.equal(route.nfcLink?.kind, 'invalid');
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, null);
   }
 
   for (const pathname of ['/', '/claim', '/clear_cards', '/fulfillment', '/nfc/unknown']) {
-    assert.equal(resolveAppRoute({ pathname, search: '?code=stub' }).nfcDeepLinkCode, null);
+    assert.equal(resolveAppRoute({ pathname, search: '?code=stub' }).nfcLink, null);
   }
 });
 

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  encodeTarotClaim, isTarotTokenId, resolveTarotConfig, tarotCodeHashInput, tarotReceiptTokenId,
+  encodeTarotClaim, resolveTarotConfig, tarotCodeHashInput, tarotReceiptTokenId,
   TAROT_CHAIN_ID, TAROT_MAX_CARDS, TAROT_METADATA_BASE_URI,
 } from '../shared/ethereum/tarot.ts';
+import { isTarotTokenId } from '../shared/ethereum/tarotCard.ts';
 import { tarotClaimDigest, TAROT_CLAIMED_TOPIC } from '../shared/ethereum/tarotCrypto.ts';
 import { ethereumSignerAddress, recoverEthereumAddress, signDigest } from '../shared/ethereum/crypto.ts';
 import { decodeReturn } from '../shared/ethereum/abi.ts';

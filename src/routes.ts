@@ -70,7 +70,6 @@ export type ResolvedAppRoute = {
   shopPath: string;
   replacementHref: string | null;
   claimDeepLinkCode: string | null;
-  nfcDeepLinkCode: string | null;
   nfcLink: NfcLink | null;
   drop: FrontendDropConfig | null;
   upcoming: UpcomingDropRouteConfig | null;
@@ -104,7 +103,6 @@ function createRoute(
     shopPath: path,
     replacementHref,
     claimDeepLinkCode: null,
-    nfcDeepLinkCode: null,
     nfcLink: null,
     drop: null,
     upcoming: null,
@@ -114,7 +112,7 @@ function createRoute(
   };
 }
 
-export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
+export function resolveAppRoute(location: AppRouteLocation, savedNfcCode?: (tokenId: number) => string | null): ResolvedAppRoute {
   const requestedPath = normalizePathname(location.pathname);
   const search = location.search || '';
   const hash = location.hash || '';
@@ -127,8 +125,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
 
   if (requestedPath === '/nfc') {
     return createRoute('nfc', requestedPath, null, {
-      nfcDeepLinkCode: new URLSearchParams(search).get('code') ?? '',
-      nfcLink: resolveNfcLink(search),
+      nfcLink: resolveNfcLink(search, savedNfcCode),
     });
   }
 

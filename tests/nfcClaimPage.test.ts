@@ -62,8 +62,8 @@ function PageContents() {
         onClick: interactive ? () => setVisible(true) : undefined,
       }, 'Sign In'),
     }),
-    route.kind === 'nfc'
-      ? createElement(NfcClaimPage, { key: route.nfcDeepLinkCode })
+    route.nfcLink?.kind === 'placeholder'
+      ? createElement(NfcClaimPage, { key: route.nfcLink.key })
       : createElement('main', null, 'Home shop'),
   );
 }
@@ -79,7 +79,7 @@ function Fixture({ wallet }: { wallet: WalletContextState }) {
   );
 }
 
-function renderPage(wallet = walletState(), url = '/nfc/?code=STUB-SECRET-CODE') {
+function renderPage(wallet = walletState(), url = '/nfc/?code=basel') {
   window.history.replaceState(null, '', url);
   return render(createElement(Fixture, { wallet }), { reactStrictMode: true });
 }
@@ -91,8 +91,8 @@ function assertPageIsUnlocked() {
   assert.equal(document.querySelector('.background-blur-layer__viewport--active'), null);
 }
 
-test('NFC always shows Claim without an address or secret-code field', () => {
-  for (const url of ['/nfc', '/nfc/', '/nfc/?code=', '/nfc/?code=STUB-SECRET-CODE', '/nfc/?code=secret%20code']) {
+test('the Basel NFC placeholder shows Claim without an address or secret-code field', () => {
+  for (const url of ['/nfc?code=basel', '/nfc/?code=basel', '/nfc/?code=basel&from=wallet']) {
     const view = renderPage(walletState(), url);
     assert.equal(view.queryByRole('textbox'), null);
     assert.ok(view.getByRole('button', { name: 'Claim' }));
@@ -157,7 +157,7 @@ test('NFC synchronously opens the video with or without a wallet and never claim
     ]);
     assert.equal(view.queryByRole('alert'), null);
     assert.ok(view.getByRole('main', { name: 'NFC claim' }));
-    assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
+    assert.equal(window.location.pathname + window.location.search, '/nfc/?code=basel');
     for (const method of walletCalls) assert.equal(method.mock.callCount(), 0);
     view.unmount();
   }
@@ -198,14 +198,14 @@ test('outside clicks and Escape keep the NFC page and its URL', (t) => {
   fireEvent.keyDown(document, { key: 'Escape' });
 
   assert.ok(view.getByRole('main', { name: 'NFC claim' }));
-  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
+  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=basel');
   assert.equal(replaceState.mock.callCount(), 0);
   assert.equal(pushState.mock.callCount(), 0);
   assertPageIsUnlocked();
 });
 
 test('the standard header navigates home and browser history restores the NFC page and URL', () => {
-  const view = renderPage(walletState(), '/nfc/?code=secret%20code');
+  const view = renderPage(walletState(), '/nfc/?code=basel');
   fireEvent.click(view.getByRole('link', { name: 'Go to mons.shop home' }));
   assert.equal(window.location.pathname + window.location.search, '/');
   assert.equal(view.queryByRole('main', { name: 'NFC claim' }), null);
@@ -213,11 +213,11 @@ test('the standard header navigates home and browser history restores the NFC pa
   assertPageIsUnlocked();
 
   act(() => {
-    window.history.replaceState(null, '', '/nfc/?code=secret%20code');
+    window.history.replaceState(null, '', '/nfc/?code=basel');
     window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
   });
   assert.ok(view.getByRole('main', { name: 'NFC claim' }));
-  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=secret%20code');
+  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=basel');
   assertPageIsUnlocked();
 
   act(() => {
@@ -229,31 +229,19 @@ test('the standard header navigates home and browser history restores the NFC pa
   assertPageIsUnlocked();
 });
 
-test('changing only the NFC code remounts the page and resets its initial scroll once', (t) => {
+test('restoring the same Basel page preserves its initial scroll position after mount', (t) => {
   const viewport = controlledViewport(t, 600);
-  const view = renderPage(walletState(), '/nfc?code=first');
+  const view = renderPage(walletState(), '/nfc?code=basel');
   const firstPage = view.getByRole('main', { name: 'NFC claim' });
-  viewport.flushFrame();
-  assert.equal(window.scrollY, 0);
-
-  viewport.setScrollY(350);
-  act(() => {
-    window.history.replaceState(null, '', '/nfc?code=second');
-    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
-  });
-  const secondPage = view.getByRole('main', { name: 'NFC claim' });
-  assert.notEqual(secondPage, firstPage);
-  assert.equal(firstPage.isConnected, false);
-  assert.equal(window.location.search, '?code=second');
   viewport.flushFrame();
   assert.equal(window.scrollY, 0);
 
   viewport.setScrollY(275);
   act(() => {
-    window.history.replaceState(null, '', '/nfc?code=second&from=wallet#receipt');
+    window.history.replaceState(null, '', '/nfc?code=basel&from=wallet#receipt');
     window.dispatchEvent(new dom.window.Event('pageshow'));
   });
-  assert.equal(view.getByRole('main', { name: 'NFC claim' }), secondPage);
+  assert.equal(view.getByRole('main', { name: 'NFC claim' }), firstPage);
   viewport.flushFrame();
   assert.equal(window.scrollY, 275);
   assertPageIsUnlocked();
@@ -282,7 +270,7 @@ test('opening and reopening the sign-in picker prepares its accessible title and
   assert.equal(document.body.style.overflow, 'hidden');
   assert.ok(document.querySelector('.background-blur-layer__viewport--active'));
   assert.ok(claim.isConnected);
-  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
+  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=basel');
 
   fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => {
@@ -290,7 +278,7 @@ test('opening and reopening the sign-in picker prepares its accessible title and
   });
   assert.ok(view.getByRole('main', { name: 'NFC claim' }));
   assert.equal(view.getByRole('button', { name: 'Claim' }), claim);
-  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
+  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=basel');
   assert.equal(document.body.style.overflow, 'auto');
   assertPageIsUnlocked();
 
@@ -314,7 +302,7 @@ test('entering NFC waits for an open wallet picker before resetting scroll, and 
   fireEvent.click(view.getByRole('button', { name: 'Sign In' }));
   assert.ok(view.getByRole('dialog'));
 
-  act(() => navigate('/nfc'));
+  act(() => navigate('/nfc?code=basel'));
   viewport.flushFrame();
   assert.ok(view.getByRole('dialog'));
   assert.equal(document.body.style.overflow, 'hidden');

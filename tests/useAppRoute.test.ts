@@ -164,32 +164,48 @@ test('navigation replaces aliases before preserving the identity of an unchanged
   assert.equal(replace.mock.callCount(), 1);
 });
 
-test('claim and NFC code changes update the route without changing its pathname', () => {
-  for (const [path, field] of [
-    ['/claim', 'claimDeepLinkCode'],
-    ['/nfc', 'nfcDeepLinkCode'],
-  ] as const) {
-    window.history.replaceState(null, '', `${path}?code=first`);
-    const view = renderHook(useAppRoute);
-    const initial = view.result.current;
-
-    act(() => {
-      window.history.replaceState(null, '', `${path}?code=second%2Fcode%2Bvalue`);
-      window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+test('Back and Forward distinguish a valid scan and a malformed scan with the same cleaned URL', async () => {
+  const code = crypto.randomUUID();
+  window.history.replaceState({ from: 'card' }, '', `/nfc?tokenId=1&testnet=true&code=${code}`);
+  const view = renderHook(useAppRoute);
+  const cleanHref = window.location.href;
+  act(() => {
+    window.history.pushState({ from: 'rescan' }, '', `${cleanHref}&code=invalid`);
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  assert.equal(view.result.current.nfcLink?.kind, 'artwork');
+  for (const [direction, kind, from] of [['back', 'tarot', 'card'], ['forward', 'artwork', 'rescan']] as const) {
+    await act(async () => {
+      const navigated = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }));
+      window.history[direction]();
+      await navigated;
     });
-
-    assert.notEqual(view.result.current, initial);
-    assert.equal(view.result.current[field], 'second/code+value');
-    assert.equal(window.location.pathname, path);
-
-    act(() => {
-      window.history.replaceState(null, '', path);
-      window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
-    });
-
-    assert.equal(view.result.current[field], '');
-    view.unmount();
+    assert.equal(window.location.href, cleanHref);
+    assert.equal(window.history.state.from, from);
+    assert.equal(JSON.stringify(window.history.state).includes(code), false);
+    assert.equal(view.result.current.nfcLink?.kind, kind);
   }
+  act(() => navigate('/nfc?tokenId=1&testnet=true'));
+  assert.equal(view.result.current.nfcLink?.kind, 'tarot');
+  assert.deepEqual(window.history.state, { from: 'rescan' });
+});
+
+test('ordinary claim links keep their code and respond to history changes', () => {
+  window.history.replaceState(null, '', '/claim?code=first');
+  const view = renderHook(useAppRoute);
+  const initial = view.result.current;
+  act(() => {
+    window.history.replaceState(null, '', '/claim?code=second%2Fcode%2Bvalue');
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  assert.notEqual(view.result.current, initial);
+  assert.equal(view.result.current.claimDeepLinkCode, 'second/code+value');
+  assert.equal(window.location.pathname + window.location.search, '/claim?code=second%2Fcode%2Bvalue');
+  act(() => {
+    window.history.replaceState(null, '', '/claim');
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  assert.equal(view.result.current.claimDeepLinkCode, '');
 });
 
 test('pageshow restores the current route while irrelevant URL changes retain its identity', () => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { captureNfcScan, readScannedCode } from '../ethereum/nfcScan';
 import { subscribeToNavigation } from '../navigation';
 import { resolveAppRoute, type ResolvedAppRoute } from '../routes';
 
@@ -7,7 +8,6 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
   a.path === b.path &&
   a.shopPath === b.shopPath &&
   a.claimDeepLinkCode === b.claimDeepLinkCode &&
-  a.nfcDeepLinkCode === b.nfcDeepLinkCode &&
   a.nfcLink?.key === b.nfcLink?.key &&
   a.drop === b.drop &&
   a.upcoming === b.upcoming &&
@@ -21,11 +21,8 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
   a.ethereumCheckoutReturnId === b.ethereumCheckoutReturnId;
 
 function resolveCurrentRoute(): ResolvedAppRoute {
-  const route = resolveAppRoute({
-    pathname: window.location.pathname,
-    search: window.location.search,
-    hash: window.location.hash,
-  });
+  captureNfcScan(window);
+  const route = resolveAppRoute(window.location, tokenId => readScannedCode(window, tokenId));
   if (route.replacementHref) {
     window.history.replaceState(window.history.state, '', route.replacementHref);
   }

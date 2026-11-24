@@ -16,9 +16,11 @@ import { ensureAnonymousSession } from '../lib/anonymousSession';
 import { AUTHENTICATED_API_ORIGIN } from '../lib/authenticatedApiOrigin';
 import { ensureStaffWalletSession } from '../lib/staffWalletSession';
 
-const DEBUG_API =
-  import.meta.env?.DEV ||
-  (typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugApi') === '1');
+const DEBUG_API = (() => {
+  if (import.meta.env?.DEV) return true;
+  try { return typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugApi') === '1'; }
+  catch { return false; }
+})();
 
 function summarizeError(err: unknown) {
   const anyErr = err as any;

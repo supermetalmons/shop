@@ -5,6 +5,7 @@ import type { EthereumWallet } from './useEthereum111k';
 import { captureEthereumWalletActionConfig, ethereumWalletActionChanged, useEthereumWalletAction } from './useEthereumWalletAction';
 import { ethereumAddress, ethereumOperation, ethereumWalletError } from './wallet';
 import { TarotApiError, tarotApi } from './tarotApi';
+import { readSavedNfcCode, settleNfcScan } from './nfcScan';
 import { abortableEthereumOperation } from './operationReconciliation';
 import { definiteEthereumSubmissionRejection } from './dropOperations';
 
@@ -121,7 +122,10 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
   const recordError = (error: unknown) => {
     if (!current()) return;
     const denied = isCredentialDenial(error);
-    if (denied) setClaimFeedback(null);
+    if (denied) {
+      if (error instanceof TarotApiError && error.credentialRejected) settleNfcScan(browserWindow, request, false);
+      setClaimFeedback(null);
+    }
     const deadline = error instanceof TarotApiError ? error.retryAt ?? (error.status === 429 ? Date.now() + 60_000 : 0) : 0;
     retryAt.current = denied ? Math.max(retryAt.current, deadline) : deadline;
     if (denied || retryAt.current > Date.now()) {
@@ -167,14 +171,24 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
     const observation = chainObservation.current;
     setState(previous => ({ ...previous, loading: true }));
     try {
-      const status = await tarotApi.status(request, controller.signal);
-      controller.signal.throwIfAborted();
-      if (latest.current.identity !== identity || reconciliationEpoch.current !== epoch) return null;
+      let status: TarotStatus | null = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const saved = readSavedNfcCode(browserWindow, request.tokenId);
+        const result = await tarotApi.status(request, controller.signal);
+        controller.signal.throwIfAborted();
+        if (latest.current.identity !== identity || reconciliationEpoch.current !== epoch) return null;
+        if (readSavedNfcCode(browserWindow, request.tokenId) === saved) {
+          status = result;
+          break;
+        }
+      }
+      if (!status) throw new DOMException('The saved NFC claim changed during validation.', 'AbortError');
       if (!acceptStatus(status, observation)) {
         setState(previous => ({ ...previous, loading: false }));
         return null;
       }
       initial.succeeded = true;
+      settleNfcScan(browserWindow, request, true);
       setRetryDeadline(null);
       setState({ identity, status, loading: false, error: null });
       if (status.claimed) {

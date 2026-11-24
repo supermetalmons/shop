@@ -1,7 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { JSDOM } from 'jsdom';
+import { createServer } from 'vite';
 import { normalizeMonsApiOrigin } from '../src/lib/monsApiOrigin.ts';
-import { rewriteDependencyPublicRpcFallbacks } from '../vite.config.ts';
+import { createViteConfig, rewriteDependencyPublicRpcFallbacks } from '../vite.config.ts';
+
+test('the NFC document head saves the scan and scrubs its URL before the app loads', async t => {
+  const server = await createServer({
+    ...createViteConfig('test'), configFile: false, cacheDir: '.cache/vite-tests', logLevel: 'silent',
+    server: { middlewareMode: true, hmr: false, watch: null },
+    optimizeDeps: { noDiscovery: true, include: [], entries: [] },
+  });
+  t.after(() => server.close());
+  const template = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+  const html = await server.transformIndexHtml('/nfc', template);
+  const code = '00000000-0000-4000-8000-000000000001';
+  const { window } = new JSDOM(html.split('</head>')[0], {
+    url: `https://shop.example/nfc?code=${code}&tokenId=10&testnet=true#card`, runScripts: 'dangerously',
+  });
+  t.after(() => window.close());
+  assert.equal(window.location.href, 'https://shop.example/nfc?tokenId=10&testnet=true#card');
+  assert.equal(window.localStorage.getItem('mons.shop.tarot.claim:sepolia:10'), code);
+});
 
 test('dependency RPC fallbacks use the same configured mons API origin', () => {
   const apiOrigin = normalizeMonsApiOrigin('https://candidate-api.example/');

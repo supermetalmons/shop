@@ -8,6 +8,20 @@ Evolution and physical redemption are not part of this release.
 ## NFC links
 
 The live format is `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>&testnet=true`.
+Scanning saves the code in the scanning browser’s local storage for that Sepolia
+card and immediately replaces the address with `/nfc?tokenId=<1..777>&testnet=true`.
+Reloading or reopening that address in the same browser restores claim access.
+Rescanning the same card with a different code updates the saved code only after
+the server accepts it. If session storage is unavailable, the browser keeps the
+pending rescan encrypted in its own history entry.
+Anyone opening the shared address in a fresh browser sees the public artwork.
+If local storage is full, session storage keeps the first scan available after a
+reload in that tab. If both stores are unavailable, the scan lasts until reload.
+A credential-specific 401 removes the matching saved code.
+Successful revalidation restores it when no newer code has been saved. A status
+response that overlaps another tab’s credential change is revalidated before
+promotion.
+
 `/nfc?code=basel` preserves the original video placeholder. The standard shop
 header and large card artwork appear immediately for a single canonical token ID,
 without waiting for code validation. Missing or incorrect codes, already-claimed
