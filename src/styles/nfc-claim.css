@@ -52,16 +52,22 @@
 
 .nfc-mutating-card__frame {
   grid-area: 1 / 1;
+}
+
+.nfc-mutating-card__frame,
+.nfc-tarot-layers img {
   animation-duration: 6216ms;
   animation-timing-function: linear;
   animation-iteration-count: infinite;
 }
 
-.nfc-mutating-card--ready .nfc-mutating-card__frame:nth-child(2) {
+.nfc-mutating-card--ready .nfc-mutating-card__frame:nth-child(2),
+.nfc-tarot-layers[data-ready="true"] img {
   animation-name: nfc-mutating-card-middle;
 }
 
-.nfc-mutating-card--ready .nfc-mutating-card__frame:nth-child(3) {
+.nfc-mutating-card--ready .nfc-mutating-card__frame:nth-child(3),
+.nfc-tarot-layers[data-ready="true"] [data-layer="full-size"] {
   animation-name: nfc-mutating-card-last;
 }
 
@@ -103,12 +109,41 @@
   font-size: 18px;
 }
 
+.nfc-tarot-card-stack {
+  position: relative;
+  forced-color-adjust: none;
+}
+
 .nfc-tarot-card {
   --nfc-card-ring-color: color-mix(in srgb, var(--fg) 20%, transparent);
+  background: white;
+  color: #111;
   border-radius: var(--interactive-card-radius);
   box-shadow: 0 0 0 1px var(--nfc-card-ring-color);
   object-fit: contain;
   transform-origin: top left;
+}
+
+.nfc-tarot-layers {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: var(--interactive-card-radius);
+  background: white;
+  pointer-events: none;
+}
+
+.nfc-tarot-layers img {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  object-fit: fill;
+  opacity: 0;
+}
+
+.nfc-tarot-layers + .nfc-tarot-card {
+  position: relative;
+  background: transparent;
 }
 
 .nfc-tarot-page {
@@ -170,16 +205,25 @@ body:has(.nfc-claim-page--artwork) {
 }
 
 .nfc-claim-page--artwork .nfc-claim-nfts,
-.nfc-claim-page--artwork .nfc-claim-nft {
+.nfc-claim-page--artwork .nfc-claim-nft,
+.nfc-claim-page--artwork .nfc-tarot-card-stack {
   display: contents;
 }
 
 .nfc-claim-page--artwork .nfc-tarot-card {
   display: block;
+  aspect-ratio: 1008 / 1600;
   width: auto;
   height: auto;
   max-width: 100%;
   max-height: 100%;
+}
+
+@supports (contain-intrinsic-size: 1px) {
+  .nfc-claim-page--artwork .nfc-tarot-card {
+    contain: size;
+    contain-intrinsic-size: 1008px 1600px;
+  }
 }
 
 .nfc-claim-error {

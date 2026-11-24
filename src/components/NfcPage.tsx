@@ -7,6 +7,7 @@ import { useTarotClaim } from '../ethereum/useTarotClaim';
 import { EthereumWalletPicker } from '../ethereum/EthereumWalletPicker';
 import { useTarotCardTransition } from '../hooks/useTarotCardTransition';
 import { NfcClaimPage } from './NfcClaimPage';
+import { NfcTarotCard } from './NfcTarotCard';
 
 type Props = {
   link: NfcLink; wallet: EthereumWallet; header?: ReactNode; suspended?: boolean; headerWalletOpen?: boolean;
@@ -18,7 +19,7 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
 }) {
   const { visible: walletModalVisible } = useWalletModal();
   const eligible = Boolean(model?.status && !model.status.claimed && model.status.config.enabled);
-  const { cardRef, receiptRef, receiptState, compact, transitioning } =
+  const { cardRef, receiptRef, receiptState, compact, transitioning, animateCard } =
     useTarotCardTransition(eligible, suspended || walletModalVisible || pickerOpen || headerWalletOpen);
   const initialScrollPending = useRef(true);
   useEffect(() => {
@@ -37,9 +38,7 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
       {compact && <h1 className="nfc-claim-page__title nfc-claim-reveal">You got 2 NFTs:</h1>}
       <ul className="nfc-claim-nfts" aria-label={compact ? 'Your NFTs' : undefined} role={compact ? 'list' : 'presentation'}>
         <li className="nfc-claim-nft" role={compact ? undefined : 'presentation'}>
-          <img ref={cardRef} className="nfc-tarot-card"
-            src={`https://wip.lil.org/tarot/bases/${tokenId}.webp`} alt="Mutating Card" width={881} height={1400}
-            style={{ aspectRatio: '881 / 1400' }} loading="eager" fetchPriority="high" decoding="async" draggable={false} referrerPolicy="no-referrer" />
+          <NfcTarotCard tokenId={tokenId} heroRef={cardRef} animate={animateCard} />
           {compact && <div className="nfc-claim-nft__copy nfc-claim-reveal"><h2>Mutating Card</h2><p>Evolve it and get it physically delivered when you’re ready.</p></div>}
         </li>
         {eligible && <li className="nfc-claim-nft nfc-claim-reveal" hidden={!compact}>

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef } from 'react';
+import { useNfcCardImagesReady } from '../hooks/useNfcCardImagesReady';
 
 const FRAME_URLS = [
   'https://wip.lil.org/mutating_card_0.webp',
@@ -8,52 +9,8 @@ const FRAME_URLS = [
 
 export function NfcMutatingCard({ alt, width, height }: { alt: string; width: number; height: number }) {
   const imagesRef = useRef<Array<HTMLImageElement | null>>([]);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    const cleanups: Array<() => void> = [];
-
-    const framePromises = imagesRef.current.map((image) => new Promise<void>((resolve, reject) => {
-      if (!image) {
-        reject();
-        return;
-      }
-      const cleanup = () => {
-        image.removeEventListener('load', loaded);
-        image.removeEventListener('error', failed);
-      };
-      const loaded = () => {
-        cleanup();
-        resolve();
-      };
-      const failed = () => {
-        cleanup();
-        reject();
-      };
-      cleanups.push(cleanup);
-      image.addEventListener('load', loaded);
-      image.addEventListener('error', failed);
-      if (image.complete) {
-        if (image.naturalWidth > 0) loaded();
-        else failed();
-      }
-    }).then(async () => {
-      if (active && image?.decode) await image.decode();
-    }));
-
-    void Promise.all(framePromises).then(() => {
-      if (!active) return;
-      setReady(true);
-    }).catch(() => {
-      cleanups.forEach((cleanup) => cleanup());
-    });
-
-    return () => {
-      active = false;
-      cleanups.forEach((cleanup) => cleanup());
-    };
-  }, []);
+  const getImages = useCallback(() => imagesRef.current, []);
+  const ready = useNfcCardImagesReady(getImages);
 
   return (
     <div className={`nfc-mutating-card${ready ? ' nfc-mutating-card--ready' : ''}`} style={{ aspectRatio: `${width} / ${height}` }}>

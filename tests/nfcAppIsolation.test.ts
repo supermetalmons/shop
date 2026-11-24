@@ -80,7 +80,7 @@ test('Tarot renders the standard header and artwork immediately and preserves bo
   assert.ok(home.querySelector('img.brand-icon'));
   assert.equal((header.getByRole('button', { name: 'Wallet' }) as HTMLButtonElement).disabled, false);
   const artwork = within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img', { name: 'Mutating Card' });
-  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/bases/1.webp');
+  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/heros/1.webp');
   assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
   assert.equal(setVisible.mock.callCount(), 0);
   await act(async () => validation.resolve({ config, tokenId: 1, receiptTokenId: 778, claimed: true,
@@ -147,7 +147,7 @@ test('public artwork navigation keeps the standard header and requires no Tarot 
   const route = resolveAppRoute({ pathname: '/nfc', search: '?tokenId=777' });
   const view = render(page(route));
   const artwork = within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img');
-  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/heros/777.webp');
   await act(async () => view.rerender(page(resolveAppRoute({ pathname: '/nfc', search: '?tokenId=777&code=wrong&testnet=true' }))));
   assert.ok(view.getByRole('banner'));
   assert.equal(within(view.getByRole('main', { name: 'Tarot card' })).getByRole('img').getAttribute('src'), artwork.getAttribute('src'));

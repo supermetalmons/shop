@@ -6,7 +6,7 @@ import type { EthereumWallet } from '../src/ethereum/useEthereum111k.ts';
 import type { EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
-let { dom } = setupFrontendDom();
+let { dom, setMediaQueryMatches } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, waitFor, within } = await import('@testing-library/react');
 const { WalletModalContext } = await import('@solana/wallet-adapter-react-ui');
 const { NfcPage } = await import('../src/components/NfcPage.tsx');
@@ -56,11 +56,15 @@ function page(linkSearch: string, value = wallet(), presentation: { headerWallet
       headerWalletOpen: presentation.headerWalletOpen,
       header: createElement('header', null, createElement('button', null, 'Shop header')) }));
 }
+function cardLayers(root: ParentNode) {
+  return Array.from(root.querySelectorAll<HTMLImageElement>('img[src*="/tarot/layers/"]'));
+}
 function assertArtworkPage(view: ReturnType<typeof render>) {
   const main = view.getByRole('main', { name: 'Tarot card' });
   const card = within(main);
   assert.equal(main.classList.contains('nfc-claim-page--artwork'), true);
   assert.equal(card.getAllByRole('img').length, 1);
+  assert.equal(cardLayers(main).length, 0);
   assert.equal(card.queryByRole('button'), null);
   assert.equal(card.queryByRole('heading'), null);
   assert.equal(card.queryByRole('alert'), null);
@@ -124,7 +128,7 @@ function pendingClaimFixture(t: TestContext, method = 'eth_sendTransaction') {
     },
   };
 }
-beforeEach(() => { dom.window.close(); ({ dom } = setupFrontendDom()); });
+beforeEach(() => { dom.window.close(); ({ dom, setMediaQueryMatches } = setupFrontendDom()); });
 afterEach(() => { cleanup(); mock.restoreAll(); window.sessionStorage.clear(); window.localStorage.clear(); });
 after(() => dom.window.close());
 
@@ -169,7 +173,7 @@ test('Basel preserves the placeholder video and a supplied card ID switches to p
   assert.deepEqual(open.mock.calls[0].arguments, ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank', 'noopener,noreferrer']);
   assert.equal(service.mock.callCount(), 0);
   view.rerender(page('?code=basel&tokenId=1&testnet=true', value));
-  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/1.webp');
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/heros/1.webp');
   assert.equal(service.mock.callCount(), 0);
 });
 
@@ -180,22 +184,62 @@ test('the header and large artwork appear before validation and remain mounted w
   const header = view.getByRole('banner');
   assert.ok(within(header).getByRole('button', { name: 'Shop header' }));
   const artwork = assertArtworkPage(view).getByRole('img');
-  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/tarot/heros/777.webp');
   await act(async () => finish(status(777, true)));
   assert.equal(view.getByRole('banner'), header);
   assert.equal(assertArtworkPage(view).getByRole('img'), artwork);
 });
 
-test('valid unclaimed links preserve the two-NFT composition using their own static media', async () => {
+test('valid unclaimed links display one decorative layer per category with their card and receipt', async () => {
   mockService();
   const view = render(page(search(777)));
   await view.findByRole('button', { name: 'Claim' });
   assert.equal(view.getAllByRole('img').length, 2);
-  assert.equal(view.getByRole('img', { name: 'Mutating Card' }).getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  const hero = view.getByRole('img', { name: 'Mutating Card' });
+  assert.equal(hero.getAttribute('src'), 'https://wip.lil.org/tarot/heros/777.webp');
   assert.equal(view.getByRole('img', { name: 'NFC Card Receipt' }).getAttribute('src'), 'https://wip.lil.org/tarot/receipts/777.webp');
-  assert.equal(view.container.querySelector('.nfc-mutating-card'), null);
-  for (const image of view.getAllByRole('img')) assert.equal(image.getAttribute('referrerpolicy'), 'no-referrer');
+  const layers = cardLayers(view.container);
+  assert.equal(layers.length, 3);
+  for (const [index, ids] of [[1, 6, 7, 10], [3, 4, 5], [2, 8, 9]].entries()) {
+    const urls = ids.map(id => `https://wip.lil.org/tarot/layers/${id}.webp`);
+    assert.ok(urls.includes(layers[index].src));
+  }
+  for (const layer of layers) assert.equal(layer.alt, '');
+  for (const image of view.container.querySelectorAll('main img')) assert.equal(image.getAttribute('referrerpolicy'), 'no-referrer');
   assert.equal(view.queryByRole('textbox'), null);
+  const layerStack = layers[0].parentElement!;
+  const decodes = [hero, ...layers].map(image => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const decode = mock.fn(() => promise);
+    Object.defineProperty(image, 'decode', { value: decode });
+    return { image, decode, resolve };
+  });
+  await act(async () => {
+    for (const { image } of decodes) fireEvent.load(image);
+  });
+  for (const { decode, resolve } of decodes) {
+    assert.equal(decode.mock.callCount(), 1);
+    assert.equal(layerStack.dataset.ready, 'false');
+    await act(async () => resolve());
+  }
+  assert.equal(layerStack.dataset.ready, 'true');
+});
+
+test('the live claim card follows reduced-motion changes while keeping its hero and Claim control', async () => {
+  const preference = '(prefers-reduced-motion: reduce)';
+  setMediaQueryMatches(preference, true);
+  mockService();
+  const view = render(page(search()));
+  const hero = assertArtworkPage(view).getByRole('img');
+  const claim = await view.findByRole('button', { name: 'Claim' });
+  assert.equal(cardLayers(view.container).length, 0);
+  await act(async () => setMediaQueryMatches(preference, false));
+  assert.equal(cardLayers(view.container).length, 3);
+  await act(async () => setMediaQueryMatches(preference, true));
+  assert.equal(cardLayers(view.container).length, 0);
+  assert.equal(view.getByRole('img', { name: 'Mutating Card' }), hero);
+  assert.equal(view.getByRole('button', { name: 'Claim' }), claim);
+  assert.equal((claim as HTMLButtonElement).disabled, false);
 });
 
 test('public artwork links render immediately without validation, receipt loading or wallet actions', () => {
@@ -208,7 +252,7 @@ test('public artwork links render immediately without validation, receipt loadin
     const view = render(page(query, value));
     const tokenId = new URLSearchParams(query).get('tokenId');
     const image = assertArtworkPage(view).getByRole('img');
-    assert.equal(image.getAttribute('src'), `https://wip.lil.org/tarot/bases/${tokenId}.webp`);
+    assert.equal(image.getAttribute('src'), `https://wip.lil.org/tarot/heros/${tokenId}.webp`);
     assert.equal(image.getAttribute('referrerpolicy'), 'no-referrer');
     assert.equal(view.container.querySelector('img[src*="/tarot/receipts/"]'), null);
     assert.equal(view.queryByRole('alert'), null);
@@ -219,17 +263,29 @@ test('public artwork links render immediately without validation, receipt loadin
   assert.equal(connect.mock.callCount(), 0);
 });
 
-test('eligible validation moves the same artwork into the claim layout without replacing the header', async () => {
+test('claim layers wait until the same hero finishes moving into the claim layout', async () => {
   const validation = Promise.withResolvers<TarotStatus>();
+  const motion = Promise.withResolvers<void>();
+  const animate = mock.fn(() => ({ finished: motion.promise, cancel() {} }));
+  Object.defineProperties(HTMLImageElement.prototype, {
+    complete: { configurable: true, get: () => true },
+    naturalWidth: { configurable: true, get: () => 881 },
+  });
   const service = mock.method(tarotApi, 'status', () => validation.promise);
   const value = wallet();
   const connect = mock.method(value, 'connect');
   const view = render(page(search(), value));
   const image = assertArtworkPage(view).getByRole('img');
+  Object.defineProperty(image, 'animate', { value: animate });
+  mock.method(image, 'getBoundingClientRect', () => new dom.window.DOMRect(0, 0, 220, 350));
   const header = view.getByRole('banner');
   assert.equal(view.container.querySelector('img[src*="/tarot/receipts/"]'), null);
   await act(async () => validation.resolve(status()));
+  await waitFor(() => assert.equal(animate.mock.callCount(), 1));
   const main = view.getByRole('main', { name: 'NFC claim' });
+  assert.equal(cardLayers(main).length, 0);
+  await act(async () => motion.resolve());
+  assert.equal(cardLayers(main).length, 3);
   assert.equal(within(main).getByRole('img', { name: 'Mutating Card' }), image);
   assert.equal(view.getByRole('banner'), header);
   assert.ok(within(main).getByRole('heading', { name: 'You got 2 NFTs:' }));
@@ -289,7 +345,7 @@ test('changing credentials for the same card resets validation without accepting
   });
   const value = wallet();
   const view = render(page('?tokenId=1', value));
-  const artworkSrc = 'https://wip.lil.org/tarot/bases/1.webp';
+  const artworkSrc = 'https://wip.lil.org/tarot/heros/1.webp';
   assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
   assert.equal(service.mock.callCount(), 0);
   view.rerender(page(search(), value));
@@ -305,7 +361,8 @@ test('changing credentials for the same card resets validation without accepting
   assert.equal(service.mock.callCount(), 2);
 });
 
-test('background credential revocation silently restores the same large artwork', async () => {
+test('credential revocation restores the same hero and revalidation reuses the layer selection until reload', async () => {
+  const random = mock.method(Math, 'random', () => 0);
   let denied = false;
   mock.method(tarotApi, 'status', async () => {
     if (denied) throw new TarotApiError('This Tarot claim link is invalid.', 403);
@@ -314,10 +371,22 @@ test('background credential revocation silently restores the same large artwork'
   const view = render(page(search()));
   const image = assertArtworkPage(view).getByRole('img');
   await view.findByRole('button', { name: 'Claim' });
+  const selection = cardLayers(view.container).map(layer => layer.src);
+  assert.equal(selection.length, 3);
+  random.mock.mockImplementation(() => 0.99);
   denied = true;
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
   assert.equal(assertArtworkPage(view).getByRole('img'), image);
   assert.equal(view.queryByRole('alert'), null);
+  denied = false;
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.deepEqual(cardLayers(view.container).map(layer => layer.src), selection);
+  view.unmount();
+  const reloaded = render(page(search()));
+  await reloaded.findByRole('button', { name: 'Claim' });
+  const nextSelection = cardLayers(reloaded.container).map(layer => layer.src);
+  assert.equal(nextSelection.length, 3);
+  assert.notDeepEqual(nextSelection, selection);
 });
 
 test('background validation and wallet restoration errors are not user-initiated claim feedback', async () => {
@@ -509,6 +578,10 @@ test('one Claim click connects Ethereum, continues once, and replaces confirmed 
   const connect = mock.method(disconnected, 'connect', () => { disconnected.status = 'connecting'; });
   const view = render(page(search(), disconnected));
   const claim = await view.findByRole('button', { name: 'Claim' });
+  const [layer] = cardLayers(view.container);
+  assert.ok(layer);
+  await act(async () => fireEvent.error(layer));
+  assert.equal((claim as HTMLButtonElement).disabled, false);
   fireEvent.click(claim);
   fireEvent.click(claim);
   assert.equal(connect.mock.callCount(), 1);
@@ -775,7 +848,7 @@ test('route changes discard stale validation results', async () => {
   view.rerender(page(search(777)));
   await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
   await act(async () => finish(status(1, false)));
-  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/bases/777.webp');
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/heros/777.webp');
 });
 
 test('API sends credentials only in a private POST and rejects another card or a mainnet response', async () => {

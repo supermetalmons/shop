@@ -160,5 +160,10 @@ export function useTarotCardTransition(eligible: boolean, paused: boolean) {
     };
   }, [eligible, paused, hidden, reducedMotion, phase]);
 
-  return { cardRef, receiptRef, receiptState, compact: eligible && phase !== 'artwork', transitioning: eligible && phase === 'entering' };
+  return {
+    cardRef, receiptRef, receiptState,
+    compact: eligible && phase !== 'artwork',
+    transitioning: eligible && phase === 'entering',
+    animateCard: eligible && phase === 'claim' && !reducedMotion,
+  };
 }
