@@ -59,7 +59,6 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
           {model.submitted ? 'Claiming…' : model.connecting ? 'Connecting…' : model.pending ? 'Confirm in wallet…' : model.coolingDown ? 'Please wait…' : 'Claim'}
         </button>
       </div>}
-      {compact && model?.claimError ? <p className="nfc-claim-error" role="alert">{model.claimError}</p> : null}
     </main>
   </>;
 }

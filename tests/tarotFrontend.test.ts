@@ -790,7 +790,7 @@ for (const denied of [401, 403]) {
   });
 }
 
-test('a deployment change keeps the error from cancelling an active manual connection', async () => {
+test('a deployment change cancels an active manual connection without showing a message', async () => {
   let activeConfig = config;
   mock.method(tarotApi, 'status', async () => ({ ...status(), config: activeConfig }));
   const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
@@ -802,13 +802,13 @@ test('a deployment change keeps the error from cancelling an active manual conne
   await view.findByRole('button', { name: 'Connecting…' });
   activeConfig = { ...config, contractAddress: `0x${'3'.repeat(40)}` };
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assert.equal((await view.findByRole('alert')).textContent, 'This Tarot drop changed. Please reload and try again.');
-  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
+  assert.equal((await view.findByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(connect.mock.callCount(), 1);
   assert.equal(cancel.mock.callCount(), 1);
   assert.equal(prepare.mock.callCount(), 0);
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assert.equal(view.getByRole('alert').textContent, 'This Tarot drop changed. Please reload and try again.');
+  assert.equal(view.queryByRole('alert'), null);
 });
 
 test('restored availability removes only the obsolete connection availability error', async () => {
@@ -867,18 +867,19 @@ test('a deployment change clears feedback from an inactive earlier manual attemp
   assert.equal(view.result.current.claimError, null);
 });
 
-test('manual connection failures are shown only after the holder clicks Claim', async () => {
+test('manual connection failures leave Claim retryable without showing a message', async () => {
   mockService();
   const value = wallet();
   mock.method(value, 'connect', () => { value.status = 'connecting'; });
   const view = render(page(search(), value));
   fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
   await act(async () => view.rerender(page(search(), { ...value, status: 'disconnected', error: 'Wallet connection was cancelled.' })));
-  assert.equal((await view.findByRole('alert')).textContent, 'Wallet connection was cancelled.');
+  assert.equal((await view.findByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(view.getAllByRole('img').length, 2);
 });
 
-test('manual preparation errors persist through background reads and clear when Claim is retried', async () => {
+test('manual preparation failures stay silent through background reads and allow Claim to be retried', async () => {
   const { prepare } = mockService();
   const second = Promise.withResolvers<TarotPrepareResponse>();
   let attempts = 0;
@@ -888,9 +889,11 @@ test('manual preparation errors persist through background reads and clear when 
   });
   const view = render(page(search(), wallet(true)));
   fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-  assert.equal((await view.findByRole('alert')).textContent, 'Couldn’t prepare this claim.');
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  assert.equal(prepare.mock.callCount(), 1);
+  assert.equal(view.queryByRole('alert'), null);
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
-  assert.equal(view.getByRole('alert').textContent, 'Couldn’t prepare this claim.');
+  assert.equal(view.queryByRole('alert'), null);
   await act(async () => fireEvent.click(view.getByRole('button', { name: 'Claim' })));
   assert.equal(view.queryByRole('alert'), null);
   assert.equal(prepare.mock.callCount(), 2);
@@ -947,7 +950,8 @@ test('wallet rejection preserves a retryable claim and cannot mint or hide the r
   });
   const view = render(page(search(), connected));
   fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-  await view.findByRole('alert');
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(view.getAllByRole('img').length, 2);
   fail = false;
   fireEvent.click(view.getByRole('button', { name: 'Claim' }));
@@ -1160,7 +1164,8 @@ test('rejecting a network switch does not prepare or submit a claim', async () =
   });
   const view = render(page(search(), connected));
   fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-  await view.findByRole('alert');
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(prepare.mock.callCount(), 0);
   assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
 });
@@ -1811,7 +1816,7 @@ test('failed receipt reconciliation preserves a newer reorg observation and acce
 });
 
 for (const failure of ['unavailable', 'rate-limit', 'network', 'invalid-response'] as const) {
-  test(`successful pending confirmation clears recovered ${failure} feedback without clearing the claim`, async t => {
+  test(`pending confirmation recovers from ${failure} silently without clearing the claim`, async t => {
     const f = pendingClaimFixture(t);
     const message = failure === 'network' || failure === 'invalid-response'
       ? 'Couldn’t verify this Tarot claim. Please try again.' : 'Confirmation is temporarily unavailable.';
@@ -1825,7 +1830,8 @@ for (const failure of ['unavailable', 'rate-limit', 'network', 'invalid-response
     window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
     const view = render(page(search(), wallet()));
     await act(async () => undefined);
-    assert.equal(view.getByRole('alert').textContent, message);
+    assert.equal(reads, 1);
+    assert.equal(view.queryByRole('alert'), null);
     assert.equal((view.getByRole('button', { name: 'Claiming…' }) as HTMLButtonElement).disabled, true);
     await act(async () => t.mock.timers.tick(failure === 'rate-limit' ? 60_000 : 4_000));
     assert.equal(reads, 2);
