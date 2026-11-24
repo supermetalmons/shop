@@ -1001,8 +1001,8 @@ test('a pending mint blocks only its placeholders and permits another mint and u
     onSolanaToggle: id => toggled.push(id) });
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
   const mint = () => view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement;
-  fireEvent.click(mint());
-  await waitFor(() => assert.equal(sent, 1));
+  await act(async () => fireEvent.click(mint()));
+  assert.equal(sent, 1);
   await waitFor(() => assert.equal(mint().disabled, false));
   const pending = view.container.querySelector<HTMLElement>('[data-inventory-id^="ethereum-pending:"]')!;
   assert.equal(pending.getAttribute('aria-busy'), 'true');
@@ -1013,8 +1013,8 @@ test('a pending mint blocks only its placeholders and permits another mint and u
   assert.equal((view.getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled, false);
   fireEvent.click(view.container.querySelector('[data-inventory-id="solana"]')!);
   assert.deepEqual(toggled, ['solana']);
-  fireEvent.click(mint());
-  await waitFor(() => assert.equal(sent, 2));
+  await act(async () => fireEvent.click(mint()));
+  assert.equal(sent, 2);
   await waitFor(() => assert.equal(view.container.querySelectorAll('[data-inventory-id^="ethereum-pending:"]').length, 2));
   assert.equal(view.queryByText(/Confirming your transaction/), null);
 });
@@ -1035,8 +1035,8 @@ test('a pending warehouse reserves shared supply while its remaining crates stay
   const view = page({ wallet: connected });
   await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, contract, owner])?.status, 'success'));
   fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
-  fireEvent.click(view.getByRole('button', { name: 'Mint0.0011 ETH' }));
-  await waitFor(() => assert.equal(transactions.length, 1));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Mint0.0011 ETH' })));
+  assert.equal(transactions.length, 1);
   await waitFor(() => assert.equal((view.getByRole('button', { name: 'Mint0.0011 ETH' }) as HTMLButtonElement).disabled, true));
   assert.equal(view.container.querySelector('.mint-panel__remaining-count')?.textContent, '000');
   assert.equal((view.getByRole('radio', { name: 'Crate' }) as HTMLInputElement).disabled, false);
@@ -1048,8 +1048,8 @@ test('a pending warehouse reserves shared supply while its remaining crates stay
   fireEvent.change(slider, { target: { value: '2' } });
   const mintCrates = view.getByRole('button', { name: /Mint\s*2 crates/ }) as HTMLButtonElement;
   assert.equal(mintCrates.disabled, false);
-  fireEvent.click(mintCrates);
-  await waitFor(() => assert.equal(transactions.length, 2));
+  await act(async () => fireEvent.click(mintCrates));
+  assert.equal(transactions.length, 2);
   await waitFor(() => assert.equal((view.getByRole('button', { name: 'Mint0.0001 ETH' }) as HTMLButtonElement).disabled, true));
   assert.equal(view.container.querySelector('.mint-panel__remaining-count')?.textContent, '0000');
   assert.equal(view.queryByRole('slider', { name: 'Mint quantity' }), null);
@@ -1080,12 +1080,12 @@ test('a pending discounted mint switches the next mint to public pricing when it
   } } };
   const view = page({ wallet: connected });
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Mint with discount for 0.00005 ETH. Regular price 0.0001 ETH.' })));
-  fireEvent.click(view.getByRole('button', { name: 'Mint with discount for 0.00005 ETH. Regular price 0.0001 ETH.' }));
-  await waitFor(() => assert.equal(transactions.length, 1));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Mint with discount for 0.00005 ETH. Regular price 0.0001 ETH.' })));
+  assert.equal(transactions.length, 1);
   await waitFor(() => assert.equal((view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ }) as HTMLButtonElement).disabled, false));
   assert.equal(view.container.querySelector('.mint-panel__submit--discounted'), null);
-  fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ }));
-  await waitFor(() => assert.equal(transactions.length, 2));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ })));
+  assert.equal(transactions.length, 2);
   assert.deepEqual(transactions.map(transaction => transaction.data), [
     encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, []]),
     encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]),
@@ -1109,8 +1109,8 @@ test('selecting another crate replaces the first and opens only that crate', asy
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${second.id}"]`)));
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${first.id}"]`)!);
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${second.id}"]`)!);
-  fireEvent.click(view.getByRole('button', { name: 'Open' }));
-  await waitFor(() => assert.equal(transactions.length, 1));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Open' })));
+  assert.equal(transactions.length, 1);
   assert.equal(transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [second.tokenId]));
   assert.ok(view.getByRole('dialog', { name: 'Crate #2 unboxing' }).classList.contains('crate-reveal'));
 });
@@ -1193,8 +1193,8 @@ test('a stored checkout and callback URL do not affect full-drop unpacking or st
   const view = page({ wallet: connected });
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)));
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)!);
-  fireEvent.click(view.getByRole('button', { name: 'Open' }));
-  await waitFor(() => assert.equal(transactions.length, 1));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Open' })));
+  assert.equal(transactions.length, 1);
   assert.equal(transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [warehouse.tokenId]));
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
   assert.equal(view.getByRole('dialog', { name: 'Warehouse #1 unboxing' }).classList.contains('crate-reveal--opening'), false);

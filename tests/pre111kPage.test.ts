@@ -146,13 +146,13 @@ for (const during of ['status', 'prepare'] as const) {
       repriced();
       return { ...quote, transaction: { ...quote.transaction, value: '0x1' } };
     });
-    view.reserve();
+    await act(async () => view.reserve());
     const label = 'Reserve · 0.000000000000000001 ETH';
     await waitFor(() => assert.equal((view.getByRole('button', { name: label }) as HTMLButtonElement).disabled, false));
     assert.match(view.getByRole('alert').textContent ?? '', /price changed/i);
     assert.equal(sendCount, 0);
-    fireEvent.click(view.getByRole('button', { name: label }));
-    await waitFor(() => assert.equal(sendCount, 1));
+    await act(async () => fireEvent.click(view.getByRole('button', { name: label })));
+    assert.equal(sendCount, 1);
   });
 }
 
@@ -225,8 +225,8 @@ for (const network of ['devnet'] as const) {
       assert.equal(cached().reservedRelics, reserved);
       assert.equal(cached().config.maxRelics, 17);
       assert.equal(view.reservedLabel(), `${reserved} reserved`);
-      view.reserve();
-      await waitFor(() => assert.equal(sendCount, 1));
+      await act(async () => view.reserve());
+      assert.equal(sendCount, 1);
       assert.deepEqual(preparedNonces, [reserved]);
       assert.deepEqual(preparedCodes, [ACCESS_CODE]);
       assert.equal(cached().remainingRelics, remaining);
@@ -257,8 +257,8 @@ for (const network of ['devnet'] as const) {
     const view = page(network); await view.ready();
     assert.equal(view.availability(), '01 / 18 left');
     reserved = 17;
-    view.reserve();
-    await waitFor(() => assert.equal(view.getByRole('alert').textContent, 'Preorders ended'));
+    await act(async () => view.reserve());
+    assert.equal(view.getByRole('alert').textContent, 'Preorders ended');
     const ended = view.getByRole('button', { name: 'Preorders ended' }) as HTMLButtonElement;
     assert.equal(ended.disabled, true);
     assert.equal(view.availability(), '00 / 18 left');
@@ -328,8 +328,8 @@ for (const network of ['devnet'] as const) {
     const sent = deferred<string>();
     sendImpl = () => sent.promise;
     const view = page(network); await view.ready();
-    view.reserve(); fireEvent.click(view.primary());
-    await waitFor(() => assert.equal(sendCount, 1));
+    await act(async () => { view.reserve(); fireEvent.click(view.primary()); });
+    assert.equal(sendCount, 1);
     assert.equal(view.primary().disabled, true);
     assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }), null);
     await act(async () => sent.resolve(`0x${'AB'.repeat(32)}`));
@@ -349,8 +349,8 @@ for (const network of ['devnet'] as const) {
   for (const result of ['confirmed', 'failed'] as const) {
     test(`${network} removes the transaction link when its own receipt is ${result}`, async t => {
       t.mock.timers.enable({ apis: ['setInterval'] });
-      const view = page(network); await view.ready(); view.reserve();
-      await waitFor(() => view.getByRole('link', { name: 'View transaction ↗' }));
+      const view = page(network); await view.ready(); await act(async () => view.reserve());
+      view.getByRole('link', { name: 'View transaction ↗' });
       confirmImpl = async (_network, _wallet, transactionHash) => ({ status: result, confirmations: 3, transactionHash, reservationNonce: 0 });
       await act(async () => { t.mock.timers.tick(3_000); });
       await waitFor(() => assert.equal(view.queryByRole('link', { name: 'View transaction ↗' }) === null, true));
@@ -367,11 +367,11 @@ test('confirming an earlier transaction cannot remove the latest pending transac
     if (transactionHash === HASH) { firstSignal = signal; return firstConfirmation.promise; }
     return { status: 'pending', confirmations: 0, transactionHash, reservationNonce: null };
   };
-  const view = page(); await view.ready(); view.reserve();
+  const view = page(); await view.ready(); await act(async () => view.reserve());
   await waitFor(() => assert.ok(firstSignal));
   await view.ready();
   sendImpl = async () => NEXT_HASH;
-  view.reserve();
+  await act(async () => view.reserve());
   const link = () => view.queryByRole('link', { name: 'View transaction ↗' })?.getAttribute('href');
   await waitFor(() => assert.equal(link(), `https://sepolia.etherscan.io/tx/${NEXT_HASH}`));
   assert.deepEqual(preparedNonces, [0, 0]);
@@ -396,8 +396,8 @@ for (const { name, error, message } of [
   test(`${name} releases the active request and allows a new reservation`, async () => {
     window.localStorage.setItem(lastTransactionKey(), HASH);
     sendError = error;
-    const view = page(); await view.ready(); view.reserve();
-    await waitFor(() => assert.match(view.getByRole('alert').textContent!, message));
+    const view = page(); await view.ready(); await act(async () => view.reserve());
+    assert.match(view.getByRole('alert').textContent!, message);
     await view.ready();
     assert.equal(window.localStorage.getItem(pendingKey()), null);
     assert.equal(window.localStorage.getItem(lastTransactionKey()), HASH);
@@ -405,8 +405,8 @@ for (const { name, error, message } of [
     assert.equal(view.queryByRole('button', { name: 'Track transaction' }), null);
     assert.equal(view.queryByRole('textbox', { name: 'Transaction hash' }), null);
     sendImpl = async () => NEXT_HASH;
-    view.reserve();
-    await waitFor(() => assert.equal(sendCount, 2));
+    await act(async () => view.reserve());
+    assert.equal(sendCount, 2);
     await view.ready();
     assert.equal(view.queryByRole('alert'), null);
     assert.equal(window.localStorage.getItem(lastTransactionKey()), HASH);
@@ -420,8 +420,8 @@ for (const completion of ['hash', 'error'] as const) {
     const oldSend = deferred<string>();
     const nextSend = deferred<string>();
     sendImpl = () => oldSend.promise;
-    const view = page(); await view.ready(); view.reserve();
-    await waitFor(() => assert.equal(sendCount, 1));
+    const view = page(); await view.ready(); await act(async () => view.reserve());
+    assert.equal(sendCount, 1);
     await act(async () => { t.mock.timers.tick(3_000); });
     assert.equal(view.primary().disabled, true);
     assert.equal(window.localStorage.getItem(pendingKey()), null);
@@ -431,8 +431,8 @@ for (const completion of ['hash', 'error'] as const) {
     assert.equal(view.reservedLabel(), '1 reserved');
     assert.equal(view.queryByText('Relic reserved.'), null);
     sendImpl = () => nextSend.promise;
-    view.reserve();
-    await waitFor(() => assert.equal(sendCount, 2));
+    await act(async () => view.reserve());
+    assert.equal(sendCount, 2);
     assert.deepEqual(preparedNonces, [0, 1]);
     await act(async () => {
       if (completion === 'hash') oldSend.resolve(HASH);
@@ -452,8 +452,8 @@ test('a late hash is tracked by receipt even when a count increase already relea
   t.mock.timers.enable({ apis: ['setInterval'] });
   const sent = deferred<string>();
   sendImpl = () => sent.promise;
-  const view = page(); await view.ready(); view.reserve();
-  await waitFor(() => assert.equal(sendCount, 1));
+  const view = page(); await view.ready(); await act(async () => view.reserve());
+  assert.equal(sendCount, 1);
   reserved = 1;
   await act(async () => { t.mock.timers.tick(3_000); });
   await view.ready();
@@ -473,8 +473,8 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
   test(`${interruption} invalidates an active request before another reservation starts`, async () => {
     const oldSend = deferred<string>();
     sendImpl = () => oldSend.promise;
-    const view = page(); await view.ready(); view.reserve();
-    await waitFor(() => assert.equal(sendCount, 1));
+    const view = page(); await view.ready(); await act(async () => view.reserve());
+    assert.equal(sendCount, 1);
     let current = view;
     if (interruption === 'disconnect') {
       await disconnectProvider();
@@ -495,8 +495,8 @@ for (const interruption of ['disconnect', 'account change', 'network change', 'u
     }
     await current.ready();
     sendImpl = async () => NEXT_HASH;
-    current.reserve();
-    await waitFor(() => assert.equal(sendCount, 2));
+    await act(async () => current.reserve());
+    assert.equal(sendCount, 2);
     await current.ready();
     await act(async () => oldSend.resolve(HASH));
     assert.equal(current.queryByRole('alert'), null);
@@ -655,8 +655,8 @@ for (const submitWithArrow of [false, true]) {
     assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
     assert.equal(scroll.mock.callCount(), 0);
     assert.equal(sendCount, 0);
-    view.reserve();
-    await waitFor(() => assert.equal(sendCount, 1));
+    await act(async () => view.reserve());
+    assert.equal(sendCount, 1);
     assert.deepEqual(preparedCodes, [ACCESS_CODE]);
   });
 }
@@ -695,9 +695,11 @@ test('a rejected code remains locked and can be corrected without saving the rej
   fireEvent.change(input, { target: { value: 'wrong' } });
   act(() => input.focus());
   const focus = t.mock.method(input, 'focus');
-  fireEvent.submit(input.closest('form')!);
-  assert.notEqual(document.activeElement, input);
-  await waitFor(() => assert.match(view.getByRole('alert').textContent!, /code/i));
+  await act(async () => {
+    fireEvent.submit(input.closest('form')!);
+    assert.notEqual(document.activeElement, input);
+  });
+  assert.match(view.getByRole('alert').textContent!, /code/i);
   assert.equal(document.activeElement, input);
   assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
@@ -717,9 +719,11 @@ test('a temporary verification failure keeps the input retryable without grantin
   fireEvent.change(input, { target: { value: ACCESS_CODE } });
   act(() => input.focus());
   const focus = t.mock.method(input, 'focus');
-  fireEvent.submit(input.closest('form')!);
-  assert.notEqual(document.activeElement, input);
-  await waitFor(() => view.getByRole('alert'));
+  await act(async () => {
+    fireEvent.submit(input.closest('form')!);
+    assert.notEqual(document.activeElement, input);
+  });
+  view.getByRole('alert');
   assert.equal(document.activeElement, input);
   assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
   assert.equal((view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled, false);
@@ -762,8 +766,8 @@ test('a background service failure preserves saved approval while reservation pr
   await view.ready();
   assert.equal(window.localStorage.getItem(ACCESS_KEY), ACCESS_CODE);
   assert.equal(view.queryByRole('textbox', { name: 'Secret code' }) === null, true);
-  view.reserve();
-  await waitFor(() => assert.equal(sendCount, 1));
+  await act(async () => view.reserve());
+  assert.equal(sendCount, 1);
   assert.deepEqual(preparedCodes, [ACCESS_CODE]);
 });
 
@@ -845,8 +849,8 @@ test('a code rejected during preparation relocks the page before wallet submissi
   prepareError = new EthereumApiError(401, 'Enter a valid secret code.', 'unauthenticated');
   const view = page();
   await view.ready();
-  view.reserve();
-  await waitFor(() => view.getByRole('textbox', { name: 'Secret code' }));
+  await act(async () => view.reserve());
+  view.getByRole('textbox', { name: 'Secret code' });
   assert.equal(window.localStorage.getItem(ACCESS_KEY), null);
   assert.deepEqual(preparedCodes, [ACCESS_CODE]);
   assert.equal(sendCount, 0);
@@ -902,8 +906,8 @@ test('approved reservation status retries twice before permitting one preparatio
   assert.equal(walletReads, 3);
   assert.equal(sendCount, 0);
   assert.deepEqual(preparedCodes, []);
-  view.reserve();
-  await waitFor(() => assert.equal(sendCount, 1));
+  await act(async () => view.reserve());
+  assert.equal(sendCount, 1);
   assert.deepEqual(preparedCodes, [ACCESS_CODE]);
 });
 
@@ -918,8 +922,8 @@ test('reservation preflight respects the status cooldown and requires a fresh cl
   void view.client.refetchQueries({ queryKey });
   await waitFor(() => assert.equal(view.client.getQueryState(queryKey)?.fetchFailureReason, failure));
   assert.equal(view.primary().disabled, false);
-  view.reserve();
-  await waitFor(() => view.getByText('Busy'));
+  await act(async () => view.reserve());
+  view.getByText('Busy');
   assert.equal(requests, 1);
   assert.equal(sendCount, 0);
   assert.deepEqual(preparedCodes, []);
@@ -931,8 +935,8 @@ test('reservation preflight respects the status cooldown and requires a fresh cl
   assert.equal(requests, 2);
   assert.equal(sendCount, 0);
   assert.deepEqual(preparedCodes, []);
-  view.reserve();
-  await waitFor(() => assert.equal(sendCount, 1));
+  await act(async () => view.reserve());
+  assert.equal(sendCount, 1);
   assert.deepEqual(preparedCodes, [ACCESS_CODE]);
 });
 

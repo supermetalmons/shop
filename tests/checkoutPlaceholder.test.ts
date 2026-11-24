@@ -8,7 +8,7 @@ import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 let { dom } = setupFrontendDom();
-const { cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { default: CheckoutPage } = await import('../src/checkout/CheckoutPage.tsx');
 const { checkoutApi, CheckoutApiError } = await import('../src/checkout/api.ts');
@@ -68,13 +68,13 @@ test('a transient saved checkout lookup can be retried with the same arrow and r
   const button = view.getByRole('button', { name: 'return' }) as HTMLButtonElement;
   assert.equal(button.textContent?.trim(), '←');
   assert.equal(status.mock.callCount(), 0);
-  fireEvent.click(button);
+  await act(async () => fireEvent.click(button));
   await view.findByRole('alert');
   assert.equal(dom.window.location.pathname, `/checkout/${checkoutId}`);
   assert.equal(button.disabled, false);
   assert.equal(checkoutReservesItems(pending.items), false);
-  fireEvent.click(button);
-  await waitFor(() => assert.equal(dom.window.location.href, callback));
+  await act(async () => fireEvent.click(button));
+  assert.equal(dom.window.location.href, callback);
   assert.deepEqual(status.mock.calls.map(call => call.arguments[0]), [checkoutId, checkoutId]);
   assert.equal(reservedOnReturn, true);
 });
@@ -87,7 +87,7 @@ test('return from a pending checkout waits for durable storage and can be retrie
     throw new Error('Storage quota exceeded');
   });
   const button = view.getByRole('button', { name: 'return' }) as HTMLButtonElement;
-  fireEvent.click(button);
+  await act(async () => fireEvent.click(button));
   const alert = await view.findByRole('alert');
   assert.match(alert.textContent!, /storage/i);
   assert.match(alert.textContent!, /enable|allow|free up/i);
@@ -96,8 +96,8 @@ test('return from a pending checkout waits for durable storage and can be retrie
   assert.equal(button.disabled, false);
 
   blockedWrite.mock.restore();
-  fireEvent.click(button);
-  await waitFor(() => assert.equal(dom.window.location.href, callback));
+  await act(async () => fireEvent.click(button));
+  assert.equal(dom.window.location.href, callback);
   const currentWindow = window;
   const otherTab = new JSDOM('', { url: 'https://mons.shop/' });
   Object.defineProperty(otherTab.window, 'localStorage', { value: storage });
@@ -113,8 +113,8 @@ test('return from a pending checkout waits for durable storage and can be retrie
 test('a missing saved checkout returns to the collection', async t => {
   t.mock.method(checkoutApi, 'status', async () => { throw new CheckoutApiError(404, 'Checkout not found.', null, 'not-found'); });
   const view = renderCheckout(checkoutId);
-  fireEvent.click(view.getByRole('button', { name: 'return' }));
-  await waitFor(() => assert.equal(dom.window.location.pathname, '/111k_devnet'));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'return' })));
+  assert.equal(dom.window.location.pathname, '/111k_devnet');
 });
 
 test('a partner entry returns to its exact callback with the original state without creating a checkout', async t => {
@@ -122,15 +122,15 @@ test('a partner entry returns to its exact callback with the original state with
   const params = new URLSearchParams({ drop: '111k_devnet', ids: '332,553', state: 'lot+7&result=success',
     callback_url: 'https://www.vvv.so/111k-sepolia-test/floor' });
   const view = renderCheckout(undefined, `?${params}`);
-  fireEvent.click(view.getByRole('button', { name: 'return' }));
-  await waitFor(() => assert.equal(dom.window.location.href,
-    'https://www.vvv.so/111k-sepolia-test/floor?state=lot%2B7%26result%3Dsuccess'));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'return' })));
+  assert.equal(dom.window.location.href,
+    'https://www.vvv.so/111k-sepolia-test/floor?state=lot%2B7%26result%3Dsuccess');
   assert.equal(fetch.mock.callCount(), 0);
 });
 
 test('a blob callback with a partner origin returns to the collection', async () => {
   const params = new URLSearchParams({ drop: '111k_devnet', ids: '111112', callback_url: 'blob:https://vvv.so/missing' });
   const view = renderCheckout(undefined, `?${params}`);
-  fireEvent.click(view.getByRole('button', { name: 'return' }));
-  await waitFor(() => assert.equal(dom.window.location.href, 'https://mons.shop/111k_devnet'));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'return' })));
+  assert.equal(dom.window.location.href, 'https://mons.shop/111k_devnet');
 });

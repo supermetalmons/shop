@@ -139,8 +139,8 @@ test('a catalog revision refresh keeps visible inventory and lets an in-flight r
   });
   await waitFor(() => assert.deepEqual(view.result.current.data?.items, [token('1')]));
   let pending!: Promise<unknown>;
-  act(() => { pending = view.result.current.refetch(); });
-  await waitFor(() => assert.ok(staleSignal));
+  await act(async () => { pending = view.result.current.refetch(); });
+  assert.ok(staleSignal);
   view.rerender(after);
   assert.deepEqual(view.result.current.data?.items, [token('1')]);
   assert.equal(staleSignal.aborted, false);

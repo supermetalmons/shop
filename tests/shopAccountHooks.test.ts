@@ -71,8 +71,8 @@ test('admin viewing uses its own cache and returning to the owner restores the a
   assert.equal(result.current.currentOwnerDeliveryRecoveryNextCheckAt, 123);
   assert.deepEqual(ownerRequests, []);
   act(() => result.current.setSettingsOpen(true));
-  act(() => result.current.setOwnerPickerOpened(true));
-  await waitFor(() => assert.equal(ownerRequests.length, 1));
+  await act(async () => result.current.setOwnerPickerOpened(true));
+  assert.equal(ownerRequests.length, 1);
   assert.deepEqual(ownerRequests, [{ cursor: undefined, pageSize: 200 }]);
   await waitFor(() => assert.deepEqual(result.current.deliveryOrderOwners, [admin, 'viewed-wallet'].sort((a, b) => a.localeCompare(b))));
 
@@ -266,13 +266,13 @@ test('concurrent sign-in callers wait for shared restoration without a toast or 
   let second!: Promise<boolean>;
   let third!: Promise<boolean>;
   const outcomes: boolean[] = [];
-  act(() => {
+  await act(async () => {
     first = result.current.ensureSignedIn();
     second = result.current.ensureSignedIn();
     third = result.current.ensureSignedIn();
     for (const request of [first, second, third]) void request.then((outcome) => { outcomes.push(outcome); });
   });
-  await waitFor(() => assert.equal(restores, 1));
+  assert.equal(restores, 1);
   assert.deepEqual(outcomes, []);
   assert.equal(signatures, 0);
   assert.deepEqual(messages, []);
@@ -412,15 +412,15 @@ test('late cleanup of a cancelled restoration preserves an immediate replacement
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
   let cancelled!: Promise<boolean>;
   let replacement!: Promise<boolean>;
-  act(() => { cancelled = result.current.ensureSignedIn({ signal: controller.signal }); });
-  await waitFor(() => assert.equal(signals.length, 1));
-  act(() => {
+  await act(async () => { cancelled = result.current.ensureSignedIn({ signal: controller.signal }); });
+  assert.equal(signals.length, 1);
+  await act(async () => {
     controller.abort();
     replacement = result.current.ensureSignedIn();
     void replacement.then(() => { replacementSettled = true; });
   });
   assert.equal(await cancelled, false);
-  await waitFor(() => assert.equal(signals.length, 2));
+  assert.equal(signals.length, 2);
   assert.equal(signals[0]?.aborted, true);
   assert.notEqual(signals[0], signals[1]);
   await act(async () => { firstRestoration.resolve('sign-in-required'); });
@@ -476,8 +476,8 @@ test('new callers share a pending signature after the original caller cancels', 
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
   let action!: Promise<boolean>;
   let nextAction!: Promise<boolean>;
-  act(() => { action = result.current.ensureSignedIn({ signal: controller.signal }); });
-  await waitFor(() => assert.equal(signatures, 1));
+  await act(async () => { action = result.current.ensureSignedIn({ signal: controller.signal }); });
+  assert.equal(signatures, 1);
   await act(async () => {
     controller.abort();
     assert.equal(await action, false);
@@ -508,8 +508,8 @@ for (const reason of ['wallet switch', 'identity change'] as const) test(`${reas
   };
   const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial });
   let action!: Promise<boolean>;
-  act(() => { action = result.current.ensureSignedIn(); });
-  await waitFor(() => assert.equal(signatures, 1));
+  await act(async () => { action = result.current.ensureSignedIn(); });
+  assert.equal(signatures, 1);
   if (reason === 'wallet switch') {
     const nextKey = new PublicKey(new Uint8Array(32).fill(2));
     rerender({ ...initial, connectedWallet: nextKey.toBase58(), publicKey: nextKey });
@@ -588,8 +588,8 @@ for (const approved of [true, false]) test(`wallet-only actions wait for a dismi
   };
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
   let signIn!: Promise<boolean>;
-  act(() => { signIn = result.current.ensureSignedIn({ signal: controller.signal }); });
-  await waitFor(() => assert.equal(signatures, 1));
+  await act(async () => { signIn = result.current.ensureSignedIn({ signal: controller.signal }); });
+  assert.equal(signatures, 1);
   let wallet!: Promise<string | null>;
   await act(async () => {
     controller.abort();
@@ -646,8 +646,8 @@ test('rejecting sign-in cancels the action even if a background refresh restores
   initial.auth.signIn = () => { signatures += 1; return signature.promise; };
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
   let action!: Promise<boolean>;
-  act(() => { action = result.current.ensureSignedIn(); });
-  await waitFor(() => assert.equal(signatures, 1));
+  await act(async () => { action = result.current.ensureSignedIn(); });
+  assert.equal(signatures, 1);
   await act(async () => {
     restored = true;
     signature.reject(new Error('User rejected the request'));
@@ -672,11 +672,11 @@ test('a rejected shared signature cancels quietly or shows one actionable error'
       const { result, unmount } = renderHook(useShopSignIn, { initialProps: initial });
       let first!: Promise<boolean>;
       let second!: Promise<boolean>;
-      act(() => {
+      await act(async () => {
         first = result.current.ensureSignedIn();
         second = result.current.ensureSignedIn();
       });
-      await waitFor(() => assert.equal(signatures, 1));
+      assert.equal(signatures, 1);
       await act(async () => {
         signature.reject(new Error('Sign-in failed. Please try again.'));
         assert.deepEqual(await Promise.all([first, second]), [false, false]);
@@ -697,8 +697,8 @@ test('navigation and unmount cancel pending actions and suppress late errors', a
       initial.auth.signIn = () => { signatures += 1; return signature.promise; };
       const { result, unmount } = renderHook(useShopSignIn, { initialProps: initial });
       let action!: Promise<boolean>;
-      act(() => { action = result.current.ensureSignedIn(); });
-      await waitFor(() => assert.equal(signatures, 1));
+      await act(async () => { action = result.current.ensureSignedIn(); });
+      assert.equal(signatures, 1);
       if (navigation) act(() => window.dispatchEvent(new dom.window.Event('pagehide')));
       else unmount();
       await act(async () => {

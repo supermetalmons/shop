@@ -213,8 +213,9 @@ test('a scanned card can be claimed after reloading its shareable URL, while a r
 
   openTab(shareUrl, snapshotTab());
   const reloaded = render(createElement(RoutedCard, { value }));
-  fireEvent.click(await reloaded.findByRole('button', { name: 'Claim' }));
-  await waitFor(() => assert.equal(service.prepare.mock.callCount(), 1));
+  const claim = await reloaded.findByRole('button', { name: 'Claim' });
+  await act(async () => fireEvent.click(claim));
+  assert.equal(service.prepare.mock.callCount(), 1);
   assert.deepEqual(service.prepare.mock.calls[0].arguments[0], { ...request, wallet: owner });
   reloaded.unmount();
 
@@ -762,8 +763,9 @@ for (const denied of [401, 403]) {
     const value = wallet(true);
     const provider = mock.method(value.provider!, 'request');
     const view = render(page(search(), value));
-    fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-    await waitFor(() => assertArtworkPage(view));
+    const initialClaim = await view.findByRole('button', { name: 'Claim' });
+    await act(async () => fireEvent.click(initialClaim));
+    assertArtworkPage(view);
     assert.equal(view.queryByRole('alert'), null);
     await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
     const claim = await view.findByRole('button', { name: 'Claim' });
@@ -888,8 +890,9 @@ test('manual preparation failures stay silent through background reads and allow
     return second.promise;
   });
   const view = render(page(search(), wallet(true)));
-  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  const claim = await view.findByRole('button', { name: 'Claim' });
+  await act(async () => fireEvent.click(claim));
+  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
   assert.equal(prepare.mock.callCount(), 1);
   assert.equal(view.queryByRole('alert'), null);
   await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
@@ -949,13 +952,14 @@ test('wallet rejection preserves a retryable claim and cannot mint or hide the r
     return original(input);
   });
   const view = render(page(search(), connected));
-  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  const claim = await view.findByRole('button', { name: 'Claim' });
+  await act(async () => fireEvent.click(claim));
+  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
   assert.equal(view.queryByRole('alert'), null);
   assert.equal(view.getAllByRole('img').length, 2);
   fail = false;
-  fireEvent.click(view.getByRole('button', { name: 'Claim' }));
-  await waitFor(() => assertArtworkPage(view));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Claim' })));
+  assertArtworkPage(view);
 });
 
 test('a refreshed claimed status hides the entire claim UI without connecting a wallet', async () => {
@@ -1014,8 +1018,9 @@ test('a delayed status read cannot reopen the claim after transaction confirmati
   mock.method(tarotApi, 'prepare', async () => prepared());
   const confirm = mock.method(tarotApi, 'confirm', () => new Promise<TarotConfirmResponse>(resolve => { finishConfirmation = resolve; }));
   const view = render(page(search(), wallet(true)));
-  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-  await waitFor(() => assert.equal(confirm.mock.callCount(), 1));
+  const claim = await view.findByRole('button', { name: 'Claim' });
+  await act(async () => fireEvent.click(claim));
+  assert.equal(confirm.mock.callCount(), 1);
   delayStatus = true;
   act(() => window.dispatchEvent(new dom.window.Event('focus')));
   await act(async () => finishConfirmation(confirmed()));
@@ -1163,8 +1168,9 @@ test('rejecting a network switch does not prepare or submit a claim', async () =
     assert.fail(`Unexpected wallet method ${method}`);
   });
   const view = render(page(search(), connected));
-  fireEvent.click(await view.findByRole('button', { name: 'Claim' }));
-  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false));
+  const claim = await view.findByRole('button', { name: 'Claim' });
+  await act(async () => fireEvent.click(claim));
+  assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
   assert.equal(view.queryByRole('alert'), null);
   assert.equal(prepare.mock.callCount(), 0);
   assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);

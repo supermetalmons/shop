@@ -155,8 +155,8 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     const f = fixture(dropId);
     const { result } = renderHook(useShopReveal, { initialProps: f.options });
     let opening!: Promise<void>;
-    act(() => { opening = result.current.openSelectedBox(f.pack); });
-    await waitFor(() => assert.equal(result.current.revealOverlay?.phase, 'ready'));
+    await act(async () => { opening = result.current.openSelectedBox(f.pack); });
+    assert.equal(result.current.revealOverlay?.phase, 'ready');
     assert.equal(result.current.startOpenLoading, assetId);
     assert.equal(result.current.revealOverlay?.packMediaId, 2);
     assert.equal(result.current.presentation.revealOverlayCanRenderMiNotePack3d, true);
@@ -245,8 +245,8 @@ test('rejecting the opening transaction cancels a queued Mi Note reveal without 
   const f = fixture('mi_note_cards_devnet');
   const { result } = renderHook(useShopReveal, { initialProps: f.options });
   let opening!: Promise<void>;
-  act(() => { opening = result.current.openSelectedBox(f.pack); });
-  await waitFor(() => assert.equal(result.current.revealOverlay?.phase, 'ready'));
+  await act(async () => { opening = result.current.openSelectedBox(f.pack); });
+  assert.equal(result.current.revealOverlay?.phase, 'ready');
   const revealing = result.current.handlePonchoOverlayRequestReveal();
   await act(async () => {
     f.confirmation.reject(Object.assign(new Error('User rejected'), { code: 4001 }));
@@ -262,8 +262,8 @@ test('switching wallets makes a queued Mi Note reveal stale even if the original
   const f = fixture('mi_note_cards');
   const { result, rerender } = renderHook(useShopReveal, { initialProps: f.options });
   let opening!: Promise<void>;
-  act(() => { opening = result.current.openSelectedBox(f.pack); });
-  await waitFor(() => assert.equal(result.current.revealOverlay?.phase, 'ready'));
+  await act(async () => { opening = result.current.openSelectedBox(f.pack); });
+  assert.equal(result.current.revealOverlay?.phase, 'ready');
   const revealing = result.current.handlePonchoOverlayRequestReveal();
   const nextOwner = new PublicKey(new Uint8Array(32).fill(23));
   rerender({ ...f.options, connectedWallet: nextOwner.toBase58(), publicKey: nextOwner, owner: nextOwner.toBase58(), localAccountWallet: nextOwner.toBase58() });

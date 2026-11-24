@@ -275,9 +275,9 @@ test('fulfillment exposes mainnet wallet balance and disconnect removes its auth
   fireEvent.click(walletButton);
   await view.findByText('1.2346 SOL');
   assert.ok(balances.every((endpoint) => endpoint.endsWith('/rpc/mainnet-beta')));
-  fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
-  await waitFor(() => assert.equal(disconnects, 1));
-  await waitFor(() => assert.equal(view.queryByText('Order 7'), null));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Disconnect' })));
+  assert.equal(disconnects, 1);
+  assert.equal(view.queryByText('Order 7'), null);
   assert.equal(readStaffWalletSession(), null);
   assert.ok(requests.some(({ path }) => path === '/api/staff/auth/logout'));
   assert.ok(requests.some(({ path }) => path === '/api/auth/anonymous/logout'));
@@ -293,15 +293,15 @@ test('closing the status editor while saving keeps Disconnect disabled until the
   await view.findByText('Order 7');
   fireEvent.click(view.getByRole('button', { name: 'Edit status' }));
   fireEvent.change(view.getByRole('combobox', { name: 'Fulfillment status' }), { target: { value: 'Shipped' } });
-  fireEvent.click(view.getByRole('button', { name: 'Save' }));
-  await waitFor(() => assert.ok(requests.some(({ path }) => path === '/api/fulfillment/order-status')));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Save' })));
+  assert.ok(requests.some(({ path }) => path === '/api/fulfillment/order-status'));
   fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
   fireEvent.click(view.getByRole('button', { name: 'Wallet' }));
   assert.equal((view.getByRole('button', { name: 'Disconnect' }) as HTMLButtonElement).disabled, true);
   await act(async () => {
     pending.resolve(Response.json({ deliveryId: 7, fulfillmentStatus: 'Shipped' }));
   });
-  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Disconnect' }) as HTMLButtonElement).disabled, false));
+  assert.equal((view.getByRole('button', { name: 'Disconnect' }) as HTMLButtonElement).disabled, false);
 });
 
 for (const wallet of MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES) {

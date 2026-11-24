@@ -161,15 +161,15 @@ for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NET
     assert.equal(wallet.calls('eth_requestAccounts').length, 1);
     assert.equal(prepareCalls, 0);
     assert.equal(wallet.calls('eth_sendTransaction').length, 0);
-    view.reserve();
-    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
+    await act(async () => view.reserve());
+    assert.equal(wallet.calls('eth_sendTransaction').length, 1);
     assert.equal(prepareCalls, 1);
   });
 
   test(`${network} reservation switches networks before sending the contract call`, async () => {
     const wallet = walletFixture(wrongChain); wallet.install();
-    const view = page(network); await view.connect(); await view.ready(); view.reserve();
-    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
+    const view = page(network); await view.connect(); await view.ready(); await act(async () => view.reserve());
+    assert.equal(wallet.calls('eth_sendTransaction').length, 1);
     assert.deepEqual(wallet.calls('wallet_switchEthereumChain')[0].params, [{ chainId: chain }]);
     const methods = wallet.requests.map(request => request.method);
     assert.ok(methods.indexOf('wallet_switchEthereumChain') < methods.indexOf('eth_sendTransaction'));
@@ -181,14 +181,14 @@ for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NET
   test(`unknown ${network} uses the fixed add-network fallback`, async () => {
     const wallet = walletFixture(wrongChain);
     wallet.handlers.set('wallet_switchEthereumChain', () => { wallet.handlers.delete('wallet_switchEthereumChain'); throw { code: 4902 }; });
-    wallet.install(); const view = page(network); await view.connect(); await view.ready(); view.reserve();
-    await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
+    wallet.install(); const view = page(network); await view.connect(); await view.ready(); await act(async () => view.reserve());
+    assert.equal(wallet.calls('eth_sendTransaction').length, 1);
     assert.deepEqual(wallet.calls('wallet_addEthereumChain')[0].params, [{ chainId: chain, chainName, nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: [rpcUrl], blockExplorerUrls: [explorerUrl] }]);
   });
   test(`${network} refuses payment if the provider stays on another chain`, async () => {
     const wallet = walletFixture(wrongChain); wallet.handlers.set('wallet_switchEthereumChain', () => null); wallet.install();
-    const view = page(network); await view.connect(); await view.ready(); view.reserve();
-    await waitFor(() => assert.match(view.getByRole('alert').textContent!, new RegExp(`Switch your wallet to ${chainName}`)));
+    const view = page(network); await view.connect(); await view.ready(); await act(async () => view.reserve());
+    assert.match(view.getByRole('alert').textContent!, new RegExp(`Switch your wallet to ${chainName}`));
     assert.equal(wallet.calls('eth_sendTransaction').length, 0); await view.ready();
   });
 }
@@ -196,8 +196,8 @@ for (const { network, chain, wrongChain, chainName, rpcUrl, explorerUrl } of NET
 for (const interruption of ['account change', 'chain change', 'disconnect', 'unmount'] as const) {
   test(`${interruption} during wallet preparation cancels the reservation before sending`, async () => {
     const wallet = walletFixture(); const pending = deferred(); wallet.handlers.set('eth_chainId', () => pending.promise); wallet.install();
-    const view = page(); await view.connect(); await view.ready(); view.reserve();
-    await waitFor(() => assert.equal(wallet.calls('eth_chainId').length, 1));
+    const view = page(); await view.connect(); await view.ready(); await act(async () => view.reserve());
+    assert.equal(wallet.calls('eth_chainId').length, 1);
     await act(async () => {
       if (interruption === 'account change') wallet.emit('accountsChanged', [OTHER]);
       else if (interruption === 'chain change') wallet.emit('chainChanged', '0x1');
@@ -222,8 +222,8 @@ test('multiple announced wallets require an explicit choice instead of sending t
   await view.ready();
   assert.equal(prepareCalls, 0);
   assert.equal(second.calls('eth_sendTransaction').length, 0);
-  view.reserve();
-  await waitFor(() => assert.equal(second.calls('eth_sendTransaction').length, 1));
+  await act(async () => view.reserve());
+  assert.equal(second.calls('eth_sendTransaction').length, 1);
   assert.equal(first.requests.length, 0);
 });
 
@@ -251,8 +251,8 @@ test('a cancelled wallet connection can be retried through Reserve without submi
   assert.equal(wallet.calls('eth_requestAccounts').length, 2);
   assert.equal(prepareCalls, 0);
   assert.equal(wallet.calls('eth_sendTransaction').length, 0);
-  view.reserve();
-  await waitFor(() => assert.equal(wallet.calls('eth_sendTransaction').length, 1));
+  await act(async () => view.reserve());
+  assert.equal(wallet.calls('eth_sendTransaction').length, 1);
 });
 
 for (const [trigger, cancelWithEscape] of [['Reserve', false], ['Connect Wallet', true]] as const) {

@@ -563,8 +563,8 @@ test('the wallet request guard rejects duplicate calls only until broadcast', as
   const view = harness(connected);
   await ready(view);
   let sending!: Promise<boolean>;
-  act(() => { sending = view.result.current.mint('crate', 1); });
-  await waitFor(() => assert.ok(release));
+  await act(async () => { sending = view.result.current.mint('crate', 1); });
+  assert.ok(release);
   assert.ok(view.result.current.busy);
   await act(async () => { assert.equal(await view.result.current.mint('warehouse', 1), false); });
   await act(async () => { release(); assert.equal(await sending, true); });
@@ -1003,8 +1003,8 @@ test('account changes release a hung wallet request and preserve a late broadcas
   const view = harness(connected);
   await ready(view);
   let sending!: Promise<boolean>;
-  act(() => { sending = view.result.current.mint('crate', 1); });
-  await waitFor(() => assert.equal(waiting, true));
+  await act(async () => { sending = view.result.current.mint('crate', 1); });
+  assert.equal(waiting, true);
   view.rerender({ wallet: wallet(other), mintKind: 'crate' });
   await act(async () => { assert.equal(await sending, false); });
   assert.equal(view.result.current.busy, null);
@@ -1162,8 +1162,8 @@ test('a canceled pre-send read cannot resume after the original deployment scope
   const view = harness(connected);
   await ready(view);
   let sending!: Promise<boolean>;
-  act(() => { sending = view.result.current.mint('crate', 1); });
-  await waitFor(() => assert.equal(waiting, true));
+  await act(async () => { sending = view.result.current.mint('crate', 1); });
+  assert.equal(waiting, true);
   const changed = resolveEthereum111kConfig({ contractAddress: '0x4444444444444444444444444444444444444444' });
   act(() => view.client.setQueryData(['ethereum111k', 'config'], changed));
   await waitFor(() => assert.equal(view.result.current.config.contractAddress, changed.contractAddress));
@@ -1197,8 +1197,8 @@ for (const [label, update, expectedError] of [
     const view = harness(connected, 'relic');
     await ready(view);
     let claiming!: Promise<boolean>;
-    act(() => { claiming = view.result.current.claimRelic(1); });
-    await waitFor(() => assert.equal(waiting, true));
+    await act(async () => { claiming = view.result.current.claimRelic(1); });
+    assert.equal(waiting, true);
     latest = { ...latest, ...update, observedBlock: 2 };
     act(() => view.client.setQueryData(['ethereum111k', 'relics', config.chainId, contract, owner], latest));
     await act(async () => { gate.resolve(); assert.equal(await claiming, false); });
@@ -1340,8 +1340,8 @@ test('a stale discounted preflight cannot cancel the foreign confirmation invent
   await waitFor(() => assert.equal(view.result.current.discountProof.isSuccess, true));
   assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false);
   let sending!: Promise<boolean>;
-  act(() => { sending = view.result.current.mint('crate', 1); });
-  await waitFor(() => assert.equal(oldChecks, 2));
+  await act(async () => { sending = view.result.current.mint('crate', 1); });
+  assert.equal(oldChecks, 2);
   act(() => {
     used = 1;
     rememberEthereumConfirmedInventory(scope, operation.id, ['111112'], [], operation.submittedAt);
@@ -1530,8 +1530,8 @@ test('wallet chain cancellation restores relic reads without replaying the abort
     return { ...relicStatus, owner: address };
   });
   let claiming!: Promise<boolean>;
-  act(() => { claiming = view.result.current.claimRelic(1); });
-  await waitFor(() => assert.equal(requested, true));
+  await act(async () => { claiming = view.result.current.claimRelic(1); });
+  assert.equal(requested, true);
   await act(async () => {
     for (const listener of listeners.get('chainChanged') ?? []) listener('0x1');
     assert.equal(await claiming, false);

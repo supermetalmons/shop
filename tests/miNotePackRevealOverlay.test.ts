@@ -383,8 +383,8 @@ test('request failures can retry without duplicate requests or losing the minimu
   const pending = Promise.withResolvers<RevealRequestStatus>();
   const h = await mount({ onRequestReveal: () => ++requests === 1 ? Promise.reject(new Error('Retry')) : pending.promise });
   ready();
-  activate();
-  await waitFor(() => assert.equal(h.completed.at(-1), true));
+  await act(async () => activate());
+  assert.equal(h.completed.at(-1), true);
   assertCleanOverlay(h.view);
   for (let tap = 0; tap < 5; tap += 1) activate();
   await act(async () => {});

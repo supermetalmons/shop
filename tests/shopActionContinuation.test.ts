@@ -125,7 +125,7 @@ test('prepare can wait for fetched inventory, then runs successfully only once',
   const initial = options();
   const { result, rerender } = renderHook(useShopActionContinuation, { initialProps: initial });
   let completion!: Promise<string>;
-  act(() => {
+  await act(async () => {
     completion = result.current.run({
       key: 'shipment', requirement: 'sign-in', cancelled: 'cancelled',
       prepare: () => { preparationAttempts += 1; if (!available) return false; successfulPreparations += 1; return true; },
@@ -133,7 +133,7 @@ test('prepare can wait for fetched inventory, then runs successfully only once',
       execute: () => 'done',
     });
   });
-  await waitFor(() => assert.ok(preparationAttempts > 0));
+  assert.ok(preparationAttempts > 0);
   available = true;
   rerender({ ...initial });
   await waitFor(() => assert.equal(successfulPreparations, 1));
@@ -206,21 +206,21 @@ test('aborting completed and blocked requests cannot cancel a different running 
   const transaction = deferred<string>();
   const { result } = renderHook(() => useShopActionContinuation(options()));
   let signedIn!: Promise<boolean>;
-  act(() => {
+  await act(async () => {
     signedIn = result.current.run({
       key: 'header-sign-in', requirement: 'sign-in', signal: completedRequest.signal,
       execute: () => true, cancelled: false,
     });
   });
-  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  assert.equal(result.current.pendingAction, null);
   assert.equal(await signedIn, true);
   let purchase!: Promise<string>;
-  act(() => {
+  await act(async () => {
     purchase = result.current.run({
       key: 'purchase', requirement: 'sign-in', execute: () => transaction.promise, cancelled: 'cancelled',
     });
   });
-  await waitFor(() => assert.equal(result.current.pendingAction?.phase, 'running'));
+  assert.deepEqual(result.current.pendingAction, { key: 'purchase', phase: 'running' });
   const blocked = await result.current.run({
     key: 'header-sign-in', requirement: 'sign-in', signal: blockedRequest.signal,
     execute: () => true, cancelled: false,
@@ -251,14 +251,14 @@ test('first chosen wallet is pinned and switching away and back cannot revive in
 test('a mismatching connected owner never prepares or executes the captured assets', async () => {
   const { result } = renderHook(() => useShopActionContinuation(options()));
   let completion!: Promise<string>;
-  act(() => {
+  await act(async () => {
     completion = result.current.run({
       key: 'shipment', requirement: 'sign-in', expectedWallet: 'wallet-b', cancelled: 'cancelled',
       prepare: () => { throw new Error('Unexpected preparation'); },
       execute: () => { throw new Error('Unexpected execution'); },
     });
   });
-  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  assert.equal(result.current.pendingAction, null);
   assert.equal(await completion, 'cancelled');
 });
 
@@ -269,8 +269,8 @@ test('closing the initiating surface cancels even while an auth gate never settl
   let completion!: Promise<string>;
   act(() => { completion = result.current.run({ key: 'claim', requirement: 'sign-in', isCurrent: () => open, execute: () => 'done', cancelled: 'cancelled' }); });
   open = false;
-  rerender({ ...initial });
-  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  await act(async () => rerender({ ...initial }));
+  assert.equal(result.current.pendingAction, null);
   assert.equal(await completion, 'cancelled');
 });
 
@@ -290,8 +290,8 @@ test('cancel during execution retains the lock until the transaction settles', a
   const transaction = deferred<string>();
   const { result } = renderHook(() => useShopActionContinuation(options()));
   let completion!: Promise<string>;
-  act(() => { completion = result.current.run({ key: 'purchase', requirement: 'sign-in', execute: () => transaction.promise, cancelled: 'cancelled' }); });
-  await waitFor(() => assert.equal(result.current.pendingAction?.phase, 'running'));
+  await act(async () => { completion = result.current.run({ key: 'purchase', requirement: 'sign-in', execute: () => transaction.promise, cancelled: 'cancelled' }); });
+  assert.equal(result.current.pendingAction?.phase, 'running');
   act(() => { result.current.cancel(); });
   assert.equal(await completion, 'cancelled');
   const duplicate = await result.current.run({ key: 'purchase', requirement: 'sign-in', execute: () => 'duplicate', cancelled: 'cancelled' });
@@ -300,8 +300,8 @@ test('cancel during execution retains the lock until the transaction settles', a
   await act(async () => { transaction.reject(new Error('Late transaction failure')); });
   assert.equal(result.current.pendingAction, null);
   let next!: Promise<string>;
-  act(() => { next = result.current.run({ key: 'claim', requirement: 'sign-in', execute: () => 'done', cancelled: 'cancelled' }); });
-  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  await act(async () => { next = result.current.run({ key: 'claim', requirement: 'sign-in', execute: () => 'done', cancelled: 'cancelled' }); });
+  assert.equal(result.current.pendingAction, null);
   assert.equal(await next, 'done');
 });
 
@@ -309,10 +309,10 @@ test('preparation failure is actionable and clears pending state without executi
   const messages: string[] = [];
   const { result } = renderHook(() => useShopActionContinuation(options({ showToast: (message) => messages.push(message) })));
   let completion!: Promise<string>;
-  act(() => {
+  await act(async () => {
     completion = result.current.run({ key: 'shipment', requirement: 'sign-in', prepare: () => { throw new Error('These items are no longer available.'); }, execute: () => 'wrong', cancelled: 'cancelled' });
   });
-  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  assert.equal(result.current.pendingAction, null);
   assert.equal(await completion, 'cancelled');
   assert.deepEqual(messages, ['These items are no longer available.']);
 });
@@ -332,10 +332,10 @@ test('readiness timeout releases the intent with one actionable message', async 
 test('execution errors still reach the initiating action handler', async () => {
   const { result } = renderHook(() => useShopActionContinuation(options()));
   let assertion!: Promise<void>;
-  act(() => {
+  await act(async () => {
     assertion = assert.rejects(result.current.run({ key: 'claim', requirement: 'sign-in', execute: async () => { throw new Error('Claim unavailable'); }, cancelled: 'cancelled' }), /Claim unavailable/);
   });
-  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  assert.equal(result.current.pendingAction, null);
   await assertion;
 });
 
@@ -346,14 +346,14 @@ test('session replacement aborts readiness after authentication and a new sessio
   const initial = options({ cancellationSignal: session.signal });
   const { result, rerender } = renderHook(useShopActionContinuation, { initialProps: initial });
   let completion!: Promise<string>;
-  act(() => {
+  await act(async () => {
     completion = result.current.run({
       key: 'shipment', requirement: 'sign-in', cancelled: 'cancelled',
       ready: () => { readinessChecks += 1; return false; },
       execute: () => 'wrong',
     });
   });
-  await waitFor(() => assert.ok(readinessChecks > 0));
+  assert.ok(readinessChecks > 0);
   act(() => { session.abort(); });
   assert.equal(await completion, 'cancelled');
   assert.equal(result.current.pendingAction, null);
@@ -361,8 +361,8 @@ test('session replacement aborts readiness after authentication and a new sessio
   assert.equal(cancelled, 'cancelled');
   rerender({ ...initial, cancellationSignal: nextSession.signal });
   let next!: Promise<string>;
-  act(() => { next = result.current.run({ key: 'claim', requirement: 'sign-in', cancelled: 'cancelled', execute: () => 'done' }); });
-  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  await act(async () => { next = result.current.run({ key: 'claim', requirement: 'sign-in', cancelled: 'cancelled', execute: () => 'done' }); });
+  assert.equal(result.current.pendingAction, null);
   assert.equal(await next, 'done');
 });
 
@@ -370,14 +370,14 @@ test('pagehide cancels readiness even after the authentication gate has finished
   let readinessChecks = 0;
   const { result } = renderHook(() => useShopActionContinuation(options()));
   let completion!: Promise<string>;
-  act(() => {
+  await act(async () => {
     completion = result.current.run({
       key: 'preorder', requirement: 'sign-in', cancelled: 'cancelled',
       ready: () => { readinessChecks += 1; return false; },
       execute: () => 'wrong',
     });
   });
-  await waitFor(() => assert.ok(readinessChecks > 0));
+  assert.ok(readinessChecks > 0);
   act(() => { window.dispatchEvent(new dom.window.Event('pagehide')); });
   assert.equal(await completion, 'cancelled');
   assert.equal(result.current.pendingAction, null);

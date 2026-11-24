@@ -207,8 +207,8 @@ test('an early wallet click restores through the real sign-in flow into its load
     assert.equal(context.calls.picker, 1);
     assert.equal(context.calls.signIn, 1);
     assert.equal(context.result.current.control.open, false);
-    context.connect();
-    await waitFor(() => assert.equal(context.calls.signature, 1));
+    await act(async () => context.connect());
+    assert.equal(context.calls.signature, 1);
     assert.equal(context.result.current.control.open, true);
     assert.equal(context.result.current.control.status, 'signing-in');
     await act(async () => { context.signature.resolve(); });
@@ -233,11 +233,11 @@ test('cancelling the early-click wallet picker closes its popup without restarti
     await act(async () => { await context.result.current.control.activate(); });
     await context.finishLoading();
     await waitFor(() => assert.equal(context.result.current.walletModalVisible, true));
-    act(() => { context.result.current.setWalletModalVisible(false); });
-    await waitFor(() => assert.equal(context.result.current.continuation.pendingAction, null));
+    await act(async () => { context.result.current.setWalletModalVisible(false); });
+    assert.equal(context.result.current.continuation.pendingAction, null);
     assert.equal(context.result.current.control.open, false);
-    context.connect();
-    await waitFor(() => assert.equal(context.result.current.auth.sessionResolution, 'settled'));
+    await act(async () => context.connect());
+    assert.equal(context.result.current.auth.sessionResolution, 'settled');
     assert.equal(context.result.current.control.open, false);
     assert.equal(context.result.current.walletModalVisible, false);
     assert.equal(context.calls.picker, 1);
@@ -350,8 +350,8 @@ test('a fresh header request cannot start authentication until a running purchas
   try {
     await context.finishLoading();
     let purchase!: Promise<void>;
-    act(() => { purchase = context.result.current.handlers.handleMint(1); });
-    await waitFor(() => assert.equal(context.calls.mint, 1));
+    await act(async () => { purchase = context.result.current.handlers.handleMint(1); });
+    assert.equal(context.calls.mint, 1);
     await act(async () => { await context.result.current.control.activate(); });
     assert.equal(context.result.current.control.open, true);
     assert.equal(context.calls.signIn, 0);
@@ -551,9 +551,9 @@ for (const [handler, key] of [
   test(`${key} shares restoration through the live action flow and suppresses repeat clicks`, async () => {
     const context = rig();
     let completion!: Promise<void | boolean>;
-    act(() => { completion = context.result.current.handlers[handler](); });
+    await act(async () => { completion = context.result.current.handlers[handler](); });
     assert.deepEqual(context.result.current.continuation.pendingAction, { key, phase: 'authenticating' });
-    await waitFor(() => assert.equal(context.calls.restoration, 1));
+    assert.equal(context.calls.restoration, 1);
     await act(async () => {
       await context.result.current.handlers.handleHeaderSignIn();
       await context.result.current.handlers.handleShipmentsSignIn();
@@ -606,8 +606,8 @@ for (const [handler, key] of [
   test(`${key} navigation cancels restoration and ignores late eligibility`, async () => {
     const context = rig();
     let completion!: Promise<void | boolean>;
-    act(() => { completion = context.result.current.handlers[handler](); });
-    await waitFor(() => assert.equal(context.calls.restoration, 1));
+    await act(async () => { completion = context.result.current.handlers[handler](); });
+    assert.equal(context.calls.restoration, 1);
     context.rerender({ ...context.initial, scopeKey: '/card_nft_2' });
     await act(async () => { assert.equal(await completion, handler === 'handleHeaderSignIn' ? false : undefined); });
     assert.equal(context.result.current.continuation.pendingAction, null);
@@ -654,8 +654,8 @@ test('cancelling a header request during restoration prevents a later signature'
   const context = rig();
   const request = new AbortController();
   let completion!: Promise<boolean>;
-  act(() => { completion = context.result.current.handlers.handleHeaderSignIn({ signal: request.signal }); });
-  await waitFor(() => assert.equal(context.calls.restoration, 1));
+  await act(async () => { completion = context.result.current.handlers.handleHeaderSignIn({ signal: request.signal }); });
+  assert.equal(context.calls.restoration, 1);
   await act(async () => { request.abort(); assert.equal(await completion, false); });
   await act(async () => { context.restoration.resolve('sign-in-required'); });
   assert.equal(context.calls.signature, 0);
@@ -677,8 +677,8 @@ test('a running mint keeps both sign-in actions blocked until it completes', asy
   const context = rig();
   const request = new AbortController();
   let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handleMint(1); });
-  await waitFor(() => assert.equal(context.calls.mint, 1));
+  await act(async () => { completion = context.result.current.handlers.handleMint(1); });
+  assert.equal(context.calls.mint, 1);
   await act(async () => {
     assert.equal(await context.result.current.handlers.handleHeaderSignIn({ signal: request.signal }), false);
     await context.result.current.handlers.handleShipmentsSignIn();

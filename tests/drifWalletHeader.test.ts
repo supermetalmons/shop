@@ -13,7 +13,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { mockCardAssetImages } from './helpers/cardAssets.ts';
 
 const { dom } = setupFrontendDom();
-const { cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const imports = registerHooks({
   load(url, context, nextLoad) {
     return url.endsWith('.css')
@@ -130,9 +130,9 @@ test('notify restores a session-only wallet popup and signs it out without an at
   assert.equal(button.disabled, true);
   fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
   fireEvent.click(button);
-  fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
-  await waitFor(() => assert.equal(readStaffWalletSession(), null));
-  await waitFor(() => assert.equal(view.queryByRole('dialog', { name: 'Wallet' }), null));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Disconnect' })));
+  assert.equal(readStaffWalletSession(), null);
+  assert.equal(view.queryByRole('dialog', { name: 'Wallet' }), null);
   assert.equal(disconnects, 0);
   assert.ok(requests.includes('/api/staff/auth/logout'));
   assert.ok(requests.includes('/api/auth/anonymous/logout'));

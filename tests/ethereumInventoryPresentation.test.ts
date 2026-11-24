@@ -368,8 +368,8 @@ for (const suspended of [false, true]) test(`an empty successful unpack closes s
   const errors: string[] = [];
   const initial = options({ onError: message => errors.push(message) });
   const view = presentationView(initial);
-  act(() => { view.presentation.openUnpack([item()]); });
-  await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
+  await act(async () => { view.presentation.openUnpack([item()]); });
+  assert.equal(view.presentation.overlay?.transactionHash, hash);
   view.rerenderOptions({ ...initial, suspended, unpackResults: { [otherHash]: [] } });
   assert.equal(view.presentation.overlay?.attempted, true);
   assert.equal(view.presentation.overlay?.closing, false);
@@ -390,9 +390,9 @@ for (const failure of ['wallet rejection', 'confirmed failure'] as const) test(`
     return failure === 'wallet rejection' && calls === 1 ? null : calls === 1 ? hash : otherHash;
   } });
   const view = presentationView(initial);
-  act(() => { view.presentation.openUnpack([item()]); });
+  await act(async () => { view.presentation.openUnpack([item()]); });
   if (failure === 'confirmed failure') {
-    await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
+    assert.equal(view.presentation.overlay?.transactionHash, hash);
     view.rerenderOptions({ ...initial, unpackErrors: { [hash]: 'Reverted' } });
   }
   await waitFor(() => assert.equal(view.presentation.overlay?.attempted, false));
@@ -400,8 +400,8 @@ for (const failure of ['wallet rejection', 'confirmed failure'] as const) test(`
   outsideGesture(view.getByRole('dialog'), 'touch');
   assert.equal(view.presentation.overlay?.closing, true);
   await waitFor(() => assert.equal(view.presentation.open, false));
-  act(() => { view.presentation.openUnpack([item()]); });
-  await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, otherHash));
+  await act(async () => { view.presentation.openUnpack([item()]); });
+  assert.equal(view.presentation.overlay?.transactionHash, otherHash);
   assert.equal(calls, 2);
   outsideGesture(view.getByRole('dialog'), 'touch');
   assert.equal(view.presentation.overlay?.closing, false);

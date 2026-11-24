@@ -910,8 +910,8 @@ test('shop actions continue through wallet selection and real auth restoration',
       let action!: Promise<boolean>;
       act(() => { action = result.current.shopSignIn.ensureSignedIn(); });
       harness.loadImpl = () => initial.promise;
-      rerender({ wallet: WALLET_A, modalVisible: false });
-      await waitFor(() => assert.equal(harness.loadCalls, 2));
+      await act(async () => rerender({ wallet: WALLET_A, modalVisible: false }));
+      assert.equal(harness.loadCalls, 2);
       await act(async () => {
         harness.loadImpl = async () => harness.nextState;
         if (outcome === 'expired' || outcome === 'failed') {
@@ -1041,8 +1041,8 @@ test('a profile read that finishes during explicit logout cannot restore the old
   harness.loadImpl = () => profile.promise;
   const previousLoads = harness.loadCalls;
   let refresh!: Promise<boolean>;
-  act(() => { refresh = result.current.refreshProfileState(); });
-  await waitFor(() => assert.equal(harness.loadCalls, previousLoads + 1));
+  await act(async () => { refresh = result.current.refreshProfileState(); });
+  assert.equal(harness.loadCalls, previousLoads + 1);
   const logout = deferred<void>();
   harness.signOutImpl = async () => {
     await logout.promise;
@@ -1122,9 +1122,9 @@ test('logout invalidates queued staff installation without delaying session revo
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
   let signIn!: Promise<{ wallet: string }>;
-  act(() => { signIn = result.current.signIn(); });
+  await act(async () => { signIn = result.current.signIn(); });
   const rejected = assert.rejects(signIn, /Wallet changed during sign-in/);
-  await waitFor(() => assert.equal(installStarted, true));
+  assert.equal(installStarted, true);
   let signOut!: Promise<void>;
   act(() => { signOut = result.current.signOut(); });
   assert.equal(harness.signOutCalls, 1);
@@ -1372,8 +1372,8 @@ test('a profile read started during signing cannot overwrite the newly authentic
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
   let signedIn = false;
   let signIn!: Promise<{ wallet: string }>;
-  act(() => { signIn = result.current.signIn().then((value) => { signedIn = true; return value; }); });
-  await waitFor(() => assert.equal(signatureCalls, 1));
+  await act(async () => { signIn = result.current.signIn().then((value) => { signedIn = true; return value; }); });
+  assert.equal(signatureCalls, 1);
   const stale = deferred<GetProfileStateResponse>();
   harness.loadImpl = () => stale.promise;
   const previousLoadCalls = harness.loadCalls;
@@ -1461,9 +1461,9 @@ test('sign-in rejects if its final profile refresh outlives the connected wallet
   const finalRefresh = deferred<GetProfileStateResponse>();
   harness.loadImpl = () => finalRefresh.promise;
   let signIn!: Promise<{ wallet: string }>;
-  act(() => { signIn = result.current.signIn(); });
+  await act(async () => { signIn = result.current.signIn(); });
   const rejected = assert.rejects(signIn, /changed during sign-in/);
-  await waitFor(() => assert.equal(harness.authenticateCalls, 1));
+  assert.equal(harness.authenticateCalls, 1);
   rerender({ wallet: null });
   await act(async () => {
     finalRefresh.resolve(readyState(WALLET_A));
@@ -1507,14 +1507,14 @@ test('an authenticated action skips restoration and signing during a stalled pro
   harness.loadImpl = () => background.promise;
   const previousLoads = harness.loadCalls;
   let refresh!: Promise<boolean>;
-  act(() => { refresh = result.current.auth.refreshProfileState(); });
-  await waitFor(() => assert.equal(harness.loadCalls, previousLoads + 1));
+  await act(async () => { refresh = result.current.auth.refreshProfileState(); });
+  assert.equal(harness.loadCalls, previousLoads + 1);
 
   let completed = false;
-  act(() => {
+  await act(async () => {
     void result.current.shopSignIn.ensureSignedIn().then((signedIn) => { completed = signedIn; });
   });
-  await waitFor(() => assert.equal(completed, true));
+  assert.equal(completed, true);
   assert.equal(result.current.auth.loading, false);
   assert.equal(result.current.auth.sessionResolution, 'settled');
   assert.equal(result.current.auth.profile, profile);
@@ -1543,12 +1543,12 @@ test('concurrent direct sign-ins share one promise, signature and wallet exchang
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
   let first!: Promise<{ wallet: string }>;
   let second!: Promise<{ wallet: string }>;
-  act(() => {
+  await act(async () => {
     first = result.current.signIn();
     second = result.current.signIn();
   });
   assert.equal(first, second);
-  await waitFor(() => assert.equal(signatures, 1));
+  assert.equal(signatures, 1);
   await act(async () => {
     signature.resolve(new Uint8Array(64));
     assert.deepEqual(await Promise.all([first, second]), [{ wallet: WALLET_A }, { wallet: WALLET_A }]);

@@ -357,7 +357,7 @@ test('an uncertain submission marker keeps a pending return link and does not cl
     ['City', 'New York'], ['State / Region', 'NY'], ['Postal code', '10001']]) {
     fireEvent.change(view.getByLabelText(label), { target: { value } });
   }
-  fireEvent.submit(view.getByRole('button', { name: /Redeem for .* ETH/ }).closest('form')!);
+  await act(async () => fireEvent.submit(view.getByRole('button', { name: /Redeem for .* ETH/ }).closest('form')!));
   await waitFor(() => assert.match((view.getByRole('link', { name: 'Return to VVV' }) as HTMLAnchorElement).href, /result=pending/));
   assert.equal(sends.length, 0);
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Continue with saved address' })));
@@ -377,7 +377,7 @@ for (const stage of ['prepare', 'submission'] as const) test(`a ${stage} token c
     ['City', 'New York'], ['State / Region', 'NY'], ['Postal code', '10001']]) {
     fireEvent.change(view.getByLabelText(label), { target: { value } });
   }
-  fireEvent.submit(view.getByRole('button', { name: /Redeem for .* ETH/ }).closest('form')!);
+  await act(async () => fireEvent.submit(view.getByRole('button', { name: /Redeem for .* ETH/ }).closest('form')!));
   await waitFor(() => assert.equal((view.getByRole('link', { name: 'Resume pending checkout' }) as HTMLAnchorElement).pathname, `/checkout/${previous}`));
   await waitFor(() => assert.equal((view.getByRole('button', {
     name: stage === 'prepare' ? /Redeem for .* ETH/ : 'Continue with saved address',
@@ -516,7 +516,7 @@ test('a pending checkout can refresh to success without a connected wallet or an
   await waitFor(() => assert.equal(checkoutReservesItems(server.items), true));
   assert.match((view.getByRole('link', { name: 'Return to VVV' }) as HTMLAnchorElement).href, /result=pending/);
   server = snapshot({ ...server, status: 'success', confirmations: 3 });
-  fireEvent.click(view.getByRole('button', { name: 'Refresh status' }));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Refresh status' })));
   await waitFor(() => assert.ok(view.getByText('Redemption confirmed')));
   await waitFor(() => assert.equal(checkoutReservesItems(server.items), false));
   assert.match((view.getByRole('link', { name: 'Return to VVV' }) as HTMLAnchorElement).href, /result=success/);
@@ -572,7 +572,7 @@ test('the checkout shows the actual wrong network and switching it retains enter
   const view = render(createElement(QueryClientProvider, { client: query }, createElement(CheckoutPageContent, { checkoutId, search: '', wallet: currentWallet })));
   await waitFor(() => assert.ok(view.getByText(/Chain 1/)));
   fireEvent.change(view.getByLabelText('Full name'), { target: { value: 'A Person' } });
-  fireEvent.click(view.getByRole('button', { name: 'Switch network' }));
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Switch network' })));
   await waitFor(() => assert.ok(!view.queryByRole('button', { name: 'Switch network' })));
   assert.equal((view.getByLabelText('Full name') as HTMLInputElement).value, 'A Person');
   assert.equal(submissions.length, 0);

@@ -231,8 +231,8 @@ test('rejected warehouse submission resets queued hits before a fresh attempt', 
   await act(async () => first.resolve(null));
   assert.equal(view.presentation.overlay?.attempted, false);
   assert.equal(warehouseProps!.hits.length, 0);
-  act(() => { fireEvent.click(button); });
-  await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
+  await act(async () => { fireEvent.click(button); });
+  assert.equal(view.presentation.overlay?.transactionHash, hash);
   assert.deepEqual(warehouseProps!.hits.map(hit => hit.id), [1]);
   assert.equal(view.sends, 2);
 });
@@ -251,8 +251,8 @@ test('rejected crate submission keeps retry hit IDs fresh for the retained scene
   assert.equal(view.presentation.overlay?.attempted, false);
   const rejectedHit = sceneProps!.hit;
   assert.equal(rejectedHit, null);
-  fireEvent.click(button);
-  await waitFor(() => assert.equal(view.presentation.overlay?.transactionHash, hash));
+  await act(async () => { fireEvent.click(button); });
+  assert.equal(view.presentation.overlay?.transactionHash, hash);
   assert.equal(document.querySelector('[data-crate-scene]'), scene);
   assert.equal(sceneProps!.hit?.id, 2);
   assert.equal(sceneProps!.opening, false);

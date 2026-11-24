@@ -124,11 +124,11 @@ function rig() {
     return { handlers, continuation, modals };
   }, { initialProps: initial });
   const expireWhileWaitingForInventory = async () => {
-    await waitFor(() => assert.ok(calls.inventoryChecks > 0));
+    assert.ok(calls.inventoryChecks > 0);
     assert.equal(calls.signIn, 0);
     sessionValid = false;
-    view.rerender({ ...initial, inventoryFetched: true });
-    await waitFor(() => assert.equal(calls.signIn, 1));
+    await act(async () => view.rerender({ ...initial, inventoryFetched: true }));
+    assert.equal(calls.signIn, 1);
     assert.equal(view.result.current.continuation.pendingAction?.phase, 'running');
   };
   return { ...view, initial, calls, messages, approve, expireWhileWaitingForInventory };
@@ -137,7 +137,7 @@ function rig() {
 test('navigation cancels a shipment opening that needed sign-in again after inventory readiness', async () => {
   const context = rig();
   let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handleOpenShip(); });
+  await act(async () => { completion = context.result.current.handlers.handleOpenShip(); });
   await context.expireWhileWaitingForInventory();
   context.rerender({ ...context.initial, scopeKey: '/other', inventoryFetched: true });
   await act(async () => { await completion; });
@@ -152,7 +152,7 @@ test('closing Shipment cancels Admin IRL Redeem while its second sign-in is wait
   const context = rig();
   act(() => context.result.current.modals.openDelivery());
   let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handleAdminIrlRedeem(); });
+  await act(async () => { completion = context.result.current.handlers.handleAdminIrlRedeem(); });
   await context.expireWhileWaitingForInventory();
   act(() => context.result.current.modals.closeDelivery());
   await act(async () => { await completion; });
@@ -169,7 +169,7 @@ test('a current action continues once when sign-in expires while waiting for inv
   const context = rig();
   act(() => context.result.current.modals.openDelivery());
   let completion!: Promise<void>;
-  act(() => { completion = context.result.current.handlers.handleAdminIrlRedeem(); });
+  await act(async () => { completion = context.result.current.handlers.handleAdminIrlRedeem(); });
   await context.expireWhileWaitingForInventory();
   assert.equal(context.calls.prepare, 0);
   await act(async () => { context.approve(); await completion; });

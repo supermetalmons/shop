@@ -168,8 +168,8 @@ test('one inventory receipt preserves the selected overlay in other clients and 
   await waitFor(() => assert.ok(consumers.every(consumer => !consumer.result.current.queries.inventoryFetching)));
   consumers.forEach((consumer, index) => assertSelectedInventory(consumer, selectedAt[index]));
   let refresh!: ReturnType<typeof first.result.current.queries.refetchInventory>;
-  act(() => { refresh = first.result.current.queries.refetchInventory(); });
-  await waitFor(() => assert.equal(responses.length, 4));
+  await act(async () => { refresh = first.result.current.queries.refetchInventory(); });
+  assert.equal(responses.length, 4);
   await act(async () => { responses[3].resolve(Response.json({ ok: true, items: [] })); await refresh; });
   assert.deepEqual(firstClient.getQueryData(['inventory', owner, false]), []);
   assertSelectedInventory(first, selectedAt[0]);

@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, 'MutationObserver', { configurable: true, valu
 Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: dom.window.getComputedStyle });
 Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, writable: true, value: true });
 
-const { cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const { DeliveryForm } = await import('../src/components/DeliveryForm.tsx');
 
 afterEach(() => cleanup());
@@ -248,8 +248,8 @@ test('delivery form submits international addresses with only the required local
     fireEvent.change(view.getByLabelText('City'), { target: { value: city } });
     if (region) fireEvent.change(view.getByLabelText(/^State \/ Region/), { target: { value: region } });
     if (postal) fireEvent.change(view.getByLabelText(/^Postal code/), { target: { value: postal } });
-    fireEvent.submit(view.container.querySelector('form')!);
-    await waitFor(() => assert.equal(submissions.length, 1));
+    await act(async () => fireEvent.submit(view.container.querySelector('form')!));
+    assert.equal(submissions.length, 1);
     assert.equal(submissions[0].countryCode, code);
     assert.equal(submissions[0].formatted.split('\n')[2], line);
     const parsed = parseShipStationShipTo(submissions[0].formatted, submissions[0].countryCode);
@@ -282,8 +282,8 @@ test('a legacy international country selection must be replaced with a real dest
     ['Email', 'recipient@example.com'], ['Full name', 'Recipient'], ['Address line 1', '1 Example Street'],
     ['City', 'Kingston'], ['State / Region', 'Kingston'],
   ]) fireEvent.change(view.getByLabelText(label), { target: { value } });
-  fireEvent.submit(view.container.querySelector('form')!);
-  await waitFor(() => assert.equal(submissions.length, 1));
+  await act(async () => fireEvent.submit(view.container.querySelector('form')!));
+  assert.equal(submissions.length, 1);
   assert.equal(submissions[0].countryCode, 'JM');
 });
 

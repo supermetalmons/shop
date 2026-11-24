@@ -124,8 +124,8 @@ test('confirmed mint resets controls and registers expected assets before a slow
   };
   const { result } = renderHook(() => useShopPurchaseActions(options, runtime));
   let mint!: Promise<void>;
-  act(() => { mint = result.current.handleMint(2); });
-  await waitFor(() => assert.equal(result.current.successfulMintToken, 1));
+  await act(async () => { mint = result.current.handleMint(2); });
+  assert.equal(result.current.successfulMintToken, 1);
   assert.equal(result.current.minting, true);
   assert.deepEqual(events, ['build', 'confirm', 'expected-assets', 'local-boxes', 'stats', 'inventory-after-mint']);
   await act(async () => { await result.current.handleMint(2); });
@@ -292,8 +292,8 @@ test('a confirmed discount mint cannot apply its allowance to a different wallet
   const { result, rerender } = renderHook((props: Options) => useShopPurchaseActions(props, runtime), { initialProps: options });
   await waitFor(() => assert.equal(result.current.discountAvailable, true));
   let mint!: Promise<void>;
-  act(() => { mint = result.current.handleDiscountMint(1); });
-  await waitFor(() => assert.equal(confirming, true));
+  await act(async () => { mint = result.current.handleDiscountMint(1); });
+  assert.equal(confirming, true);
   rerender({ ...options, connectedWallet: nextKey.toBase58(), publicKey: nextKey });
   await waitFor(() => assert.equal(result.current.discountChecking, false));
   await act(async () => { confirmation.resolve(false); await mint; });
@@ -315,8 +315,8 @@ test('a confirmed discount mint cannot overwrite a newer discount version in sto
   const { result, rerender } = renderHook((props: Options) => useShopPurchaseActions(props, runtime), { initialProps: options });
   await waitFor(() => assert.equal(result.current.discountAvailable, true));
   let mint!: Promise<void>;
-  act(() => { mint = result.current.handleDiscountMint(1); });
-  await waitFor(() => assert.equal(confirming, true));
+  await act(async () => { mint = result.current.handleDiscountMint(1); });
+  assert.equal(confirming, true);
   runtime.fetchDiscountMintRecordUsedCount = async () => 1;
   const nextVersion = 'regression:v2';
   const nextCacheKey = discountUsedKey(nextVersion, options.connectedWallet);
@@ -347,8 +347,8 @@ for (const contextChange of ['wallet', 'route'] as const) {
     const { result, rerender } = renderHook((props: Options) => useShopPurchaseActions(props, runtime), { initialProps: options });
     await waitFor(() => assert.equal(result.current.discountAvailable, true));
     let mint!: Promise<void>;
-    act(() => { mint = result.current.handleDiscountMint(1); });
-    await waitFor(() => assert.equal(confirming, true));
+    await act(async () => { mint = result.current.handleDiscountMint(1); });
+    assert.equal(confirming, true);
     rerender(contextChange === 'wallet'
       ? { ...options, connectedWallet: nextKey.toBase58(), publicKey: nextKey }
       : {
