@@ -131,10 +131,17 @@ export function useTarotCardTransition(eligible: boolean, paused: boolean) {
     const width = viewport?.width;
     const height = viewport?.height;
     const scale = viewport?.scale;
-    const animation = card.animate([
-      { transform: `translate(${start.left - end.left}px, ${start.top - end.top}px) scale(${start.width / end.width})` },
-      { transform: 'none' },
-    ], { duration: 394, delay: 16, easing: 'cubic-bezier(.24,.42,.2,1)', fill: 'backwards' });
+    const startScale = start.width / end.width;
+    const keyframes = Array.from({ length: 17 }, (_, index) => {
+      const remaining = 1 - index / 16;
+      const cardScale = 1 + (startScale - 1) * remaining;
+      return {
+        transform: `translate(${(start.left - end.left) * remaining}px, ${(start.top - end.top) * remaining}px) scale(${cardScale})`,
+        boxShadow: `0 0 0 ${1 / cardScale}px var(--nfc-card-ring-color)`,
+      };
+    });
+    const animation = card.animate(keyframes,
+      { duration: 394, delay: 16, easing: 'cubic-bezier(.24,.42,.2,1)', fill: 'backwards' });
     let active = true;
     const finish = () => { if (active) setPhase('claim'); };
     const viewportResized = () => {

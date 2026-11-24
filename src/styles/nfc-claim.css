@@ -104,8 +104,9 @@
 }
 
 .nfc-tarot-card {
+  --nfc-card-ring-color: color-mix(in srgb, var(--fg) 20%, transparent);
   border-radius: var(--interactive-card-radius);
-  outline: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  box-shadow: 0 0 0 1px var(--nfc-card-ring-color);
   object-fit: contain;
   transform-origin: top left;
 }

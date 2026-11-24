@@ -94,7 +94,10 @@ test('early eligibility waits for artwork load, decode and paint before moving t
   assert.equal(image.dataset.layout, 'compact');
   assert.equal(controlled.animations.length, 1);
   assert.equal(controlled.animations[0].node, image);
-  assert.notEqual(controlled.animations[0].keyframes[0].transform, controlled.animations[0].keyframes.at(-1)?.transform);
+  assert.equal(controlled.animations[0].keyframes[0].transform, 'translate(110px, -40px) scale(2)');
+  assert.equal(controlled.animations[0].keyframes[0].boxShadow, '0 0 0 0.5px var(--nfc-card-ring-color)');
+  assert.equal(controlled.animations[0].keyframes.at(-1)?.transform, 'translate(0px, 0px) scale(1)');
+  assert.equal(controlled.animations[0].keyframes.at(-1)?.boxShadow, '0 0 0 1px var(--nfc-card-ring-color)');
   assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, true);
   await act(async () => controlled.animations[0].finished.resolve());
   assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, false);
@@ -236,6 +239,19 @@ test('reduced motion exposes the eligible layout without starting an animation',
   assert.equal(view.getByRole('img').dataset.layout, 'compact');
   assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, false);
   assert.equal(controlled.animations.length, 0);
+  assert.equal(controlled.frames.size, 0);
+});
+
+test('native card animation works without custom-property registration', async () => {
+  const controlled = controls({ cached: true });
+  Object.defineProperty(window, 'CSS', { configurable: true, value: {} });
+  const view = render(createElement(Card, { eligible: true }));
+  await controlled.decode();
+  await controlled.paint();
+  assert.equal(view.getByRole('img').dataset.layout, 'compact');
+  assert.equal(controlled.animations.length, 1);
+  await act(async () => controlled.animations[0].finished.resolve());
+  assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, false);
   assert.equal(controlled.frames.size, 0);
 });
 
