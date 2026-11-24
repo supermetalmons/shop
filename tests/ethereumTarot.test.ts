@@ -57,7 +57,7 @@ test('claim code hashing normalizes casing and binds deployment and card without
 test('Tarot signing matches the Solidity fixture and binds every authorization field', () => {
   const claim = { chainId: 11155111, contractAddress, wallet, tokenId: 777, deadline: 2_000_000_600 };
   const digest = tarotClaimDigest(claim);
-  assert.equal(digest, '0x2000d9adbb67a0beb4cc16b29f621b369f4b6396a12308a78393169888fc261a');
+  assert.equal(digest, '0x3cf218cb14c4ea887ffc71cc80a644337a7f98abb9a8600bb8de08288d460b7c');
   const key = '0x' + 'a11ce'.padStart(64, '0');
   assert.equal(recoverEthereumAddress(digest, signDigest(key, digest)), ethereumSignerAddress(key));
   for (const modified of [{ ...claim, chainId: 1 }, { ...claim, contractAddress: wallet },

@@ -34,7 +34,7 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient {
     constructor(address initialOwner, address signer, string memory baseURI_)
         ERC721("divination machina x", "DMX")
         Ownable(initialOwner)
-        EIP712("Tarot Cards", "1")
+        EIP712("divination machina x", "1")
     {
         if (block.chainid != 11155111 && block.chainid != 31337) revert UnsupportedChain();
         if (initialOwner == address(this) || signer == address(0) || signer == address(this)) revert InvalidAddress();

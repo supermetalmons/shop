@@ -11,7 +11,7 @@ export function tarotClaimDigest(args: {
 }): Hex {
   const domain = hash(hexToBytes(encodeAbi(['bytes32', 'bytes32', 'bytes32', 'uint256', 'address'], [
     textHash('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'),
-    textHash('Tarot Cards'), textHash('1'), args.chainId, requireEthereumAddress(args.contractAddress),
+    textHash('divination machina x'), textHash('1'), args.chainId, requireEthereumAddress(args.contractAddress),
   ]).slice(2)));
   const claim = hash(hexToBytes(encodeAbi(['bytes32', 'address', 'uint256', 'uint256'], [
     textHash('TarotClaim(address wallet,uint256 tokenId,uint256 deadline)'),

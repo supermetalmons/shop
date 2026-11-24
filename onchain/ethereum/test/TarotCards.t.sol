@@ -55,7 +55,7 @@ contract TarotCardsTest is TestSupport {
     {
         bytes32 domain = keccak256(abi.encode(
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256("Tarot Cards"), keccak256("1"), chainId, contractAddress
+            keccak256("divination machina x"), keccak256("1"), chainId, contractAddress
         ));
         bytes32 data = keccak256(abi.encode(
             keccak256("TarotClaim(address wallet,uint256 tokenId,uint256 deadline)"), wallet, tokenId, deadline
@@ -94,7 +94,7 @@ contract TarotCardsTest is TestSupport {
         (bytes1 fields, string memory name, string memory version, uint256 chain, address verifyingContract,,) =
             token.eip712Domain();
         assertEq(uint256(uint8(fields)), 15);
-        assertEq(name, "Tarot Cards");
+        assertEq(name, "divination machina x");
         assertEq(version, "1");
         assertEq(chain, 11155111);
         assertEq(verifyingContract, address(token));
@@ -154,7 +154,7 @@ contract TarotCardsTest is TestSupport {
     function testSigningDigestMatchesSharedFixture() public pure {
         assertEq(_digest(0x1111111111111111111111111111111111111111, 777, 2_000_000_600,
             0x3333333333333333333333333333333333333333, 11155111),
-            0x2000d9adbb67a0beb4cc16b29f621b369f4b6396a12308a78393169888fc261a);
+            0x3cf218cb14c4ea887ffc71cc80a644337a7f98abb9a8600bb8de08288d460b7c);
     }
 
     function testAllCardsCanBeClaimedOnceWithoutReceiptCollisions() public {
