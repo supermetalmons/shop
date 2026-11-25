@@ -30,7 +30,8 @@ not migrated; retiring a deployment does not erase its onchain history.
 | Redemption receipts | `1000777..2000775` | `1000776 + burnedCardId` |
 
 `INITIAL_CARDS` is 777; `MAX_CARDS` is the lifetime ceiling of 999999. Every NFT
-ID is recorded in `issued` permanently. A burned card can never be minted again.
+ID remains observable through `issued(tokenId)` permanently. A burned card can
+never be minted again.
 Receipts are transferable proofs and cannot be burned or redeemed. Initial NFC
 receipts survive independently when the corresponding card is redeemed.
 
@@ -69,6 +70,21 @@ before any output receiver callback. Any failed safe mint rolls back burns,
 fees, issuance, and authorization consumption. `generation`, `createdByOrder`,
 `redeemedByOrder`, `getTokenInfo`, and `getRedemption` preserve provenance after
 burning; `tokenURI` still requires a currently existing NFT.
+
+The current source stores permanent card issuance in an OpenZeppelin bitmap.
+`claimed(tokenId)` derives the initial-card claim flag from that issuance bit;
+`issued(tokenId)` derives NFC receipt issuance from its initial card and redemption
+receipt issuance from its source card's nonzero `redeemedByOrder`. These getters
+retain their existing signatures and values, including after transfers and burns.
+All issuance and receipt flags are visible before receiver callbacks.
+
+Redemption records pack validated card IDs into `uint32[]` storage arrays, with
+eight IDs per slot. Input and output IDs are range-checked before narrowing;
+`getRedemption` expands them back to the original ordered `uint256[]` results.
+Calldata, events, signed array hashes, order IDs, and generation values keep their
+original types. Direct minting leaves fresh generation and creation-order slots
+at their default zero values. Permanent issuance prevents those slots from being
+reused for a previously minted card.
 
 Minting starts enabled and redemption starts paused. The owner independently
 controls `setMintingPaused` and `setRedemptionsPaused`; neither stops transfers
@@ -398,6 +414,11 @@ nonce, and fees. New manifests also pin `expectedCollectionImage` to the DMX
 collection image. Original manifests without that field are verified against
 their matching original deployment metadata; preserve that evidence unchanged.
 Renderer and collection have separate manifests and journals.
+The compact-storage source revision changes collection creation and runtime
+bytecode. Rebuild and prepare a fresh collection release for that revision;
+retain historical deployment sources, artifacts, manifests, and signed journals
+unchanged. Mainnet credential binding checks the approved release against the
+current local build as well as the deployed code.
 Source verification supports both contract types and requires release version 2
 with an explicit `contractName`; older manifests are rejected before requests.
 Resume the same signed journal after interrupted broadcasts. Preserve the new
@@ -448,6 +469,20 @@ before manually removing an unrecognized lock. Recovery never authorizes
 replacing an existing manifest or signed journal; resume that release instead.
 
 ## Release validation and recovery
+
+Run the isolated DMX gas regression check with
+`npm --prefix onchain/ethereum run gas:dmx:check`. To record new snapshots after
+an intentional contract change, use
+`npm --prefix onchain/ethereum run gas:dmx:update` and review the resulting diff.
+The cases cover cold and populated-bucket claims, initial and future mint
+batches, sparse IDs across bitmap buckets, redemptions with up to 50 inputs and
+50 outputs, and redemption-record reads.
+Measurements isolate each contract call from setup and earlier transaction
+accesses. Bitmap savings depend on sharing buckets; sparse IDs open more
+storage slots than consecutive IDs.
+The [compact-storage comparison](../../onchain/ethereum/benchmarks/dmx-gas-optimization.json)
+records before/after gas using the same harness and compiler settings, excluding
+transaction intrinsic gas. It pins the baseline commit and measured source hashes.
 
 Run the Tarot contract/deployment tests, frontend/API/runtime tests, and
 `npm run test:tarot:e2e` and `npm run test:tarot:mainnet:e2e`. The E2E tests deploy locally and submit local

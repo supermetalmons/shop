@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "a5ceee47089568b753d27d572b96aeb1db4412f4",
+  "compiler": {
+    "version": "0.8.38",
+    "optimizerRuns": 200,
+    "viaIR": false,
+    "evmVersion": "prague"
+  },
+  "measurement": {
+    "chainId": 1,
+    "isolated": true,
+    "includesTransactionIntrinsicGas": false,
+    "harness": "test/DMXGas.t.sol",
+    "harnessSha256": "969a8229938f36e18d23b33b1e853a973cd5a7a3137cb58249272ccc629a5ed9"
+  },
+  "baseline": {
+    "sourceSha256": "073c18a501972a133719ed90cd4c6a36ba91c6550f43c99a39ec52af2fab9aa8",
+    "runtimeBytes": 16322
+  },
+  "optimized": {
+    "sourceSha256": "2329a443d0afbf665bcd1794d4984513b9f4c012b71ad501b80afeeee8e2a9f9",
+    "runtimeBytes": 16670
+  },
+  "gas": {
+    "claimFirst": {
+      "baseline": 179819,
+      "optimized": 130776,
+      "saved": 49043,
+      "reductionPercent": 27.27
+    },
+    "claimPopulatedBucket": {
+      "baseline": 179819,
+      "optimized": 113676,
+      "saved": 66143,
+      "reductionPercent": 36.78
+    },
+    "getRedemption1": {
+      "baseline": 16506,
+      "optimized": 17043,
+      "saved": -537,
+      "reductionPercent": -3.25
+    },
+    "getRedemption50": {
+      "baseline": 235917,
+      "optimized": 100898,
+      "saved": 135019,
+      "reductionPercent": 57.23
+    },
+    "mintFuture50": {
+      "baseline": 2700151,
+      "optimized": 1404401,
+      "saved": 1295750,
+      "reductionPercent": 47.99
+    },
+    "mintInitial50": {
+      "baseline": 6311477,
+      "optimized": 2779027,
+      "saved": 3532450,
+      "reductionPercent": 55.97
+    },
+    "mintSparseFuture50": {
+      "baseline": 2700151,
+      "optimized": 2477501,
+      "saved": 222650,
+      "reductionPercent": 8.25
+    },
+    "redeemInitial1": {
+      "baseline": 377066,
+      "optimized": 354520,
+      "saved": 22546,
+      "reductionPercent": 5.98
+    },
+    "redeemInitial50": {
+      "baseline": 11072015,
+      "optimized": 7036125,
+      "saved": 4035890,
+      "reductionPercent": 36.45
+    }
+  }
+}

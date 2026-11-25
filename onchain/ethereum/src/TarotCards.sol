@@ -7,9 +7,12 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ERC165Checker} from "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {BitMaps} from "@openzeppelin/contracts/utils/structs/BitMaps.sol";
 import {IDMXRenderer, IDMXTokenInfo} from "./IDMXRenderer.sol";
 
 contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, IDMXTokenInfo {
+    using BitMaps for BitMaps.BitMap;
+
     struct MintQuote {
         bytes32 authorizationId;
         address recipient;
@@ -28,8 +31,8 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
     struct RedemptionRecord {
         address wallet;
         address recipient;
-        uint256[] inputCardIds;
-        uint256[] outputCardIds;
+        uint32[] inputCardIds;
+        uint32[] outputCardIds;
     }
 
     struct RedemptionConfig {
@@ -65,8 +68,7 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
     bool public mintingPaused;
     bool public redemptionsPaused = true;
     uint256 public redemptionConfigCount;
-    mapping(uint256 => bool) public claimed;
-    mapping(uint256 => bool) public issued;
+    BitMaps.BitMap private issuedBits;
     mapping(bytes32 => bool) public usedMintAuthorizations;
     mapping(uint256 => bool) public usedRedemptionOrders;
     mapping(uint256 => uint256) public generation;
@@ -132,6 +134,17 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
         _setRenderer(initialRenderer);
     }
 
+    function claimed(uint256 tokenId) public view returns (bool) {
+        return tokenId > 0 && tokenId <= INITIAL_CARDS && issuedBits.get(tokenId);
+    }
+
+    function issued(uint256 tokenId) public view returns (bool) {
+        if (tokenId == 0 || tokenId > MAX_TOKEN_ID) return false;
+        if (tokenId <= MAX_CARDS) return issuedBits.get(tokenId);
+        if (tokenId <= REDEMPTION_RECEIPT_OFFSET) return issuedBits.get(tokenId - RECEIPT_OFFSET);
+        return redeemedByOrder[tokenId - REDEMPTION_RECEIPT_OFFSET] != 0;
+    }
+
     function claim(uint256 tokenId, uint256 deadline, bytes calldata signature) external nonReentrant {
         _claim(msg.sender, tokenId, deadline, signature);
     }
@@ -187,7 +200,7 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
         }
         _checkSignature(_redemptionDigest(inputCardIds, outputCardIds, receiptIds, quote), signature);
         _accrueRedemptionFee(quote.configId);
-        _prepareRedemption(inputCardIds, outputCardIds, receiptIds, quote);
+        _prepareRedemption(inputCardIds, outputCardIds, quote);
         // Every input is burned before a receiver can observe or transfer any output.
         for (uint256 i; i < inputCardIds.length; ++i) {
             _burn(inputCardIds[i]);
@@ -211,7 +224,7 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
     }
 
     function getTokenInfo(uint256 tokenId) external view returns (TokenInfo memory info) {
-        if (!issued[tokenId]) revert InvalidTokenId();
+        if (!issued(tokenId)) revert InvalidTokenId();
         if (tokenId <= MAX_CARDS) {
             info.kind = TokenKind.Card;
             info.cardId = tokenId;
@@ -235,7 +248,11 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
     {
         RedemptionRecord storage record = redemptions[orderId];
         if (!usedRedemptionOrders[orderId]) revert InvalidAuthorization();
-        return (record.wallet, record.recipient, record.inputCardIds, record.outputCardIds);
+        inputCardIds = new uint256[](record.inputCardIds.length);
+        outputCardIds = new uint256[](record.outputCardIds.length);
+        for (uint256 i; i < inputCardIds.length; ++i) inputCardIds[i] = record.inputCardIds[i];
+        for (uint256 i; i < outputCardIds.length; ++i) outputCardIds[i] = record.outputCardIds[i];
+        return (record.wallet, record.recipient, inputCardIds, outputCardIds);
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
@@ -333,7 +350,7 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
         _checkMinting();
         receiptTokenId(tokenId);
         _validateRecipient(recipient);
-        if (claimed[tokenId]) revert AlreadyClaimed();
+        if (claimed(tokenId)) revert AlreadyClaimed();
         _checkDeadline(deadline);
         _checkSignature(_hashTypedDataV4(keccak256(abi.encode(CLAIM_TYPEHASH, recipient, tokenId, deadline))), signature);
         _prepareCardMint(tokenId, 0, 0);
@@ -350,13 +367,11 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
     function _prepareCardMint(uint256 cardId, uint256 nextGeneration, uint256 orderId) private {
         _validateCardId(cardId);
         if (cardId <= INITIAL_CARDS) {
-            if (claimed[cardId]) revert AlreadyClaimed();
-            claimed[cardId] = true;
-            _reserve(receiptTokenId(cardId));
+            if (issuedBits.get(cardId)) revert AlreadyClaimed();
         }
         _reserve(cardId);
-        generation[cardId] = nextGeneration;
-        createdByOrder[cardId] = orderId;
+        if (nextGeneration != 0) generation[cardId] = nextGeneration;
+        if (orderId != 0) createdByOrder[cardId] = orderId;
     }
 
     function _mintPreparedCard(address recipient, uint256 cardId) private {
@@ -371,15 +386,12 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
     function _prepareRedemption(
         uint256[] calldata inputCardIds,
         uint256[] calldata outputCardIds,
-        uint256[] memory receiptIds,
         RedemptionQuote calldata quote
     ) private {
         usedRedemptionOrders[quote.orderId] = true;
         RedemptionRecord storage record = redemptions[quote.orderId];
         record.wallet = quote.wallet;
         record.recipient = quote.recipient;
-        record.inputCardIds = inputCardIds;
-        record.outputCardIds = outputCardIds;
         uint256 highestGeneration;
         for (uint256 i; i < inputCardIds.length; ++i) {
             uint256 cardId = inputCardIds[i];
@@ -387,11 +399,12 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
             if (redeemedByOrder[cardId] != 0) revert AlreadyIssued();
             redeemedByOrder[cardId] = quote.orderId;
             if (generation[cardId] > highestGeneration) highestGeneration = generation[cardId];
-            _reserve(receiptIds[i]);
+            record.inputCardIds.push(uint32(cardId));
         }
         for (uint256 i; i < outputCardIds.length; ++i) {
             if (outputCardIds[i] <= INITIAL_CARDS) revert InvalidTokenId();
             _prepareCardMint(outputCardIds[i], highestGeneration + 1, quote.orderId);
+            record.outputCardIds.push(uint32(outputCardIds[i]));
         }
     }
 
@@ -454,8 +467,8 @@ contract TarotCards is ERC721, Ownable2Step, EIP712, ReentrancyGuardTransient, I
     }
 
     function _reserve(uint256 tokenId) private {
-        if (issued[tokenId]) revert AlreadyIssued();
-        issued[tokenId] = true;
+        if (issuedBits.get(tokenId)) revert AlreadyIssued();
+        issuedBits.set(tokenId);
     }
 
     function _validateCardId(uint256 cardId) private pure {
