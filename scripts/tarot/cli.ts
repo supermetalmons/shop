@@ -6,7 +6,11 @@ import { createD1MaintenanceRunner, loadD1Credentials } from '../shared/d1Mainte
 import { environmentStorage } from '../ethereum-metadata/storage.ts';
 import { generateTarotMetadata, publishTarotMetadata, verifyPublicTarotMetadata, verifyTarotMedia } from './catalog.ts';
 import { assertExistingTarotCredentialPin, createTarotClaimLinks, loadTarotClaimLinks,
-  recordVerifiedTarotCredentials, tarotCredentialSql, verifyTarotCredentials } from './claimLinks.ts';
+  privateDirectory, recordVerifiedTarotCredentials, tarotCredentialSql, verifyTarotCredentials } from './claimLinks.ts';
+import { bindMainnetCredentials, createMainnetClaimLinks, loadMainnetClaimLinks, mainnetBindingConfiguration,
+  mainnetBindingRpc, mainnetCredentialFingerprint,
+  stageMainnetCredentials, verifyMainnetCredentials } from './mainnetClaims.ts';
+import { withMetadataLock } from '../ethereum-metadata/lock.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -38,12 +42,42 @@ async function configureStorage(): Promise<void> {
 
 export async function runTarotOperations(argv: string[]) {
   const { values, positionals, tokens } = parseArgs({ args: argv, allowPositionals: true, tokens: true,
-    options: { directory: { type: 'string' }, contract: { type: 'string' } } });
+    options: { directory: { type: 'string' }, contract: { type: 'string' }, 'deployment-block': { type: 'string' },
+      'deployment-transaction': { type: 'string' } } });
   const options = tokens.filter(token => token.kind === 'option').map(token => token.name);
   const command = positionals[0];
   if (positionals.length !== 1 || new Set(options).size !== options.length ||
-    !['metadata', 'verify-media', 'publish', 'verify-public', 'links', 'provision', 'verify-codes'].includes(command)) {
-    throw new Error('Use metadata|verify-media|publish|verify-public|links|provision|verify-codes [--directory PATH] [--contract ADDRESS for links].');
+    !['metadata', 'verify-media', 'publish', 'verify-public', 'links', 'provision', 'verify-codes',
+      'mainnet-links', 'mainnet-provision', 'mainnet-verify', 'mainnet-bind'].includes(command)) {
+    throw new Error('Use metadata|verify-media|publish|verify-public|links|provision|verify-codes|mainnet-links|mainnet-provision|mainnet-verify|mainnet-bind [--directory PATH] [--contract ADDRESS for links or mainnet-bind] [--deployment-block BLOCK --deployment-transaction HASH for mainnet-bind].');
+  }
+  if (command !== 'mainnet-bind' && values['deployment-block'] !== undefined) throw new Error('--deployment-block is only allowed for mainnet-bind.');
+  if (command !== 'mainnet-bind' && values['deployment-transaction'] !== undefined) throw new Error('--deployment-transaction is only allowed for mainnet-bind.');
+  if (command.startsWith('mainnet-')) {
+    const binding = command === 'mainnet-bind'
+      ? mainnetBindingConfiguration(values.contract, values['deployment-block'], values['deployment-transaction']) : null;
+    const rpc = binding ? mainnetBindingRpc() : null;
+    if (!binding && values.contract !== undefined) throw new Error('Mainnet staging must not bind a contract.');
+    const directory = resolve(root, values.directory || '.operations/dmx-mainnet-v1');
+    privateDirectory(directory, root);
+    return withMetadataLock(resolve(directory, 'claim-links.lock'), async () => {
+      const manifest = command === 'mainnet-links'
+        ? createMainnetClaimLinks(directory, root) : loadMainnetClaimLinks(directory, root);
+      const fingerprint = mainnetCredentialFingerprint(manifest);
+      const files = { privateManifest: resolve(directory, 'claim-links.private.json'),
+        csv: resolve(directory, 'claim-links.private.csv') };
+      if (command === 'mainnet-links') return { operation: command, chainId: 1, batchId: manifest.batchId,
+        credentialCount: manifest.links.length, credentialSetSha256: fingerprint,
+        status: 'local', contractAddress: null, verified: false, ...files };
+      loadD1Credentials(root);
+      const database = createD1MaintenanceRunner('ops');
+      const verified = binding && rpc ? await bindMainnetCredentials(manifest, database, binding, rpc)
+        : command === 'mainnet-provision' ? stageMainnetCredentials(manifest, database) : verifyMainnetCredentials(manifest, database);
+      if (mainnetCredentialFingerprint(loadMainnetClaimLinks(directory, root)) !== fingerprint) {
+        throw new Error('Private mainnet files changed during provisioning.');
+      }
+      return { operation: command, ...verified, ...files };
+    });
   }
   if (command === 'metadata') return generateTarotMetadata(resolve(root, values.directory || '.cache/tarot-sepolia-v1/metadata'));
   if (command === 'verify-media') return verifyTarotMedia();

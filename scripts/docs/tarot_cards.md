@@ -5,8 +5,9 @@ card/NFC-receipt pairs and adds recipient minting, signed redemption into future
 generations, configurable fee payouts, and a replaceable metadata renderer.
 The collection and EIP-712 domain name are `divination machina x`, the symbol is
 `DMX`, and the domain version is `1`. The contract permits Ethereum mainnet,
-Sepolia, and local chain 31337; the current application and release runner remain
-Sepolia-only.
+Sepolia, and local chain 31337. The application source defaults NFC links to
+mainnet and supports explicit Sepolia links. Mainnet remains unconfigured and
+disabled; the contract deployment runner remains Sepolia-only.
 
 The application code targets this new revision only. Its next deployment must
 be coordinated with the new collection and renderer, new deployment-scoped
@@ -87,6 +88,86 @@ without moving old balances when new configurations are registered.
 
 ## NFC links
 
+### Prelaunch mainnet credentials
+
+Mainnet links can be prepared before a contract address is known. Apply OPS
+migration `0015_dmx_mainnet_claim_staging.sql`, then use:
+
+```sh
+npm run tarot:ops -- mainnet-links
+npm run tarot:ops -- mainnet-provision
+npm run tarot:ops -- mainnet-verify
+```
+
+The default private directory is `.operations/dmx-mainnet-v1/` (mode `0700`).
+It contains `claim-links.private.json` and `claim-links.private.csv`, both mode
+`0600`, ignored and untracked by Git. The CSV has 777 full links, one per line,
+without a header or extra columns: `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>`.
+Keep the canonical manifest and CSV for later contract binding. Generation
+resumes an existing manifest without changing codes and can restore a missing
+CSV; a CSV without its original manifest must be recovered, not overwritten.
+
+Only batch metadata and SHA-256 staging hashes go into
+`dmx_mainnet_claim_batches` and `dmx_mainnet_claim_codes` in OPS D1. The hashes
+bind the batch, mainnet chain ID, token ID, and credential. Provisioning resumes
+matching partial writes and rejects conflicts or revoked credentials. A batch
+is marked `staged` only after all 777 rows match the private manifest, with its
+contract binding still null. Claim authorization never accepts staging hashes.
+The existing Sepolia credential table and release pin remain separate.
+
+Browser-bundle validation also scans all codes in the private mainnet manifest
+when present; use `ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST` for a non-default path.
+Only generic diagnostics are emitted. Do not add actual credentials, CSVs, or
+private manifests to source files, tests, logs, release evidence, or public media.
+
+At a separately authorized mainnet launch, apply OPS migration
+`0016_dmx_mainnet_bound_claim_codes.sql`, then bind the retained batch:
+
+```sh
+npm run tarot:ops -- mainnet-bind --contract <verified-mainnet-contract> --deployment-block <creation-block> --deployment-transaction <creation-transaction-hash>
+```
+
+This uses `ETHEREUM_TAROT_MAINNET_RPC_URL` when supplied, otherwise the public
+Ethereum RPC. Only HTTPS and read-only RPC methods are allowed. Binding builds
+`TarotCards` from the current checkout in a temporary directory and compares the
+deployed bytecode with that trusted build. It also verifies the successful direct
+creation transaction and receipt against the canonical deployment block, exact
+trusted creation bytecode, and canonical owner/signer/renderer constructor arguments.
+This proves initialization of signing constants that vary in deployed bytecode.
+Factory deployments are not accepted. Use the reviewed source revision and compiler
+settings that were deployed. No credentials are bound if these checks fail.
+Binding also checks chain 1, canonical confirmations, the DMX identity and
+signing domain, and the signer/renderer addresses. It derives contract-scoped
+hashes into `dmx_mainnet_bound_claim_codes`, verifies all 777, then marks the batch
+`bound` with that address. Partial writes remain inactive; retrying the same
+binding verifies or resumes it. A different address or conflicting credential
+set is rejected. The private CSV/manifest and original URLs stay unchanged.
+
+Configure `ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS`,
+`ETHEREUM_TAROT_MAINNET_DEPLOYMENT_BLOCK`, and the independent
+`ETHEREUM_TAROT_MAINNET_SIGNER_SECRET` for the verified deployment before setting
+`ETHEREUM_TAROT_MAINNET_ENABLED=true`. The signer secret is optional while mainnet
+is disabled; there is no fallback to the Sepolia key. API access also requires
+the matching bound batch. None of these launch actions is performed by preparing
+the application source or by staging commands.
+
+### Network selection and prelaunch scans
+
+No `testnet` argument selects mainnet; explicit `testnet=false` also selects
+mainnet, and `testnet=true` selects Sepolia. Malformed or repeated network flags
+never select a claim flow. The updated application saves the scanned credential
+under a network-specific key before removing it from the URL. Mainnet and Sepolia
+credentials, rescan candidates, encrypted history, and pending transactions stay
+separate. Existing Sepolia storage and legacy encrypted history remain readable.
+
+While mainnet is unconfigured or its batch is unbound, the API returns unavailable
+rather than invalid credentials. The page keeps showing artwork without claim
+controls and retains the code for later validation. Deploy the matching API
+before the updated frontend. Scans made by older versions that discarded mainnet
+codes need the original link again.
+
+### Existing Sepolia flow
+
 The live format is `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>&testnet=true`.
 Scanning saves the code in the scanning browser’s local storage for that Sepolia
 card and immediately replaces the address with `/nfc?tokenId=<1..777>&testnet=true`.
@@ -139,7 +220,8 @@ Late wallet replies update only their original intent. Failed receipt replies
 are ignored if a newer chain observation arrived during their request.
 
 The browser calls `/api/ethereum/tarot/status`, `/prepare`, and `/confirm` using
-POST JSON, explicit `testnet: true`, and the `X-Mons-CSRF` header. Every request
+POST JSON, an explicit boolean `testnet`, and the `X-Mons-CSRF` header. Omitting
+`testnet` at the API also defaults to mainnet. Every request
 validates the secret against its exact deployment and card. Preparation adds the
 wallet; confirmation adds the wallet and transaction hash. No separate wallet
 sign-in message is required. The backend signature binds the wallet, card,
@@ -283,8 +365,8 @@ nonce, and fees. Renderer and collection have separate manifests and journals.
 Source verification supports both contract types. Resume the same signed
 journal after interrupted broadcasts. New manifests use release version 2;
 old release directories remain frozen. Never redeploy or replace 111K as part
-of Tarot work. Mainnet is supported by the collection source but remains outside
-the current deployment runner, API, and frontend. Local Anvil is test-only.
+of Tarot work. Mainnet is supported by the collection and application source but
+remains outside the current contract deployment runner. Local Anvil is test-only.
 
 All four deployment commands exclusively own `operation.lock` inside the
 release directory, including `verify`, which only reads the chain but records
@@ -301,9 +383,12 @@ replacing an existing manifest or signed journal; resume that release instead.
 ## Release validation and recovery
 
 Run the Tarot contract/deployment tests, frontend/API/runtime tests, and
-`npm run test:tarot:e2e`. The E2E test deploys locally and submits real local
+`npm run test:tarot:e2e` and `npm run test:tarot:mainnet:e2e`. The E2E tests deploy locally and submit local
 claims, recipient mints, multi-generation redemptions, and fee withdrawals.
-It also checks receipt provenance, renderer swaps, and pause recovery. On public
+They also check receipt provenance, renderer swaps, and pause recovery. The
+mainnet variant uses a local chain with ID 1 and a synthetic 777-code batch to
+exercise staging, verified binding, signing, and initial-claim confirmation.
+On public
 Sepolia use signed preparation and `eth_call`/gas estimation only; do not consume
 one of the 777 initial pairs during release acceptance.
 

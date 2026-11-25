@@ -27,28 +27,31 @@ function wrappingKey(browser: Browser) {
   return storage.getItem(keyPrefix + id) === encoded ? { id, key } : null;
 }
 
-export function sealNfcHistoryCode(browser: Browser, tokenId: number, code: string): string | null {
-  if (!isTarotTokenId(tokenId) || !isTarotClaimCode(code)) return null;
+export function sealNfcHistoryCode(browser: Browser, tokenId: number, code: string, testnet: boolean): string | null {
+  if (!isTarotTokenId(tokenId) || !isTarotClaimCode(code) || typeof testnet !== 'boolean') return null;
   try {
     const wrapping = wrappingKey(browser);
     if (!wrapping) return null;
     const nonce = browser.crypto.getRandomValues(new Uint8Array(nacl.secretbox.nonceLength));
-    const message = new TextEncoder().encode(`${tokenId}:${code}`);
+    const message = new TextEncoder().encode(`${testnet ? 11155111 : 1}:${tokenId}:${code}`);
     const box = nacl.secretbox(message, nonce, wrapping.key);
-    return `sealed1.${wrapping.id}.${encode(nonce)}.${encode(box)}`;
+    return `sealed2.${wrapping.id}.${encode(nonce)}.${encode(box)}`;
   } catch { return null; }
 }
 
-export function openNfcHistoryCode(browser: Browser, tokenId: number, entry: unknown): string | null {
-  if (typeof entry !== 'string' || entry.length > 160 || !entry.startsWith('sealed1.')) return null;
+export function openNfcHistoryCode(browser: Browser, tokenId: number, entry: unknown, testnet: boolean): string | null {
+  if (typeof testnet !== 'boolean' || typeof entry !== 'string' || entry.length > 160 ||
+    !(entry.startsWith('sealed2.') || testnet && entry.startsWith('sealed1.'))) return null;
   try {
-    const [, id, nonce, box, extra] = entry.split('.');
+    const [version, id, nonce, box, extra] = entry.split('.');
     if (extra !== undefined || !id || !nonce || !box) return null;
     const key = readKey(browser.localStorage, keyPrefix + id);
     if (!key) return null;
     const message = nacl.secretbox.open(decode(box), decode(nonce), key);
     if (!message) return null;
-    const [card, code] = new TextDecoder().decode(message).split(':');
-    return card === String(tokenId) && isTarotClaimCode(code) ? code : null;
+    const parts = new TextDecoder().decode(message).split(':');
+    const [chain, card, code] = version === 'sealed1' ? ['11155111', ...parts] : parts;
+    return parts.length === (version === 'sealed1' ? 2 : 3) && chain === String(testnet ? 11155111 : 1) &&
+      card === String(tokenId) && isTarotClaimCode(code) ? code : null;
   } catch { return null; }
 }

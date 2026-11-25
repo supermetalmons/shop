@@ -48,7 +48,7 @@ const { default: App } = await import('../src/App.tsx');
 startupStorage.mock.restore();
 imports.deregister();
 
-const config = resolveTarotConfig({ contractAddress: '0x2222222222222222222222222222222222222222', enabled: true, deploymentBlock: 1 });
+const config = resolveTarotConfig({ contractAddress: '0x2222222222222222222222222222222222222222', enabled: true, deploymentBlock: 1, testnet: true });
 const tarotRoute = resolveAppRoute({ pathname: '/nfc', search: '?code=00000000-0000-4000-8000-000000000001&tokenId=1&testnet=true' });
 const wallet: WalletContextState = {
   publicKey: null, autoConnect: false, wallets: [], wallet: null, connecting: false, connected: false, disconnecting: false,

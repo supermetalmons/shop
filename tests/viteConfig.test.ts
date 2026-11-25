@@ -1,10 +1,53 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { JSDOM } from 'jsdom';
-import { createServer } from 'vite';
+import { createServer, normalizePath, resolveConfig } from 'vite';
 import { normalizeMonsApiOrigin } from '../src/lib/monsApiOrigin.ts';
 import { createViteConfig, rewriteDependencyPublicRpcFallbacks } from '../vite.config.ts';
+
+test('private operator files are denied alongside Vite default sensitive files', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mons-vite-private-'));
+  let server: Awaited<ReturnType<typeof createServer>> | undefined;
+  t.after(async () => {
+    await server?.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const config = createViteConfig('test', root);
+  const defaults = await resolveConfig({ configFile: false, envDir: false, logLevel: 'silent' }, 'serve', 'test');
+  for (const pattern of defaults.server.fs.deny) assert.ok(config.server?.fs?.deny?.includes(pattern));
+  assert.ok(config.server?.fs?.deny?.includes('**/.operations/**'));
+  const privateContent = 'synthetic-private-operator-data';
+  const privateFiles = ['.operations/private/nfc.csv', '.env', '.env.local', 'private.pem', '.npmrc', '.yarnrc.yml', '.git/config'];
+  for (const name of privateFiles) {
+    const filename = join(root, name);
+    await mkdir(dirname(filename), { recursive: true });
+    await writeFile(filename, privateContent);
+  }
+  await writeFile(join(root, 'ordinary.txt'), 'ordinary public file');
+  server = await createServer({
+    ...config, root, publicDir: false, configFile: false, envDir: false,
+    cacheDir: join(root, 'vite-cache'), logLevel: 'silent', appType: 'custom',
+    server: { ...config.server, host: '127.0.0.1', port: 0, hmr: false, watch: null },
+    optimizeDeps: { noDiscovery: true, include: [], entries: [] },
+  });
+  await server.listen();
+  const address = server.httpServer?.address();
+  assert.ok(address && typeof address === 'object');
+  const origin = `http://127.0.0.1:${address.port}`;
+  assert.equal(await (await fetch(`${origin}/ordinary.txt`)).text(), 'ordinary public file');
+  for (const name of privateFiles) {
+    for (const pathname of [`/${name}`, `/@fs/${normalizePath(join(root, name))}`]) {
+      for (const query of ['', '?raw']) {
+        const response = await fetch(origin + pathname + query);
+        assert.equal(response.status, 403, pathname + query);
+        assert.ok(!(await response.text()).includes(privateContent));
+      }
+    }
+  }
+});
 
 test('the NFC document head saves the scan and scrubs its URL before the app loads', async t => {
   const server = await createServer({

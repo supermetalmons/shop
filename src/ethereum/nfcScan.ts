@@ -5,9 +5,9 @@ import { normalizePathname, withoutNfcScan } from '../navigation';
 import { openNfcHistoryCode, sealNfcHistoryCode } from './nfcHistoryCode';
 import { resolveNfcLink } from './tarotLink';
 
-type ScanWindow = Window & { nfcUnsavedCodes?: Map<string, string>; nfcDeniedEntry?: string };
+type ScanWindow = Window & { nfcUnsavedCodes?: Map<string, string>; nfcDeniedEntries?: Map<string, string> };
 type Store = 'localStorage' | 'sessionStorage';
-const storageKey = (tokenId: number) => `mons.shop.tarot.claim:sepolia:${tokenId}`;
+const storageKey = (tokenId: number, testnet: boolean) => `mons.shop.tarot.claim:${testnet ? 'sepolia' : 'mainnet'}:${tokenId}`;
 
 function readCode(browser: ScanWindow, store: Store, key: string): string | null {
   const cached = browser.nfcUnsavedCodes?.get(key);
@@ -28,9 +28,9 @@ function writeCode(browser: ScanWindow, store: Store, key: string, code: string)
   return false;
 }
 
-function readCandidate(browser: ScanWindow, tokenId: number, entry: string): string | null {
-  const key = `${storageKey(tokenId)}:${entry}`;
-  return openNfcHistoryCode(browser, tokenId, entry) ?? readCode(browser, 'sessionStorage', key) ?? readCode(browser, 'localStorage', key);
+function readCandidate(browser: ScanWindow, tokenId: number, testnet: boolean, entry: string): string | null {
+  const key = `${storageKey(tokenId, testnet)}:${entry}`;
+  return openNfcHistoryCode(browser, tokenId, entry, testnet) ?? readCode(browser, 'sessionStorage', key) ?? readCode(browser, 'localStorage', key);
 }
 
 function sessionCode(raw: string | null): { code: string; baseline?: string | null } | null {
@@ -48,8 +48,9 @@ function localCode(browser: ScanWindow, key: string): string | null | undefined 
   try { return browser.localStorage.getItem(key); } catch { return undefined; }
 }
 
-export function readSavedNfcCode(browser: ScanWindow, tokenId: number): string | null {
-  const key = storageKey(tokenId);
+export function readSavedNfcCode(browser: ScanWindow, tokenId: number, testnet: boolean): string | null {
+  if (typeof testnet !== 'boolean') return null;
+  const key = storageKey(tokenId, testnet);
   const local = localCode(browser, key);
   const fallback = sessionCode(readCode(browser, 'sessionStorage', key));
   if (fallback && (local == null || local === fallback.baseline)) return fallback.code;
@@ -93,14 +94,14 @@ export function captureNfcScan(browser: ScanWindow): void {
 
   let state = withoutNfcScan(history.state);
   if (link.kind === 'tarot') {
-    const { tokenId, code } = link.request;
-    const key = storageKey(tokenId);
-    const saved = readSavedNfcCode(browser, tokenId);
+    const { tokenId, code, testnet } = link.request;
+    const key = storageKey(tokenId, testnet);
+    const saved = readSavedNfcCode(browser, tokenId, testnet);
     if (saved && saved !== code) {
       let entry = browser.crypto.getRandomValues(new Uint32Array(4)).join('-');
       const candidate = `${key}:${entry}`;
       if (!writeCode(browser, 'sessionStorage', candidate, code)) {
-        const sealed = sealNfcHistoryCode(browser, tokenId, code);
+        const sealed = sealNfcHistoryCode(browser, tokenId, code, testnet);
         if (sealed) {
           entry = sealed;
           browser.nfcUnsavedCodes?.delete(candidate);
@@ -117,20 +118,21 @@ export function captureNfcScan(browser: ScanWindow): void {
   history.replaceState(state, '', url.href);
 }
 
-export function readScannedCode(browser: ScanWindow, tokenId: number): string | null {
+export function readScannedCode(browser: ScanWindow, tokenId: number, testnet: boolean): string | null {
+  if (typeof testnet !== 'boolean') return null;
   const entry = browser.history.state?.nfcScan;
-  if (entry === 'artwork' || (entry && entry === browser.nfcDeniedEntry)) return null;
-  const candidate = entry ? readCandidate(browser, tokenId, entry) : null;
-  return candidate ?? readSavedNfcCode(browser, tokenId);
+  if (entry === 'artwork' || (entry && entry === browser.nfcDeniedEntries?.get(storageKey(tokenId, testnet)))) return null;
+  const candidate = entry ? readCandidate(browser, tokenId, testnet, entry) : null;
+  return candidate ?? readSavedNfcCode(browser, tokenId, testnet);
 }
 
 export function settleNfcScan(browser: ScanWindow, request: TarotRequest, accepted: boolean): void {
   const entry = browser.history.state?.nfcScan;
-  const key = storageKey(request.tokenId);
-  const candidateCode = entry ? readCandidate(browser, request.tokenId, entry) : null;
+  const key = storageKey(request.tokenId, request.testnet);
+  const candidateCode = entry ? readCandidate(browser, request.tokenId, request.testnet, entry) : null;
   if (!accepted) discardMatchingCode(browser, key, request.code);
   if (accepted) {
-    const saved = readSavedNfcCode(browser, request.tokenId);
+    const saved = readSavedNfcCode(browser, request.tokenId, request.testnet);
     if (candidateCode !== request.code && saved && saved !== request.code) return;
     if (!saveCode(browser, key, request.code)) return;
   }
@@ -140,8 +142,9 @@ export function settleNfcScan(browser: ScanWindow, request: TarotRequest, accept
   let state = withoutNfcScan(browser.history.state);
   if (!accepted) {
     // Reload can use the previous working code; keep this visit on the artwork.
-    browser.nfcDeniedEntry ??= browser.crypto.getRandomValues(new Uint32Array(4)).join('-');
-    state = { ...state, nfcScan: browser.nfcDeniedEntry };
+    const denied = browser.nfcDeniedEntries ??= new Map();
+    if (!denied.has(key)) denied.set(key, browser.crypto.getRandomValues(new Uint32Array(4)).join('-'));
+    state = { ...state, nfcScan: denied.get(key) };
   }
   browser.history.replaceState(state, '');
 }

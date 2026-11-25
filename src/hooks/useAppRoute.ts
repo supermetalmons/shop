@@ -22,7 +22,7 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
 
 function resolveCurrentRoute(): ResolvedAppRoute {
   captureNfcScan(window);
-  const route = resolveAppRoute(window.location, tokenId => readScannedCode(window, tokenId));
+  const route = resolveAppRoute(window.location, (tokenId, testnet) => readScannedCode(window, tokenId, testnet));
   if (route.replacementHref) {
     window.history.replaceState(window.history.state, '', route.replacementHref);
   }

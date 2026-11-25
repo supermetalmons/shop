@@ -25,7 +25,9 @@ export type TarotEnvironment = Pick<Env,
   'OPS_DB' | 'ALCHEMY_MI_NOTE_API_KEY' | 'ETHEREUM_111K_RPC_URL' |
   'ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS' | 'ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK' | 'ETHEREUM_TAROT_SEPOLIA_ENABLED' |
   'TAROT_ACCESS_IP_RATE_LIMITER' | 'TAROT_PREPARE_RATE_LIMITER' | 'TAROT_CONFIRM_IP_RATE_LIMITER'
-> & EthereumProviderEnvironment & Partial<Pick<Env, 'ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET'>>;
+> & EthereumProviderEnvironment & Partial<Pick<Env, 'ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET' |
+  'ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS' | 'ETHEREUM_TAROT_MAINNET_DEPLOYMENT_BLOCK' | 'ETHEREUM_TAROT_MAINNET_ENABLED'>> &
+  { ETHEREUM_TAROT_MAINNET_SIGNER_SECRET?: string };
 
 type Context = EthereumReadContext & { env: TarotEnvironment; config: TarotConfig; nowMs: number };
 type State = { blockNumber: number; blockHash: string; timestamp: number; signer: string; claimed: boolean; mintingPaused: boolean };
@@ -35,7 +37,7 @@ const ZERO_ADDRESS = `0x${'0'.repeat(40)}`;
 const ZERO_WORD = `0x${'0'.repeat(64)}`;
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const requestSchema = z.object({
-  tokenId: z.number().int().min(1).max(TAROT_MAX_CARDS), testnet: z.literal(true),
+  tokenId: z.number().int().min(1).max(TAROT_MAX_CARDS), testnet: z.boolean().default(false),
   code: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
 }).strict();
 
@@ -61,7 +63,8 @@ function readContext(context: Context): EthereumReadContext {
 }
 
 function configuredSigner(context: Context): { secret: string; address: string } | null {
-  const secret = context.env.ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET?.trim();
+  const secret = (context.config.testnet
+    ? context.env.ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET : context.env.ETHEREUM_TAROT_MAINNET_SIGNER_SECRET)?.trim();
   if (!secret) return null;
   try { return { secret, address: ethereumSignerAddress(secret) }; } catch { return null; }
 }
@@ -69,9 +72,24 @@ function configuredSigner(context: Context): { secret: string; address: string }
 async function requireCode(context: Context, tokenId: number, code: string): Promise<void> {
   const contractAddress = context.config.contractAddress;
   if (!contractAddress) return unavailable();
-  const row = await context.env.OPS_DB.prepare(`SELECT code_hash, revoked_at_ms FROM tarot_claim_codes
-    WHERE chain_id = ? AND contract_address = ? AND token_id = ?`)
-    .bind(context.config.chainId, contractAddress, tokenId).first<CodeRow>();
+  let row: CodeRow | null;
+  if (context.config.testnet) {
+    row = await context.env.OPS_DB.prepare(`SELECT code_hash, revoked_at_ms FROM tarot_claim_codes
+      WHERE chain_id = ? AND contract_address = ? AND token_id = ?`)
+      .bind(context.config.chainId, contractAddress, tokenId).first<CodeRow>();
+  } else {
+    const batch = await context.env.OPS_DB.prepare(`SELECT batch_id,chain_id,status,contract_address,credential_count,
+      verified_at_ms,bound_at_ms FROM dmx_mainnet_claim_batches WHERE collection_key = ?`)
+      .bind('dmx-mainnet-v1').first<Record<string, unknown>>();
+    if (!batch || batch.chain_id !== 1 || batch.status !== 'bound' || batch.contract_address !== contractAddress ||
+      batch.credential_count !== TAROT_MAX_CARDS || typeof batch.batch_id !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(batch.batch_id) ||
+      !Number.isSafeInteger(batch.verified_at_ms) || Number(batch.verified_at_ms) < 0 ||
+      !Number.isSafeInteger(batch.bound_at_ms) || Number(batch.bound_at_ms) < Number(batch.verified_at_ms)) return unavailable();
+    row = await context.env.OPS_DB.prepare(`SELECT code_hash, revoked_at_ms FROM dmx_mainnet_bound_claim_codes
+      WHERE batch_id = ? AND chain_id = ? AND contract_address = ? AND token_id = ?`)
+      .bind(batch.batch_id, context.config.chainId, contractAddress, tokenId).first<CodeRow>();
+  }
   const matches = await matchesSha256Hex(tarotCodeHashInput({ chainId: context.config.chainId, contractAddress, tokenId, code }),
     row?.code_hash ?? '0'.repeat(64));
   if (!row || row.revoked_at_ms !== null || !matches) {
@@ -238,8 +256,10 @@ export async function handleTarotRequest(request: Request, env: TarotEnvironment
       : requestSchema.extend({ wallet: z.string() }).strict();
     const body = await readEthereumBody(request, signal, schema);
     const wallet = 'wallet' in body ? ethereumAddress(body.wallet) : null;
-    const config = resolveTarotConfig({ contractAddress: env.ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS,
-      deploymentBlock: env.ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK, enabled: env.ETHEREUM_TAROT_SEPOLIA_ENABLED === 'true' });
+    const config = resolveTarotConfig({ testnet: body.testnet,
+      contractAddress: body.testnet ? env.ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS : env.ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS,
+      deploymentBlock: body.testnet ? env.ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK : env.ETHEREUM_TAROT_MAINNET_DEPLOYMENT_BLOCK,
+      enabled: (body.testnet ? env.ETHEREUM_TAROT_SEPOLIA_ENABLED : env.ETHEREUM_TAROT_MAINNET_ENABLED) === 'true' });
     const context: Context = { env, config, signal, nowMs: (dependencies.nowMs || Date.now)(),
       fetch: dependencies.fetch || ((input, init) => fetch(input, init)) };
     await requireCode(context, body.tokenId, body.code);

@@ -10,6 +10,8 @@ import { TAROT_CREDENTIAL_PIN_PATH, tarotCredentialPin, type TarotClaimLinks } f
 const code = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
 const codes = Array.from({ length: 777 }, (_, index) => index === 0 ? code :
   `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`);
+const mainnetCodes = Array.from({ length: 777 }, (_, index) =>
+  `abcdefab-0000-4000-8000-${index.toString(16).padStart(12, '0')}`);
 const api = JSON.parse(readFileSync(resolve('cloud/workers/api/wrangler.jsonc'), 'utf8'));
 
 function releaseManifest(): TarotClaimLinks {
@@ -18,15 +20,23 @@ function releaseManifest(): TarotClaimLinks {
       url: `https://mons.shop/nfc?code=${code}&tokenId=${index + 1}&testnet=true` })) };
 }
 
+function mainnetManifest() {
+  return { version: 1, chainId: 1, collectionKey: 'dmx-mainnet-v1', contractAddress: null as string | null,
+    batchId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', createdAtMs: 1_000,
+    links: mainnetCodes.map((code, index) => ({ code, tokenId: index + 1,
+      url: `https://mons.shop/nfc?code=${code}&tokenId=${index + 1}` })) };
+}
+
 function validate(content: string, options: {
   strict?: boolean; manifest?: unknown; rawManifest?: string;
   pin?: unknown; rawPin?: string; omitPin?: boolean;
   location?: 'explicit' | 'default' | 'absent' | 'missing-explicit'; args?: string[];
+  mainnet?: { manifest?: unknown; rawManifest?: string; location?: 'explicit' | 'default' | 'missing-explicit' };
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'tarot-browser-bundle-'));
   try {
-    for (const filename of ['scripts/validate-browser-bundle.ts', 'scripts/tarot/claimLinks.ts',
-      'shared/ethereum/tarot.ts', 'shared/ethereum/tarotCard.ts', 'shared/ethereum/abi.ts', 'shared/ethereum/protocol.ts',
+    for (const filename of ['scripts/validate-browser-bundle.ts', 'scripts/tarot/claimLinks.ts', 'scripts/tarot/mainnetClaims.ts',
+      'shared/ethereum/tarot.ts', 'shared/ethereum/tarotCard.ts', 'shared/ethereum/dmx.ts', 'shared/ethereum/abi.ts', 'shared/ethereum/protocol.ts',
       'cloud/workers/api/wrangler.jsonc']) {
       mkdirSync(dirname(join(directory, filename)), { recursive: true });
       copyFileSync(resolve(filename), join(directory, filename));
@@ -52,7 +62,20 @@ function validate(content: string, options: {
     }
     const env: NodeJS.ProcessEnv = { ...process.env, ETHEREUM_PRE111K_ACCESS_CODES: '["synthetic-relic-placeholder"]' };
     delete env.ETHEREUM_TAROT_PRIVATE_MANIFEST;
+    delete env.ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST;
     if (location === 'explicit' || location === 'missing-explicit') env.ETHEREUM_TAROT_PRIVATE_MANIFEST = manifest;
+    if (options.mainnet) {
+      const mainnetLocation = options.mainnet.location ?? 'default';
+      const filename = mainnetLocation === 'default'
+        ? join(directory, '.operations', 'dmx-mainnet-v1', 'claim-links.private.json')
+        : join(directory, 'mainnet-claim-links.private.json');
+      if (mainnetLocation !== 'missing-explicit') {
+        mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
+        const value = Object.hasOwn(options.mainnet, 'manifest') ? options.mainnet.manifest : mainnetManifest();
+        writeFileSync(filename, options.mainnet.rawManifest ?? JSON.stringify(value), { mode: 0o600 });
+      }
+      if (mainnetLocation !== 'default') env.ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST = filename;
+    }
     return spawnSync(process.execPath, ['--experimental-strip-types', join(directory, 'scripts/validate-browser-bundle.ts'),
       ...(options.strict ? ['--require-tarot-manifest'] : []), ...(options.args ?? [])], {
       cwd: directory, encoding: 'utf8', env,
@@ -79,6 +102,58 @@ test('bundle validation permits unrelated UUIDs', () => {
     assert.equal(result.status, 0);
     assert.match(result.stdout, /No private credentials/);
     assert.equal(codes.some(value => (result.stdout + result.stderr).toLowerCase().includes(value)), false);
+  }
+});
+
+test('bundle scans inspect every staged mainnet code without printing credentials', () => {
+  for (const [index, code] of mainnetCodes.entries()) {
+    const spelling = index % 2 ? code.toUpperCase() : code;
+    const result = validate(`const claimCode = "${spelling}";`, { location: 'absent', mainnet: {} });
+    assert.equal(result.status, 1, `Card ${index + 1}`);
+    const diagnostics = result.stdout + result.stderr;
+    assert.match(diagnostics, /a configured DMX mainnet claim code/);
+    assert.equal(mainnetCodes.some(value => diagnostics.toLowerCase().includes(value)), false);
+  }
+});
+
+test('staged mainnet scans support an explicit path without changing Sepolia release validation', () => {
+  for (const location of ['default', 'explicit'] as const) {
+    assert.equal(validate('const safe = true;', { strict: true, mainnet: { location } }).status, 0);
+    for (const code of [codes[0], mainnetCodes[0], mainnetCodes[776]]) {
+      const result = validate(`const claimCode = "${code}";`, { strict: true, mainnet: { location } });
+      assert.equal(result.status, 1);
+      assert.equal((result.stdout + result.stderr).toLowerCase().includes(code), false);
+    }
+    const unpinned = validate('const safe = true;', { strict: true, omitPin: true, mainnet: { location } });
+    assert.equal(unpinned.status, 1);
+    assert.match(unpinned.stderr, /private Tarot manifest for the configured deployment is required/);
+  }
+});
+
+test('staged mainnet manifests are optional but fail closed when configured or present and invalid', () => {
+  assert.equal(validate('const safe = true;', { location: 'absent' }).status, 0);
+  const changed = (change: (manifest: ReturnType<typeof mainnetManifest>) => void) => {
+    const manifest = mainnetManifest();
+    change(manifest);
+    return manifest;
+  };
+  const invalid = [null, {}, { ...mainnetManifest(), version: 2 }, { ...mainnetManifest(), chainId: 11155111 },
+    { ...mainnetManifest(), collectionKey: 'another-collection' }, { ...mainnetManifest(), contractAddress: '0x' + '1'.repeat(40) },
+    { ...mainnetManifest(), batchId: 'invalid' }, { ...mainnetManifest(), createdAtMs: -1 },
+    changed(manifest => { manifest.links.pop(); }),
+    changed(manifest => { manifest.links[1].code = manifest.links[0].code;
+      manifest.links[1].url = `https://mons.shop/nfc?code=${manifest.links[1].code}&tokenId=2`; }),
+    changed(manifest => { [manifest.links[0], manifest.links[1]] = [manifest.links[1], manifest.links[0]]; }),
+    changed(manifest => { manifest.links[0].url += '&testnet=true'; }),
+    changed(manifest => { manifest.links[0].code = 'private-invalid-code'; }),
+  ];
+  for (const mainnet of [{ location: 'missing-explicit' as const }, { rawManifest: '{' },
+    ...invalid.map(manifest => ({ manifest }))]) {
+    const result = validate('const safe = true;', { location: 'absent', mainnet });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Invalid private DMX mainnet staging manifest/);
+    assert.doesNotMatch(result.stdout, /No private credentials/);
+    assert.equal(mainnetCodes.some(code => (result.stdout + result.stderr).toLowerCase().includes(code)), false);
   }
 });
 

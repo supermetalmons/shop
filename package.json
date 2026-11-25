@@ -87,6 +87,7 @@
     "verify:ethereum-provider": "node --import tsx scripts/ops/verifyEthereumProvider.ts",
     "test:pre111k:e2e": "node --import tsx cloud/workers/api/runtime-test/pre111k-e2e.ts",
     "test:tarot:e2e": "node --import tsx cloud/workers/api/runtime-test/tarot-e2e.ts",
+    "test:tarot:mainnet:e2e": "node --import tsx cloud/workers/api/runtime-test/tarot-e2e.ts --mainnet",
     "test:onchain:sbf": "node scripts/check-all.mjs sbf",
     "check": "npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run check:api && npm run typecheck:tools && npm run typecheck:tests && npm run check:dead-code && npm run test:renderers && npm test && npm run test:onchain && npm run build && npm run validate:browser-bundle",
     "check:all": "node scripts/check-all.mjs",

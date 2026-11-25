@@ -20,18 +20,20 @@ const owner = '0x1111111111111111111111111111111111111111';
 const contract = '0x2222222222222222222222222222222222222222';
 const transactionHash = `0x${'a'.repeat(64)}`;
 const receiptBlockHash = `0x${'d'.repeat(64)}`;
-const config = resolveTarotConfig({ contractAddress: contract, enabled: true, deploymentBlock: 1 });
+const config = resolveTarotConfig({ contractAddress: contract, enabled: true, deploymentBlock: 1, testnet: true });
+const mainnetConfig = resolveTarotConfig({ contractAddress: contract, enabled: true, deploymentBlock: 1, testnet: false });
 const request: TarotRequest = { code, tokenId: 1, testnet: true };
+const mainnetRequest: TarotRequest = { ...request, testnet: false };
 const search = (tokenId = 1) => `?code=${code}&tokenId=${tokenId}&testnet=true`;
-const status = (tokenId = 1, claimed = false): TarotStatus => ({
-  config, tokenId, receiptTokenId: tarotReceiptTokenId(tokenId), claimed, observedBlock: 5,
+const status = (tokenId = 1, claimed = false, testnet = true): TarotStatus => ({
+  config: testnet ? config : mainnetConfig, tokenId, receiptTokenId: tarotReceiptTokenId(tokenId), claimed, observedBlock: 5,
   observedTimestamp: Math.floor(Date.now() / 1000), blockHash: `0x${'b'.repeat(64)}`,
 });
-function prepared(tokenId = 1): TarotPrepareResponse {
+function prepared(tokenId = 1, testnet = true): TarotPrepareResponse {
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const signature = `0x${'c'.repeat(130)}`;
   return { tokenId, receiptTokenId: tarotReceiptTokenId(tokenId), wallet: owner, deadline, expiresAtMs: deadline * 1000, signature,
-    transaction: { to: contract, chainId: config.chainId, value: '0x0', data: encodeTarotClaim(tokenId, deadline, signature) } };
+    transaction: { to: contract, chainId: testnet ? config.chainId : mainnetConfig.chainId, value: '0x0', data: encodeTarotClaim(tokenId, deadline, signature) } };
 }
 function confirmed(tokenId = 1, blockNumber = 6): TarotConfirmResponse {
   return { status: 'confirmed', transactionHash, confirmations: 3, tokenId, receiptTokenId: tarotReceiptTokenId(tokenId),
@@ -91,8 +93,8 @@ function assertArtworkPage(view: ReturnType<typeof render>) {
   return card;
 }
 function mockService(claimed = false) {
-  const statusMock = mock.method(tarotApi, 'status', async (input: TarotRequest) => status(input.tokenId, claimed));
-  const prepareMock = mock.method(tarotApi, 'prepare', async (input: TarotRequest) => prepared(input.tokenId));
+  const statusMock = mock.method(tarotApi, 'status', async (input: TarotRequest) => status(input.tokenId, claimed, input.testnet));
+  const prepareMock = mock.method(tarotApi, 'prepare', async (input: TarotRequest) => prepared(input.tokenId, input.testnet));
   const confirm = mock.method(tarotApi, 'confirm', async (input: TarotConfirmRequest) => confirmed(input.tokenId));
   return { status: statusMock, prepare: prepareMock, confirm };
 }
@@ -149,12 +151,17 @@ beforeEach(() => { dom.window.close(); ({ dom, setMediaQueryMatches } = setupFro
 afterEach(() => { cleanup(); mock.restoreAll(); window.sessionStorage.clear(); window.localStorage.clear(); });
 after(() => dom.window.close());
 
-test('Tarot routing separates public artwork IDs from valid testnet claim credentials', () => {
+test('Tarot routing separates public artwork IDs from network-specific claim credentials', () => {
   assert.equal(resolveNfcLink('?code=basel').kind, 'placeholder');
   for (const tokenId of [1, 777]) {
     const link = resolveNfcLink(search(tokenId));
     assert.equal(link.kind, 'tarot');
     if (link.kind === 'tarot') assert.deepEqual(link.request, { ...request, tokenId });
+    for (const suffix of ['', '&testnet=false']) {
+      const mainnet = resolveNfcLink(`?code=${code}&tokenId=${tokenId}${suffix}`);
+      assert.equal(mainnet.kind, 'tarot');
+      if (mainnet.kind === 'tarot') assert.deepEqual(mainnet.request, { ...mainnetRequest, tokenId });
+    }
   }
   for (const query of ['', '?code=basel&testnet=true',
     ...['0', '778', '1.5', '01', '-1', '1e2', 'NaN'].map(id => `?code=${code}&tokenId=${id}&testnet=true`),
@@ -162,7 +169,7 @@ test('Tarot routing separates public artwork IDs from valid testnet claim creden
     assert.equal(resolveNfcLink(query).kind, 'invalid', query);
   }
   for (const query of ['?tokenId=1', '?tokenId=777', '?code=basel&tokenId=1',
-    `?code=${code}&tokenId=1`, `?code=${code}&tokenId=1&testnet=false`, `?code=${code}&tokenId=1&testnet=TRUE`,
+    `?code=${code}&tokenId=1&testnet=TRUE`,
     `?code=guess&tokenId=1&testnet=true`, `${search()}&code=${code}`, `${search()}&testnet=true`]) {
     assert.equal(resolveNfcLink(query).kind, 'artwork', query);
   }
@@ -195,7 +202,9 @@ test('NFC identity changes with token ID and testnet, while unrelated parameters
   assert.ok(original?.kind === 'tarot');
   assert.deepEqual(original.request, request);
   act(() => { window.history.replaceState(null, '', `/nfc${search(777).replace('true', 'false')}`); window.dispatchEvent(new dom.window.PopStateEvent('popstate')); });
-  assert.equal(view.result.current.nfcLink?.kind, 'artwork');
+  const mainnet = view.result.current.nfcLink;
+  assert.ok(mainnet?.kind === 'tarot');
+  assert.deepEqual(mainnet.request, { ...mainnetRequest, tokenId: 777 });
 });
 
 test('a scanned card can be claimed after reloading its shareable URL, while a recipient sees only artwork', async () => {
@@ -590,7 +599,7 @@ test('public artwork links render immediately without validation, receipt loadin
   const value = wallet();
   const connect = mock.method(value, 'connect');
   for (const query of ['?tokenId=1', '?tokenId=777&code=wrong', '?tokenId=1&code=&testnet=true',
-    '?tokenId=777&code=wrong&testnet=true', `?tokenId=1&code=${code}&testnet=false`, `?tokenId=777&code=${code}`]) {
+    '?tokenId=777&code=wrong&testnet=true', '?tokenId=1&code=wrong&testnet=false', '?tokenId=777&code=']) {
     const view = render(page(query, value));
     const tokenId = new URLSearchParams(query).get('tokenId');
     const image = assertArtworkPage(view).getByRole('img');
@@ -698,7 +707,7 @@ test('changing credentials for the same card resets validation without accepting
   await act(async () => first.resolve(status()));
   assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
   assert.equal(view.queryByRole('alert'), null);
-  view.rerender(page(`?tokenId=1&code=${code}&testnet=false`, value));
+  view.rerender(page('?tokenId=1', value));
   assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
   assert.equal(service.mock.callCount(), 2);
 });
@@ -1176,6 +1185,88 @@ test('rejecting a network switch does not prepare or submit a claim', async () =
   assert.equal((view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement).disabled, false);
 });
 
+test('mainnet claims switch to Ethereum and recover their own transaction after reload', async () => {
+  const value = wallet(true);
+  const authorization = prepared(1, false);
+  const provider = value.provider!;
+  let chainId = '0xaa36a7';
+  const walletRequest = mock.method(provider, 'request', async ({ method, params }: Parameters<typeof provider.request>[0]) => {
+    if (method === 'eth_accounts') return [owner];
+    if (method === 'eth_chainId') return chainId;
+    if (method === 'wallet_switchEthereumChain') {
+      assert.deepEqual(params, [{ chainId: '0x1' }]);
+      chainId = '0x1';
+      return null;
+    }
+    if (method === 'eth_sendTransaction') {
+      assert.deepEqual(params, [{ ...authorization.transaction, from: owner, chainId: '0x1' }]);
+      return transactionHash;
+    }
+    assert.fail(`Unexpected wallet method ${method}`);
+  });
+  let mined = false;
+  const requests: { path: string; body: Record<string, unknown> }[] = [];
+  mock.method(globalThis, 'fetch', async (path: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    requests.push({ path: String(path), body });
+    assert.equal(body.testnet, false);
+    if (String(path).endsWith('/status')) return Response.json(status(1, false, false));
+    if (String(path).endsWith('/prepare')) return Response.json(authorization);
+    assert.ok(String(path).endsWith('/confirm'));
+    return Response.json(mined ? confirmed() : { ...confirmed(), status: 'pending', confirmations: 0,
+      blockNumber: null, blockHash: null });
+  });
+  const key = `mons.shop.tarot.pending:1:${contract}:1`;
+  const sepoliaKey = `mons.shop.tarot.pending:${config.chainId}:${contract}:1`;
+  const sepoliaPending = JSON.stringify({ wallet: owner, transactionHash: `0x${'f'.repeat(64)}`,
+    deadline: Math.floor(Date.now() / 1000) + 600 });
+  window.sessionStorage.setItem(sepoliaKey, sepoliaPending);
+  const first = renderHook(() => useTarotClaim(mainnetRequest, value));
+  await waitFor(() => assert.equal(first.result.current.status?.config.chainId, 1));
+  assert.equal(first.result.current.pending, false);
+  await act(async () => first.result.current.claim());
+  await waitFor(() => assert.equal(first.result.current.submitted, true));
+  assert.equal(walletRequest.mock.calls.filter(call => call.arguments[0].method === 'wallet_switchEthereumChain').length, 1);
+  assert.deepEqual(requests.find(item => item.path.endsWith('/prepare'))?.body, { ...mainnetRequest, wallet: owner });
+  assert.equal(JSON.parse(window.sessionStorage.getItem(key)!).transactionHash, transactionHash);
+  assert.equal(window.sessionStorage.getItem(sepoliaKey), sepoliaPending);
+  first.unmount();
+
+  openTab('https://mons.shop/nfc?tokenId=1&testnet=false', snapshotTab());
+  mined = true;
+  const disconnected = wallet();
+  const connect = mock.method(disconnected, 'connect');
+  const resumed = renderHook(() => useTarotClaim(mainnetRequest, disconnected));
+  await waitFor(() => assert.equal(resumed.result.current.status?.claimed, true));
+  assert.equal(resumed.result.current.pending, false);
+  assert.equal(window.sessionStorage.getItem(key), null);
+  assert.equal(window.sessionStorage.getItem(sepoliaKey), sepoliaPending);
+  assert.equal(requests.filter(item => item.path.endsWith('/prepare')).length, 1);
+  assert.deepEqual(requests.find(item => item.path.endsWith('/confirm'))?.body,
+    { ...mainnetRequest, wallet: owner, transactionHash });
+  assert.equal(connect.mock.callCount(), 0);
+});
+
+test('unavailable mainnet preparation preserves the scanned credential and artwork without claim controls', async () => {
+  const fetch = mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ error: { code: 'unavailable' } }, { status: 503 }));
+  const value = wallet(true);
+  const walletRequest = mock.method(value.provider!, 'request');
+  window.history.replaceState(null, '', `/nfc${search().replace('testnet=true', 'testnet=false')}`);
+  const view = render(createElement(RoutedCard, { value }));
+  await act(async () => undefined);
+  const artwork = within(view.getByRole('main', { name: 'Tarot card' }));
+  assert.equal(artwork.getByRole('img', { name: 'Mutating Card' }).getAttribute('src'), 'https://wip.lil.org/tarot/heros/1.webp');
+  assert.equal(artwork.queryByRole('button'), null);
+  assert.equal(artwork.queryByRole('alert'), null);
+  assert.equal(window.localStorage.getItem('mons.shop.tarot.claim:mainnet:1'), code);
+  assert.equal(window.localStorage.getItem('mons.shop.tarot.claim:sepolia:1'), null);
+  assert.equal(window.location.search, '?tokenId=1&testnet=false');
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.deepEqual(JSON.parse(String((fetch.mock.calls[0].arguments[1] as RequestInit).body)), mainnetRequest);
+  assert.equal(walletRequest.mock.callCount(), 0);
+});
+
 for (const failure of [new TarotApiError('Invalid link.', 401), new TarotApiError('Forbidden.', 403),
   new TarotApiError('Too many attempts.', 429), new TarotApiError('Temporarily unavailable.', 503), new TypeError('Network unavailable')]) {
   test(`initial ${failure instanceof TarotApiError ? failure.status : 'network'} validation failures silently preserve the large artwork`, async () => {
@@ -1203,35 +1294,47 @@ test('route changes discard stale validation results', async () => {
   assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/tarot/heros/777.webp');
 });
 
-test('API sends credentials only in a private POST and rejects another card or a mainnet response', async () => {
-  let response: unknown = status();
-  const fetch = mock.method(globalThis, 'fetch', async () => Response.json(response));
-  await tarotApi.status(request);
-  const [url, init] = fetch.mock.calls[0].arguments as unknown as [string, RequestInit];
-  assert.equal(url, '/api/ethereum/tarot/status');
-  assert.equal(init.method, 'POST');
-  assert.equal(init.cache, 'no-store');
-  assert.equal(init.referrerPolicy, 'no-referrer');
-  assert.equal(init.credentials, 'omit');
-  assert.deepEqual(JSON.parse(String(init.body)), request);
-  response = status(2);
-  await assert.rejects(tarotApi.status(request), /verify/);
-  response = { ...status(), config: { ...config, chainId: 1 } };
-  await assert.rejects(tarotApi.status(request), /verify/);
-});
+for (const testnet of [false, true]) {
+  test(`API keeps ${testnet ? 'Sepolia' : 'mainnet'} credentials private and rejects another card or network`, async () => {
+    const input = { ...request, testnet };
+    const expected = testnet ? config : mainnetConfig;
+    const other = testnet ? mainnetConfig : config;
+    let response: unknown = status(1, false, testnet);
+    const fetch = mock.method(globalThis, 'fetch', async () => Response.json(response));
+    await tarotApi.status(input);
+    const [url, init] = fetch.mock.calls[0].arguments as unknown as [string, RequestInit];
+    assert.equal(url, '/api/ethereum/tarot/status');
+    assert.equal(init.method, 'POST');
+    assert.equal(init.cache, 'no-store');
+    assert.equal(init.referrerPolicy, 'no-referrer');
+    assert.equal(init.credentials, 'omit');
+    assert.deepEqual(JSON.parse(String(init.body)), input);
+    for (const result of [status(2, false, testnet), { ...status(), config: other },
+      { ...status(), config: { ...expected, chainId: other.chainId } },
+      { ...status(), config: { ...expected, testnet: !testnet } }]) {
+      response = result;
+      await assert.rejects(tarotApi.status(input), /verify/);
+    }
+  });
 
-test('prepared transactions must mint this exact pair on Sepolia for zero ETH', async () => {
-  let response = prepared();
-  mock.method(globalThis, 'fetch', async () => Response.json(response));
-  await tarotApi.prepare({ ...request, wallet: owner }, config);
-  for (const transaction of [
-    { ...response.transaction, chainId: 1 }, { ...response.transaction, value: '0x1' },
-    { ...response.transaction, to: owner }, { ...response.transaction, data: '0x' },
-  ]) {
-    response = { ...prepared(), transaction };
-    await assert.rejects(tarotApi.prepare({ ...request, wallet: owner }, config), /verify/);
-  }
-});
+  test(`prepared transactions must mint this exact pair on ${testnet ? 'Sepolia' : 'mainnet'} for zero ETH`, async () => {
+    const input = { ...request, testnet, wallet: owner };
+    const expected = testnet ? config : mainnetConfig;
+    const other = testnet ? mainnetConfig : config;
+    let response = prepared(1, testnet);
+    const fetch = mock.method(globalThis, 'fetch', async () => Response.json(response));
+    await tarotApi.prepare(input, expected);
+    await assert.rejects(tarotApi.prepare(input, other), /verify/);
+    assert.equal(fetch.mock.callCount(), 1);
+    for (const transaction of [
+      { ...response.transaction, chainId: other.chainId }, { ...response.transaction, value: '0x1' },
+      { ...response.transaction, to: owner }, { ...response.transaction, data: '0x' },
+    ]) {
+      response = { ...prepared(1, testnet), transaction };
+      await assert.rejects(tarotApi.prepare(input, expected), /verify/);
+    }
+  });
+}
 
 test('confirmation responses require paired canonical receipt proof for terminal results', async () => {
   let response: unknown = confirmed();

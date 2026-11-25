@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveTarotConfig, TAROT_MAX_CARDS } from '../shared/ethereum/tarot.ts';
 import { assertTarotCredentialPin, TAROT_CREDENTIAL_PIN_PATH, type TarotClaimLinks } from './tarot/claimLinks.ts';
+import { mainnetCredentials } from './tarot/mainnetClaims.ts';
 
 const options = process.argv.slice(2);
 if (options.length > 1 || options.some(option => option !== '--require-tarot-manifest')) {
@@ -26,6 +27,7 @@ const forbiddenStrings = [
   'api.testnet.solana.com',
   'ETHEREUM_PRE111K_ACCESS_CODES',
   'ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET',
+  'ETHEREUM_TAROT_MAINNET_SIGNER_SECRET',
 ];
 
 const forbiddenPatterns = [
@@ -58,7 +60,7 @@ if (requireTarotManifest || existsSync(tarotManifest) || process.env.ETHEREUM_TA
       const api = JSON.parse(readFileSync(new URL('../cloud/workers/api/wrangler.jsonc', import.meta.url), 'utf8')) as {
         vars?: { ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS?: string };
       };
-      const expected = resolveTarotConfig({ contractAddress: api.vars?.ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS });
+      const expected = resolveTarotConfig({ testnet: true, contractAddress: api.vars?.ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS });
       if (!expected.contractAddress || manifest.chainId !== expected.chainId || manifest.contractAddress !== expected.contractAddress) throw new Error();
     } else if (manifest.links.length !== TAROT_MAX_CARDS || manifest.links.some(link => typeof link.code !== 'string' ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(link.code))) throw new Error();
@@ -67,6 +69,19 @@ if (requireTarotManifest || existsSync(tarotManifest) || process.env.ETHEREUM_TA
     console.error(requireTarotManifest
       ? '[browser-bundle] A valid private Tarot manifest for the configured deployment is required, matching its verified credential-set fingerprint.'
       : '[browser-bundle] Invalid private Tarot manifest.');
+    process.exit(1);
+  }
+}
+
+const mainnetManifest = resolve(process.env.ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST || '.operations/dmx-mainnet-v1/claim-links.private.json');
+let mainnetCodes: string[] = [];
+if (existsSync(mainnetManifest) || process.env.ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST) {
+  try {
+    const manifest: Parameters<typeof mainnetCredentials>[0] = JSON.parse(readFileSync(mainnetManifest, 'utf8'));
+    mainnetCredentials(manifest);
+    mainnetCodes = manifest.links.map(link => link.code);
+  } catch {
+    console.error('[browser-bundle] Invalid private DMX mainnet staging manifest.');
     process.exit(1);
   }
 }
@@ -80,12 +95,13 @@ function listFiles(directory: string): string[] {
 
 const violations = listFiles(distDirectory).flatMap((path) => {
   const text = readFileSync(path).toString('utf8');
-  const tarotText = tarotCodes.length ? text.toLowerCase() : '';
+  const tarotText = tarotCodes.length || mainnetCodes.length ? text.toLowerCase() : '';
   return [
     ...forbiddenStrings.filter((value) => text.includes(value)).map(() => 'a forbidden provider endpoint or private binding'),
     ...forbiddenPatterns.filter(({ pattern }) => pattern.test(text)).map(({ label }) => label),
     ...(accessCodes.some(code => text.includes(code)) ? ['a configured relic access code'] : []),
     ...(tarotCodes.some(code => tarotText.includes(code)) ? ['a configured Tarot claim code'] : []),
+    ...(mainnetCodes.some(code => tarotText.includes(code)) ? ['a configured DMX mainnet claim code'] : []),
   ];
 });
 

@@ -29,7 +29,7 @@ function tarotLinkUrl(tokenId: number, code: string): string {
   return `https://mons.shop/nfc?code=${code}&tokenId=${tokenId}&testnet=true`;
 }
 
-function privateDirectory(directory: string, root: string): void {
+export function privateDirectory(directory: string, root: string): void {
   const allowed = resolve(root, '.operations');
   const target = resolve(directory);
   const child = relative(allowed, target);

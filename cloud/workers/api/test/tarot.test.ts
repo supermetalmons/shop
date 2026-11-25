@@ -6,7 +6,7 @@ import test, { type TestContext } from 'node:test';
 import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ethereumSignerAddress, recoverEthereumAddress } from '../../../../shared/ethereum/crypto.ts';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.ts';
-import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaim, tarotCodeHashInput, tarotReceiptTokenId,
+import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaim, tarotCodeHashInput, tarotReceiptTokenId, tarotChainId,
   type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
 import { TAROT_CLAIMED_TOPIC, tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.ts';
 import { handleTarotRequest, type TarotEnvironment } from '../src/tarot.ts';
@@ -25,15 +25,30 @@ const CODE = '11111111-1111-4111-8111-111111111111';
 const BAD_CODE = '22222222-2222-4222-8222-222222222222';
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const credentials = { tokenId: 1, testnet: true, code: CODE };
+const BATCH_ID = '44444444-4444-4444-8444-444444444444';
 type RpcRequest = { id: number; method: string; params: unknown[] };
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, testnet = true) {
+  const chainId = tarotChainId(testnet);
+  const scopedCredentials = { ...credentials, testnet };
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());
   db.exec(readFileSync('cloud/workers/api/ops-migrations/0014_tarot_claim_codes.sql', 'utf8'));
   for (const tokenId of [1, 777]) db.prepare('INSERT INTO tarot_claim_codes VALUES (?, ?, ?, ?, ?, NULL)')
     .run(TAROT_CHAIN_ID, CONTRACT, tokenId, createHash('sha256').update(tarotCodeHashInput({ chainId: TAROT_CHAIN_ID,
       contractAddress: CONTRACT, tokenId, code: CODE })).digest('hex'), NOW);
+  if (!testnet) {
+    for (const name of ['0015_dmx_mainnet_claim_staging.sql', '0016_dmx_mainnet_bound_claim_codes.sql']) {
+      db.exec(readFileSync(`cloud/workers/api/ops-migrations/${name}`, 'utf8'));
+    }
+    db.prepare(`INSERT INTO dmx_mainnet_claim_batches
+      (batch_id,chain_id,collection_key,status,contract_address,credential_count,credential_set_sha256,created_at_ms,verified_at_ms,bound_at_ms)
+      VALUES (?,1,'dmx-mainnet-v1','bound',?,777,?,?,?,?)`).run(BATCH_ID, CONTRACT, 'a'.repeat(64), NOW, NOW, NOW);
+    for (const tokenId of [1, 777]) db.prepare(`INSERT INTO dmx_mainnet_bound_claim_codes
+      (batch_id,chain_id,contract_address,token_id,code_hash,created_at_ms,revoked_at_ms) VALUES (?,1,?,?,?,?,NULL)`)
+      .run(BATCH_ID, CONTRACT, tokenId, createHash('sha256').update(tarotCodeHashInput({ chainId: 1,
+        contractAddress: CONTRACT, tokenId, code: CODE })).digest('hex'), NOW);
+  }
   const calls: RpcRequest[] = [];
   const blockNumbers = new Map<string, number>();
   const limitKeys = { access: [] as string[], prepare: [] as string[], confirm: [] as string[] };
@@ -43,9 +58,11 @@ function fixture(t: TestContext) {
     OPS_DB: d1Database(db, () => { dbReads++; }), ALCHEMY_MI_NOTE_API_KEY: 'test', ETHEREUM_111K_RPC_URL: '',
     ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS: CONTRACT, ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK: '1',
     ETHEREUM_TAROT_SEPOLIA_ENABLED: 'true', ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET: KEY,
+    ...(!testnet ? { ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS: CONTRACT, ETHEREUM_TAROT_MAINNET_DEPLOYMENT_BLOCK: '1',
+      ETHEREUM_TAROT_MAINNET_ENABLED: 'true', ETHEREUM_TAROT_MAINNET_SIGNER_SECRET: KEY } : {}),
     TAROT_ACCESS_IP_RATE_LIMITER: limiter('access'), TAROT_PREPARE_RATE_LIMITER: limiter('prepare'), TAROT_CONFIRM_IP_RATE_LIMITER: limiter('confirm'),
   };
-  const state = { chainId: Number(TAROT_CHAIN_ID), blockNumber: 100, canonicalHash: BLOCK_HASH, timestamp: NOW / 1000,
+  const state = { chainId: Number(chainId), blockNumber: 100, canonicalHash: BLOCK_HASH, timestamp: NOW / 1000,
     claimed: 0, initial: 777, maximum: 999_999, offset: 999_999, lifetime: 600, mintingPaused: 0, signer: String(SIGNER),
     callHash: null as string | null,
     claimBlock: 0,
@@ -95,7 +112,7 @@ function fixture(t: TestContext) {
     };
     return Response.json(Array.isArray(body) ? body.map(respond) : respond(body));
   };
-  const call = async (path: string, body: unknown = credentials, headers: Record<string, string> = {}, method = 'POST') => {
+  const call = async (path: string, body: unknown = scopedCredentials, headers: Record<string, string> = {}, method = 'POST') => {
     const request = new Request(`https://api.mons.shop${path}`, { method,
       headers: { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.1', 'Content-Type': 'application/json', 'X-Mons-CSRF': '1', ...headers },
       ...(method === 'POST' ? { body: JSON.stringify(body) } : {}) });
@@ -103,7 +120,7 @@ function fixture(t: TestContext) {
     return { response, body: await response.json() as Record<string, unknown> };
   };
   const prepared = async (tokenId = 1) => {
-    const response = await call(TAROT_API_PATHS.prepare, { ...credentials, tokenId, wallet: WALLET });
+    const response = await call(TAROT_API_PATHS.prepare, { ...scopedCredentials, tokenId, wallet: WALLET });
     assert.equal(response.response.status, 200, JSON.stringify(response.body));
     return response.body as unknown as TarotPrepareResponse;
   };
@@ -115,11 +132,12 @@ function fixture(t: TestContext) {
     state.receipt = { transactionHash: HASH, blockHash: blockHash(98), blockNumber: '0x62', from: WALLET, to: CONTRACT, status: '0x1',
       logs: [log(topics), ...[1, tarotReceiptTokenId(1)].map(id => log([TRANSFER, encodeAbi(['uint256'], [0]), encodeAbi(['address'], [WALLET]), encodeAbi(['uint256'], [id])]))] };
     state.transaction = { hash: HASH, blockHash: blockHash(98), blockNumber: '0x62', from: WALLET, to: CONTRACT,
-      chainId: ethereumHexQuantity(TAROT_CHAIN_ID), value: '0x0', input: quote.transaction.data };
+      chainId: ethereumHexQuantity(chainId), value: '0x0', input: quote.transaction.data };
     return quote;
   };
-  const confirm = () => call(TAROT_API_PATHS.confirm, { ...credentials, wallet: WALLET, transactionHash: HASH });
-  return { env, state, calls, db, call, prepared, mined, confirm, blockHash, limitKeys, dbReads: () => dbReads };
+  const confirm = () => call(TAROT_API_PATHS.confirm, { ...scopedCredentials, wallet: WALLET, transactionHash: HASH });
+  return { env, state, calls, db, call, prepared, mined, confirm, blockHash, limitKeys,
+    credentials: scopedCredentials, dbReads: () => dbReads };
 }
 
 test('Tarot signs a free atomic claim scoped to the token, wallet, chain and contract without consuming its code', async t => {
@@ -162,9 +180,9 @@ test('Tarot checks secret credentials before RPC and revalidates claimed links',
   assert.equal((await f.call(TAROT_API_PATHS.status)).response.status, 401);
 });
 
-test('Tarot rejects mainnet, extra fields and malformed requests before database or RPC work', async t => {
+test('Tarot rejects malformed networks, extra fields and malformed requests before database or RPC work', async t => {
   const f = fixture(t);
-  for (const body of [{ ...credentials, testnet: false }, { tokenId: 1, code: CODE }, { ...credentials, tokenId: 0 },
+  for (const body of [{ ...credentials, testnet: 'false' }, { ...credentials, testnet: null }, { ...credentials, tokenId: 0 },
     { ...credentials, tokenId: 778 }, { ...credentials, tokenId: '1' }, { ...credentials, code: 'basel' },
     { ...credentials, chainId: 1 }, { ...credentials, code: `${CODE} ` }]) {
     assert.equal((await f.call(TAROT_API_PATHS.status, body)).response.status, 400);
@@ -174,6 +192,87 @@ test('Tarot rejects mainnet, extra fields and malformed requests before database
   assert.equal((await f.call(TAROT_API_PATHS.status, credentials, { 'X-Mons-CSRF': '' })).response.status, 403);
   assert.equal(f.calls.length, 0);
   assert.equal(f.dbReads(), 0);
+});
+
+test('unconfigured mainnet requests stay unavailable without rejecting credentials or falling back to Sepolia', async t => {
+  const f = fixture(t);
+  for (const body of [{ tokenId: 1, code: CODE }, { ...credentials, testnet: false }]) {
+    for (const path of [TAROT_API_PATHS.status, TAROT_API_PATHS.prepare]) {
+      const response = await f.call(path, path === TAROT_API_PATHS.prepare ? { ...body, wallet: WALLET } : body);
+      assert.equal(response.response.status, 503);
+      assert.equal((response.body.error as { code: string }).code, 'unavailable');
+    }
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.dbReads(), 0);
+});
+
+test('mainnet defaults and explicit false use the bound mainnet credentials and signer', async t => {
+  const f = fixture(t, false);
+  f.env.ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET = `0x${'55'.repeat(32)}`;
+  const response = await f.call(TAROT_API_PATHS.status, { tokenId: 1, code: CODE });
+  assert.equal(response.response.status, 200);
+  const config = (response.body as unknown as TarotStatus).config;
+  assert.equal(config.testnet, false);
+  assert.equal(config.chainId, 1);
+  assert.equal(config.enabled, true);
+  assert.equal(config.explorerUrl, 'https://etherscan.io');
+  for (const tokenId of [1, 777]) {
+    const quote = await f.prepared(tokenId);
+    assert.equal(quote.transaction.chainId, 1);
+    assert.equal(quote.transaction.to, CONTRACT);
+    assert.equal(recoverEthereumAddress(tarotClaimDigest({ chainId: 1, contractAddress: CONTRACT,
+      wallet: WALLET, tokenId, deadline: quote.deadline }), quote.signature), SIGNER);
+    assert.notEqual(recoverEthereumAddress(tarotClaimDigest({ chainId: TAROT_CHAIN_ID, contractAddress: CONTRACT,
+      wallet: WALLET, tokenId, deadline: quote.deadline }), quote.signature), SIGNER);
+  }
+});
+
+test('mainnet retains credentials while the staged batch is unbound or points at another deployment', async t => {
+  const f = fixture(t, false);
+  f.db.prepare("UPDATE dmx_mainnet_claim_batches SET status='staged',contract_address=NULL,bound_at_ms=NULL").run();
+  for (const path of [TAROT_API_PATHS.status, TAROT_API_PATHS.prepare]) {
+    const response = await f.call(path, path === TAROT_API_PATHS.prepare ? { ...f.credentials, wallet: WALLET } : f.credentials);
+    assert.equal(response.response.status, 503);
+    assert.equal((response.body.error as { code: string }).code, 'unavailable');
+  }
+  f.db.prepare("UPDATE dmx_mainnet_claim_batches SET status='bound',contract_address=?,bound_at_ms=?").run(OTHER, NOW);
+  assert.equal((await f.call(TAROT_API_PATHS.status)).response.status, 503);
+  assert.equal(f.calls.length, 0);
+});
+
+test('mainnet does not accept staging or Sepolia hashes, revoked credentials, or a missing mainnet signer', async t => {
+  const f = fixture(t, false);
+  const request = { ...f.credentials, wallet: WALLET };
+  delete f.env.ETHEREUM_TAROT_MAINNET_SIGNER_SECRET;
+  assert.equal((await f.call(TAROT_API_PATHS.prepare, request)).response.status, 503);
+  f.env.ETHEREUM_TAROT_MAINNET_SIGNER_SECRET = KEY;
+  for (const codeHash of [createHash('sha256').update(tarotCodeHashInput({ chainId: TAROT_CHAIN_ID,
+    contractAddress: CONTRACT, tokenId: 1, code: CODE })).digest('hex'),
+    createHash('sha256').update(`mons:dmx:mainnet-staging:v1:1:${BATCH_ID}:1:${CODE}`).digest('hex')]) {
+    f.db.prepare('UPDATE dmx_mainnet_bound_claim_codes SET code_hash=? WHERE token_id=1').run(codeHash);
+    assert.equal((await f.call(TAROT_API_PATHS.prepare, request)).response.status, 401);
+  }
+  const valid = createHash('sha256').update(tarotCodeHashInput({ chainId: 1,
+    contractAddress: CONTRACT, tokenId: 1, code: CODE })).digest('hex');
+  f.db.prepare('UPDATE dmx_mainnet_bound_claim_codes SET code_hash=?,revoked_at_ms=? WHERE token_id=1').run(valid, NOW);
+  assert.equal((await f.call(TAROT_API_PATHS.status)).response.status, 401);
+});
+
+test('mainnet confirms its own chain and keeps recovery readable while disabled or paused', async t => {
+  const f = fixture(t, false);
+  await f.mined();
+  f.state.claimed = 1;
+  f.state.mintingPaused = 1;
+  f.env.ETHEREUM_TAROT_MAINNET_ENABLED = 'false';
+  delete f.env.ETHEREUM_TAROT_MAINNET_SIGNER_SECRET;
+  const status = await f.call(TAROT_API_PATHS.status);
+  assert.equal(status.response.status, 200);
+  assert.equal(status.body.claimed, true);
+  assert.equal((status.body.config as TarotStatus['config']).enabled, false);
+  assert.equal((await f.confirm()).body.status, 'confirmed');
+  f.state.chainId = TAROT_CHAIN_ID;
+  assert.equal((await f.confirm()).response.status, 503);
 });
 
 test('Tarot status waits for three confirmations while preparation sees the latest claim', async t => {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   encodeTarotClaim, encodeTarotClaimTo, resolveTarotConfig, tarotCodeHashInput, tarotReceiptTokenId,
-  TAROT_CHAIN_ID, TAROT_MAX_CARDS, TAROT_METADATA_BASE_URI,
+  TAROT_CHAIN_ID, TAROT_MAX_CARDS, TAROT_METADATA_BASE_URI, tarotChainId,
 } from '../shared/ethereum/tarot.ts';
 import { isTarotTokenId } from '../shared/ethereum/tarotCard.ts';
 import { dmxMintDigest, dmxRedemptionDigest, tarotClaimDigest, TAROT_CLAIMED_TOPIC } from '../shared/ethereum/tarotCrypto.ts';
@@ -15,8 +15,17 @@ const contractAddress = '0x3333333333333333333333333333333333333333';
 const wallet = '0x1111111111111111111111111111111111111111';
 const code = '70664cea-b3ab-4004-9a34-5527b5380ad2';
 
-test('Tarot deployment configuration is always Sepolia and requires explicit enablement', () => {
-  const config = resolveTarotConfig({ contractAddress, deploymentBlock: '123', enabled: true });
+test('Tarot defaults to mainnet, keeps Sepolia explicit, and requires enablement', () => {
+  const mainnet = resolveTarotConfig({ contractAddress, deploymentBlock: '123', enabled: true });
+  assert.equal(mainnet.chainId, 1);
+  assert.equal(mainnet.testnet, false);
+  assert.equal(mainnet.chainName, 'Ethereum');
+  assert.equal(mainnet.explorerUrl, 'https://etherscan.io');
+  assert.equal(mainnet.walletRpcUrl, 'https://ethereum-rpc.publicnode.com');
+  assert.equal(mainnet.enabled, true);
+  assert.equal(tarotChainId(false), 1);
+  assert.equal(tarotChainId(true), 11155111);
+  const config = resolveTarotConfig({ contractAddress, deploymentBlock: '123', enabled: true, testnet: true });
   assert.equal(config.chainId, 11155111);
   assert.equal(config.testnet, true);
   assert.equal(config.enabled, true);
@@ -50,7 +59,9 @@ test('claim code hashing normalizes casing and binds deployment and card without
   assert.equal(tarotCodeHashInput({ ...args, code: code.toUpperCase() }), tarotCodeHashInput(args));
   assert.notEqual(tarotCodeHashInput({ ...args, tokenId: 2 }), tarotCodeHashInput(args));
   assert.notEqual(tarotCodeHashInput({ ...args, contractAddress: wallet }), tarotCodeHashInput(args));
-  for (const invalid of [{ ...args, chainId: 1 }, { ...args, contractAddress: '0x' + '0'.repeat(40) },
+  assert.equal(tarotCodeHashInput({ ...args, chainId: 1 }), `mons:tarot:claim:v1:1:${contractAddress}:1:${code}`);
+  assert.notEqual(tarotCodeHashInput({ ...args, chainId: 1 }), tarotCodeHashInput(args));
+  for (const invalid of [{ ...args, chainId: 10 }, { ...args, contractAddress: '0x' + '0'.repeat(40) },
     { ...args, tokenId: 778 }, { ...args, code: 'secret-do-not-log' }, { ...args, code: code.replace('-4004-', '-3004-') }]) {
     assert.throws(() => tarotCodeHashInput(invalid), /^Error: Invalid Tarot claim code scope$/);
   }

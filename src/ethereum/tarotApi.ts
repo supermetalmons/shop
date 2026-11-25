@@ -1,4 +1,4 @@
-import { encodeTarotClaim, TAROT_API_PATHS, TAROT_CHAIN_ID, TAROT_MAX_CARDS, tarotReceiptTokenId,
+import { encodeTarotClaim, TAROT_API_PATHS, TAROT_MAX_CARDS, tarotChainId, tarotReceiptTokenId,
   type TarotConfig, type TarotConfirmRequest, type TarotConfirmResponse, type TarotPrepareRequest,
   type TarotPrepareResponse, type TarotRequest, type TarotStatus } from '../../shared/ethereum/tarot';
 import { normalizeEthereumAddress } from '../../shared/ethereum/protocol';
@@ -16,8 +16,9 @@ const integer = (value: unknown): value is number => typeof value === 'number' &
 const hash = (value: unknown): value is string => typeof value === 'string' && /^0x[0-9a-f]{64}$/i.test(value);
 function invalid(): never { throw new Error('Couldn’t verify this Tarot claim. Please reload and try again.'); }
 
-function parseConfig(value: unknown): TarotConfig {
-  if (!record(value) || value.testnet !== true || value.chainId !== TAROT_CHAIN_ID || value.maxCards !== TAROT_MAX_CARDS ||
+function parseConfig(value: unknown, request: TarotRequest): TarotConfig {
+  if (!record(value) || typeof value.testnet !== 'boolean' || value.testnet !== request.testnet ||
+    value.chainId !== tarotChainId(request.testnet) || value.maxCards !== TAROT_MAX_CARDS ||
     typeof value.enabled !== 'boolean' || typeof value.chainName !== 'string' || !integer(value.deploymentBlock) ||
     value.confirmationBlocks !== 3 || typeof value.walletRpcUrl !== 'string' ||
     typeof value.explorerUrl !== 'string') return invalid();
@@ -67,15 +68,16 @@ export const tarotApi = {
     const value = await post(TAROT_API_PATHS.status, request, signal);
     if (!record(value) || !matchesCard(value, request) || typeof value.claimed !== 'boolean' ||
       !integer(value.observedBlock) || !integer(value.observedTimestamp) || !hash(value.blockHash)) return invalid();
-    return { ...value, config: parseConfig(value.config) } as TarotStatus;
+    return { ...value, config: parseConfig(value.config, request) } as TarotStatus;
   },
   async prepare(request: TarotPrepareRequest, config: TarotConfig, signal?: AbortSignal): Promise<TarotPrepareResponse> {
+    const expected = parseConfig(config, request);
     const value = await post(TAROT_API_PATHS.prepare, request, signal);
     if (!record(value) || !matchesCard(value, request) || normalizeEthereumAddress(value.wallet) !== normalizeEthereumAddress(request.wallet) ||
       !integer(value.deadline) || !integer(value.expiresAtMs) || value.expiresAtMs !== value.deadline * 1000 || value.expiresAtMs <= Date.now() ||
       typeof value.signature !== 'string' || !/^0x[0-9a-f]{130}$/i.test(value.signature) || !record(value.transaction)) return invalid();
     const transaction = value.transaction;
-    if (transaction.chainId !== TAROT_CHAIN_ID || normalizeEthereumAddress(transaction.to) !== config.contractAddress ||
+    if (transaction.chainId !== expected.chainId || normalizeEthereumAddress(transaction.to) !== expected.contractAddress ||
       transaction.value !== '0x0' || transaction.data !== encodeTarotClaim(request.tokenId, value.deadline, value.signature)) return invalid();
     return value as TarotPrepareResponse;
   },

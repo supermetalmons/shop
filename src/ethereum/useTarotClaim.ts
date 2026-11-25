@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TarotConfig, TarotRequest, TarotStatus } from '../../shared/ethereum/tarot';
-import { TAROT_AUTHORIZATION_TTL_SECONDS, TAROT_CHAIN_ID } from '../../shared/ethereum/tarot';
+import { TAROT_AUTHORIZATION_TTL_SECONDS, tarotChainId } from '../../shared/ethereum/tarot';
 import type { EthereumWallet } from './useEthereum111k';
 import { captureEthereumWalletActionConfig, ethereumWalletActionChanged, useEthereumWalletAction } from './useEthereumWalletAction';
 import { ethereumAddress, ethereumOperation, ethereumWalletError } from './wallet';
@@ -173,11 +173,11 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
     try {
       let status: TarotStatus | null = null;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const saved = readSavedNfcCode(browserWindow, request.tokenId);
+        const saved = readSavedNfcCode(browserWindow, request.tokenId, request.testnet);
         const result = await tarotApi.status(request, controller.signal);
         controller.signal.throwIfAborted();
         if (latest.current.identity !== identity || reconciliationEpoch.current !== epoch) return null;
-        if (readSavedNfcCode(browserWindow, request.tokenId) === saved) {
+        if (readSavedNfcCode(browserWindow, request.tokenId, request.testnet) === saved) {
           status = result;
           break;
         }
@@ -336,7 +336,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
     };
     void check();
     return () => { active = false; if (timer) clearTimeout(timer); };
-  }, [identity, pending, currentStatus?.config.contractAddress, currentStatus?.claimed, suspended, refresh]);
+  }, [identity, pending, currentStatus?.config.chainId, currentStatus?.config.contractAddress, currentStatus?.claimed, suspended, refresh]);
 
   const submit = async (): Promise<boolean> => {
     const controller = lifecycle.current;
@@ -356,7 +356,8 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
       const observation = chainObservation.current;
       const status = await tarotApi.status(request, signal);
       operation.assertCurrent();
-      if (status.config.contractAddress !== config.contractAddress || status.config.chainId !== TAROT_CHAIN_ID || !status.config.enabled) {
+      if (status.config.contractAddress !== config.contractAddress || status.config.chainId !== config.chainId ||
+        status.config.testnet !== request.testnet || status.config.chainId !== tarotChainId(request.testnet) || !status.config.enabled) {
         throw new Error('This Tarot drop changed. Please reload and try again.');
       }
       if (!acceptStatus(status, observation)) {

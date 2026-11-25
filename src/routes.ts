@@ -112,7 +112,7 @@ function createRoute(
   };
 }
 
-export function resolveAppRoute(location: AppRouteLocation, savedNfcCode?: (tokenId: number) => string | null): ResolvedAppRoute {
+export function resolveAppRoute(location: AppRouteLocation, savedNfcCode?: (tokenId: number, testnet: boolean) => string | null): ResolvedAppRoute {
   const requestedPath = normalizePathname(location.pathname);
   const search = location.search || '';
   const hash = location.hash || '';
@@ -192,7 +192,8 @@ export function walletVisibleShopRoute(
   if (
     (isMainnetOnlyStaffWallet(connectedWallet) || isMainnetOnlyStaffWallet(staffWallet)) &&
     (route.drop?.solanaCluster === 'devnet' || route.upcoming?.solanaCluster === 'devnet' ||
-      route.kind === 'ethereum-drop' || route.nfcLink?.kind === 'tarot' || route.wipExperience === 'mi_note_cards_demo')
+      route.kind === 'ethereum-drop' || route.nfcLink?.kind === 'tarot' && route.nfcLink.request.testnet ||
+      route.wipExperience === 'mi_note_cards_demo')
   ) return resolveAppRoute({ pathname: '/' });
   return route;
 }

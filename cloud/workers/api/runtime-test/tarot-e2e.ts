@@ -10,13 +10,18 @@ import { ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/c
 import { dmxRedemptionReceiptTokenId, encodeDmxMintTo, encodeDmxMintToAuthorized, encodeDmxRedeem,
   type DMXRedemptionQuote } from '../../../../shared/ethereum/dmx.ts';
 import { dmxMintDigest, dmxRedemptionDigest, tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.ts';
-import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaimTo, tarotCodeHashInput, tarotReceiptTokenId,
+import { TAROT_API_PATHS, encodeTarotClaimTo, tarotChainId, tarotCodeHashInput, tarotReceiptTokenId,
   type TarotConfirmResponse, type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
+import { bindMainnetCredentials, stageMainnetCredentials, type MainnetClaimLinks } from '../../../../scripts/tarot/mainnetClaims.ts';
 import { handleTarotRequest, type TarotEnvironment } from '../src/tarot.ts';
 import { d1Database } from '../test/commerceD1Harness.ts';
 
 const root = resolve(import.meta.dirname, '../../../..');
 const project = resolve(root, 'onchain/ethereum');
+const args = process.argv.slice(2);
+if (args.length > 1 || args.length === 1 && args[0] !== '--mainnet') throw new Error('Use tarot-e2e.ts [--mainnet].');
+const testnet = args.length === 0;
+const chainId = tarotChainId(testnet);
 const build = spawnSync('forge', ['build', '--offline'], { cwd: project, stdio: 'inherit' });
 if (build.status !== 0) throw new Error('Contract compilation failed');
 const port = await new Promise<number>((done, reject) => {
@@ -28,13 +33,14 @@ const port = await new Promise<number>((done, reject) => {
     server.close(error => error ? reject(error) : done(address.port));
   });
 });
-const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--chain-id', String(TAROT_CHAIN_ID), '--hardfork', 'prague', '--silent'],
+const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--chain-id', String(chainId), '--hardfork', 'prague', '--silent'],
   { stdio: ['ignore', 'ignore', 'pipe'] });
 let anvilError = '';
 anvil.stderr.on('data', data => { anvilError += String(data); });
 anvil.on('error', error => { anvilError += error.message; });
 const rpcUrl = `http://127.0.0.1:${port}`;
 const db = new DatabaseSync(':memory:');
+db.exec('PRAGMA foreign_keys = ON');
 let rpcId = 0;
 async function rpc<T>(method: string, params: unknown[] = []): Promise<T> {
   const response = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -72,28 +78,46 @@ try {
     ['address', 'address', 'address'], [admin, ethereumSignerAddress(key), rendererDeployment.contractAddress]).slice(2)}` });
   assert.ok(deployment.contractAddress);
   const contractAddress = deployment.contractAddress.toLowerCase();
+  const deploymentBlock = Number(deployment.blockNumber);
   await rpc('anvil_mine', ['0x2']);
   db.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0014_tarot_claim_codes.sql'), 'utf8'));
-  const code = '11111111-1111-4111-8111-111111111111';
-  for (const tokenId of [1, 2, 777]) db.prepare('INSERT INTO tarot_claim_codes VALUES (?, ?, ?, ?, ?, NULL)')
-    .run(TAROT_CHAIN_ID, contractAddress, tokenId, createHash('sha256').update(tarotCodeHashInput({ chainId: TAROT_CHAIN_ID,
-      contractAddress, tokenId, code })).digest('hex'), Date.now());
+  const manifest: MainnetClaimLinks | null = testnet ? null : {
+    version: 1, chainId: 1, collectionKey: 'dmx-mainnet-v1', contractAddress: null,
+    batchId: '00000000-0000-4000-8000-000000000000', createdAtMs: Date.now(),
+    links: Array.from({ length: 777 }, (_, index) => {
+      const tokenId = index + 1;
+      const code = `00000000-0000-4000-8000-${tokenId.toString(16).padStart(12, '0')}`;
+      return { tokenId, code, url: `https://mons.shop/nfc?code=${code}&tokenId=${tokenId}` };
+    }),
+  };
+  const codeFor = (tokenId: number) => manifest?.links[tokenId - 1].code ?? '11111111-1111-4111-8111-111111111111';
+  if (testnet) {
+    for (const tokenId of [1, 2, 777]) db.prepare('INSERT INTO tarot_claim_codes VALUES (?, ?, ?, ?, ?, NULL)')
+      .run(chainId, contractAddress, tokenId, createHash('sha256').update(tarotCodeHashInput({ chainId,
+        contractAddress, tokenId, code: codeFor(tokenId) })).digest('hex'), Date.now());
+  } else {
+    for (const migration of ['0015_dmx_mainnet_claim_staging.sql', '0016_dmx_mainnet_bound_claim_codes.sql']) {
+      db.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations', migration), 'utf8'));
+    }
+  }
   const limiter: RateLimit = { limit: async () => ({ success: true }) };
   const env: TarotEnvironment = {
     OPS_DB: d1Database(db), ALCHEMY_MI_NOTE_API_KEY: 'local-test', ETHEREUM_111K_RPC_URL: '',
     TAROT_ACCESS_IP_RATE_LIMITER: limiter, TAROT_PREPARE_RATE_LIMITER: limiter, TAROT_CONFIRM_IP_RATE_LIMITER: limiter,
-    ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS: contractAddress, ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK: String(Number(deployment.blockNumber)),
-    ETHEREUM_TAROT_SEPOLIA_ENABLED: 'true', ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET: key,
+    ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS: testnet ? contractAddress : '',
+    ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK: testnet ? String(deploymentBlock) : '0',
+    ETHEREUM_TAROT_SEPOLIA_ENABLED: testnet ? 'true' : 'false', ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET: testnet ? key : '',
   };
+  let apiRpcRequests = 0;
   async function api<T>(path: string, body: unknown, expectedStatus = 200): Promise<T> {
     const response = await handleTarotRequest(new Request(`https://api.mons.shop${path}`, { method: 'POST',
       headers: { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.1', 'Content-Type': 'application/json', 'X-Mons-CSRF': '1' },
-      body: JSON.stringify(body) }), env, path, { fetch: (_input, init) => fetch(rpcUrl, init) });
+      body: JSON.stringify(body) }), env, path, { fetch: (_input, init) => { apiRpcRequests++; return fetch(rpcUrl, init); } });
     const value = await response.json();
     assert.equal(response.status, expectedStatus, JSON.stringify(value));
     return value as T;
   }
-  const request = (tokenId: number) => ({ tokenId, testnet: true, code });
+  const request = (tokenId: number) => ({ tokenId, testnet, code: codeFor(tokenId) });
   const status = (tokenId: number) => api<TarotStatus>(TAROT_API_PATHS.status, request(tokenId));
   const prepare = (tokenId: number, owner = wallet) => api<TarotPrepareResponse>(TAROT_API_PATHS.prepare, { ...request(tokenId), wallet: owner });
   const confirm = (tokenId: number, transactionHash: string, owner = wallet) => api<TarotConfirmResponse>(TAROT_API_PATHS.confirm,
@@ -101,11 +125,35 @@ try {
   const ownerOf = async (tokenId: number) => decodeReturn(['address'], await rpc<string>('eth_call', [
     { to: contractAddress, data: encodeCall('ownerOf(uint256)', ['uint256'], [tokenId]) }, 'latest',
   ]))[0];
-  assert.equal((await status(1)).claimed, false);
+  if (manifest) {
+    await api(TAROT_API_PATHS.status, request(1), 503);
+    await api(TAROT_API_PATHS.prepare, { ...request(1), wallet }, 503);
+    const database = { query: (sql: string) => db.prepare(sql).all(), executeCommand: (sql: string) => db.exec(sql) };
+    assert.equal(stageMainnetCredentials(manifest, database).status, 'staged');
+    env.ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS = contractAddress;
+    env.ETHEREUM_TAROT_MAINNET_DEPLOYMENT_BLOCK = String(deploymentBlock);
+    env.ETHEREUM_TAROT_MAINNET_ENABLED = 'true';
+    env.ETHEREUM_TAROT_MAINNET_SIGNER_SECRET = key;
+    await api(TAROT_API_PATHS.status, request(1), 503);
+    await api(TAROT_API_PATHS.prepare, { ...request(1), wallet }, 503);
+    assert.equal(apiRpcRequests, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dmx_mainnet_bound_claim_codes').get()?.count, 0);
+    const bound = await bindMainnetCredentials(manifest, database,
+      { contractAddress, deploymentBlock, transactionHash: deployment.transactionHash }, rpc);
+    assert.equal(bound.status, 'bound');
+    assert.equal(bound.credentialCount, 777);
+    assert.equal(bound.contractAddress, contractAddress);
+    assert.equal((await api<TarotStatus>(TAROT_API_PATHS.status, { tokenId: 1, code: codeFor(1) })).config.chainId, 1);
+  }
+  const initial = await status(1);
+  assert.equal(initial.claimed, false);
+  assert.equal(initial.config.chainId, chainId);
+  assert.equal(initial.config.testnet, testnet);
   await api(TAROT_API_PATHS.prepare, { ...request(1), wallet, code: '22222222-2222-4222-8222-222222222222' }, 401);
-  await api(TAROT_API_PATHS.prepare, { ...request(1), wallet, testnet: false }, 400);
+  await api(TAROT_API_PATHS.prepare, { ...request(1), wallet, testnet: !testnet }, 503);
   const quote = await prepare(1);
   assert.equal(quote.transaction.value, '0x0');
+  assert.equal(quote.transaction.chainId, chainId);
   await assert.rejects(send(other, quote.transaction), /revert/);
   await assert.rejects(send(wallet, { ...quote.transaction, value: '0x1' }), /revert/);
   const receipt = await send(wallet, quote.transaction);
@@ -145,7 +193,7 @@ try {
   const call = (from: string, signature: string, types: string[], values: unknown[]) =>
     send(from, { to: contractAddress, data: encodeCall(signature, types, values) });
   const deadline = async () => Number((await rpc<{ timestamp: string }>('eth_getBlockByNumber', ['latest', false])).timestamp) + 600;
-  const domain = { chainId: TAROT_CHAIN_ID, contractAddress };
+  const domain = { chainId, contractAddress };
   const metadata = async (tokenId: number | bigint) => {
     const [uri] = await read('tokenURI(uint256)', ['uint256'], [tokenId], ['string']);
     assert.equal(typeof uri, 'string');
@@ -251,12 +299,22 @@ try {
   await call(admin, 'setMintingPaused(bool)', ['bool'], [true]);
   await rpc('anvil_mine', ['0x2']);
   assert.equal((await status(1)).config.enabled, false);
-  env.ETHEREUM_TAROT_SEPOLIA_ENABLED = 'false';
-  env.ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET = '';
+  if (testnet) {
+    env.ETHEREUM_TAROT_SEPOLIA_ENABLED = 'false';
+    env.ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET = '';
+  } else {
+    env.ETHEREUM_TAROT_MAINNET_ENABLED = 'false';
+    env.ETHEREUM_TAROT_MAINNET_SIGNER_SECRET = '';
+  }
   assert.equal((await status(1)).claimed, true);
   assert.equal((await confirm(1, receipt.transactionHash)).status, 'confirmed');
-  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM tarot_claim_codes WHERE revoked_at_ms IS NULL').get()?.count, 3);
-  console.log('DMX E2E passed: initial claims, relayed and owner mints, signed multi-generation redemption, fee splitting, receipt provenance, renderer swaps, replay rejection and paused recovery. Maximum 50-input/50-output redemption gas estimate:', maximumBatchGas.toString());
+  const credentialTable = testnet ? 'tarot_claim_codes' : 'dmx_mainnet_bound_claim_codes';
+  assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${credentialTable} WHERE revoked_at_ms IS NULL`).get()?.count, testnet ? 3 : 777);
+  if (!testnet) {
+    assert.equal(db.prepare('SELECT status FROM dmx_mainnet_claim_batches').get()?.status, 'bound');
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dmx_mainnet_claim_codes WHERE revoked_at_ms IS NULL').get()?.count, 777);
+  }
+  console.log(`DMX ${testnet ? 'Sepolia' : 'mainnet'} E2E passed: initial claims, relayed and owner mints, signed multi-generation redemption, fee splitting, receipt provenance, renderer swaps, replay rejection and paused recovery. Maximum 50-input/50-output redemption gas estimate:`, maximumBatchGas.toString());
 } finally {
   db.close();
   anvil.kill('SIGTERM');

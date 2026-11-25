@@ -108,6 +108,9 @@ export function createViteConfig(
     server: {
       port: 5173,
       allowedHosts: ['.trycloudflare.com'],
+      fs: {
+        deny: ['.env', '.env.*', '*.{crt,pem,key,p12,pfx,cer,der}', '.npmrc', '.yarnrc.yml', '**/.git/**', '**/.operations/**'],
+      },
       proxy: {
         '/api': {
           target: settings.apiOrigin,
