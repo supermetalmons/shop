@@ -1,0 +1,16 @@
+{
+  "verified": true,
+  "checkedAt": "2026-11-25T18:27:30.276Z",
+  "contractAddress": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
+  "liveHeroLoaded": true,
+  "liveReceiptLoaded": true,
+  "liveLayerImagesLoaded": 3,
+  "savedScanReloadVerified": true,
+  "publicArtworkVerified": true,
+  "successfulDmxMediaRequests": 7,
+  "oldMediaRequests": 0,
+  "claimPreparations": 0,
+  "claimTransactionsBroadcast": 0,
+  "codeReferrers": 0,
+  "visualInspectionPassed": true
+}

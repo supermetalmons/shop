@@ -1,0 +1,53 @@
+{
+  "etherscan": {
+    "chainId": 11155111,
+    "contractName": "DMXWebpRenderer",
+    "contractAddress": "0x7cf83245cea3defd3b1b0249951618dbfadf281f",
+    "transactionHash": "0x22794a066fddaf12f85efe0624fda938b4e65cabad043980aecd3b890611414d",
+    "artifactSha256": "c49507d9a864b88be71ba8aaebc193e16620e69de85c6c736ede16d924062b00",
+    "standardInputSha256": "95e17eb30d40be06fc111e5ee50f754186ec1891c74a7eaedea5ac9f94d2c5da",
+    "checkedAt": "2026-11-25T18:19:46.629Z",
+    "url": "https://sepolia.etherscan.io/address/0x7cf83245cea3defd3b1b0249951618dbfadf281f#code",
+    "compilerVersion": "0.8.38+commit.1835d247",
+    "optimizationRuns": 200,
+    "evmVersion": "prague",
+    "metadataBytecodeHash": "none",
+    "constructorArgsMatch": true,
+    "frozenSourcesMatch": true,
+    "compilerSettingsMatch": true,
+    "abiMatches": true,
+    "sourceCount": 11,
+    "match": "exact_match",
+    "verified": true
+  },
+  "sourcify": {
+    "chainId": 11155111,
+    "contractAddress": "0x7cf83245cea3defd3b1b0249951618dbfadf281f",
+    "transactionHash": "0x22794a066fddaf12f85efe0624fda938b4e65cabad043980aecd3b890611414d",
+    "match": "match",
+    "creationMatch": "match",
+    "runtimeMatch": "match",
+    "compilerVersion": "0.8.38+commit.1835d247",
+    "metadataHash": "none",
+    "verifiedAt": "2026-11-25T18:19:33Z",
+    "checkedAt": "2026-11-25T18:19:46.059Z",
+    "sourceSha256": {
+      "node_modules/@openzeppelin/contracts/utils/Base64.sol": "1c143572893f50f04fe8e507d89f9997cd3242102ba4200c8de0803ecbaf8cec",
+      "node_modules/@openzeppelin/contracts/utils/Bytes.sol": "3ce9120a27934c75a074cb785d3a88868069ef6529dbe4dc6b845af0836f3c70",
+      "node_modules/@openzeppelin/contracts/utils/Panic.sol": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
+      "node_modules/@openzeppelin/contracts/utils/Strings.sol": "e318709bbe73a7831d64c1351e8bdc43780b245f25191234e361e6ab9b98c67b",
+      "node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol": "61a2b12c96857aaa35f48aeda67a4281637a42494c0b3795be0ae976aa7b3793",
+      "node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol": "9055c2994b37dea1a41b7b7926dcb510f05dbe2540b0aafc5fbee9558fffd0ca",
+      "node_modules/@openzeppelin/contracts/utils/math/Math.sol": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
+      "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
+      "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
+      "src/DMXWebpRenderer.sol": "2515004005bdb16d1a60c354082f4143db497eada9ff9cf74a19b1112ff2cd4f",
+      "src/IDMXRenderer.sol": "9545abddb8493fdf40668582857a0b01f9911f3005f1a932ed235882583094c4"
+    },
+    "creationBytecodeMatch": true,
+    "runtimeBytecodeMatch": true,
+    "frozenSourcesMatch": true,
+    "url": "https://repo.sourcify.dev/11155111/0x7cf83245cea3defd3b1b0249951618dbfadf281f",
+    "apiUrl": "https://sourcify.dev/server/v2/contract/11155111/0x7cf83245cea3defd3b1b0249951618dbfadf281f?fields=sources%2Ccompilation%2Cdeployment%2CcreationBytecode.onchainBytecode%2CcreationBytecode.recompiledBytecode%2CcreationBytecode.transformationValues%2CruntimeBytecode.onchainBytecode%2CruntimeBytecode.recompiledBytecode"
+  }
+}

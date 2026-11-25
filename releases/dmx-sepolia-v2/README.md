@@ -6,7 +6,12 @@ renderer. The superseded Tarot deployment is retired and its cleanup is verified
 Collection: [`0x4dc87245ef8e09305407c352e6c535ffa4e31e6c`](https://sepolia.etherscan.io/address/0x4dc87245ef8e09305407c352e6c535ffa4e31e6c#code),
 deployed at block `12209336`.
 
-Renderer: [`0x4fd72d56cab36c926100ab54b73dc2f5df454810`](https://sepolia.etherscan.io/address/0x4fd72d56cab36c926100ab54b73dc2f5df454810#code),
+Active renderer: [`0x7cf83245cea3defd3b1b0249951618dbfadf281f`](https://sepolia.etherscan.io/address/0x7cf83245cea3defd3b1b0249951618dbfadf281f#code),
+deployed at block `12211225` and activated at block `12211233`. The
+[DMX media update](../dmx-media-20261125/README.md) changes the media paths while
+retaining this collection and its credentials.
+
+Original renderer: [`0x4fd72d56cab36c926100ab54b73dc2f5df454810`](https://sepolia.etherscan.io/address/0x4fd72d56cab36c926100ab54b73dc2f5df454810#code),
 deployed at block `12209330`.
 
 The collection supports the 777 initial NFC claims, recipient minting, signed

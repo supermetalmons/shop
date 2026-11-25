@@ -25,7 +25,7 @@ function TarotLayers({ layers, heroReady }: { layers: ReturnType<typeof selectLa
     <div className="nfc-tarot-layers" data-ready={heroReady && ready} aria-hidden="true">
       {layers.map(({ category, id }, index) => (
         <img key={category} ref={image => { imagesRef.current[index] = image; }}
-          data-layer={category} src={`https://wip.lil.org/tarot/layers/${id}.webp`}
+          data-layer={category} src={`https://wip.lil.org/dmx/layers/${id}.webp`}
           alt="" loading="eager" decoding="async" draggable={false} referrerPolicy="no-referrer" />
       ))}
     </div>
@@ -39,7 +39,7 @@ export function NfcTarotCard({ tokenId, heroRef, animate }: { tokenId: number; h
   return (
     <div className="nfc-tarot-card-stack" data-ready={ready}>
       {animate && <TarotLayers layers={layers} heroReady={ready} />}
-      <img ref={heroRef} className="nfc-tarot-card" src={`https://wip.lil.org/tarot/heros/${tokenId}.webp`}
+      <img ref={heroRef} className="nfc-tarot-card" src={`https://wip.lil.org/dmx/heroes/${tokenId}.webp`}
         alt="Mutating Card" width={1008} height={1600} loading="eager" fetchPriority="high"
         decoding="async" draggable={false} referrerPolicy="no-referrer" />
     </div>

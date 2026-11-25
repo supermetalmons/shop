@@ -1,0 +1,19 @@
+{
+  "complete": true,
+  "checkedAt": "2026-11-25T18:28:07.638Z",
+  "chainId": 11155111,
+  "collection": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
+  "activeRenderer": "0x7cf83245cea3defd3b1b0249951618dbfadf281f",
+  "frontendVersionId": "99ac966d-a4d6-4438-a322-77ddc53592e3",
+  "mediaCount": 2341,
+  "liveBrowserVerified": true,
+  "originalDeploymentEvidenceUnmodified": true,
+  "credentialPinUnmodified": true,
+  "originalEvidenceFilesChecked": 7,
+  "publicEvidenceCredentialScanPassed": true,
+  "credentialsChecked": 1554,
+  "temporaryPasswordFiles": 0,
+  "claimTransactionsBroadcast": 0,
+  "mainnetUnchanged": true,
+  "apiDeploymentUnchanged": true
+}

@@ -1,0 +1,42 @@
+{
+  "releaseVersion": 2,
+  "contractName": "DMXWebpRenderer",
+  "chainId": 11155111,
+  "contractAddress": "0x7cf83245cea3defd3b1b0249951618dbfadf281f",
+  "expectedCollectionImage": "https://wip.lil.org/dmx/cards/1.webp",
+  "deploymentBlock": 12211225,
+  "deploymentBlockHash": "0xfb3cbeadd88afe3eaf05354fb8964d1ef0a1d8f7d64e0ead4c243cae166d18f8",
+  "transactionHash": "0x22794a066fddaf12f85efe0624fda938b4e65cabad043980aecd3b890611414d",
+  "deployer": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "admin": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "collectionMetadata": {
+    "name": "divination machina x",
+    "symbol": "DMX",
+    "description": "777 Tarot cards and their paired NFC receipts.",
+    "image": "https://wip.lil.org/dmx/cards/1.webp",
+    "external_link": "https://mons.shop"
+  },
+  "runtimeBytes": 3555,
+  "runtimeKeccak256": "0x1a3cbfa7260485d35d2f11ce4cc26c77485121d8f93ed6a168e06611fb3a0ede",
+  "artifactSha256": "c49507d9a864b88be71ba8aaebc193e16620e69de85c6c736ede16d924062b00",
+  "standardInputSha256": "95e17eb30d40be06fc111e5ee50f754186ec1891c74a7eaedea5ac9f94d2c5da",
+  "constructorArgs": "0x",
+  "confirmations": 4,
+  "verifiedAt": "2026-11-25T18:19:23.190Z",
+  "receipt": {
+    "type": "0x0",
+    "status": "0x1",
+    "cumulativeGasUsed": "0x85679c5",
+    "logs": [],
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "transactionHash": "0x22794a066fddaf12f85efe0624fda938b4e65cabad043980aecd3b890611414d",
+    "transactionIndex": "0x5e",
+    "blockHash": "0xfb3cbeadd88afe3eaf05354fb8964d1ef0a1d8f7d64e0ead4c243cae166d18f8",
+    "blockNumber": "0xba5419",
+    "gasUsed": "0x570dcf",
+    "effectiveGasPrice": "0x3e8",
+    "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "to": null,
+    "contractAddress": "0x7cf83245cea3defd3b1b0249951618dbfadf281f"
+  }
+}

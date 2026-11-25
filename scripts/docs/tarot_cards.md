@@ -311,10 +311,10 @@ constructor. The collection delegates `tokenURI` and `contractURI` to
 `IDMXRenderer`, passing its own address. A renderer can query token provenance
 without tying collection logic to any metadata format or hosting provider.
 
-The initial `DMXWebpRenderer` has no constructor arguments and returns Base64
+`DMXWebpRenderer` has no constructor arguments and returns Base64
 JSON data URIs. Initial card and NFC-receipt names, descriptions, and artwork
-remain the same. Card artwork is `https://wip.lil.org/tarot/bases/<cardId>.webp`;
-both receipt kinds use `https://wip.lil.org/tarot/receipts/<sourceCardId>.webp`,
+remain the same. Card artwork is `https://wip.lil.org/dmx/cards/<cardId>.webp`;
+both receipt kinds use `https://wip.lil.org/dmx/receipts/<sourceCardId>.webp`,
 with distinct descriptions for NFC authentication and redemption. Future card
 and redemption-receipt metadata also includes generation and order references.
 Order references are decimal strings so JSON consumers preserve the full uint256 value.
@@ -333,9 +333,12 @@ changing data inside a future mutable renderer. Initial NFC receipts also emit
 
 DMX uses its renderer directly and has no static metadata publication step.
 The legacy metadata generator, publisher, and static metadata verifier are
-removed. `npm run tarot:ops -- verify-media` checks the shared card and receipt
-WEBPs without publishing metadata. Preserve those shared images during retirement;
-only the superseded deployment's static JSON prefix is removed.
+removed. `npm run tarot:ops -- verify-media` checks cards, heroes, and receipts
+for IDs 1–777 plus layers 1–10 under `https://wip.lil.org/dmx/`: 2,341 WEBPs
+without publishing metadata. The NFC page uses `heroes/<cardId>.webp` and
+`layers/<layerId>.webp`; collection metadata uses `cards/1.webp`.
+Preserve those shared images during retirement; only the superseded deployment's
+static JSON prefix is removed.
 
 Use an independent encrypted Tarot authorization keystore, with its password in
 Keychain, and provision `ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET` through Wrangler's
@@ -345,8 +348,19 @@ authorization signer. Configure the API's `ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRE
 `DEPLOYMENT_BLOCK`, and `ENABLED` only after verifying the new deployment.
 
 Prepare, deploy, and verify the renderer first using its own private directory.
-Then prepare the collection against that verified renderer release. Collection
-preparation freezes the renderer evidence and verifies its canonical deployment
+For an in-place media update, the existing collection owner calls
+`setRenderer(newRenderer)` after verifying the new renderer's deployment,
+runtime bytecode, and media. Re-read the chain ID, owner, and active renderer,
+simulate the call, and journal the signed transaction before broadcasting.
+Require three canonical confirmations and verify the renderer readback,
+collection metadata, and refresh events. Preserve the original deployment
+evidence and append the renderer deployment and activation records. The
+collection address, credentials, signer, and API deployment block stay unchanged;
+this operation does not require collection replacement or retirement.
+
+For a collection replacement, prepare the collection against the verified
+renderer release. Collection preparation freezes the renderer evidence and
+verifies its canonical deployment
 and runtime bytecode; an arbitrary renderer address is not accepted as a
 substitute. Use these steps for the replacement:
 
@@ -370,7 +384,10 @@ npm --prefix onchain/ethereum run tarot:verify-source -- verify <private-release
 
 RPC configuration comes from `ETHEREUM_TAROT_RPC_URL` or `ALCHEMY_API_KEY`. The
 runner accepts only Sepolia and freezes source, constructor inputs, bytecode,
-nonce, and fees. Renderer and collection have separate manifests and journals.
+nonce, and fees. New manifests also pin `expectedCollectionImage` to the DMX
+collection image. Original manifests without that field are verified against
+their matching original deployment metadata; preserve that evidence unchanged.
+Renderer and collection have separate manifests and journals.
 Source verification supports both contract types and requires release version 2
 with an explicit `contractName`; older manifests are rejected before requests.
 Resume the same signed journal after interrupted broadcasts. Preserve the new

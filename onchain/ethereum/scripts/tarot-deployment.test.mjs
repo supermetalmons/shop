@@ -8,17 +8,21 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   deploymentConfiguration, deploymentConstructorArgs, deploymentGas, main, TAROT_SEPOLIA,
-  validateDeploymentConfiguration, validateSignedDeployment, readRendererRelease, rendererInterfaceId, validateCollectionMetadata, verifyDeploymentState,
+  validateDeploymentConfiguration, validateSignedDeployment, readRendererRelease, rendererInterfaceId, validateCollectionMetadata,
+  verifyDeploymentState, verifyRendererRelease,
 } from './tarot-deployment.mjs';
 
 const quoteSigner = '0x2222222222222222222222222222222222222222';
 const rendererAddress = '0x4444444444444444444444444444444444444444';
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const sha256 = value => createHash('sha256').update(value).digest('hex');
-const configuration = () => ({ network: 'sepolia', ...deploymentConfiguration('sepolia', quoteSigner, rendererAddress) });
+const configuration = () => ({ network: 'sepolia', ...deploymentConfiguration('sepolia', quoteSigner, rendererAddress),
+  expectedCollectionImage: collectionMetadata.image });
 const collectionMetadata = { name: 'divination machina x', symbol: 'DMX', description: '777 Tarot cards and their paired NFC receipts.',
-  image: 'https://wip.lil.org/tarot/bases/1.webp', external_link: 'https://mons.shop' };
+  image: 'https://wip.lil.org/dmx/cards/1.webp', external_link: 'https://mons.shop' };
 const collectionURI = 'data:application/json;base64,' + Buffer.from(JSON.stringify(collectionMetadata)).toString('base64');
+const historicalMetadata = { ...collectionMetadata, image: 'https://wip.lil.org/tarot/bases/1.webp' };
+const historicalURI = 'data:application/json;base64,' + Buffer.from(JSON.stringify(historicalMetadata)).toString('base64');
 const project = fileURLToPath(new URL('../', import.meta.url));
 const originalReadFileSync = fs.readFileSync;
 let build;
@@ -59,7 +63,7 @@ test('frozen deployment identity rejects changed roles, network and release vers
   const manifest = configuration();
   assert.deepEqual(validateDeploymentConfiguration(manifest), deploymentConfiguration('sepolia', quoteSigner, rendererAddress));
   for (const [key, value] of Object.entries({ chainId: 1, network: 'mainnet', admin: quoteSigner,
-    deployer: quoteSigner, releaseVersion: 1 })) {
+    deployer: quoteSigner, releaseVersion: 1, expectedCollectionImage: historicalMetadata.image })) {
     assert.throws(() => validateDeploymentConfiguration({ ...manifest, [key]: value }));
   }
 });
@@ -92,10 +96,12 @@ function rendererFixture(directory) {
   const { compilationTarget, ...settings } = artifact.metadata.settings;
   const input = { language: 'Solidity', sources, settings };
   const manifest = { network: 'sepolia', ...deploymentConfiguration('sepolia', undefined, undefined, 'DMXWebpRenderer'),
+    expectedCollectionImage: collectionMetadata.image,
     contractAddress: rendererAddress, constructorArgs: '0x', creationCode: artifact.bytecode.object,
     artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(input)),
     deploymentBlockHash: '0x' + 'a'.repeat(64) };
-  const deployment = { ...manifest, deploymentBlock: 1, transactionHash: '0x' + 'b'.repeat(64), confirmations: 3 };
+  const deployment = { ...manifest, deploymentBlock: 1, transactionHash: '0x' + 'b'.repeat(64), confirmations: 3,
+    collectionMetadata };
   for (const [name, value] of Object.entries({ 'manifest.json': manifest, 'deployment.json': deployment,
     'DMXWebpRenderer.artifact.json': artifact, 'DMXWebpRenderer.standard-input.json': input })) {
     fs.writeFileSync(path.join(directory, name), json(value));
@@ -136,7 +142,8 @@ function fixture(t, overrides = {}) {
       eth_getTransactionByHash: { input: renderer.artifact.bytecode.object, from: TAROT_SEPOLIA.deployer, to: null,
         chainId: '0xaa36a7', value: '0x0' },
       eth_call: request.params[0]?.data?.startsWith('0x01ffc9a7') ? '0x' + '0'.repeat(63) + '1' : execFileSync('cast',
-        ['abi-encode', 'value(string)', collectionURI], { encoding: 'utf8' }).trim(),
+        ['abi-encode', 'value(string)', 'data:application/json;base64,' +
+          Buffer.from(JSON.stringify(renderer.deployment.collectionMetadata)).toString('base64')], { encoding: 'utf8' }).trim(),
       eth_estimateGas: '0x1e8480', eth_gasPrice: '0x5f5e100', eth_getBalance: '0x11c37937e08000', ...overrides };
     assert.ok(Object.hasOwn(results, request.method), 'Unexpected RPC operation ' + request.method);
     return Response.json({ jsonrpc: '2.0', id: 1, result: results[request.method] });
@@ -162,6 +169,7 @@ test('preparation freezes real compiler sources and artifacts and never sends a 
   assert.equal(manifest.chainId, 11155111);
   assert.equal(manifest.quoteSigner, quoteSigner);
   assert.equal(manifest.network, 'sepolia');
+  assert.equal(manifest.expectedCollectionImage, collectionMetadata.image);
   assert.equal(manifest.creationCode, artifact.bytecode.object + manifest.constructorArgs.slice(2));
   assert.deepEqual(f.read('TarotCards.artifact.json'), artifact);
   assert.equal(f.read('TarotCards.standard-input.json').sources['src/TarotCards.sol'].content,
@@ -371,6 +379,7 @@ test('renderer preparation freezes its own artifact and has no collection constr
   await main(['prepare', '--contract', 'DMXWebpRenderer', '--directory', f.directory]);
   const manifest = f.read('manifest.json');
   assert.equal(manifest.contractName, 'DMXWebpRenderer');
+  assert.equal(manifest.expectedCollectionImage, collectionMetadata.image);
   assert.equal(manifest.constructorArgs, '0x');
   assert.equal(manifest.creationCode, f.renderer.artifact.bytecode.object);
   assert.equal(Object.hasOwn(manifest, 'renderer'), false);
@@ -422,12 +431,56 @@ test('legacy release directories cannot be silently repurposed', () => {
 
 test('renderer metadata validation decodes JSON and checks collection identity', () => {
   assert.deepEqual(validateCollectionMetadata(collectionURI), collectionMetadata);
+  assert.throws(() => validateCollectionMetadata(historicalURI));
   assert.throws(() => validateCollectionMetadata('https://cdn.mons.shop/tarot-sepolia/v1/collection.json'), /inline JSON/);
   for (const change of [{ name: 'Tarot Cards' }, { symbol: 'TAROT' }, { image: 'https://example.com/art.webp' }]) {
     const uri = 'data:application/json;base64,' + Buffer.from(JSON.stringify({ ...collectionMetadata, ...change })).toString('base64');
     assert.throws(() => validateCollectionMetadata(uri));
   }
   assert.match(rendererInterfaceId(), /^0x[0-9a-f]{8}$/);
+});
+
+function useHistoricalRenderer(f) {
+  delete f.renderer.manifest.expectedCollectionImage;
+  delete f.renderer.deployment.expectedCollectionImage;
+  f.renderer.deployment.collectionMetadata = historicalMetadata;
+  fs.writeFileSync(path.join(f.rendererDirectory, 'manifest.json'), json(f.renderer.manifest));
+  fs.writeFileSync(path.join(f.rendererDirectory, 'deployment.json'), json(f.renderer.deployment));
+}
+
+test('historical renderer verification uses original deployment image evidence without changing frozen files', async t => {
+  const f = fixture(t);
+  useHistoricalRenderer(f);
+  const before = fs.readdirSync(f.rendererDirectory).map(name => [name, fs.readFileSync(path.join(f.rendererDirectory, name), 'utf8')]);
+  await verifyRendererRelease(readRendererRelease(f.rendererDirectory), async (method, params) => {
+    const response = await fetch('https://tarot-rpc.invalid', { body: JSON.stringify({ method, params }) });
+    return (await response.json()).result;
+  });
+  assert.deepEqual(fs.readdirSync(f.rendererDirectory).map(name => [name, fs.readFileSync(path.join(f.rendererDirectory, name), 'utf8')]), before);
+  assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+});
+
+test('new collection preparation rejects a historically valid renderer with old media', async t => {
+  const f = fixture(t);
+  useHistoricalRenderer(f);
+  await assert.rejects(f.prepare(), /current DMX renderer media/);
+  assert.deepEqual(fs.readdirSync(f.directory), []);
+});
+
+test('historical renderer metadata fallback requires matching original deployment evidence', t => {
+  const f = fixture(t);
+  useHistoricalRenderer(f);
+  const reportPath = path.join(f.rendererDirectory, 'deployment.json');
+  for (const change of [{ collectionMetadata: undefined }, { standardInputSha256: 'changed' }, { contractAddress: quoteSigner }]) {
+    fs.writeFileSync(reportPath, json({ ...f.renderer.deployment, ...change }));
+    assert.throws(() => readRendererRelease(f.rendererDirectory), /collection image evidence|differs from manifest/);
+  }
+});
+
+test('current renderer release cannot substitute historical media evidence', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.rendererDirectory, 'deployment.json'), json({ ...f.renderer.deployment, collectionMetadata: historicalMetadata }));
+  assert.throws(() => readRendererRelease(f.rendererDirectory), /collection image differs from manifest/);
 });
 
 
@@ -466,4 +519,16 @@ test('collection verification checks new ranges, renderer, paused redemption, EI
     { 'redemptionsPaused()': false }, { 'mintingPaused()': true }, { domainName: 'Tarot Cards' }, { 'symbol()': 'TAROT' }]) {
     await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest, change), '0x5'));
   }
+});
+
+test('historical collection verification pins the image recorded by its original deployment', async () => {
+  const manifest = { ...configuration(), contractAddress: '0x3333333333333333333333333333333333333333',
+    artifactSha256: 'a'.repeat(64), standardInputSha256: 'b'.repeat(64) };
+  delete manifest.expectedCollectionImage;
+  const deployment = { ...manifest, collectionMetadata: historicalMetadata };
+  assert.deepEqual(await verifyDeploymentState(manifest, stateRpc(manifest, { 'contractURI()': historicalURI }), '0x5', deployment), historicalMetadata);
+  await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest), '0x5', deployment));
+  await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest), '0x5'), /original deployment metadata evidence/);
+  await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest), '0x5', { ...deployment, artifactSha256: 'changed' }),
+    /differs from manifest: artifactSha256/);
 });

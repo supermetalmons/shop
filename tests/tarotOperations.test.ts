@@ -128,15 +128,30 @@ test('credential pins require complete verification and cannot be replaced by an
     pin.credentialSetSha256);
 });
 
-test('media verification checks all shared card and receipt artwork without publishing metadata', async () => {
-  let media = 0;
-  await verifyTarotMedia(async (_input, init) => {
+test('media verification checks all DMX cards, heroes, receipts, and layers without publishing metadata', async () => {
+  const media: string[] = [];
+  const result = await verifyTarotMedia(async (input, init) => {
     assert.equal(init?.method, 'HEAD');
-    media++;
+    assert.equal(init?.redirect, 'error');
+    media.push(String(input));
     return new Response(null, { headers: { 'content-type': 'image/webp', 'content-length': '100' } });
   });
-  assert.equal(media, 1554);
-  await assert.rejects(() => verifyTarotMedia(async () => new Response(null, { status: 404 })), /media unavailable/);
+  assert.deepEqual(result, { verified: true, artworkCount: 2341 });
+  assert.equal(new Set(media).size, 2341);
+  for (const [kind, count] of [['cards', 777], ['heroes', 777], ['receipts', 777], ['layers', 10]] as const) {
+    const prefix = `https://wip.lil.org/dmx/${kind}/`;
+    const ids = media.filter(url => url.startsWith(prefix)).map(url => Number(url.slice(prefix.length, -5)));
+    assert.deepEqual(ids.sort((a, b) => a - b), Array.from({ length: count }, (_, index) => index + 1));
+  }
+  const invalidResponses: ResponseInit[] = [
+    { status: 404 },
+    { headers: { 'content-type': 'text/html', 'content-length': '100' } },
+    { headers: { 'content-type': 'image/webp', 'content-length': '0' } },
+    { headers: { 'content-type': 'image/webp' } },
+  ];
+  for (const response of invalidResponses) {
+    await assert.rejects(() => verifyTarotMedia(async () => new Response(null, response)), /media unavailable/);
+  }
 });
 
 function rebindFixture(t: TestContext) {

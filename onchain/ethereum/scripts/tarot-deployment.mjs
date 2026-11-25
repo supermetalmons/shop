@@ -19,6 +19,7 @@ export const TAROT_SEPOLIA = Object.freeze({
 
 const project = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const repository = path.resolve(project, '../..');
+const collectionImage = 'https://wip.lil.org/dmx/cards/1.webp';
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const hashHex = value => '0x' + Buffer.from(keccak_256(Buffer.from(value.slice(2), 'hex'))).toString('hex');
@@ -44,6 +45,9 @@ export function validateDeploymentConfiguration(manifest, network = 'sepolia') {
     assert.equal(manifest[key], configuration[key], 'Unexpected deployment ' + key);
   }
   assert.equal(manifest.network, network, 'Deployment network changed');
+  if (Object.hasOwn(manifest, 'expectedCollectionImage')) {
+    assert.equal(manifest.expectedCollectionImage, collectionImage, 'Unexpected deployment collection image');
+  }
   return configuration;
 }
 
@@ -58,7 +62,21 @@ export function rendererInterfaceId() {
   return '0x' + (selector('tokenURI(address,uint256)') ^ selector('contractURI(address)')).toString(16).padStart(8, '0');
 }
 
-export function validateCollectionMetadata(uri) {
+function deploymentCollectionImage(manifest, deployment) {
+  if (Object.hasOwn(manifest, 'expectedCollectionImage')) {
+    assert.equal(manifest.expectedCollectionImage, collectionImage, 'Unexpected deployment collection image');
+    return manifest.expectedCollectionImage;
+  }
+  assert.ok(deployment, 'Historical release requires its original deployment metadata evidence');
+  for (const key of ['releaseVersion', 'chainId', 'contractName', 'contractAddress', 'artifactSha256', 'standardInputSha256']) {
+    assert.equal(deployment[key], manifest[key], 'Historical deployment differs from manifest: ' + key);
+  }
+  const image = deployment.collectionMetadata?.image;
+  assert.ok(typeof image === 'string' && image.startsWith('https://'), 'Historical deployment has no collection image evidence');
+  return image;
+}
+
+export function validateCollectionMetadata(uri, expectedImage = collectionImage) {
   assert.ok(typeof uri === 'string' && uri.startsWith('data:application/json;base64,'), 'Renderer must return inline JSON metadata');
   const encoded = uri.slice('data:application/json;base64,'.length);
   const bytes = Buffer.from(encoded, 'base64');
@@ -66,7 +84,7 @@ export function validateCollectionMetadata(uri) {
   const metadata = JSON.parse(bytes.toString('utf8'));
   assert.equal(metadata.name, 'divination machina x');
   assert.equal(metadata.symbol, 'DMX');
-  assert.equal(metadata.image, 'https://wip.lil.org/tarot/bases/1.webp');
+  assert.equal(metadata.image, expectedImage);
   assert.equal(metadata.external_link, 'https://mons.shop');
   return metadata;
 }
@@ -90,13 +108,15 @@ export function readRendererRelease(directory) {
     assert.equal(hashHex('0x' + Buffer.from(input.sources[source].content).toString('hex')), metadata.keccak256,
       'Renderer source differs from artifact: ' + source);
   }
-  for (const key of ['chainId', 'contractName', 'contractAddress', 'artifactSha256', 'standardInputSha256']) {
+  for (const key of ['chainId', 'contractName', 'contractAddress', 'artifactSha256', 'standardInputSha256', 'expectedCollectionImage']) {
     assert.equal(deployment[key], manifest[key], 'Renderer deployment differs from manifest: ' + key);
   }
   assert.ok(deployment.confirmations >= 3, 'Renderer deployment needs three confirmations');
   assert.match(deployment.transactionHash, /^0x[0-9a-f]{64}$/);
   assert.match(deployment.deploymentBlockHash, /^0x[0-9a-f]{64}$/);
   assert.ok(Number.isSafeInteger(deployment.deploymentBlock) && deployment.deploymentBlock >= 0);
+  assert.equal(deployment.collectionMetadata?.image, deploymentCollectionImage(manifest, deployment),
+    'Renderer deployment collection image differs from manifest');
   return { files, manifest, deployment, artifact, input };
 }
 
@@ -129,11 +149,13 @@ export async function verifyRendererRelease(release, rpc) {
   assert.equal(BigInt(supports), 1n, 'Renderer interface is unsupported');
   const metadata = await rpc('eth_call', [{ to: manifest.contractAddress,
     data: run(['calldata', 'contractURI(address)', manifest.admin]) }, 'latest']);
-  validateCollectionMetadata(JSON.parse(run(['abi-decode', 'value()(string)', metadata, '--json']))[0]);
+  validateCollectionMetadata(JSON.parse(run(['abi-decode', 'value()(string)', metadata, '--json']))[0],
+    deploymentCollectionImage(manifest, deployment));
 }
 
-export async function verifyDeploymentState(manifest, rpc, block) {
+export async function verifyDeploymentState(manifest, rpc, block, deployment) {
   const contractName = manifest.contractName;
+  const expectedImage = deploymentCollectionImage(manifest, deployment);
   const call = async (signature, type, ...args) => {
     const data = run(['calldata', signature, ...args]);
     const result = await rpc('eth_call', [{ to: manifest.contractAddress, data }, block]);
@@ -166,10 +188,10 @@ export async function verifyDeploymentState(manifest, rpc, block) {
     assert.equal(domain[2], '1');
     assert.equal(String(domain[3]), String(manifest.chainId));
     assert.equal(domain[4].toLowerCase(), manifest.contractAddress);
-    metadata = validateCollectionMetadata(await call('contractURI()', 'string'));
+    metadata = validateCollectionMetadata(await call('contractURI()', 'string'), expectedImage);
   } else {
     assert.equal(await call('supportsInterface(bytes4)', 'uint256', rendererInterfaceId()), '1');
-    metadata = validateCollectionMetadata(await call('contractURI(address)', 'string', manifest.admin));
+    metadata = validateCollectionMetadata(await call('contractURI(address)', 'string', manifest.admin), expectedImage);
   }
   return metadata;
 }
@@ -290,6 +312,10 @@ async function runDeployment(command, options, network, directory) {
   if (rendererRelease) {
     assert.equal(rendererRelease.manifest.contractAddress, configuration.renderer, 'Renderer prerequisite address changed');
     if (manifest) assert.equal(manifest.rendererReleaseSha256, sha256(json(rendererRelease.files)), 'Frozen renderer release changed');
+    if (command === 'prepare') {
+      assert.equal(deploymentCollectionImage(rendererRelease.manifest, rendererRelease.deployment), collectionImage,
+        'New collection preparation requires the current DMX renderer media');
+    }
     await verifyRendererRelease(rendererRelease, rpc);
   }
 
@@ -320,7 +346,8 @@ async function runDeployment(command, options, network, directory) {
     assert.deepEqual(compilationTarget, { ['src/' + contractName + '.sol']: contractName });
     const standardInput = { language: 'Solidity', sources,
       settings: { ...settings, outputSelection: { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode', 'metadata'] } } } };
-    const manifest = { network, ...configuration, preparedAt: new Date().toISOString(), contractAddress: predicted,
+    const manifest = { network, ...configuration, expectedCollectionImage: collectionImage,
+      preparedAt: new Date().toISOString(), contractAddress: predicted,
       nonce: nonce.toString(), constructorArgs, creationCode, ...gas,
       ...(rendererRelease ? { rendererReleaseSha256: sha256(json(rendererRelease.files)) } : {}),
       artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(standardInput)) };
@@ -419,9 +446,12 @@ async function runDeployment(command, options, network, directory) {
   assert.equal(BigInt(transaction.chainId), BigInt(configuration.chainId));
   const code = await rpc('eth_getCode', [manifest.contractAddress, receipt.blockNumber]);
   assert.ok(matchingRuntime(artifact.deployedBytecode.object, code, artifact.deployedBytecode.immutableReferences ?? {}), 'Deployed runtime mismatch');
-  const metadata = await verifyDeploymentState(manifest, rpc, receipt.blockNumber);
+  const previousDeployment = Object.hasOwn(manifest, 'expectedCollectionImage') ? undefined
+    : JSON.parse(fs.readFileSync(path.join(directory, 'deployment.json'), 'utf8'));
+  const metadata = await verifyDeploymentState(manifest, rpc, receipt.blockNumber, previousDeployment);
   assert.equal(BigInt(await rpc('eth_getBalance', [manifest.contractAddress, receipt.blockNumber])), 0n);
   const report = { releaseVersion: 2, contractName, chainId: manifest.chainId, contractAddress: manifest.contractAddress,
+    ...(Object.hasOwn(manifest, 'expectedCollectionImage') ? { expectedCollectionImage: manifest.expectedCollectionImage } : {}),
     deploymentBlock: Number(BigInt(receipt.blockNumber)), deploymentBlockHash: receipt.blockHash,
     transactionHash: journal.transactionHash, deployer, admin: manifest.admin,
     ...(contractName === 'TarotCards' ? { quoteSigner: manifest.quoteSigner, renderer: manifest.renderer,

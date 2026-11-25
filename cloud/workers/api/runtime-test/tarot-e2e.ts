@@ -203,8 +203,8 @@ try {
       image: string; attributes: { trait_type: string; value: string | number }[];
     };
   };
-  assert.equal((await metadata(1)).image, 'https://wip.lil.org/tarot/bases/1.webp');
-  assert.equal((await metadata(tarotReceiptTokenId(1))).image, 'https://wip.lil.org/tarot/receipts/1.webp');
+  assert.equal((await metadata(1)).image, 'https://wip.lil.org/dmx/cards/1.webp');
+  assert.equal((await metadata(tarotReceiptTokenId(1))).image, 'https://wip.lil.org/dmx/receipts/1.webp');
 
   await send(admin, { to: contractAddress, data: encodeDmxMintTo(other, [3, 778]) });
   assert.equal(await ownerOf(3), other);
@@ -248,7 +248,7 @@ try {
   }
   assert.deepEqual(await read('getRedemption(uint256)', ['uint256'], [1], ['address', 'address', 'uint256[]', 'uint256[]']),
     [wallet, wallet, [2n, 779n], [780n, 781n]]);
-  assert.equal((await metadata(dmxRedemptionReceiptTokenId(2))).image, 'https://wip.lil.org/tarot/receipts/2.webp');
+  assert.equal((await metadata(dmxRedemptionReceiptTokenId(2))).image, 'https://wip.lil.org/dmx/receipts/2.webp');
   assert.deepEqual(await read('releasableRedemption(uint256)', ['uint256'], [1], ['uint256', 'uint256']), [751n, 250n]);
   const balancesBefore = await Promise.all([admin, other].map(address => rpc<string>('eth_getBalance', [address, 'latest'])));
   await call(wallet, 'releaseRedemption(uint256[])', ['uint256[]'], [[1, 1]]);
@@ -296,7 +296,7 @@ try {
   assert.ok(nextRenderer.contractAddress);
   await call(admin, 'setRenderer(address)', ['address'], [nextRenderer.contractAddress]);
   assert.equal((await read('renderer()', [], [], ['address']))[0], nextRenderer.contractAddress.toLowerCase());
-  assert.equal((await metadata(782)).image, 'https://wip.lil.org/tarot/bases/782.webp');
+  assert.equal((await metadata(782)).image, 'https://wip.lil.org/dmx/cards/782.webp');
   await call(admin, 'setMintingPaused(bool)', ['bool'], [true]);
   await rpc('anvil_mine', ['0x2']);
   assert.equal((await status(1)).config.enabled, false);
