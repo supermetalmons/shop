@@ -74,6 +74,10 @@ async function requireCode(context: Context, tokenId: number, code: string): Pro
   if (!contractAddress) return unavailable();
   let row: CodeRow | null;
   if (context.config.testnet) {
+    const retired = await context.env.OPS_DB.prepare(`SELECT 1 FROM dmx_retired_sepolia_deployments
+      WHERE chain_id = ? AND contract_address = ?`)
+      .bind(context.config.chainId, contractAddress).first();
+    if (retired) return unavailable();
     row = await context.env.OPS_DB.prepare(`SELECT code_hash, revoked_at_ms FROM tarot_claim_codes
       WHERE chain_id = ? AND contract_address = ? AND token_id = ?`)
       .bind(context.config.chainId, contractAddress, tokenId).first<CodeRow>();

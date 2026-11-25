@@ -34,6 +34,7 @@ function fixture(t: TestContext, testnet = true) {
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());
   db.exec(readFileSync('cloud/workers/api/ops-migrations/0014_tarot_claim_codes.sql', 'utf8'));
+  db.exec(readFileSync('cloud/workers/api/ops-migrations/0017_dmx_sepolia_retirement.sql', 'utf8'));
   for (const tokenId of [1, 777]) db.prepare('INSERT INTO tarot_claim_codes VALUES (?, ?, ?, ?, ?, NULL)')
     .run(TAROT_CHAIN_ID, CONTRACT, tokenId, createHash('sha256').update(tarotCodeHashInput({ chainId: TAROT_CHAIN_ID,
       contractAddress: CONTRACT, tokenId, code: CODE })).digest('hex'), NOW);
@@ -178,6 +179,37 @@ test('Tarot checks secret credentials before RPC and revalidates claimed links',
   assert.equal((await f.call(TAROT_API_PATHS.prepare, { ...credentials, wallet: WALLET })).response.status, 409);
   f.db.prepare('UPDATE tarot_claim_codes SET revoked_at_ms = ? WHERE token_id = 1').run(NOW);
   assert.equal((await f.call(TAROT_API_PATHS.status)).response.status, 401);
+});
+
+test('retired Sepolia scopes reject retained credentials before RPC or signing', async t => {
+  const f = fixture(t);
+  const retained = f.db.prepare('SELECT * FROM tarot_claim_codes ORDER BY token_id').all();
+  f.db.prepare('INSERT INTO dmx_retired_sepolia_deployments VALUES (?, ?, ?, ?)').run(TAROT_CHAIN_ID, CONTRACT, OTHER, NOW);
+  for (const [path, body] of [
+    [TAROT_API_PATHS.status, credentials],
+    [TAROT_API_PATHS.prepare, { ...credentials, wallet: WALLET }],
+    [TAROT_API_PATHS.confirm, { ...credentials, wallet: WALLET, transactionHash: HASH }],
+  ] as const) {
+    const result = await f.call(path, body);
+    assert.equal(result.response.status, 503);
+    assert.equal((result.body.error as { code: string }).code, 'unavailable');
+    assert.equal(result.body.signature, undefined);
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.limitKeys.prepare.length, 0);
+  assert.deepEqual(f.db.prepare('SELECT * FROM tarot_claim_codes ORDER BY token_id').all(), retained);
+});
+
+test('Sepolia retirement does not block another contract or the same address on mainnet', async t => {
+  for (const testnet of [true, false]) {
+    const f = fixture(t, testnet);
+    f.db.prepare('INSERT INTO dmx_retired_sepolia_deployments VALUES (?, ?, ?, ?)')
+      .run(TAROT_CHAIN_ID, testnet ? OTHER : CONTRACT, testnet ? CONTRACT : OTHER, NOW);
+    const result = await f.call(TAROT_API_PATHS.status);
+    assert.equal(result.response.status, 200);
+    assert.equal((result.body as unknown as TarotStatus).config.enabled, true);
+    assert.equal((await f.prepared()).transaction.chainId, tarotChainId(testnet));
+  }
 });
 
 test('Tarot rejects malformed networks, extra fields and malformed requests before database or RPC work', async t => {

@@ -97,6 +97,7 @@ export type OpsD1IntegrityInput = {
   authWalletBindingCounts: OpsD1Row[];
   workerControlColumns: OpsD1Row[];
   tarotClaimCodeColumns: OpsD1Row[];
+  dmxRetiredSepoliaDeploymentColumns: OpsD1Row[];
 };
 
 export type OpsD1IntegrityReport = {
@@ -141,6 +142,13 @@ const expectedTarotClaimCodeColumns: readonly ExpectedColumn[] = [
   ['code_hash', 'TEXT', 1, 0],
   ['created_at_ms', 'INTEGER', 1, 0],
   ['revoked_at_ms', 'INTEGER', 0, 0],
+];
+
+const expectedDmxRetiredSepoliaDeploymentColumns: readonly ExpectedColumn[] = [
+  ['chain_id', 'INTEGER', 1, 1],
+  ['contract_address', 'TEXT', 1, 2],
+  ['replacement_contract_address', 'TEXT', 1, 0],
+  ['retired_at_ms', 'INTEGER', 1, 0],
 ];
 
 const expectedAnonymousAuthSessionColumns: readonly ExpectedColumn[] = [
@@ -414,6 +422,8 @@ export function assertOpsD1Integrity(
   assertExactSchema(input.schema);
   assertStrictTables(input.tableList);
   assertExactColumns(input.tarotClaimCodeColumns, expectedTarotClaimCodeColumns, 'tarot_claim_codes');
+  assertExactColumns(input.dmxRetiredSepoliaDeploymentColumns, expectedDmxRetiredSepoliaDeploymentColumns,
+    'dmx_retired_sepolia_deployments');
   assertExactColumns(
     input.anonymousAuthSessionColumns,
     expectedAnonymousAuthSessionColumns,
@@ -588,6 +598,7 @@ export function readRemoteOpsD1Integrity(
     authWalletBindingCounts: 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings',
     workerControlColumns: 'PRAGMA table_info(worker_controls)',
     tarotClaimCodeColumns: 'PRAGMA table_info(tarot_claim_codes)',
+    dmxRetiredSepoliaDeploymentColumns: 'PRAGMA table_info(dmx_retired_sepolia_deployments)',
   });
   return assertOpsD1Integrity({
     ...rows,

@@ -1,19 +1,22 @@
 # divination machina x (DMX)
 
-The current source revision is not deployed. It retains 777 initial claimable
-card/NFC-receipt pairs and adds recipient minting, signed redemption into future
-generations, configurable fee payouts, and a replaceable metadata renderer.
-The collection and EIP-712 domain name are `divination machina x`, the symbol is
-`DMX`, and the domain version is `1`. The contract permits Ethereum mainnet,
-Sepolia, and local chain 31337. The application source defaults NFC links to
-mainnet and supports explicit Sepolia links. Mainnet remains unconfigured and
-disabled; the contract deployment runner remains Sepolia-only.
+The [Sepolia v2 release](../../releases/dmx-sepolia-v2/README.md) is live. All 777
+existing NFC codes and URLs were retained; the superseded deployment is retired
+and its credentials, static metadata, and obsolete local artifacts were removed.
 
-The application code targets this new revision only. Its next deployment must
-be coordinated with the new collection and renderer, new deployment-scoped
-credentials, and updated release pins. Current live addresses, credentials,
-published metadata, and `releases/tarot-sepolia-v1/` describe the old deployment
-and are not changed by this source update. No migration of its NFTs is implied.
+DMX has 777 initial claimable card/NFC-receipt pairs, recipient minting, signed
+redemption into future generations, configurable fee payouts, and a replaceable
+metadata renderer. The collection and EIP-712 domain name are
+`divination machina x`, the symbol is `DMX`, and the domain version is `1`.
+The contract permits Ethereum mainnet, Sepolia, and local chain 31337. NFC links
+default to mainnet and support explicit Sepolia links. Mainnet remains
+unconfigured and disabled; the contract deployment runner supports Sepolia only.
+
+This guide describes the Sepolia replacement workflow. Rebind the existing 777
+NFC codes and URLs to the verified DMX collection, update the deployment settings
+and credential pin, then retire the superseded deployment in the same rollout.
+The application supports the DMX contract and renderer only. Existing NFTs are
+not migrated; retiring a deployment does not erase its onchain history.
 
 ## Contract operations
 
@@ -50,12 +53,12 @@ It burns every input and mints one permanent receipt per input plus 0–50 new
 cards in IDs `778..999999`. Replacement cards can themselves be redeemed using
 fresh quotes. Their generation is one above the highest input generation.
 
-Both new authorization types use `keccak256(abi.encode(ids))` for array hashes.
+Both authorization types use `keccak256(abi.encode(ids))` for array hashes.
 Signatures expire within ten minutes, bind the chain and collection address,
 and cannot be reused. Shared types, calldata encoders, and digest helpers live
 in `shared/ethereum/dmx.ts`, `shared/ethereum/tarot.ts`, and
 `shared/ethereum/tarotCrypto.ts`. These are contract/operator capabilities;
-there are no new HTTP endpoints or user interfaces.
+the HTTP API and storefront expose initial NFC claims.
 
 Issuance and provenance are committed, then all selected inputs are burned,
 before any output receiver callback. Any failed safe mint rolls back burns,
@@ -158,7 +161,10 @@ mainnet, and `testnet=true` selects Sepolia. Malformed or repeated network flags
 never select a claim flow. The updated application saves the scanned credential
 under a network-specific key before removing it from the URL. Mainnet and Sepolia
 credentials, rescan candidates, encrypted history, and pending transactions stay
-separate. Existing Sepolia storage and legacy encrypted history remain readable.
+separate. Existing network-scoped saved codes and `sealed2` history remain
+readable without changing storage keys or clearing scans. The `sealed1` decoder
+is removed. Pending transactions must contain their recorded intent ID and
+deadline; the browser no longer invents either field for older records.
 
 While mainnet is unconfigured or its batch is unbound, the API returns unavailable
 rather than invalid credentials. The page keeps showing artwork without claim
@@ -166,9 +172,9 @@ controls and retains the code for later validation. Deploy the matching API
 before the updated frontend. Scans made by older versions that discarded mainnet
 codes need the original link again.
 
-### Existing Sepolia flow
+### Sepolia NFC flow
 
-The live format is `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>&testnet=true`.
+The format is `https://mons.shop/nfc?code=<UUID>&tokenId=<1..777>&testnet=true`.
 Scanning saves the code in the scanning browser’s local storage for that Sepolia
 card and immediately replaces the address with `/nfc?tokenId=<1..777>&testnet=true`.
 Reloading or reopening that address in the same browser restores claim access.
@@ -208,9 +214,9 @@ A later 401 or 403 invalidates unclaimed access and cancels queued wallet work
 without discarding pending recovery. Claim stays unavailable until validation
 succeeds again. Rate-limit cooldowns disable the existing Claim button and
 show `Please wait…` when no claim is in progress. The button returns to Claim at
-the retry deadline without automatically opening a wallet. Wallet and transaction
-failures retain their feedback; temporary confirmation-read errors clear once
-confirmation polling recovers.
+the retry deadline without automatically opening a wallet. Wallet cancellations restore the Claim button for retry without adding a message
+below it. Temporary confirmation-read failures retain pending recovery until
+confirmation polling succeeds.
 
 Wallet submission records a public recovery intent before handing off to the
 wallet. A shared window cache preserves it across SPA navigation when browser
@@ -241,29 +247,41 @@ digests of the canonical input returned by `tarotCodeHashInput`, plus deployment
 card ID, creation time, and optional revocation time. Claimed cards retain their
 credentials because NFC links remain usable as artwork views.
 
-Generate and import credentials only after freezing the deployment address:
+For the replacement, retain the existing codes and URLs through an explicit
+rebind after the new collection has been deployed and verified:
 
 ```sh
-npm run tarot:ops -- links --contract <verified-Sepolia-contract>
-npm run tarot:ops -- provision
-npm run tarot:ops -- verify-codes
+npm run tarot:ops -- rebind --source-directory .operations/tarot-sepolia-v1 --source-pin releases/tarot-sepolia-v1/credential-set.json --deployment-directory <verified-v2-collection-release> --directory .operations/dmx-sepolia-v2
+npm run tarot:ops -- verify-codes --directory .operations/dmx-sepolia-v2
 ```
 
-The default operator export is
-`.operations/tarot-sepolia-v1/claim-links.private.json`, with directory mode 0700
-and file mode 0600. Back up this private file before programming NFC cards. Never
-publish it, paste its contents into logs, or add it to Git. Re-running generation
-uses the same manifest; conflicting credentials or a different deployment fail
-closed. Provisioning imports hashes only and verifies all 777 rows. No public
-endpoint lists codes or imports credentials.
+The source-directory, source-pin, and deployment-directory flags are required
+for `rebind` and are rejected by other commands. The target directory defaults
+to `.operations/dmx-sepolia-v2/`. Rebinding validates the old private manifest,
+its public pin, and all 777 existing database rows, then checks the verified
+version 2 collection release. It preserves every token-ID/code/URL triple while
+binding the hashes to the new contract. It provisions and reads back all 777
+replacement rows before creating the new public pin. Matching retries resume
+the same target; changed sources, deployment evidence, or target contents fail
+closed. Keep the source files and pin through replacement verification and live
+acceptance, then remove them during retirement cleanup. Do not regenerate codes
+for this rollout.
+
+The default operator manifest is
+`.operations/dmx-sepolia-v2/claim-links.private.json`, with directory mode 0700
+and file mode 0600. Never publish it, paste its contents into logs, or add it to
+Git. The original physical tags keep the same URLs; no browser-storage migration
+or tag reprogramming is needed. Credential commands lock their private directory.
+Provisioning stores hashes only, rejects retired deployments, and verifies all
+777 rows. No public endpoint lists codes or imports credentials.
 
 Successful provisioning readback and `verify-codes` record the public aggregate
-fingerprint in `releases/tarot-sepolia-v1/credential-set.json`. All 777 database
-rows must match first. The fingerprint binds the deployment and ordered
-token-ID/code-hash pairs; it contains no codes, URLs, or individual code hashes.
-Matching repeats preserve the file. A conflicting existing fingerprint stops
-verification or provisioning before database writes. Changing the credential
-set or deployment requires an explicit reviewed release-pin change.
+fingerprint in `releases/dmx-sepolia-v2/credential-set.json`. All 777 database rows
+must match first. The fingerprint binds the deployment and ordered token-ID/code-hash
+pairs; it contains no codes, URLs, or individual code hashes. Matching repeats
+preserve the file. A conflicting existing fingerprint stops verification or
+provisioning before database writes. The old source pin is never overwritten
+by rebind; remove it only as part of verified retirement cleanup.
 
 Use `ETHEREUM_TAROT_PRIVATE_MANIFEST` to point the browser bundle scanner at a
 non-default private manifest; otherwise it scans the default manifest when
@@ -313,19 +331,11 @@ Use `refreshMetadata(fromTokenId, toTokenId)` or `refreshContractMetadata()` whe
 changing data inside a future mutable renderer. Initial NFC receipts also emit
 `MetadataUpdate` when their source card is redeemed.
 
-The old static metadata at `https://cdn.mons.shop/tarot-sepolia/v1/` belongs only
-to the frozen v1 release. These legacy utilities intentionally retain the old
-receipt offset of 777 and must not be used to publish this new collection:
-
-```sh
-npm run tarot:ops -- metadata
-npm run tarot:ops -- verify-media
-npm run tarot:ops -- publish
-npm run tarot:ops -- verify-public
-```
-
-Legacy publication uses `cdn-mons-shop`, refuses conflicting overwrites, and
-reads every object back. The new renderer requires no metadata publication.
+DMX uses its renderer directly and has no static metadata publication step.
+The legacy metadata generator, publisher, and static metadata verifier are
+removed. `npm run tarot:ops -- verify-media` checks the shared card and receipt
+WEBPs without publishing metadata. Preserve those shared images during retirement;
+only the superseded deployment's static JSON prefix is removed.
 
 Use an independent encrypted Tarot authorization keystore, with its password in
 Keychain, and provision `ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET` through Wrangler's
@@ -334,12 +344,11 @@ existing Sepolia deployment wallet is the administrator; do not reuse a 111K
 authorization signer. Configure the API's `ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS`,
 `DEPLOYMENT_BLOCK`, and `ENABLED` only after verifying the new deployment.
 
-For a separately authorized future release, prepare, deploy, and verify the
-renderer first using its own private directory. Then prepare the collection
-against that verified renderer release. Collection preparation freezes the
-renderer evidence and verifies its canonical deployment and runtime bytecode;
-an arbitrary renderer address is not accepted as a substitute. The following
-commands describe that future workflow, not actions performed for this change:
+Prepare, deploy, and verify the renderer first using its own private directory.
+Then prepare the collection against that verified renderer release. Collection
+preparation freezes the renderer evidence and verifies its canonical deployment
+and runtime bytecode; an arbitrary renderer address is not accepted as a
+substitute. Use these steps for the replacement:
 
 ```sh
 npm --prefix onchain/ethereum run tarot:deploy -- prepare --contract DMXWebpRenderer --directory <private-renderer-release>
@@ -362,10 +371,12 @@ npm --prefix onchain/ethereum run tarot:verify-source -- verify <private-release
 RPC configuration comes from `ETHEREUM_TAROT_RPC_URL` or `ALCHEMY_API_KEY`. The
 runner accepts only Sepolia and freezes source, constructor inputs, bytecode,
 nonce, and fees. Renderer and collection have separate manifests and journals.
-Source verification supports both contract types. Resume the same signed
-journal after interrupted broadcasts. New manifests use release version 2;
-old release directories remain frozen. Never redeploy or replace 111K as part
-of Tarot work. Mainnet is supported by the collection and application source but
+Source verification supports both contract types and requires release version 2
+with an explicit `contractName`; older manifests are rejected before requests.
+Resume the same signed journal after interrupted broadcasts. Preserve the new
+renderer and collection release evidence. Remove superseded local release trees
+only after retirement verification. Never redeploy or replace 111K as part of
+Tarot work. Mainnet is supported by the collection and application source but
 remains outside the current contract deployment runner. Local Anvil is test-only.
 
 All four deployment commands exclusively own `operation.lock` inside the
@@ -388,17 +399,67 @@ claims, recipient mints, multi-generation redemptions, and fee withdrawals.
 They also check receipt provenance, renderer swaps, and pause recovery. The
 mainnet variant uses a local chain with ID 1 and a synthetic 777-code batch to
 exercise staging, verified binding, signing, and initial-claim confirmation.
-On public
-Sepolia use signed preparation and `eth_call`/gas estimation only; do not consume
-one of the 777 initial pairs during release acceptance.
+On public Sepolia use signed preparation and `eth_call`/gas estimation only;
+do not consume one of the 777 initial pairs during release acceptance.
 
-At the separately authorized cutover, deploy the API with `npm run deploy:api`,
-which applies OPS migrations and checks OPS integrity. This change does not alter
-Commerce schemas or rows and does not need the full Commerce audit. Deploy the
-storefront with `npm run deploy` only against the matching new contract revision.
-Verify live NFC headers, Basel behavior, matching signer/configuration, all 777
-credentials, and all 777 unclaimed onchain flags. Publish only aggregate
-acceptance results, verified source hashes, and public deployment identity.
+## Sepolia cutover and retirement
+
+Complete the replacement and cleanup in one rollout:
+
+1. Apply OPS migration `0017_dmx_sepolia_retirement.sql` with
+   `npm run db:migrate:ops` and verify OPS integrity with
+   `npm run check:ops-d1`. Include API retirement checks in the disabled
+   replacement deployment below, before enabling claims. This rollout changes
+   OPS, not Commerce schemas or rows, so it uses the routine bounded Commerce
+   gate.
+2. Deploy and verify the version 2 renderer and collection, then run the explicit
+   `rebind` above. Verify the matching signer, all 777 replacement credentials,
+   source verification, and all 777 unclaimed onchain flags without consuming an
+   initial pair.
+3. Configure `ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS`,
+   `ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK`, and the matching signer secret for
+   the verified replacement, with `ETHEREUM_TAROT_SEPOLIA_ENABLED=false`.
+   Deploy this retirement-aware API configuration with `npm run deploy:api` to
+   stop issuing old-contract authorizations while replacement claims remain
+   disabled.
+4. On the superseded contract, set `quoteSigner` to
+   `0x000000000000000000000000000000000000dEaD`. Require three canonical
+   confirmations and verify the signer readback. The old contract has no
+   mint-pause operation. Signer rotation revokes its outstanding claim
+   authorizations; disabling the API flag alone would leave signatures valid
+   for up to ten minutes. Journal this operation privately under
+   `.operations/dmx-sepolia-v2/` and resume the same operation if interrupted.
+5. Set the bundle scanner to the replacement private manifest and
+   `releases/dmx-sepolia-v2/credential-set.json`, then deploy the storefront with
+   `npm run deploy`. Enable replacement claims in the API and deploy it again.
+   Check live NFC headers, Basel behavior, saved-code recovery, matching
+   signer/configuration, all 777 unclaimed flags, and mainnet prelaunch behavior.
+   The 777 physical Sepolia links remain unchanged.
+6. After live acceptance, insert the immutable old-to-new marker in
+   `dmx_retired_sepolia_deployments`. The OPS triggers fence old-scope credential
+   inserts and updates, and the API rejects the retired scope. Leave that marker
+   permanently; changing configuration back is not a rollback. Stop superseded
+   credential tooling before removing its files.
+7. Delete only the superseded contract's `tarot_claim_codes` rows and its static
+   JSON metadata under `tarot-sepolia/v1/` in `cdn-mons-shop`, then invalidate
+   cached CDN responses for those deleted objects. Remove the old private
+   credential/release directories, obsolete caches and backups, and
+   `releases/tarot-sepolia-v1/` after preserving a minimal aggregate cleanup
+   record with the new release. Keep Git history, the retirement marker, the
+   new signed release evidence and private manifest, all mainnet credentials,
+   shared WEBPs, profiles, pre111k, 111K, and unrelated drops.
+8. Verify old credential rows, obsolete artifacts, and deleted public metadata
+   are absent, the old signer remains the burn address, and the replacement
+   stays healthy. Repeat absence and health checks after a bounded observation
+   period. Tarot has no scheduler writer; do not treat the shared Worker
+   schedule as a Tarot cleanup job. Record completion only after the observation
+   confirms retired data has not reappeared.
+
+Keep replacement evidence in the
+[DMX Sepolia v2 release](../../releases/dmx-sepolia-v2/README.md). Publish only
+aggregate acceptance and cleanup results, verified source hashes, and public
+deployment identity. These steps are a rollout procedure; the release evidence
+records which steps have actually completed.
 
 To stop issuing new authorizations, disable the Tarot API flag. Outstanding
 signatures can remain valid for up to ten minutes. On-chain `setMintingPaused`

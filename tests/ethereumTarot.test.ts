@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   encodeTarotClaim, encodeTarotClaimTo, resolveTarotConfig, tarotCodeHashInput, tarotReceiptTokenId,
-  TAROT_CHAIN_ID, TAROT_MAX_CARDS, TAROT_METADATA_BASE_URI, tarotChainId,
+  TAROT_CHAIN_ID, TAROT_MAX_CARDS, tarotChainId,
 } from '../shared/ethereum/tarot.ts';
 import { isTarotTokenId } from '../shared/ethereum/tarotCard.ts';
 import { dmxMintDigest, dmxRedemptionDigest, tarotClaimDigest, TAROT_CLAIMED_TOPIC } from '../shared/ethereum/tarotCrypto.ts';
@@ -34,7 +34,6 @@ test('Tarot defaults to mainnet, keeps Sepolia explicit, and requires enablement
   assert.equal(config.deploymentBlock, 123);
   assert.equal(resolveTarotConfig({ enabled: true }).enabled, false);
   assert.equal(resolveTarotConfig({ contractAddress }).enabled, false);
-  assert.equal(TAROT_METADATA_BASE_URI, 'https://cdn.mons.shop/tarot-sepolia/v1/');
   for (const contractAddress of ['wrong', '0x' + '0'.repeat(40)]) assert.throws(() => resolveTarotConfig({ contractAddress }));
   for (const deploymentBlock of [-1, 1.5, 'broken', Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => resolveTarotConfig({ deploymentBlock }));

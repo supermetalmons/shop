@@ -32,6 +32,7 @@ test('full Worker Tarot quotas follow the trusted IP across allowed Origin chang
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());
   db.exec(readFileSync('cloud/workers/api/ops-migrations/0014_tarot_claim_codes.sql', 'utf8'));
+  db.exec(readFileSync('cloud/workers/api/ops-migrations/0017_dmx_sepolia_retirement.sql', 'utf8'));
   const counts = { access: new Map<string, number>(), confirm: new Map<string, number>() };
   const limiter = (operation: keyof typeof counts, maximum: number): RateLimit => ({ limit: async ({ key }) => {
     const count = (counts[operation].get(key) ?? 0) + 1;

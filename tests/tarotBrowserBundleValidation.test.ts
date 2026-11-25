@@ -53,10 +53,10 @@ function validate(content: string, options: {
     mkdirSync(join(directory, 'dist'));
     writeFileSync(join(directory, 'dist', 'bundle.js'), content);
     const location = options.location ?? 'explicit';
-    const manifest = location === 'default' ? join(directory, '.operations', 'tarot-sepolia-v1', 'claim-links.private.json')
+    const manifest = location === 'default' ? join(directory, '.operations', 'dmx-sepolia-v2', 'claim-links.private.json')
       : join(directory, 'claim-links.private.json');
     if (location !== 'absent' && location !== 'missing-explicit') {
-      if (location === 'default') mkdirSync(join(directory, '.operations', 'tarot-sepolia-v1'), { recursive: true });
+      if (location === 'default') mkdirSync(join(directory, '.operations', 'dmx-sepolia-v2'), { recursive: true });
       const value = Object.hasOwn(options, 'manifest') ? options.manifest : options.strict ? releaseManifest() : { links: codes.map(code => ({ code })) };
       writeFileSync(manifest, options.rawManifest ?? JSON.stringify(value), { mode: 0o600 });
     }

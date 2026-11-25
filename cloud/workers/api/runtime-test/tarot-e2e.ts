@@ -81,6 +81,7 @@ try {
   const deploymentBlock = Number(deployment.blockNumber);
   await rpc('anvil_mine', ['0x2']);
   db.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0014_tarot_claim_codes.sql'), 'utf8'));
+  db.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0017_dmx_sepolia_retirement.sql'), 'utf8'));
   const manifest: MainnetClaimLinks | null = testnet ? null : {
     version: 1, chainId: 1, collectionKey: 'dmx-mainnet-v1', contractAddress: null,
     batchId: '00000000-0000-4000-8000-000000000000', createdAtMs: Date.now(),

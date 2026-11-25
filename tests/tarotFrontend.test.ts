@@ -785,7 +785,7 @@ for (const denied of [401, 403]) {
 
   test(`confirmation ${denied} stays silent after revalidation and retains pending recovery`, async t => {
     const f = pendingClaimFixture(t);
-    window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+    window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 }));
     f.confirm.mock.mockImplementation(async () => { throw new TarotApiError('This Tarot claim link is invalid.', denied); });
     const view = f.mount(wallet());
     await act(async () => undefined);
@@ -986,7 +986,8 @@ test('a refreshed claimed status hides the entire claim UI without connecting a 
 
 test('reload recovers a submitted receipt without storing a secret or requiring a connected wallet', async () => {
   const { confirm } = mockService();
-  window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`, JSON.stringify({ wallet: owner, transactionHash }));
+  window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
+    JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
   assert.equal(JSON.stringify(window.sessionStorage).includes(code), false);
   const view = render(page(search()));
   await waitFor(() => {
@@ -1006,7 +1007,7 @@ test('a dropped or cancelled transaction becomes claimable only after confirmed 
   mock.method(tarotApi, 'confirm', async () => ({ status: 'pending' as const, transactionHash, confirmations: 0, tokenId: 1,
     receiptTokenId: tarotReceiptTokenId(1), blockNumber: null, blockHash: null }));
   const key = `mons.shop.tarot.pending:${config.chainId}:${contract}:1`;
-  window.sessionStorage.setItem(key, JSON.stringify({ wallet: owner, transactionHash, deadline }));
+  window.sessionStorage.setItem(key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline }));
   const view = render(page(search()));
   const claiming = await view.findByRole('button', { name: 'Claiming…' });
   assert.equal((claiming as HTMLButtonElement).disabled, true);
@@ -1043,7 +1044,7 @@ test('new post-confirmation requests cannot move behind the receipt block or con
   mock.method(tarotApi, 'status', async () => snapshot);
   mock.method(tarotApi, 'confirm', async () => confirmed(1, 105));
   window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
-    JSON.stringify({ wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
+    JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
   const value = wallet();
   const view = renderHook(() => useTarotClaim(request, value));
   await waitFor(() => assert.equal(view.result.current.status?.claimed, true));
@@ -1066,7 +1067,7 @@ for (const observedBlock of [105, 107]) {
     mock.method(tarotApi, 'status', async () => snapshot);
     mock.method(tarotApi, 'confirm', async () => confirmed(1, 105));
     window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
-      JSON.stringify({ wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
+      JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
     const value = wallet();
     const view = renderHook(() => useTarotClaim(request, value));
     await waitFor(() => assert.equal(view.result.current.status?.claimed, true));
@@ -1111,7 +1112,7 @@ test('a stale status preserves pending recovery and polling continues until a fr
   const confirm = mock.method(tarotApi, 'confirm', async () => ({ ...confirmed(), status: 'pending' as const,
     confirmations: 0, blockNumber: null, blockHash: null }));
   const key = `mons.shop.tarot.pending:${config.chainId}:${contract}:1`;
-  window.sessionStorage.setItem(key, JSON.stringify({ wallet: owner, transactionHash, deadline: 2_000_000_600 }));
+  window.sessionStorage.setItem(key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: 2_000_000_600 }));
   const value = wallet();
   const view = renderHook(() => useTarotClaim(request, value));
   await act(async () => undefined);
@@ -1134,7 +1135,7 @@ for (const observedBlock of [105, 110]) {
     mock.method(tarotApi, 'status', async () => snapshot);
     const confirm = mock.method(tarotApi, 'confirm', () => new Promise<TarotConfirmResponse>(resolve => { finish = resolve; }));
     window.sessionStorage.setItem(`mons.shop.tarot.pending:${config.chainId}:${contract}:1`,
-      JSON.stringify({ wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
+      JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: Math.floor(Date.now() / 1000) + 600 }));
     const value = wallet();
     const view = renderHook(() => useTarotClaim(request, value));
     await waitFor(() => assert.equal(confirm.mock.callCount(), 1));
@@ -1218,7 +1219,7 @@ test('mainnet claims switch to Ethereum and recover their own transaction after 
   });
   const key = `mons.shop.tarot.pending:1:${contract}:1`;
   const sepoliaKey = `mons.shop.tarot.pending:${config.chainId}:${contract}:1`;
-  const sepoliaPending = JSON.stringify({ wallet: owner, transactionHash: `0x${'f'.repeat(64)}`,
+  const sepoliaPending = JSON.stringify({ id: 'sepolia-intent', wallet: owner, transactionHash: `0x${'f'.repeat(64)}`,
     deadline: Math.floor(Date.now() / 1000) + 600 });
   window.sessionStorage.setItem(sepoliaKey, sepoliaPending);
   const first = renderHook(() => useTarotClaim(mainnetRequest, value));
@@ -1867,33 +1868,42 @@ test('a late hash cannot revive a cleared local intent when removing its stored 
   assert.equal(window.sessionStorage.getItem(f.key), original);
 });
 
-test('legacy hash recovery does not extend its in-memory expiry when migration storage fails', async t => {
-  const f = pendingClaimFixture(t);
-  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash }));
-  mock.method(dom.window.Storage.prototype, 'setItem', () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); });
-  const view = f.mount(wallet());
-  await act(async () => undefined);
-  assert.equal(view.result.current.pending, true);
-  await f.expire();
-  assert.equal(view.result.current.pending, false);
-  assert.equal(window.sessionStorage.getItem(f.key), null);
-});
+for (const testnet of [false, true]) {
+  for (const missing of ['id', 'deadline', 'both'] as const) {
+    test(`${testnet ? 'Sepolia' : 'mainnet'} pending recovery rejects records missing ${missing}`, async () => {
+      const service = mockService();
+      const input = { ...request, testnet };
+      const key = `mons.shop.tarot.pending:${testnet ? config.chainId : mainnetConfig.chainId}:${contract}:1`;
+      const stored = JSON.stringify({ wallet: owner, transactionHash,
+        ...(missing === 'deadline' ? { id: 'existing-intent' } : {}),
+        ...(missing === 'id' ? { deadline: Math.floor(Date.now() / 1000) + 600 } : {}) });
+      window.sessionStorage.setItem(key, stored);
+      const value = wallet();
+      const view = renderHook(() => useTarotClaim(input, value));
+      await act(async () => undefined);
+      assert.ok(view.result.current.status);
+      assert.equal(view.result.current.pending, false);
+      assert.equal(service.confirm.mock.callCount(), 0);
+      assert.equal(window.sessionStorage.getItem(key), stored);
+    });
+  }
+}
 
-test('legacy hash recovery persists its identity and deadline once across reloads', async t => {
+test('current pending recovery preserves its identity and deadline across reloads', async t => {
   const f = pendingClaimFixture(t);
-  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash }));
+  const stored = JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 });
+  window.sessionStorage.setItem(f.key, stored);
   const first = f.mount(wallet());
   await act(async () => undefined);
-  const migrated = JSON.parse(window.sessionStorage.getItem(f.key)!);
-  assert.ok(migrated.id);
-  assert.equal(migrated.deadline, f.now + 600);
+  assert.equal(first.result.current.pending, true);
+  assert.equal(window.sessionStorage.getItem(f.key), stored);
   await act(async () => first.unmount());
   t.mock.timers.setTime((f.now + 120) * 1000);
   f.setSnapshot({ observedBlock: 110, observedTimestamp: f.now + 96, blockHash: `0x${'e'.repeat(64)}` });
   const second = f.mount(wallet());
   await act(async () => undefined);
   assert.equal(second.result.current.pending, true);
-  assert.deepEqual(JSON.parse(window.sessionStorage.getItem(f.key)!), migrated);
+  assert.equal(window.sessionStorage.getItem(f.key), stored);
 });
 
 test('failed receipt reconciliation preserves a newer reorg observation and accepts a later fresh failure', async t => {
@@ -1901,7 +1911,7 @@ test('failed receipt reconciliation preserves a newer reorg observation and acce
   f.setSnapshot({ observedTimestamp: f.now - 60 });
   const delayed = Promise.withResolvers<TarotConfirmResponse>();
   f.confirm.mock.mockImplementation(() => delayed.promise);
-  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 }));
   const view = f.mount(wallet());
   await act(async () => undefined);
   assert.equal(f.confirm.mock.callCount(), 1);
@@ -1936,7 +1946,7 @@ for (const failure of ['unavailable', 'rate-limit', 'network', 'invalid-response
       if (++reads === 1) throw error;
       return { ...confirmed(), status: 'pending' as const, confirmations: 0, blockNumber: null, blockHash: null };
     });
-    window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+    window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 }));
     const view = render(page(search(), wallet()));
     await act(async () => undefined);
     assert.equal(reads, 1);
@@ -1953,7 +1963,7 @@ for (const failure of ['unavailable', 'rate-limit', 'network', 'invalid-response
 test('canonical expiry clears temporary confirmation feedback and stops receipt polling', async t => {
   const f = pendingClaimFixture(t);
   f.confirm.mock.mockImplementation(async () => { throw new TarotApiError('Confirmation unavailable.', 503); });
-  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 }));
   const view = f.mount(wallet());
   await act(async () => undefined);
   assert.equal(view.result.current.pending, true);
@@ -1991,7 +2001,7 @@ test('a pending confirmation begun before a newer chain observation cannot clear
     if (++reads === 1) throw new TarotApiError('Confirmation unavailable.', 503);
     return reads === 2 ? delayed.promise : pending;
   });
-  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 }));
   const view = f.mount(wallet());
   await act(async () => undefined);
   assert.equal(view.result.current.claimError, 'Confirmation unavailable.');
@@ -2016,7 +2026,7 @@ test('a pending confirmation from before a new cooldown cannot clear transient f
     if (++reads === 1) throw new TarotApiError('Confirmation unavailable.', 503);
     return delayed.promise;
   });
-  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 }));
   const view = f.mount(wallet());
   await act(async () => undefined);
   await act(async () => t.mock.timers.tick(4_000));
@@ -2296,7 +2306,7 @@ test('pending confirmation polling resumes after concurrent 429 invalidates its 
   const f = pendingClaimFixture(t);
   const oldConfirmation = Promise.withResolvers<TarotConfirmResponse>();
   f.confirm.mock.mockImplementation(() => oldConfirmation.promise);
-  window.sessionStorage.setItem(f.key, JSON.stringify({ wallet: owner, transactionHash, deadline: f.now + 600 }));
+  window.sessionStorage.setItem(f.key, JSON.stringify({ id: 'existing-intent', wallet: owner, transactionHash, deadline: f.now + 600 }));
   const view = f.mount(wallet());
   await act(async () => undefined);
   let limited = true;

@@ -111,4 +111,12 @@ export default {
   }
   await env.OPS_DB.prepare('UPDATE tarot_claim_codes SET revoked_at_ms = created_at_ms').run();
   assert.equal((await call(TAROT_API_PATHS.status, credentials, true)).status, 401);
+  await env.OPS_DB.prepare('UPDATE tarot_claim_codes SET revoked_at_ms = NULL').run();
+  await env.OPS_DB.prepare('INSERT INTO dmx_retired_sepolia_deployments VALUES (?, ?, ?, ?)')
+    .bind(TAROT_CHAIN_ID, contractAddress, `0x${'33'.repeat(20)}`, Date.now()).run();
+  for (const [path, body] of [
+    [TAROT_API_PATHS.status, credentials],
+    [TAROT_API_PATHS.prepare, { ...credentials, wallet }],
+    [TAROT_API_PATHS.confirm, confirmationRequest],
+  ] as const) assert.equal((await call(path, body)).status, 503);
 });

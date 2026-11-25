@@ -1,0 +1,25 @@
+{
+  "checkedAt": "2026-11-25T12:33:25.145Z",
+  "mode": "active",
+  "chainId": 11155111,
+  "contractAddress": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
+  "renderer": "0x4fd72d56cab36c926100ab54b73dc2f5df454810",
+  "unclaimedPairs": 777,
+  "observedBlock": 12209563,
+  "blockHash": "0x2ebd529f37f790becec55852be9dfa3fe96f073eff4889c2926bb363c839e381",
+  "signedSimulations": [
+    {
+      "valid": true,
+      "estimatedGas": 708678
+    },
+    {
+      "valid": true,
+      "estimatedGas": 708690
+    }
+  ],
+  "mainnetDisabled": true,
+  "privateNfcHeaders": true,
+  "inlineMetadataVerified": true,
+  "redemptionsPaused": true,
+  "claimTransactionsBroadcast": 0
+}

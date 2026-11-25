@@ -1,0 +1,44 @@
+{
+  "checkedAt": "2026-11-25T13:03:11.844Z",
+  "contractTests": 86,
+  "deploymentAndSourceTests": 69,
+  "credentialOperationTests": 13,
+  "retirementAndOpsTests": 37,
+  "sepoliaLocalE2E": true,
+  "mainnetLocalE2E": true,
+  "mediaCount": 1554,
+  "applicationReleaseChecks": {
+    "apiMaintenance": {
+      "passed": true,
+      "unitTests": 3822,
+      "runtimeTests": 96,
+      "version": "3fd46205-ccce-4962-82af-24f4fca610d7"
+    },
+    "frontend": {
+      "passed": true,
+      "version": "283308a2-dbac-4760-8d37-c6cafc0f3b80",
+      "strictCredentialScan": true,
+      "tests": 5777
+    },
+    "apiActivation": {
+      "passed": true,
+      "unitTests": 3822,
+      "runtimeTests": 96,
+      "version": "75af184b-e2e3-4330-b9bc-ee270ba8d5b2"
+    }
+  },
+  "optionalDeadCodeCheck": {
+    "passed": false,
+    "preExisting": true,
+    "details": [
+      "Unused export ARTIST_METADATA_PLAN_PAGE_SIZE",
+      "Stale production export baseline for 111K artist metadata constants and current production consumers"
+    ],
+    "runtimeImpact": "Pre-existing 111K export bookkeeping; no related runtime changes in this release."
+  },
+  "remoteCleanupSyntheticTests": 9,
+  "localCleanupSyntheticTests": 7,
+  "liveAcceptancePassed": true,
+  "browserAcceptancePassed": true,
+  "retirementVerified": true
+}

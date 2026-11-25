@@ -75,7 +75,7 @@ test('sealed history binds the network and card even when both networks use the 
   assert.equal(original.localStorage.length, 1);
 });
 
-test('legacy sealed1 histories remain readable only on Sepolia', t => {
+test('sealed1 histories are rejected without removing keys used by current scans', t => {
   const original = browser(t);
   const encode = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
   const id = encode(new Uint8Array(16).fill(1));
@@ -84,7 +84,12 @@ test('legacy sealed1 histories remain readable only on Sepolia', t => {
   const code = crypto.randomUUID();
   original.localStorage.setItem(`mons.shop.tarot.history-key:v1:${id}`, encode(key));
   const legacy = `sealed1.${id}.${encode(nonce)}.${encode(nacl.secretbox(new TextEncoder().encode(`10:${code}`), nonce, key))}`;
-  assert.equal(openNfcHistoryCode(original, 10, legacy, true), code);
+  assert.equal(openNfcHistoryCode(original, 10, legacy, true), null);
   assert.equal(openNfcHistoryCode(original, 10, legacy, false), null);
-  assert.equal(openNfcHistoryCode(original, 11, legacy, true), null);
+  for (const testnet of [false, true]) {
+    const current = sealNfcHistoryCode(original, 10, code, testnet);
+    assert.equal(openNfcHistoryCode(original, 10, current, testnet), code);
+  }
+  assert.equal(original.localStorage.length, 1);
+  assert.equal(original.localStorage.getItem(`mons.shop.tarot.history-key:v1:${id}`), encode(key));
 });

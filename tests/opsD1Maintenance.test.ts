@@ -184,6 +184,7 @@ function integrityInput(
       authWalletBindingCounts: queryRows(db, 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings'),
       workerControlColumns: queryRows(db, 'PRAGMA table_info(worker_controls)'),
       tarotClaimCodeColumns: queryRows(db, 'PRAGMA table_info(tarot_claim_codes)'),
+      dmxRetiredSepoliaDeploymentColumns: queryRows(db, 'PRAGMA table_info(dmx_retired_sepolia_deployments)'),
       ...overrides,
     };
   } finally {
@@ -204,7 +205,7 @@ test('Ops integrity reads all checks in one command without changing the report'
       calls += 1;
       assert.equal(args.includes('--file'), false);
       const statements = unstable_splitSqlQuery(args[args.indexOf('--command') + 1]);
-      assert.equal(statements.length, 32);
+      assert.equal(statements.length, 33);
       return JSON.stringify(statements.map((sql) => ({ success: true, results: queryRows(db, sql) })));
     });
     assert.deepEqual(readRemoteOpsD1Integrity(runner.queryBatch), assertOpsD1Integrity(expected));
@@ -269,6 +270,23 @@ test('Ops manifest validation preserves exact schema identity and strict tables'
     ...input,
     tableList: input.tableList.map((row, index) => index === 0 ? { ...row, strict: 0 } : row),
   }), /strict flag/);
+});
+
+test('Ops integrity requires the immutable DMX Sepolia retirement schema and credential guards', () => {
+  const input = integrityInput();
+  for (const name of ['dmx_retired_sepolia_deployments', 'dmx_retired_sepolia_deployments_insert_guard',
+    'dmx_retired_sepolia_deployments_update_guard', 'dmx_retired_sepolia_deployments_delete_guard',
+    'tarot_claim_codes_retired_insert_guard', 'tarot_claim_codes_retired_update_guard']) {
+    assert.throws(() => assertOpsD1Integrity({ ...input, schema: input.schema.filter(row => row.name !== name) }), /schema/, name);
+  }
+  assert.throws(() => assertOpsD1Integrity({ ...input,
+    dmxRetiredSepoliaDeploymentColumns: input.dmxRetiredSepoliaDeploymentColumns.map(row =>
+      row.name === 'retired_at_ms' ? { ...row, type: 'TEXT' } : row),
+  }), /dmx_retired_sepolia_deployments columns/);
+  assert.throws(() => assertOpsD1Integrity({ ...input,
+    schema: input.schema.map(row => row.name === 'tarot_claim_codes_retired_update_guard'
+      ? { ...row, sql: String(row.sql).replace('OLD.chain_id', 'NEW.chain_id') } : row),
+  }), /schema/);
 });
 
 test('Ops manifest validation requires the complete latest migration set', () => {

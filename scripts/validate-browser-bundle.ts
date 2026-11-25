@@ -49,7 +49,7 @@ if (!accessCodes) {
   process.exit(1);
 }
 
-const tarotManifest = resolve(process.env.ETHEREUM_TAROT_PRIVATE_MANIFEST || '.operations/tarot-sepolia-v1/claim-links.private.json');
+const tarotManifest = resolve(process.env.ETHEREUM_TAROT_PRIVATE_MANIFEST || '.operations/dmx-sepolia-v2/claim-links.private.json');
 let tarotCodes: string[] = [];
 if (requireTarotManifest || existsSync(tarotManifest) || process.env.ETHEREUM_TAROT_PRIVATE_MANIFEST) {
   try {

@@ -122,7 +122,6 @@ const productionExportBaseline = [
   ["shared/ethereum/revealDeployment.ts","exports","ETHEREUM_REVEAL_CATALOG_VERSION_PATTERN","tooling","scripts/ops/ethereumRevealControl.ts"],
   ["shared/ethereum/tarot.ts","exports","encodeTarotClaimTo","test","cloud/workers/api/runtime-test/tarot-e2e.ts"],
   ["shared/ethereum/tarot.ts","exports","TAROT_CHAIN_ID","tooling","scripts/tarot/claimLinks.ts"],
-  ["shared/ethereum/tarot.ts","exports","TAROT_METADATA_BASE_URI","tooling","scripts/tarot/catalog.ts"],
   ["shared/ethereum/tarotCrypto.ts","exports","dmxMintDigest","test","cloud/workers/api/runtime-test/tarot-e2e.ts"],
   ["shared/ethereum/tarotCrypto.ts","exports","dmxRedemptionDigest","test","cloud/workers/api/runtime-test/tarot-e2e.ts"],
   ["shared/fulfillmentAccess.ts","exports","MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES","test","tests/fulfillmentAccess.test.ts"],

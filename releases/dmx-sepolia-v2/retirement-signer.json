@@ -1,0 +1,12 @@
+{
+  "verified": true,
+  "chainId": 11155111,
+  "oldContract": "0x63fef7c4867c558b91fda48899580a89d9f8cde1",
+  "replacementContract": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
+  "disabledSigner": "0x000000000000000000000000000000000000dead",
+  "transactionHash": "0x2bf83406164997a5cd62f8b6717bb01e5839cd761e7781d5ccaa6a2eb2d91b47",
+  "blockNumber": 12209482,
+  "blockHash": "0x6971fde61529bdc5882ccf16b2e7cc6df74310f22f7c2dfabf79d93d4b4edaf5",
+  "confirmations": 4,
+  "verifiedAt": "2026-11-25T12:17:18.096Z"
+}

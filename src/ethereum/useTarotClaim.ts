@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TarotConfig, TarotRequest, TarotStatus } from '../../shared/ethereum/tarot';
-import { TAROT_AUTHORIZATION_TTL_SECONDS, tarotChainId } from '../../shared/ethereum/tarot';
+import { tarotChainId } from '../../shared/ethereum/tarot';
 import type { EthereumWallet } from './useEthereum111k';
 import { captureEthereumWalletActionConfig, ethereumWalletActionChanged, useEthereumWalletAction } from './useEthereumWalletAction';
 import { ethereumAddress, ethereumOperation, ethereumWalletError } from './wallet';
@@ -42,18 +42,12 @@ function readPending(browserWindow: Window, config: TarotConfig, tokenId: number
   try {
     const value: unknown = JSON.parse(stored ?? 'null');
     if (value && typeof value === 'object' && 'wallet' in value && 'transactionHash' in value &&
+      'id' in value && typeof value.id === 'string' && value.id &&
+      'deadline' in value && typeof value.deadline === 'number' && Number.isSafeInteger(value.deadline) && value.deadline > 0 &&
       (value.transactionHash === null || typeof value.transactionHash === 'string' && /^0x[0-9a-f]{64}$/.test(value.transactionHash)) && ethereumAddress(value.wallet)) {
-      const deadline = 'deadline' in value && typeof value.deadline === 'number' && Number.isSafeInteger(value.deadline) && value.deadline > 0
-        ? value.deadline : value.transactionHash === null ? null : Math.floor(Date.now() / 1000) + TAROT_AUTHORIZATION_TTL_SECONDS;
-      if (deadline === null) return null;
-      const wallet = ethereumAddress(value.wallet)!;
-      const id = 'id' in value && typeof value.id === 'string' && value.id ? value.id :
-        value.transactionHash === null ? null : `legacy:${wallet}:${value.transactionHash}`;
-      if (id) {
-        const pending = { id, wallet, transactionHash: value.transactionHash, deadline };
-        cachePending(browserWindow, key, pending, stored);
-        return pending;
-      }
+      const pending = { id: value.id, wallet: ethereumAddress(value.wallet)!, transactionHash: value.transactionHash, deadline: value.deadline };
+      cachePending(browserWindow, key, pending, stored);
+      return pending;
     }
   } catch {}
   return null;

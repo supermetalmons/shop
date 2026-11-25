@@ -76,6 +76,43 @@ async function assertEthereumProfilePersistence(db: D1Database): Promise<void> {
     .first<{ email: string }>())?.email, winner?.email);
 }
 
+async function assertDmxSepoliaRetirementPersistence(db: D1Database): Promise<void> {
+  const retired = '0x' + 'ab'.repeat(20);
+  const replacement = '0x' + 'cd'.repeat(20);
+  const batch = '11111111-1111-4111-8111-111111111111';
+  const originalHash = 'a'.repeat(64);
+  await db.batch([
+    ...[retired, replacement].map(contract => db.prepare('INSERT INTO tarot_claim_codes VALUES (11155111, ?, 1, ?, 1000, NULL)')
+      .bind(contract, originalHash)),
+    db.prepare(`INSERT INTO dmx_mainnet_claim_batches VALUES (?, 1, 'dmx-mainnet-v1', 'staged', NULL,
+      777, ?, 1000, 2000, NULL)`).bind(batch, originalHash),
+    db.prepare('INSERT INTO dmx_mainnet_claim_codes VALUES (?, 1, ?, 1000, NULL)').bind(batch, originalHash),
+    db.prepare('INSERT INTO dmx_mainnet_bound_claim_codes VALUES (?, 1, ?, 1, ?, 1000, NULL)').bind(batch, retired, originalHash),
+    db.prepare('INSERT INTO dmx_retired_sepolia_deployments VALUES (11155111, ?, ?, 2000)').bind(retired, replacement),
+  ]);
+  await assert.rejects(db.batch([
+    db.prepare('UPDATE tarot_claim_codes SET code_hash=? WHERE contract_address=?').bind('b'.repeat(64), replacement),
+    db.prepare('INSERT INTO tarot_claim_codes VALUES (11155111, ?, 2, ?, 1000, NULL)').bind(retired, 'c'.repeat(64)),
+  ]), /Retired DMX Sepolia credentials/);
+  assert.equal(await db.prepare('SELECT code_hash FROM tarot_claim_codes WHERE contract_address=?')
+    .bind(replacement).first('code_hash'), originalHash);
+  await assert.rejects(db.prepare('UPDATE tarot_claim_codes SET contract_address=?,token_id=2 WHERE contract_address=?')
+    .bind(retired, replacement).run(), /Retired DMX Sepolia credentials/);
+  await assert.rejects(db.prepare('UPDATE tarot_claim_codes SET contract_address=?,token_id=2 WHERE contract_address=?')
+    .bind(replacement, retired).run(), /Retired DMX Sepolia credentials/);
+  await assert.rejects(db.prepare('UPDATE dmx_retired_sepolia_deployments SET retired_at_ms=3000').run(), /retirement is immutable/);
+  await assert.rejects(db.prepare('DELETE FROM dmx_retired_sepolia_deployments').run(), /retirement is immutable/);
+  await assert.rejects(db.prepare('INSERT OR REPLACE INTO dmx_retired_sepolia_deployments VALUES (11155111, ?, ?, 3000)')
+    .bind(retired, replacement).run(), /retirement is immutable/);
+  await db.prepare('DELETE FROM tarot_claim_codes WHERE chain_id=11155111 AND contract_address=?').bind(retired).run();
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM tarot_claim_codes WHERE contract_address=?').bind(retired).first('count'), 0);
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM tarot_claim_codes WHERE contract_address=?').bind(replacement).first('count'), 1);
+  assert.equal(await db.prepare('SELECT status FROM dmx_mainnet_claim_batches WHERE batch_id=?').bind(batch).first('status'), 'staged');
+  for (const table of ['dmx_mainnet_claim_codes', 'dmx_mainnet_bound_claim_codes']) {
+    assert.equal(await db.prepare(`SELECT code_hash FROM ${table} WHERE batch_id=? AND token_id=1`).bind(batch).first('code_hash'), originalHash);
+  }
+}
+
 function normalizeRuntimeRevealSubmission(
   raw: Record<string, unknown>,
 ): RevealSubmissionRecord {
@@ -212,7 +249,11 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       '0012_ethereum_reveal_catalog_updates.sql',
       '0013_mixed_allocation_revisions.sql',
       '0014_tarot_claim_codes.sql',
+      '0015_dmx_mainnet_claim_staging.sql',
+      '0016_dmx_mainnet_bound_claim_codes.sql',
+      '0017_dmx_sepolia_retirement.sql',
     ]);
+    await assertDmxSepoliaRetirementPersistence(env.OPS_DB);
     await assertEthereumProfilePersistence(env.OPS_DB);
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count
       FROM sqlite_schema

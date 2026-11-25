@@ -14,7 +14,6 @@ export const TAROT_API_PATHS = {
 export const TAROT_RECEIPT_OFFSET = DMX_RECEIPT_OFFSET;
 export const TAROT_AUTHORIZATION_TTL_SECONDS = 600;
 export const TAROT_CHAIN_ID = 11155111;
-export const TAROT_METADATA_BASE_URI = 'https://cdn.mons.shop/tarot-sepolia/v1/';
 const TAROT_CLAIM_FUNCTION = 'claim(uint256,uint256,bytes)';
 
 export type TarotConfig = {

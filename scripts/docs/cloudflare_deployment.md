@@ -30,13 +30,13 @@ Publishing and release dry runs additionally require the private Tarot manifest
 through `validate:browser-bundle:release`. It checks the configured Sepolia
 contract and all 777 unique, ordered claim links before scanning the output.
 It also matches the credential-set fingerprint recorded in
-`releases/tarot-sepolia-v1/credential-set.json` after successful provisioning
+`releases/dmx-sepolia-v2/credential-set.json` after successful provisioning
 verification. The pin is read from the repository, independently of the private
 manifest path. A missing or mismatched pin blocks release scans; the check does
 not contact D1. Run `npm run tarot:ops -- verify-codes` to establish a missing
 pin from the fully verified deployment. Existing conflicting pins are never
 overwritten automatically.
-Use the default `.operations/tarot-sepolia-v1/claim-links.private.json` or set
+Use the default `.operations/dmx-sepolia-v2/claim-links.private.json` or set
 `ETHEREUM_TAROT_PRIVATE_MANIFEST` for the validator. Keep this file outside
 `dist`; only the Node validator reads it, and it is never a Vite input or Worker
 upload. Ordinary builds and local scans do not require a Tarot manifest.
@@ -51,6 +51,33 @@ npm run deploy
 `wrangler deploy --dry-run`. `deploy` repeats the checks and publishes with
 `wrangler deploy --strict`. It changes only the frontend Worker and does not
 deploy the API.
+
+### DMX Sepolia replacement
+
+Follow the [DMX cutover and retirement procedure](tarot_cards.md#sepolia-cutover-and-retirement)
+for contract replacement. Keep all 777 existing physical NFC codes and URLs:
+`tarot:ops -- rebind` verifies the source manifest/pin and the new collection
+release before provisioning replacement hashes and creating the new pin.
+Use the `.operations/dmx-sepolia-v2/` manifest for the strict frontend scan;
+update any `ETHEREUM_TAROT_PRIVATE_MANIFEST` override in the private scan
+environment. Mainnet staging files and network-scoped saved scans stay intact.
+
+Deploy OPS migration `0017_dmx_sepolia_retirement.sql` and API retirement support
+before cutover. Once the replacement contracts and rebound credentials are
+verified, point the API at the replacement with claims disabled. Set the old
+contract's `quoteSigner` to `0x000000000000000000000000000000000000dEaD`, require
+three canonical confirmations, and verify the signer readback. Deploy the
+frontend, then enable the replacement in the API and complete live acceptance.
+
+Fence the old contract with its immutable OPS retirement marker before deleting
+its credential rows, static metadata prefix, and obsolete release/private
+artifacts. Invalidate cached CDN responses for deleted metadata. Preserve the
+retirement marker and minimal cleanup evidence, then repeat absence and
+replacement-health checks after a bounded observation period. Tarot has no
+scheduler writer. Disabling the old API alone does not revoke already-issued
+signatures. This is an OPS rollout and uses `deploy:api`, not the full Commerce
+audit. Record actual completion in the
+[DMX Sepolia v2 release](../../releases/dmx-sepolia-v2/README.md).
 
 ## API Worker
 

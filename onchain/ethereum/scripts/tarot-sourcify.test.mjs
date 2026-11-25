@@ -21,7 +21,7 @@ function fixture(t, chainId = 11155111, contractName = 'TarotCards') {
     deployedBytecode: { object: '0x60016003', immutableReferences: {} } };
   const write = (name, value) => fs.writeFileSync(path.join(directory, name), json(value));
   const constructorArgs = contractName === 'DMXWebpRenderer' ? '0x' : '0x0001';
-  write('manifest.json', { contractName, chainId, contractAddress: address, standardInputSha256: sha256(json(input)), artifactSha256: sha256(json(artifact)),
+  write('manifest.json', { releaseVersion: 2, contractName, chainId, contractAddress: address, standardInputSha256: sha256(json(input)), artifactSha256: sha256(json(artifact)),
     creationCode: artifact.bytecode.object + constructorArgs.slice(2), constructorArgs });
   write('deployment.json', { chainId, contractAddress: address, transactionHash, confirmations: 3,
     runtimeBytes: 4, runtimeKeccak256: '0x' + 'b'.repeat(64) });
@@ -156,6 +156,34 @@ for (const chainId of [11155111]) {
     t.mock.method(globalThis, 'fetch', async () => Response.json({ chainId: chainId === 1 ? '11155111' : '1' }));
     await assert.rejects(f.run('verify'), /Published chain does not match release/);
     assert.equal(fs.existsSync(path.join(f.directory, 'TarotCards.sourcify-verification.json')), false);
+  });
+}
+
+for (const releaseVersion of [undefined, 1, '2', 3]) {
+  test(`rejects release version ${releaseVersion} before source requests or evidence writes`, async t => {
+    const f = fixture(t);
+    f.write('manifest.json', { ...f.read('manifest.json'), releaseVersion });
+    const files = fs.readdirSync(f.directory).sort();
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected request'); });
+    for (const mode of ['submit', 'status', 'verify']) {
+      await assert.rejects(f.run(mode), /requires a version 2 DMX release/);
+    }
+    assert.equal(fetchMock.mock.callCount(), 0);
+    assert.deepEqual(fs.readdirSync(f.directory).sort(), files);
+  });
+}
+
+for (const contractName of [undefined, null, '', 'LegacyTarotCards']) {
+  test(`rejects missing or unsupported contract name ${contractName} before source requests or evidence writes`, async t => {
+    const f = fixture(t);
+    f.write('manifest.json', { ...f.read('manifest.json'), contractName });
+    const files = fs.readdirSync(f.directory).sort();
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected request'); });
+    for (const mode of ['submit', 'status', 'verify']) {
+      await assert.rejects(f.run(mode), /Unsupported source verification contract/);
+    }
+    assert.equal(fetchMock.mock.callCount(), 0);
+    assert.deepEqual(fs.readdirSync(f.directory).sort(), files);
   });
 }
 

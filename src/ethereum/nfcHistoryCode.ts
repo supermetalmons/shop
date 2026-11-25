@@ -41,17 +41,17 @@ export function sealNfcHistoryCode(browser: Browser, tokenId: number, code: stri
 
 export function openNfcHistoryCode(browser: Browser, tokenId: number, entry: unknown, testnet: boolean): string | null {
   if (typeof testnet !== 'boolean' || typeof entry !== 'string' || entry.length > 160 ||
-    !(entry.startsWith('sealed2.') || testnet && entry.startsWith('sealed1.'))) return null;
+    !entry.startsWith('sealed2.')) return null;
   try {
-    const [version, id, nonce, box, extra] = entry.split('.');
+    const [, id, nonce, box, extra] = entry.split('.');
     if (extra !== undefined || !id || !nonce || !box) return null;
     const key = readKey(browser.localStorage, keyPrefix + id);
     if (!key) return null;
     const message = nacl.secretbox.open(decode(box), decode(nonce), key);
     if (!message) return null;
     const parts = new TextDecoder().decode(message).split(':');
-    const [chain, card, code] = version === 'sealed1' ? ['11155111', ...parts] : parts;
-    return parts.length === (version === 'sealed1' ? 2 : 3) && chain === String(testnet ? 11155111 : 1) &&
+    const [chain, card, code] = parts;
+    return parts.length === 3 && chain === String(testnet ? 11155111 : 1) &&
       card === String(tokenId) && isTarotClaimCode(code) ? code : null;
   } catch { return null; }
 }

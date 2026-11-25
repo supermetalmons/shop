@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-11-25T12:40:41.523Z",
+  "contractAddress": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
+  "realLiveValidation": true,
+  "matchingArtworkPair": true,
+  "savedSepoliaScanPreserved": true,
+  "reloadRestoredAccess": true,
+  "oldPendingTransactionIsolated": true,
+  "mainnetStorageIsolated": true,
+  "codeScrubbedFromUrl": true,
+  "privateReferrers": 0,
+  "walletConnectedFromClaim": true,
+  "liveBackendPreparation": true,
+  "cancellationRetryEnabled": true,
+  "publicArtworkWithoutClaim": true,
+  "publicArtworkFitsViewport": true,
+  "baselPlaceholderVerified": true,
+  "walletTransactionsBroadcast": 0
+}

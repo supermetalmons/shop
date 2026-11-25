@@ -9,7 +9,7 @@ import { WalletModalContext } from '@solana/wallet-adapter-react-ui';
 import { useAppRoute } from '../src/hooks/useAppRoute.ts';
 import type { useSolanaAuth } from '../src/hooks/useSolanaAuth.ts';
 import { resolveAppRoute, type ResolvedAppRoute } from '../src/routes.ts';
-import { resolveTarotConfig } from '../shared/ethereum/tarot.ts';
+import { resolveTarotConfig, tarotReceiptTokenId } from '../shared/ethereum/tarot.ts';
 import { tarotApi, TarotApiError } from '../src/ethereum/tarotApi.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -73,7 +73,7 @@ function fixture(t: TestContext, setVisible: (visible: boolean) => void = () => 
 test('a scanned card reaches Claim when the browser denies local storage', async t => {
   mock.getter(window, 'localStorage', blockLocalStorage);
   const status = mock.method(tarotApi, 'status', async (request: Parameters<typeof tarotApi.status>[0]) => ({
-    config, tokenId: request.tokenId, receiptTokenId: request.tokenId + 777, claimed: false,
+    config, tokenId: request.tokenId, receiptTokenId: tarotReceiptTokenId(request.tokenId), claimed: false,
     observedBlock: 10, observedTimestamp: 1, blockHash: `0x${'b'.repeat(64)}`,
   }));
   const page = fixture(t);

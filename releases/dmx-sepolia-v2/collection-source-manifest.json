@@ -1,15 +1,32 @@
 {
-  "chainId": 11155111,
-  "contractAddress": "0x63fef7c4867c558b91fda48899580a89d9f8cde1",
-  "transactionHash": "0x5df93dd90f6e4b1d9a642affe1b87515495136bee8fa979423bdd0678b572742",
-  "match": "match",
-  "creationMatch": "match",
-  "runtimeMatch": "match",
   "compilerVersion": "0.8.38+commit.1835d247",
-  "metadataHash": "none",
-  "verifiedAt": "2026-11-22T16:53:15Z",
-  "checkedAt": "2026-11-22T16:53:53.101Z",
-  "sourceSha256": {
+  "settings": {
+    "remappings": [
+      "@openzeppelin/=node_modules/@openzeppelin/",
+      "erc721a/=node_modules/erc721a/"
+    ],
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "metadata": {
+      "bytecodeHash": "none"
+    },
+    "evmVersion": "prague",
+    "libraries": {},
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "metadata"
+        ]
+      }
+    }
+  },
+  "fullyQualifiedName": "src/TarotCards.sol:TarotCards",
+  "sources": {
     "node_modules/@openzeppelin/contracts/access/Ownable.sol": "38578bd71c0a909840e67202db527cc6b4e6b437e0f39f0c909da32c1e30cb81",
     "node_modules/@openzeppelin/contracts/access/Ownable2Step.sol": "c75345d7b9feef17ae29f2a800ca2f65f8021cf80436a41d6ec00f57f5180f36",
     "node_modules/@openzeppelin/contracts/interfaces/IERC5267.sol": "f89772d2d4fafcbef8b73bb10ee9a3373edec2eedb2f1b302320915b351dc3d1",
@@ -31,15 +48,17 @@
     "node_modules/@openzeppelin/contracts/utils/cryptography/EIP712.sol": "2845caaaf70757b6cce612ae4ffbec2c382cb3d1cb9765c98fa649c0f5f1c794",
     "node_modules/@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol": "538a0d7c4f0ec5a8562f58561890f7b49d14580674ecf58bc5f505b45c73df65",
     "node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol": "61a2b12c96857aaa35f48aeda67a4281637a42494c0b3795be0ae976aa7b3793",
+    "node_modules/@openzeppelin/contracts/utils/introspection/ERC165Checker.sol": "b42cd10397f404b8383363f646c21d59ff4decc7bca3de8c5b84773806605e14",
     "node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol": "9055c2994b37dea1a41b7b7926dcb510f05dbe2540b0aafc5fbee9558fffd0ca",
     "node_modules/@openzeppelin/contracts/utils/math/Math.sol": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
     "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
     "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
-    "src/TarotCards.sol": "183914219520c4b0036410f414c3358c1d0fb8f9d2cefc59fb262e36160a6dc6"
+    "src/IDMXRenderer.sol": "9545abddb8493fdf40668582857a0b01f9911f3005f1a932ed235882583094c4",
+    "src/TarotCards.sol": "073c18a501972a133719ed90cd4c6a36ba91c6550f43c99a39ec52af2fab9aa8"
   },
-  "creationBytecodeMatch": true,
-  "runtimeBytecodeMatch": true,
-  "frozenSourcesMatch": true,
-  "url": "https://repo.sourcify.dev/11155111/0x63fef7c4867c558b91fda48899580a89d9f8cde1",
-  "apiUrl": "https://sourcify.dev/server/v2/contract/11155111/0x63fef7c4867c558b91fda48899580a89d9f8cde1?fields=sources%2Ccompilation%2Cdeployment%2CcreationBytecode.onchainBytecode%2CcreationBytecode.recompiledBytecode%2CcreationBytecode.transformationValues%2CruntimeBytecode.onchainBytecode%2CruntimeBytecode.recompiledBytecode"
+  "artifactSha256": "eca7a13aeee8b70f325381913a79e36b4bcd304b476ccac92dd3ab6b57bc0f91",
+  "standardInputSha256": "479c2dfa44829c740cf5581b4d738cbef14e5bc7a7e8a6e0430315b211136be0",
+  "constructorArgs": "0x000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93000000000000000000000000d242982d1ca8b031336d9da7b532e65a80313ed70000000000000000000000004fd72d56cab36c926100ab54b73dc2f5df454810",
+  "runtimeBytes": 16322,
+  "runtimeKeccak256": "0xbc51b6affa0e339ca183fba47968822da76fe0dd5153f1a03ad4ddea6b17195d"
 }

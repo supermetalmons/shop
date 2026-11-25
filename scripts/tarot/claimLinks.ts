@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { TAROT_CHAIN_ID, TAROT_MAX_CARDS, tarotCodeHashInput } from '../../shared/ethereum/tarot.ts';
 import { normalizeEthereumAddress } from '../../shared/ethereum/protocol.ts';
@@ -7,7 +7,8 @@ import { normalizeEthereumAddress } from '../../shared/ethereum/protocol.ts';
 type ClaimLink = { tokenId: number; code: string; url: string };
 export type TarotClaimLinks = { version: 1; chainId: number; contractAddress: string; createdAtMs: number; links: ClaimLink[] };
 type Credential = { tokenId: number; codeHash: string };
-export const TAROT_CREDENTIAL_PIN_PATH = 'releases/tarot-sepolia-v1/credential-set.json';
+export type TarotCredentialDatabase = { query(sql: string): Record<string, unknown>[]; executeCommand(sql: string): unknown };
+export const TAROT_CREDENTIAL_PIN_PATH = 'releases/dmx-sepolia-v2/credential-set.json';
 
 export function tarotCredentials(manifest: TarotClaimLinks): Credential[] {
   if (manifest.version !== 1 || manifest.chainId !== TAROT_CHAIN_ID ||
@@ -57,6 +58,33 @@ function readPrivateManifest(path: string): TarotClaimLinks {
   return manifest;
 }
 
+export function writeTarotJsonOnce(filename: string, value: unknown, mode: 0o600 | 0o644 = 0o600): void {
+  const contents = JSON.stringify(value, null, 2) + '\n';
+  const stat = lstatSync(filename, { throwIfNoEntry: false });
+  if (stat) {
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== mode || readFileSync(filename, 'utf8') !== contents) {
+      throw new Error('Existing Tarot artifact conflicts with the frozen operation.');
+    }
+    return;
+  }
+  const temporary = filename + '.' + randomUUID() + '.tmp';
+  const descriptor = openSync(temporary, 'wx', mode);
+  try {
+    try { writeFileSync(descriptor, contents); fsyncSync(descriptor); }
+    finally { closeSync(descriptor); }
+    linkSync(temporary, filename);
+  } finally { unlinkSync(temporary); }
+  const parent = openSync(dirname(filename), 'r');
+  try { fsyncSync(parent); } finally { closeSync(parent); }
+}
+
+export function freezeTarotClaimLinks(directory: string, manifest: TarotClaimLinks, root: string): TarotClaimLinks {
+  tarotCredentials(manifest);
+  privateDirectory(directory, root);
+  writeTarotJsonOnce(resolve(directory, 'claim-links.private.json'), manifest);
+  return loadTarotClaimLinks(directory, root);
+}
+
 export function createTarotClaimLinks(directory: string, contract: string, root: string): TarotClaimLinks {
   const contractAddress = normalizeEthereumAddress(contract);
   if (!contractAddress || /^0x0{40}$/.test(contractAddress)) throw new Error('A nonzero Tarot deployment address is required.');
@@ -72,13 +100,7 @@ export function createTarotClaimLinks(directory: string, contract: string, root:
       const code = randomUUID();
       return { tokenId: index + 1, code, url: tarotLinkUrl(index + 1, code) };
     }) };
-  tarotCredentials(manifest);
-  const descriptor = openSync(filename, 'wx', 0o600);
-  try { writeFileSync(descriptor, JSON.stringify(manifest, null, 2) + '\n'); fsyncSync(descriptor); }
-  finally { closeSync(descriptor); }
-  const parent = openSync(dirname(filename), 'r');
-  try { fsyncSync(parent); } finally { closeSync(parent); }
-  return manifest;
+  return freezeTarotClaimLinks(directory, manifest, root);
 }
 
 export function loadTarotClaimLinks(directory: string, root: string): TarotClaimLinks {
@@ -88,7 +110,36 @@ export function loadTarotClaimLinks(directory: string, root: string): TarotClaim
 
 export function tarotCredentialSql(manifest: TarotClaimLinks): string {
   const rows = tarotCredentials(manifest);
-  return rows.map(({ tokenId, codeHash }) => `INSERT INTO tarot_claim_codes(chain_id,contract_address,token_id,code_hash,created_at_ms,revoked_at_ms) VALUES (${TAROT_CHAIN_ID},'${manifest.contractAddress}',${tokenId},'${codeHash}',${manifest.createdAtMs},NULL) ON CONFLICT(chain_id,contract_address,token_id) DO UPDATE SET code_hash=CASE WHEN tarot_claim_codes.code_hash=excluded.code_hash AND tarot_claim_codes.revoked_at_ms IS NULL THEN tarot_claim_codes.code_hash ELSE NULL END;`).join('\n');
+  return rows.map(({ tokenId, codeHash }) => `INSERT INTO tarot_claim_codes(chain_id,contract_address,token_id,code_hash,created_at_ms,revoked_at_ms) VALUES (${TAROT_CHAIN_ID},'${manifest.contractAddress}',${tokenId},'${codeHash}',${manifest.createdAtMs},NULL) ON CONFLICT(chain_id,contract_address,token_id) DO UPDATE SET code_hash=CASE WHEN tarot_claim_codes.code_hash=excluded.code_hash AND tarot_claim_codes.created_at_ms=excluded.created_at_ms AND tarot_claim_codes.revoked_at_ms IS NULL THEN tarot_claim_codes.code_hash ELSE NULL END;`).join('\n');
+}
+
+export function readTarotCredentials(manifest: TarotClaimLinks, database: TarotCredentialDatabase): Record<string, unknown>[] {
+  tarotCredentials(manifest);
+  return database.query(`SELECT chain_id,contract_address,token_id,code_hash,created_at_ms,revoked_at_ms FROM tarot_claim_codes
+    WHERE chain_id=${manifest.chainId} AND contract_address='${manifest.contractAddress}' ORDER BY token_id`);
+}
+
+export function assertTarotDeploymentActive(manifest: TarotClaimLinks, database: TarotCredentialDatabase): void {
+  tarotCredentials(manifest);
+  const retired = database.query(`SELECT chain_id,contract_address FROM dmx_retired_sepolia_deployments
+    WHERE chain_id=${manifest.chainId} AND contract_address='${manifest.contractAddress}'`);
+  if (retired.length) throw new Error('The Sepolia credential deployment is retired.');
+}
+
+export function provisionTarotCredentials(manifest: TarotClaimLinks, database: TarotCredentialDatabase, root: string): Record<string, unknown>[] {
+  assertExistingTarotCredentialPin(manifest, root);
+  assertTarotDeploymentActive(manifest, database);
+  const existing = readTarotCredentials(manifest, database);
+  verifyTarotCredentials(manifest, existing, false);
+  if (existing.length === TAROT_MAX_CARDS) return existing;
+  const statements = tarotCredentialSql(manifest).split('\n');
+  for (let offset = 0; offset < statements.length; offset += 50) {
+    database.executeCommand(statements.slice(offset, offset + 50).join('\n'));
+  }
+  assertTarotDeploymentActive(manifest, database);
+  const rows = readTarotCredentials(manifest, database);
+  verifyTarotCredentials(manifest, rows, true);
+  return rows;
 }
 
 export function verifyTarotCredentials(manifest: TarotClaimLinks, rows: Record<string, unknown>[], complete: boolean): void {
@@ -136,9 +187,5 @@ export function recordVerifiedTarotCredentials(manifest: TarotClaimLinks, rows: 
   }
   const pin = { ...tarotCredentialPin(manifest), verifiedAt: new Date().toISOString() };
   mkdirSync(dirname(filename), { recursive: true });
-  const descriptor = openSync(filename, 'wx', 0o644);
-  try { writeFileSync(descriptor, JSON.stringify(pin, null, 2) + '\n'); fsyncSync(descriptor); }
-  finally { closeSync(descriptor); }
-  const parent = openSync(dirname(filename), 'r');
-  try { fsyncSync(parent); } finally { closeSync(parent); }
+  writeTarotJsonOnce(filename, pin, 0o644);
 }
