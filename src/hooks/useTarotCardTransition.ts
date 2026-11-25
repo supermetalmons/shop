@@ -136,7 +136,7 @@ export function useTarotCardTransition(eligible: boolean, paused: boolean) {
       const remaining = 1 - index / 16;
       const cardScale = 1 + (startScale - 1) * remaining;
       return {
-        transform: `translate(${(start.left - end.left) * remaining}px, ${(start.top - end.top) * remaining}px) scale(${cardScale})`,
+        transform: `translate3d(${(start.left - end.left) * remaining}px, ${(start.top - end.top) * remaining}px, 0) scale(${cardScale})`,
         boxShadow: `0 0 0 ${1 / cardScale}px var(--nfc-card-ring-color)`,
       };
     });

@@ -94,9 +94,9 @@ test('early eligibility waits for artwork load, decode and paint before moving t
   assert.equal(image.dataset.layout, 'compact');
   assert.equal(controlled.animations.length, 1);
   assert.equal(controlled.animations[0].node, image);
-  assert.equal(controlled.animations[0].keyframes[0].transform, 'translate(110px, -40px) scale(2)');
+  assert.equal(controlled.animations[0].keyframes[0].transform, 'translate3d(110px, -40px, 0) scale(2)');
   assert.equal(controlled.animations[0].keyframes[0].boxShadow, '0 0 0 0.5px var(--nfc-card-ring-color)');
-  assert.equal(controlled.animations[0].keyframes.at(-1)?.transform, 'translate(0px, 0px) scale(1)');
+  assert.equal(controlled.animations[0].keyframes.at(-1)?.transform, 'translate3d(0px, 0px, 0) scale(1)');
   assert.equal(controlled.animations[0].keyframes.at(-1)?.boxShadow, '0 0 0 1px var(--nfc-card-ring-color)');
   assert.equal((view.getByRole('button') as HTMLButtonElement).disabled, true);
   await act(async () => controlled.animations[0].finished.resolve());

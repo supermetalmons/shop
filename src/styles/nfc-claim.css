@@ -125,6 +125,7 @@
   border-radius: var(--interactive-card-radius);
   box-shadow: 0 0 0 1px var(--nfc-card-ring-color);
   object-fit: contain;
+  transform: translate3d(0, 0, 0);
   transform-origin: top left;
 }
 
