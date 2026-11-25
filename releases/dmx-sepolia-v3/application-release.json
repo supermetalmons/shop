@@ -1,0 +1,34 @@
+{
+  "checkedAt": "2026-11-25T20:14:47.220Z",
+  "chainId": 11155111,
+  "contractAddress": "0xc465f98f824a9d4017d09ef219f3b546794e49ef",
+  "renderer": "0x1de4a011811b378f6a8eef079eac5014e9b5583e",
+  "quoteSigner": "0x0ae152fc5d64bf76d3d00bfd811be6f6caff42a9",
+  "api": {
+    "worker": "mons-shop-api",
+    "deploymentId": "f2e1314b-fa54-4963-84df-dab5a3443b8e",
+    "versionId": "a3be0f14-cc9b-42db-8f1a-bf5f7ac48732",
+    "percentage": 100,
+    "createdOn": "2026-11-25T19:59:45.649146Z",
+    "configurationVerified": true
+  },
+  "frontend": {
+    "worker": "mons-shop",
+    "deploymentId": "681c8428-c6e3-4bb1-91b1-1af800194d74",
+    "versionId": "376b9e17-dce6-47d9-8b23-3385da918dda",
+    "percentage": 100,
+    "createdOn": "2026-11-25T19:49:57.650844Z",
+    "configurationVerified": true
+  },
+  "mainnetUnchangedDisabled": true,
+  "readbackEvidence": {
+    "api": {
+      "deploymentsSha256": "cb9ac36694dae7196e28f8ec5fa25e7ea994103a2d01cd224c9cd8834f6ee4e4",
+      "versionSha256": "7a134dddd993f87f307c0f69f196aaef6e43638e53c0ae2d8b1e090410e926b7"
+    },
+    "frontend": {
+      "deploymentsSha256": "5f65c4c9595c520ad701f90c08fd93615c9834b34f740b3470b85598ad0b8eed",
+      "versionSha256": "5238079645d2e67ebaaf764c7325730d12a5af1cb8232e79cb05813fbd8a35ed"
+    }
+  }
+}

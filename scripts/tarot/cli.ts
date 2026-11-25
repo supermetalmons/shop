@@ -47,7 +47,7 @@ export async function runTarotOperations(argv: string[]) {
     loadD1Credentials(root);
     return rebindTarotCredentials({ root, sourceDirectory: resolve(root, values['source-directory']!),
       sourcePin: resolve(root, values['source-pin']!), deploymentDirectory: resolve(root, values['deployment-directory']!),
-      directory: resolve(root, values.directory || '.operations/dmx-sepolia-v2') }, createD1MaintenanceRunner('ops'));
+      directory: resolve(root, values.directory || '.operations/dmx-sepolia-v3') }, createD1MaintenanceRunner('ops'));
   }
   if (command.startsWith('mainnet-')) {
     const binding = command === 'mainnet-bind'
@@ -84,7 +84,7 @@ export async function runTarotOperations(argv: string[]) {
       return { operation: command, ...verified, ...files };
     });
   }
-  const directory = resolve(root, values.directory || '.operations/dmx-sepolia-v2');
+  const directory = resolve(root, values.directory || '.operations/dmx-sepolia-v3');
   privateDirectory(directory, root);
   return withMetadataLock(resolve(directory, 'claim-links.lock'), async () => {
     const manifest = command === 'links' ? createTarotClaimLinks(directory, values.contract || '', root) : loadTarotClaimLinks(directory, root);

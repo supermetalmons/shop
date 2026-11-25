@@ -1,0 +1,38 @@
+{
+  "checkedAt": "2026-11-25T20:14:13.188Z",
+  "mode": "active",
+  "chainId": 11155111,
+  "contractAddress": "0xc465f98f824a9d4017d09ef219f3b546794e49ef",
+  "renderer": "0x1de4a011811b378f6a8eef079eac5014e9b5583e",
+  "quoteSigner": "0x0ae152fc5d64bf76d3d00bfd811be6f6caff42a9",
+  "apiEnabled": true,
+  "unclaimedPairs": 777,
+  "observedBlock": 12211782,
+  "blockHash": "0xbe296e8efa7f48ccd77f9f41dd7307842a33521f80d5867f078a8ff9ce7a677a",
+  "mainnetDisabled": true,
+  "privateNfcHeaders": true,
+  "inlineMetadataVerified": true,
+  "redemptionsPaused": true,
+  "privateManifestCredentials": 777,
+  "boundaryCredentialsAccepted": 2,
+  "credentialPinVerified": true,
+  "claimTransactionsBroadcast": 0,
+  "signedSimulations": [
+    {
+      "valid": true,
+      "estimatedGas": 482010
+    },
+    {
+      "valid": true,
+      "estimatedGas": 482472
+    },
+    {
+      "valid": true,
+      "estimatedGas": 482035
+    },
+    {
+      "valid": true,
+      "estimatedGas": 482496
+    }
+  ]
+}

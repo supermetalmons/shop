@@ -8,7 +8,7 @@ type ClaimLink = { tokenId: number; code: string; url: string };
 export type TarotClaimLinks = { version: 1; chainId: number; contractAddress: string; createdAtMs: number; links: ClaimLink[] };
 type Credential = { tokenId: number; codeHash: string };
 export type TarotCredentialDatabase = { query(sql: string): Record<string, unknown>[]; executeCommand(sql: string): unknown };
-export const TAROT_CREDENTIAL_PIN_PATH = 'releases/dmx-sepolia-v2/credential-set.json';
+export const TAROT_CREDENTIAL_PIN_PATH = 'releases/dmx-sepolia-v3/credential-set.json';
 
 export function tarotCredentials(manifest: TarotClaimLinks): Credential[] {
   if (manifest.version !== 1 || manifest.chainId !== TAROT_CHAIN_ID ||

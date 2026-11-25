@@ -1,8 +1,10 @@
 # divination machina x (DMX)
 
-The [Sepolia v2 release](../../releases/dmx-sepolia-v2/README.md) is live. All 777
-existing NFC codes and URLs were retained; the superseded deployment is retired
-and its credentials, static metadata, and obsolete local artifacts were removed.
+The [Sepolia v3 release](../../releases/dmx-sepolia-v3/README.md) records the
+rollout of a fresh renderer, the gas-optimized collection, and a new authorization
+signer. The v2-to-v3 replacement retains all 777 existing NFC codes and URLs and
+includes retirement of the superseded deployment. Release evidence records
+which deployment, acceptance, and cleanup steps have completed.
 
 DMX has 777 initial claimable card/NFC-receipt pairs, recipient minting, signed
 redemption into future generations, configurable fee payouts, and a replaceable
@@ -273,19 +275,22 @@ digests of the canonical input returned by `tarotCodeHashInput`, plus deployment
 card ID, creation time, and optional revocation time. Claimed cards retain their
 credentials because NFC links remain usable as artwork views.
 
-For the replacement, retain the existing codes and URLs through an explicit
-rebind after the new collection has been deployed and verified:
+For the v2-to-v3 replacement, retain the existing codes and URLs through an
+explicit rebind after the fresh renderer and collection have been deployed and
+verified. Set `TAROT_CREDENTIAL_PIN_PATH` to the v3 pin before rebinding; the old
+source pin must remain distinct from the new target pin:
 
 ```sh
-npm run tarot:ops -- rebind --source-directory .operations/tarot-sepolia-v1 --source-pin releases/tarot-sepolia-v1/credential-set.json --deployment-directory <verified-v2-collection-release> --directory .operations/dmx-sepolia-v2
-npm run tarot:ops -- verify-codes --directory .operations/dmx-sepolia-v2
+npm run tarot:ops -- rebind --source-directory .operations/dmx-sepolia-v2 --source-pin releases/dmx-sepolia-v2/credential-set.json --deployment-directory <verified-v3-collection-release> --directory .operations/dmx-sepolia-v3
+npm run tarot:ops -- verify-codes --directory .operations/dmx-sepolia-v3
 ```
 
 The source-directory, source-pin, and deployment-directory flags are required
 for `rebind` and are rejected by other commands. The target directory defaults
-to `.operations/dmx-sepolia-v2/`. Rebinding validates the old private manifest,
+to `.operations/dmx-sepolia-v3/`. Rebinding validates the old private manifest,
 its public pin, and all 777 existing database rows, then checks the verified
-version 2 collection release. It preserves every token-ID/code/URL triple while
+collection release with `releaseVersion: 2`. The v3 deployment name does not
+change this frozen release format. It preserves every token-ID/code/URL triple while
 binding the hashes to the new contract. It provisions and reads back all 777
 replacement rows before creating the new public pin. Matching retries resume
 the same target; changed sources, deployment evidence, or target contents fail
@@ -294,7 +299,7 @@ acceptance, then remove them during retirement cleanup. Do not regenerate codes
 for this rollout.
 
 The default operator manifest is
-`.operations/dmx-sepolia-v2/claim-links.private.json`, with directory mode 0700
+`.operations/dmx-sepolia-v3/claim-links.private.json`, with directory mode 0700
 and file mode 0600. Never publish it, paste its contents into logs, or add it to
 Git. The original physical tags keep the same URLs; no browser-storage migration
 or tag reprogramming is needed. Credential commands lock their private directory.
@@ -302,7 +307,7 @@ Provisioning stores hashes only, rejects retired deployments, and verifies all
 777 rows. No public endpoint lists codes or imports credentials.
 
 Successful provisioning readback and `verify-codes` record the public aggregate
-fingerprint in `releases/dmx-sepolia-v2/credential-set.json`. All 777 database rows
+fingerprint in `releases/dmx-sepolia-v3/credential-set.json`. All 777 database rows
 must match first. The fingerprint binds the deployment and ordered token-ID/code-hash
 pairs; it contains no codes, URLs, or individual code hashes. Matching repeats
 preserve the file. A conflicting existing fingerprint stops verification or
@@ -363,8 +368,9 @@ removed. `npm run tarot:ops -- verify-media` checks cards, heroes, and receipts
 for IDs 1–777 plus layers 1–10 under `https://wip.lil.org/dmx/`: 2,341 WEBPs
 without publishing metadata. The NFC page uses `heroes/<cardId>.webp` and
 `layers/<layerId>.webp`; collection metadata uses `cards/1.webp`.
-Preserve those shared images during retirement; only the superseded deployment's
-static JSON prefix is removed.
+Preserve those shared images during retirement. The v2-to-v3 replacement has no
+static JSON prefix to delete: v2 already uses renderer-generated metadata, and
+the legacy v1 static metadata cleanup is complete.
 
 Use an independent encrypted Tarot authorization keystore, with its password in
 Keychain, and provision `ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET` through Wrangler's
@@ -384,11 +390,13 @@ evidence and append the renderer deployment and activation records. The
 collection address, credentials, signer, and API deployment block stay unchanged;
 this operation does not require collection replacement or retirement.
 
-For a collection replacement, prepare the collection against the verified
-renderer release. Collection preparation freezes the renderer evidence and
-verifies its canonical deployment
-and runtime bytecode; an arbitrary renderer address is not accepted as a
-substitute. Use these steps for the replacement:
+For the v3 replacement, deploy a fresh renderer and a fresh collection with a
+new, independent Sepolia authorization signer. Do not reuse either v2 renderer
+deployment. Prepare the collection against the newly verified renderer release.
+Both manifests keep `releaseVersion: 2`. Collection preparation freezes the
+renderer evidence and verifies its canonical deployment and runtime bytecode;
+an arbitrary renderer address is not accepted as a substitute. Use these steps
+for the replacement:
 
 ```sh
 npm --prefix onchain/ethereum run tarot:deploy -- prepare --contract DMXWebpRenderer --directory <private-renderer-release>
@@ -495,33 +503,38 @@ do not consume one of the 777 initial pairs during release acceptance.
 
 ## Sepolia cutover and retirement
 
-Complete the replacement and cleanup in one rollout:
+Complete the v2-to-v3 replacement and cleanup in one rollout:
 
-1. Apply OPS migration `0017_dmx_sepolia_retirement.sql` with
-   `npm run db:migrate:ops` and verify OPS integrity with
+1. Verify OPS migration `0017_dmx_sepolia_retirement.sql` and API retirement
+   support are deployed; apply the migration with `npm run db:migrate:ops` if
+   needed. Verify OPS integrity with
    `npm run check:ops-d1`. Include API retirement checks in the disabled
    replacement deployment below, before enabling claims. This rollout changes
    OPS, not Commerce schemas or rows, so it uses the routine bounded Commerce
    gate.
-2. Deploy and verify the version 2 renderer and collection, then run the explicit
-   `rebind` above. Verify the matching signer, all 777 replacement credentials,
-   source verification, and all 777 unclaimed onchain flags without consuming an
-   initial pair.
+2. Deploy and verify a fresh renderer, then a fresh gas-optimized collection
+   using that renderer and a new dedicated signer. Keep the frozen release
+   format at `releaseVersion: 2`. Update the active credential pin and private
+   directory defaults to v3, then run the explicit `rebind` above. Verify the
+   matching signer, all 777 replacement credentials, exact source verification
+   for both contracts, and all 777 unclaimed onchain flags without consuming an
+   initial pair. Preserve the source v2 manifest and pin until acceptance.
 3. Configure `ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS`,
    `ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK`, and the matching signer secret for
    the verified replacement, with `ETHEREUM_TAROT_SEPOLIA_ENABLED=false`.
    Deploy this retirement-aware API configuration with `npm run deploy:api` to
    stop issuing old-contract authorizations while replacement claims remain
    disabled.
-4. On the superseded contract, set `quoteSigner` to
+4. On the superseded v2 contract, call `setMintingPaused(true)` and
+   `setRedemptionsPaused(true)`, then set `quoteSigner` to
    `0x000000000000000000000000000000000000dEaD`. Require three canonical
-   confirmations and verify the signer readback. The old contract has no
-   mint-pause operation. Signer rotation revokes its outstanding claim
-   authorizations; disabling the API flag alone would leave signatures valid
-   for up to ten minutes. Journal this operation privately under
-   `.operations/dmx-sepolia-v2/` and resume the same operation if interrupted.
+   confirmations and verify both pause flags and the signer readback. Pausing
+   stops old issuance and redemptions; signer rotation revokes outstanding
+   authorizations. Disabling the API flag alone would leave signatures valid
+   for up to ten minutes. Journal these operations privately under
+   `.operations/dmx-sepolia-v3/` and resume the same operations if interrupted.
 5. Set the bundle scanner to the replacement private manifest and
-   `releases/dmx-sepolia-v2/credential-set.json`, then deploy the storefront with
+   `releases/dmx-sepolia-v3/credential-set.json`, then deploy the storefront with
    `npm run deploy`. Enable replacement claims in the API and deploy it again.
    Check live NFC headers, Basel behavior, saved-code recovery, matching
    signer/configuration, all 777 unclaimed flags, and mainnet prelaunch behavior.
@@ -529,25 +542,27 @@ Complete the replacement and cleanup in one rollout:
 6. After live acceptance, insert the immutable old-to-new marker in
    `dmx_retired_sepolia_deployments`. The OPS triggers fence old-scope credential
    inserts and updates, and the API rejects the retired scope. Leave that marker
-   permanently; changing configuration back is not a rollback. Stop superseded
-   credential tooling before removing its files.
-7. Delete only the superseded contract's `tarot_claim_codes` rows and its static
-   JSON metadata under `tarot-sepolia/v1/` in `cdn-mons-shop`, then invalidate
-   cached CDN responses for those deleted objects. Remove the old private
-   credential/release directories, obsolete caches and backups, and
-   `releases/tarot-sepolia-v1/` after preserving a minimal aggregate cleanup
-   record with the new release. Keep Git history, the retirement marker, the
-   new signed release evidence and private manifest, all mainnet credentials,
-   shared WEBPs, profiles, pre111k, 111K, and unrelated drops.
-8. Verify old credential rows, obsolete artifacts, and deleted public metadata
-   are absent, the old signer remains the burn address, and the replacement
+   permanently; changing configuration back is not a rollback. Keep the existing
+   v1-to-v2 retirement marker unchanged and append the v2-to-v3 marker. Stop
+   superseded credential tooling before removing its files.
+7. Delete only the superseded v2 contract's `tarot_claim_codes` rows. Remove its
+   private credential/release directories, obsolete caches and backups,
+   superseded signer material, and `releases/dmx-sepolia-v2/` after preserving a
+   minimal aggregate cleanup record with the new release. Remove obsolete
+   renderer-update release artifacts once their required provenance is retained
+   in the cleanup record. There is no static metadata deletion or CDN purge in
+   this replacement. Keep Git history, every retirement marker, the new signed
+   renderer and collection evidence, the v3 private manifest and signer, all
+   mainnet credentials, shared WEBPs, profiles, pre111k, 111K, and unrelated drops.
+8. Verify old credential rows and obsolete artifacts are absent, both old pause
+   flags remain set, the old signer remains the burn address, and the replacement
    stays healthy. Repeat absence and health checks after a bounded observation
    period. Tarot has no scheduler writer; do not treat the shared Worker
    schedule as a Tarot cleanup job. Record completion only after the observation
    confirms retired data has not reappeared.
 
 Keep replacement evidence in the
-[DMX Sepolia v2 release](../../releases/dmx-sepolia-v2/README.md). Publish only
+[DMX Sepolia v3 release](../../releases/dmx-sepolia-v3/README.md). Publish only
 aggregate acceptance and cleanup results, verified source hashes, and public
 deployment identity. These steps are a rollout procedure; the release evidence
 records which steps have actually completed.

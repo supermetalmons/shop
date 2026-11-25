@@ -1,32 +1,15 @@
 {
+  "chainId": 11155111,
+  "contractAddress": "0x1de4a011811b378f6a8eef079eac5014e9b5583e",
+  "transactionHash": "0x2a24e7acd8b42149f179cac83032560857d6285410ff1bf38b55a8e31126774d",
+  "match": "match",
+  "creationMatch": "match",
+  "runtimeMatch": "match",
   "compilerVersion": "0.8.38+commit.1835d247",
-  "settings": {
-    "remappings": [
-      "@openzeppelin/=node_modules/@openzeppelin/",
-      "erc721a/=node_modules/erc721a/"
-    ],
-    "optimizer": {
-      "enabled": true,
-      "runs": 200
-    },
-    "metadata": {
-      "bytecodeHash": "none"
-    },
-    "evmVersion": "prague",
-    "libraries": {},
-    "outputSelection": {
-      "*": {
-        "*": [
-          "abi",
-          "evm.bytecode",
-          "evm.deployedBytecode",
-          "metadata"
-        ]
-      }
-    }
-  },
-  "fullyQualifiedName": "src/DMXWebpRenderer.sol:DMXWebpRenderer",
-  "sources": {
+  "metadataHash": "none",
+  "verifiedAt": "2026-11-25T19:25:58Z",
+  "checkedAt": "2026-11-25T19:28:55.173Z",
+  "sourceSha256": {
     "node_modules/@openzeppelin/contracts/utils/Base64.sol": "1c143572893f50f04fe8e507d89f9997cd3242102ba4200c8de0803ecbaf8cec",
     "node_modules/@openzeppelin/contracts/utils/Bytes.sol": "3ce9120a27934c75a074cb785d3a88868069ef6529dbe4dc6b845af0836f3c70",
     "node_modules/@openzeppelin/contracts/utils/Panic.sol": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
@@ -36,12 +19,12 @@
     "node_modules/@openzeppelin/contracts/utils/math/Math.sol": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
     "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
     "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
-    "src/DMXWebpRenderer.sol": "b95f90326d5e3b0b03f35e6533ff40bf671d58df5aedd688944d019fcddbb9c0",
+    "src/DMXWebpRenderer.sol": "2515004005bdb16d1a60c354082f4143db497eada9ff9cf74a19b1112ff2cd4f",
     "src/IDMXRenderer.sol": "9545abddb8493fdf40668582857a0b01f9911f3005f1a932ed235882583094c4"
   },
-  "artifactSha256": "2f01846f7d837833486579902a65a9751d5e53df61638f634447a6616096a553",
-  "standardInputSha256": "5710bed29b3e107793b27cb3ae870b72d99b71ff0059274a03cec2e9bf5913ae",
-  "constructorArgs": "0x",
-  "runtimeBytes": 3560,
-  "runtimeKeccak256": "0x742a39936b9671c1715e4c70b117290184b923412490e9c31bb208bed7319676"
+  "creationBytecodeMatch": true,
+  "runtimeBytecodeMatch": true,
+  "frozenSourcesMatch": true,
+  "url": "https://repo.sourcify.dev/11155111/0x1de4a011811b378f6a8eef079eac5014e9b5583e",
+  "apiUrl": "https://sourcify.dev/server/v2/contract/11155111/0x1de4a011811b378f6a8eef079eac5014e9b5583e?fields=sources%2Ccompilation%2Cdeployment%2CcreationBytecode.onchainBytecode%2CcreationBytecode.recompiledBytecode%2CcreationBytecode.transformationValues%2CruntimeBytecode.onchainBytecode%2CruntimeBytecode.recompiledBytecode"
 }

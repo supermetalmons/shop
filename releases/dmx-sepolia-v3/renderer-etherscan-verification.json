@@ -1,0 +1,23 @@
+{
+  "chainId": 11155111,
+  "contractName": "DMXWebpRenderer",
+  "contractAddress": "0x1de4a011811b378f6a8eef079eac5014e9b5583e",
+  "transactionHash": "0x2a24e7acd8b42149f179cac83032560857d6285410ff1bf38b55a8e31126774d",
+  "artifactSha256": "c49507d9a864b88be71ba8aaebc193e16620e69de85c6c736ede16d924062b00",
+  "standardInputSha256": "95e17eb30d40be06fc111e5ee50f754186ec1891c74a7eaedea5ac9f94d2c5da",
+  "checkedAt": "2026-11-25T19:29:28.073Z",
+  "url": "https://sepolia.etherscan.io/address/0x1de4a011811b378f6a8eef079eac5014e9b5583e#code",
+  "compilerVersion": "0.8.38+commit.1835d247",
+  "optimizationRuns": 200,
+  "evmVersion": "prague",
+  "metadataBytecodeHash": "none",
+  "constructorArgsMatch": true,
+  "frozenSourcesMatch": true,
+  "compilerSettingsMatch": true,
+  "abiMatches": true,
+  "sourceCount": 11,
+  "match": "similar_match",
+  "matchedAddress": "0x7cf83245cea3defd3b1b0249951618dbfadf281f",
+  "independentlyBytecodeVerifiedBySourcify": true,
+  "verified": true
+}

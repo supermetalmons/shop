@@ -1,0 +1,69 @@
+{
+  "checkedAt": "2026-11-25T20:14:47.220Z",
+  "rollout": {
+    "disabledApi": {
+      "unitTests": 3826,
+      "runtimeTests": 96,
+      "passed": true
+    },
+    "enabledApi": {
+      "unitTests": 3826,
+      "runtimeTests": 96,
+      "passed": true
+    },
+    "frontendTests": 5780,
+    "additionalOperatorRecordedChecks": {
+      "focusedTests": 29,
+      "helperTests": 35,
+      "workerTests": 5,
+      "clientTests": 29,
+      "commonTests": 1,
+      "verified": true
+    },
+    "localSepoliaE2E": true,
+    "localMainnetE2E": true
+  },
+  "reusedSourceBaseline": {
+    "commit": "a120a04d45f4dcd2a06d2a85b3273b6545998aa3",
+    "contractTests": 93,
+    "gasBenchmarks": 9,
+    "deploymentTests": 88,
+    "passed": true,
+    "rerunThisRollout": false
+  },
+  "etherscan": {
+    "collection": {
+      "match": "exact_match",
+      "frozenSourcesMatch": true,
+      "compilerSettingsMatch": true,
+      "abiMatches": true,
+      "constructorArgsMatch": true
+    },
+    "renderer": {
+      "match": "similar_match",
+      "matchedAddress": "0x7cf83245cea3defd3b1b0249951618dbfadf281f",
+      "frozenSourcesMatch": true,
+      "compilerSettingsMatch": true,
+      "abiMatches": true,
+      "constructorArgsMatch": true
+    }
+  },
+  "sourcify": {
+    "collection": {
+      "match": "match",
+      "creationMatch": "match",
+      "runtimeMatch": "match",
+      "creationBytecodeMatch": true,
+      "runtimeBytecodeMatch": true,
+      "frozenSourcesMatch": true
+    },
+    "renderer": {
+      "match": "match",
+      "creationMatch": "match",
+      "runtimeMatch": "match",
+      "creationBytecodeMatch": true,
+      "runtimeBytecodeMatch": true,
+      "frozenSourcesMatch": true
+    }
+  }
+}

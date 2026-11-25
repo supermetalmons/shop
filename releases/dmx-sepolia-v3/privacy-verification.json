@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-11-25T20:14:47.220Z",
+  "verified": true,
+  "publicArtifacts": 19,
+  "sepoliaCredentialsChecked": 777,
+  "mainnetCredentialsChecked": 777,
+  "plaintextCredentialMatches": 0,
+  "privatePathsPublished": 0,
+  "rawLogsPublished": 0,
+  "rawBrowserArtifactsPublished": 0,
+  "claimSignaturesPublished": 0,
+  "compressedArtifactsPublished": 0,
+  "completeCandidateScannedBeforeWrite": true,
+  "completePublicDirectoryScannedAfterWrite": true
+}

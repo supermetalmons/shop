@@ -157,10 +157,10 @@ test('media verification checks all DMX cards, heroes, receipts, and layers with
 function rebindFixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'dmx-rebind-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const sourceDirectory = join(root, '.operations', 'source');
-  const directory = join(root, '.operations', 'target');
+  const sourceDirectory = join(root, '.operations', 'dmx-sepolia-v2');
+  const directory = join(root, '.operations', 'dmx-sepolia-v3');
   const deploymentDirectory = join(root, '.operations', 'deployment');
-  const sourcePin = join(root, 'releases', 'source', 'credential-set.json');
+  const sourcePin = join(root, 'releases', 'dmx-sepolia-v2', 'credential-set.json');
   const source = createTarotClaimLinks(sourceDirectory, contract, root);
   mkdirSync(dirname(sourcePin), { recursive: true });
   writeFileSync(sourcePin, json({ ...tarotCredentialPin(source), verifiedAt: new Date().toISOString() }));
@@ -355,5 +355,5 @@ test('the CLI rejects removed publisher commands and requires explicit rebind ev
   }
   await assert.rejects(runTarotOperations(['links', '--source-pin', 'unused']), /only allowed for rebind/);
   await assert.rejects(runTarotOperations(['verify-media', '--directory', 'unused']), /does not accept/);
-  assert.equal(TAROT_CREDENTIAL_PIN_PATH, 'releases/dmx-sepolia-v2/credential-set.json');
+  assert.equal(TAROT_CREDENTIAL_PIN_PATH, 'releases/dmx-sepolia-v3/credential-set.json');
 });

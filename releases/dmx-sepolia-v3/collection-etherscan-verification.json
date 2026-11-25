@@ -1,0 +1,21 @@
+{
+  "chainId": 11155111,
+  "contractName": "TarotCards",
+  "contractAddress": "0xc465f98f824a9d4017d09ef219f3b546794e49ef",
+  "transactionHash": "0x8b8cf61138d5c72b20fcd0e2f21dba8780f73a502645570c0c86b7ce61c2cc64",
+  "artifactSha256": "e4d77e69953e097577c73d7b017163316f0610fc25c84e251d6aa22f1b68a684",
+  "standardInputSha256": "d315c02c113e47c22a37f2945d1281c5c11f4a51ff04a3aee9b4d95117472dce",
+  "checkedAt": "2026-11-25T19:27:27.175Z",
+  "url": "https://sepolia.etherscan.io/address/0xc465f98f824a9d4017d09ef219f3b546794e49ef#code",
+  "compilerVersion": "0.8.38+commit.1835d247",
+  "optimizationRuns": 200,
+  "evmVersion": "prague",
+  "metadataBytecodeHash": "none",
+  "constructorArgsMatch": true,
+  "frozenSourcesMatch": true,
+  "compilerSettingsMatch": true,
+  "abiMatches": true,
+  "sourceCount": 29,
+  "match": "exact_match",
+  "verified": true
+}

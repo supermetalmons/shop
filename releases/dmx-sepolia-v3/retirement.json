@@ -1,0 +1,80 @@
+{
+  "completedAt": "2026-11-25T20:14:47.220Z",
+  "chainId": 11155111,
+  "oldContract": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
+  "replacementContract": "0xc465f98f824a9d4017d09ef219f3b546794e49ef",
+  "oldState": {
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "quoteSigner": "0x000000000000000000000000000000000000dead",
+    "mintingPaused": true,
+    "redemptionsPaused": true,
+    "blockNumber": 12211646,
+    "blockHash": "0x6c09609ab6b7dbbbff4ac6b7d4a2beed920133825d2e45d83c1d87bfb757d57b",
+    "confirmations": 3
+  },
+  "actions": {
+    "minting": {
+      "verified": true,
+      "action": "minting",
+      "skipped": false,
+      "transactionHash": "0x0133dc51cd65510b33c76be1fbfae75a90eed12bb9dcf2536434236db4d140eb",
+      "blockNumber": 12211633,
+      "blockHash": "0x10722f02581f27ec1d09e4a75e76d2aab765f956b4066859f019e703f365342e",
+      "confirmations": 7,
+      "checkedAt": "2026-11-25T19:44:16.225Z"
+    },
+    "redemptions": {
+      "verified": true,
+      "action": "redemptions",
+      "skipped": true,
+      "blockNumber": 12211637,
+      "blockHash": "0xf3a518384a912651c826d75780d94c5efbdd2bf38eb2d975fc1cf5d24a88ea5c",
+      "confirmations": 3,
+      "checkedAt": "2026-11-25T19:44:23.155Z"
+    },
+    "signer": {
+      "verified": true,
+      "action": "signer",
+      "skipped": false,
+      "transactionHash": "0xc136a0a6f7b0784a4d9df5898983c38e795ccd4a63612d4185c5f46ccbcf4170",
+      "blockNumber": 12211644,
+      "blockHash": "0x08b5f0767802bc7962738efcd2bcb0cee457b9b1c601e21c7d760521cc66886b",
+      "confirmations": 4,
+      "checkedAt": "2026-11-25T19:46:00.223Z"
+    }
+  },
+  "remote": {
+    "remoteCleanupVerified": true,
+    "retirementMarkerVerified": true,
+    "oldCredentialRowsDeleted": 777,
+    "oldCredentialRowsRemaining": 0,
+    "replacementCredentialRows": 777,
+    "sameCredentialTriples": 777,
+    "mainnetTablesUnchanged": true,
+    "priorRetirementMarkersUnchanged": true,
+    "storageObjectsDeleted": 0,
+    "sharedMediaPreserved": true,
+    "firstVerifiedAt": "2026-11-25T20:02:53.021Z",
+    "checkedAt": "2026-11-25T20:13:46.545Z",
+    "observationMs": 653524,
+    "observationComplete": true
+  },
+  "local": {
+    "files": 1758,
+    "directories": 1020,
+    "symlinks": 19,
+    "bytes": 60119046,
+    "remainingEntries": 0,
+    "localCleanupVerified": true,
+    "oldKeychainAbsent": true,
+    "newKeychainPreserved": true,
+    "replacementBundleUnchanged": true,
+    "adminKeystoreUnchanged": true,
+    "mainnetPrivateFilesUnchanged": true,
+    "priorRetirementPreserved": true,
+    "firstVerifiedAt": "2026-11-25T20:08:06.460Z",
+    "checkedAt": "2026-11-25T20:13:57.563Z",
+    "observationMs": 351103,
+    "observationComplete": true
+  }
+}
