@@ -13,19 +13,20 @@ const json = value => JSON.stringify(value, null, 2) + '\n';
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 let invocation = 0;
 
-function fixture(t, chainId = 11155111) {
+function fixture(t, chainId = 11155111, contractName = 'TarotCards') {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tarot-sourcify-test-'));
-  const input = { sources: { 'src/TarotCards.sol': { content: 'pragma solidity 0.8.38; contract TarotCards {}' } },
+  const input = { sources: { ['src/' + contractName + '.sol']: { content: 'pragma solidity 0.8.38; contract ' + contractName + ' {}' } },
     settings: { metadata: { bytecodeHash: 'none' } } };
   const artifact = { metadata: { compiler: { version: compilerVersion } }, bytecode: { object: '0x60016002' },
     deployedBytecode: { object: '0x60016003', immutableReferences: {} } };
   const write = (name, value) => fs.writeFileSync(path.join(directory, name), json(value));
-  write('manifest.json', { chainId, contractAddress: address, standardInputSha256: sha256(json(input)), artifactSha256: sha256(json(artifact)),
-    creationCode: artifact.bytecode.object + '0001', constructorArgs: '0x0001' });
+  const constructorArgs = contractName === 'DMXWebpRenderer' ? '0x' : '0x0001';
+  write('manifest.json', { contractName, chainId, contractAddress: address, standardInputSha256: sha256(json(input)), artifactSha256: sha256(json(artifact)),
+    creationCode: artifact.bytecode.object + constructorArgs.slice(2), constructorArgs });
   write('deployment.json', { chainId, contractAddress: address, transactionHash, confirmations: 3,
     runtimeBytes: 4, runtimeKeccak256: '0x' + 'b'.repeat(64) });
-  write('TarotCards.standard-input.json', input);
-  write('TarotCards.artifact.json', artifact);
+  write(contractName + '.standard-input.json', input);
+  write(contractName + '.artifact.json', artifact);
   const output = [];
   t.mock.method(console, 'log', value => output.push(JSON.parse(value)));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -181,3 +182,75 @@ for (const chainId of [1, 10, '11155111', undefined]) {
     assert.equal(fetchMock.mock.callCount(), 0);
   });
 }
+
+
+test('renderer source verification submits and verifies the renderer target independently', async t => {
+  const f = fixture(t, 11155111, 'DMXWebpRenderer');
+  const input = f.read('DMXWebpRenderer.standard-input.json');
+  const artifact = f.read('DMXWebpRenderer.artifact.json');
+  const manifest = f.read('manifest.json');
+  const published = { address, chainId: '11155111', match: 'match', creationMatch: 'match', runtimeMatch: 'match',
+    deployment: { transactionHash }, compilation: { compilerVersion, fullyQualifiedName: 'src/DMXWebpRenderer.sol:DMXWebpRenderer' },
+    sources: input.sources, verifiedAt: '2026-11-24T10:00:00.000Z',
+    creationBytecode: { onchainBytecode: manifest.creationCode, recompiledBytecode: artifact.bytecode.object,
+      transformationValues: {} },
+    runtimeBytecode: { onchainBytecode: artifact.deployedBytecode.object, recompiledBytecode: artifact.deployedBytecode.object } };
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    if (url === contractUrl) return Response.json({}, { status: 404 });
+    if (init.method === 'POST') {
+      assert.equal(JSON.parse(init.body).contractIdentifier, 'src/DMXWebpRenderer.sol:DMXWebpRenderer');
+      return Response.json({ verificationId: 'renderer-job' }, { status: 202 });
+    }
+    return Response.json(published);
+  });
+  await f.run('submit');
+  assert.equal(f.read('DMXWebpRenderer.sourcify-submission.json').value.verificationId, 'renderer-job');
+  await f.run('verify');
+  assert.equal(f.read('DMXWebpRenderer.sourcify-verification.json').frozenSourcesMatch, true);
+  assert.equal(f.read('source-manifest.json').fullyQualifiedName, 'src/DMXWebpRenderer.sol:DMXWebpRenderer');
+  assert.equal(fs.existsSync(path.join(f.directory, 'TarotCards.sourcify-verification.json')), false);
+});
+
+
+function publishedRelease(f, contractName) {
+  const manifest = f.read('manifest.json');
+  const artifact = f.read(contractName + '.artifact.json');
+  const input = f.read(contractName + '.standard-input.json');
+  return { address, chainId: '11155111', match: 'match', creationMatch: 'match', runtimeMatch: 'match',
+    deployment: { transactionHash }, compilation: { compilerVersion, fullyQualifiedName: 'src/' + contractName + '.sol:' + contractName },
+    sources: input.sources, verifiedAt: '2026-11-24T10:00:00.000Z',
+    creationBytecode: { onchainBytecode: manifest.creationCode, recompiledBytecode: artifact.bytecode.object },
+    runtimeBytecode: { onchainBytecode: artifact.deployedBytecode.object, recompiledBytecode: artifact.deployedBytecode.object } };
+}
+
+for (const values of [undefined, null, {}, { constructorArguments: null }, { constructorArguments: '0x' }]) {
+  test(`renderer verification accepts empty constructor representation ${JSON.stringify(values)}`, async t => {
+    const f = fixture(t, 11155111, 'DMXWebpRenderer');
+    const published = publishedRelease(f, 'DMXWebpRenderer');
+    published.creationBytecode.transformationValues = values;
+    t.mock.method(globalThis, 'fetch', async () => Response.json(published));
+    await f.run('verify');
+    assert.equal(f.read('DMXWebpRenderer.sourcify-verification.json').creationBytecodeMatch, true);
+    assert.equal(f.read('source-manifest.json').constructorArgs, '0x');
+  });
+}
+
+for (const [contractName, args] of [['TarotCards', undefined], ['TarotCards', null], ['TarotCards', '0x'],
+  ['DMXWebpRenderer', '0x0001'], ['DMXWebpRenderer', '']]) {
+  test(`${contractName} verification rejects incorrect constructor representation ${JSON.stringify(args)}`, async t => {
+    const f = fixture(t, 11155111, contractName);
+    const published = publishedRelease(f, contractName);
+    published.creationBytecode.transformationValues = { constructorArguments: args };
+    t.mock.method(globalThis, 'fetch', async () => Response.json(published));
+    await assert.rejects(f.run('verify'), /Published constructor arguments differ/);
+    assert.equal(fs.existsSync(path.join(f.directory, contractName + '.sourcify-verification.json')), false);
+  });
+}
+
+test('empty renderer constructor cannot hide extra creation bytes', async t => {
+  const f = fixture(t, 11155111, 'DMXWebpRenderer');
+  f.write('manifest.json', { ...f.read('manifest.json'), creationCode: f.read('manifest.json').creationCode + '0001' });
+  const request = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected request'); });
+  await assert.rejects(f.run('verify'), /Frozen constructor arguments do not match/);
+  assert.equal(request.mock.callCount(), 0);
+});

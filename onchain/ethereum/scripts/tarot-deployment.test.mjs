@@ -1,24 +1,50 @@
-import test from 'node:test';
+import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   deploymentConfiguration, deploymentConstructorArgs, deploymentGas, main, TAROT_SEPOLIA,
-  validateDeploymentConfiguration, validateSignedDeployment,
+  validateDeploymentConfiguration, validateSignedDeployment, readRendererRelease, rendererInterfaceId, validateCollectionMetadata, verifyDeploymentState,
 } from './tarot-deployment.mjs';
 
 const quoteSigner = '0x2222222222222222222222222222222222222222';
-const configuration = () => ({ network: 'sepolia', ...deploymentConfiguration('sepolia', quoteSigner) });
+const rendererAddress = '0x4444444444444444444444444444444444444444';
+const json = value => JSON.stringify(value, null, 2) + '\n';
+const sha256 = value => createHash('sha256').update(value).digest('hex');
+const configuration = () => ({ network: 'sepolia', ...deploymentConfiguration('sepolia', quoteSigner, rendererAddress) });
+const collectionMetadata = { name: 'divination machina x', symbol: 'DMX', description: '777 Tarot cards and their paired NFC receipts.',
+  image: 'https://wip.lil.org/tarot/bases/1.webp', external_link: 'https://mons.shop' };
+const collectionURI = 'data:application/json;base64,' + Buffer.from(JSON.stringify(collectionMetadata)).toString('base64');
+const project = fileURLToPath(new URL('../', import.meta.url));
+const originalReadFileSync = fs.readFileSync;
+let build;
+let artifacts;
 
-test('Tarot configuration pins Sepolia and the approved admin and metadata root', () => {
-  const config = deploymentConfiguration('sepolia', quoteSigner.toUpperCase().replace('0X', '0x'));
+before(async () => {
+  build = fs.mkdtempSync(path.join(os.tmpdir(), 'tarot-build-test-'));
+  const contracts = ['TarotCards', 'DMXWebpRenderer'];
+  execFileSync('forge', ['build', '--offline', ...contracts.map(name => 'src/' + name + '.sol'),
+    '--out', path.join(build, 'out'), '--cache-path', path.join(build, 'cache')],
+  { cwd: project, stdio: 'pipe', timeout: 30_000 });
+  artifacts = Object.fromEntries(await Promise.all(contracts.map(async name => [name,
+    JSON.parse(await fs.promises.readFile(path.join(build, 'out', name + '.sol', name + '.json'), 'utf8'))])));
+});
+
+after(() => {
+  if (build) fs.rmSync(build, { recursive: true, force: true });
+  assert.equal(fs.readFileSync, originalReadFileSync, 'Filesystem mock must be restored after tests');
+});
+
+test('DMX configuration pins Sepolia, the approved admin and verified renderer', () => {
+  const config = deploymentConfiguration('sepolia', quoteSigner.toUpperCase().replace('0X', '0x'), rendererAddress);
   assert.equal(config.chainId, 11155111);
   assert.equal(config.admin, TAROT_SEPOLIA.deployer);
-  assert.equal(config.baseURI, 'https://cdn.mons.shop/tarot-sepolia/v1/');
+  assert.equal(config.renderer, rendererAddress);
+  assert.equal(config.releaseVersion, 2);
   assert.equal(config.quoteSigner, quoteSigner);
   for (const network of ['mainnet', 'devnet', 'local', 'other']) {
     assert.throws(() => deploymentConfiguration(network, quoteSigner), /Sepolia only/);
@@ -29,21 +55,21 @@ test('Tarot configuration pins Sepolia and the approved admin and metadata root'
   assert.throws(() => deploymentConfiguration('sepolia', TAROT_SEPOLIA.deployer), /dedicated/);
 });
 
-test('frozen deployment identity rejects changed roles, network and metadata', () => {
+test('frozen deployment identity rejects changed roles, network and release version', () => {
   const manifest = configuration();
-  assert.deepEqual(validateDeploymentConfiguration(manifest), deploymentConfiguration('sepolia', quoteSigner));
+  assert.deepEqual(validateDeploymentConfiguration(manifest), deploymentConfiguration('sepolia', quoteSigner, rendererAddress));
   for (const [key, value] of Object.entries({ chainId: 1, network: 'mainnet', admin: quoteSigner,
-    deployer: quoteSigner, baseURI: 'https://cdn.mons.shop/111k/' })) {
+    deployer: quoteSigner, releaseVersion: 1 })) {
     assert.throws(() => validateDeploymentConfiguration({ ...manifest, [key]: value }));
   }
 });
 
-test('constructor encoding supplies owner, independent signer and metadata URI', () => {
+test('constructor encoding supplies owner, independent signer and renderer', () => {
   const config = configuration();
   const encoded = deploymentConstructorArgs(config);
-  const values = JSON.parse(execFileSync('cast', ['abi-decode', 'constructor()(address,address,string)', encoded, '--json'], { encoding: 'utf8' }));
+  const values = JSON.parse(execFileSync('cast', ['abi-decode', 'constructor()(address,address,address)', encoded, '--json'], { encoding: 'utf8' }));
   assert.deepEqual(values.map(value => value.startsWith('0x') ? value.toLowerCase() : value),
-    [config.admin, config.quoteSigner, config.baseURI]);
+    [config.admin, config.quoteSigner, config.renderer]);
 });
 
 test('journaled signed transaction cannot change chain, nonce, payment, signer, recipient or calldata', () => {
@@ -60,13 +86,40 @@ test('journaled signed transaction cannot change chain, nonce, payment, signer, 
   assert.throws(() => deploymentGas('2000000', '3000000000', TAROT_SEPOLIA.maximumFeeWei), /fee ceiling/);
 });
 
-function fixture(t, overrides = {}, artifact) {
+function rendererFixture(directory) {
+  const artifact = artifacts.DMXWebpRenderer;
+  const sources = Object.fromEntries(Object.keys(artifact.metadata.sources).map(name => [name, { content: fs.readFileSync(path.join(project, name), 'utf8') }]));
+  const { compilationTarget, ...settings } = artifact.metadata.settings;
+  const input = { language: 'Solidity', sources, settings };
+  const manifest = { network: 'sepolia', ...deploymentConfiguration('sepolia', undefined, undefined, 'DMXWebpRenderer'),
+    contractAddress: rendererAddress, constructorArgs: '0x', creationCode: artifact.bytecode.object,
+    artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(input)),
+    deploymentBlockHash: '0x' + 'a'.repeat(64) };
+  const deployment = { ...manifest, deploymentBlock: 1, transactionHash: '0x' + 'b'.repeat(64), confirmations: 3 };
+  for (const [name, value] of Object.entries({ 'manifest.json': manifest, 'deployment.json': deployment,
+    'DMXWebpRenderer.artifact.json': artifact, 'DMXWebpRenderer.standard-input.json': input })) {
+    fs.writeFileSync(path.join(directory, name), json(value));
+  }
+  return { manifest, deployment, artifact, input };
+}
+
+function fixture(t, overrides = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tarot-deployment-test-'));
+  const rendererDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'dmx-renderer-test-'));
+  const renderer = rendererFixture(rendererDirectory);
   const previous = process.env.ETHEREUM_TAROT_RPC_URL;
   process.env.ETHEREUM_TAROT_RPC_URL = 'https://tarot-rpc.invalid';
   const read = fs.readFileSync.bind(fs);
-  if (artifact) t.mock.method(fs, 'readFileSync', (filename, ...args) => String(filename).endsWith('/out/TarotCards.sol/TarotCards.json')
-    ? JSON.stringify(artifact) : read(filename, ...args));
+  const artifactFiles = new Map(Object.entries(artifacts).map(([name, artifact]) => [
+    path.join(project, 'out', name + '.sol', name + '.json'), json(artifact),
+  ]));
+  t.mock.method(fs, 'readFileSync', (filename, ...args) => {
+    const name = filename instanceof URL ? fileURLToPath(filename) : String(filename);
+    const artifact = artifactFiles.get(name);
+    if (artifact !== undefined) return artifact;
+    assert.ok(!name.startsWith(path.join(project, 'out') + path.sep), 'Tests must not read cached build artifacts');
+    return read(filename, ...args);
+  });
   const logs = [];
   const requests = [];
   let beforeRequest;
@@ -75,30 +128,35 @@ function fixture(t, overrides = {}, artifact) {
     const request = JSON.parse(options.body);
     requests.push(request);
     await beforeRequest?.(request);
-    const results = { eth_chainId: '0xaa36a7', eth_getTransactionCount: '0x0', eth_getCode: '0x',
+    const results = { eth_chainId: '0xaa36a7', eth_getTransactionCount: '0x0',
+      eth_getCode: request.params[0] === rendererAddress ? renderer.artifact.deployedBytecode.object : '0x',
+      eth_getTransactionReceipt: { status: '0x1', contractAddress: rendererAddress, blockNumber: '0x1',
+        blockHash: renderer.manifest.deploymentBlockHash, from: TAROT_SEPOLIA.deployer, to: null },
+      eth_getBlockByNumber: { number: '0x3', hash: renderer.manifest.deploymentBlockHash },
+      eth_getTransactionByHash: { input: renderer.artifact.bytecode.object, from: TAROT_SEPOLIA.deployer, to: null,
+        chainId: '0xaa36a7', value: '0x0' },
+      eth_call: request.params[0]?.data?.startsWith('0x01ffc9a7') ? '0x' + '0'.repeat(63) + '1' : execFileSync('cast',
+        ['abi-encode', 'value(string)', collectionURI], { encoding: 'utf8' }).trim(),
       eth_estimateGas: '0x1e8480', eth_gasPrice: '0x5f5e100', eth_getBalance: '0x11c37937e08000', ...overrides };
     assert.ok(Object.hasOwn(results, request.method), 'Unexpected RPC operation ' + request.method);
     return Response.json({ jsonrpc: '2.0', id: 1, result: results[request.method] });
   });
   t.after(() => {
     fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(rendererDirectory, { recursive: true, force: true });
     if (previous === undefined) delete process.env.ETHEREUM_TAROT_RPC_URL;
     else process.env.ETHEREUM_TAROT_RPC_URL = previous;
   });
-  return { directory, logs, requests,
+  return { directory, rendererDirectory, renderer, logs, requests,
     read: name => JSON.parse(read(path.join(directory, name), 'utf8')),
-    prepare: () => main(['prepare', '--directory', directory, '--quote-signer', quoteSigner]),
+    prepare: () => main(['prepare', '--directory', directory, '--quote-signer', quoteSigner, '--renderer-directory', rendererDirectory]),
     beforeRequest: callback => { beforeRequest = callback; },
   };
 }
 
 test('preparation freezes real compiler sources and artifacts and never sends a transaction', async t => {
-  const build = fs.mkdtempSync(path.join(os.tmpdir(), 'tarot-build-test-'));
-  t.after(() => fs.rmSync(build, { recursive: true, force: true }));
-  execFileSync('forge', ['build', '--offline', 'src/TarotCards.sol', '--out', path.join(build, 'out'),
-    '--cache-path', path.join(build, 'cache')], { cwd: fileURLToPath(new URL('../', import.meta.url)), stdio: 'pipe', timeout: 30_000 });
-  const artifact = JSON.parse(fs.readFileSync(path.join(build, 'out/TarotCards.sol/TarotCards.json'), 'utf8'));
-  const f = fixture(t, {}, artifact);
+  const artifact = artifacts.TarotCards;
+  const f = fixture(t);
   await f.prepare();
   const manifest = f.read('manifest.json');
   assert.equal(manifest.chainId, 11155111);
@@ -112,9 +170,20 @@ test('preparation freezes real compiler sources and artifacts and never sends a 
   assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
   assert.equal(f.logs[0].prepared, true);
   await assert.rejects(f.prepare(), /already contains a release/);
-  manifest.baseURI = 'https://cdn.mons.shop/tarot-mainnet/v1/';
+  manifest.renderer = quoteSigner;
   fs.writeFileSync(path.join(f.directory, 'manifest.json'), JSON.stringify(manifest));
-  await assert.rejects(main(['verify', '--directory', f.directory]), /Unexpected deployment baseURI/);
+  await assert.rejects(main(['verify', '--directory', f.directory]), /Renderer prerequisite address changed/);
+});
+
+test('every deployment command requires an explicit release directory before any RPC operation', async t => {
+  const f = fixture(t);
+  for (const command of ['prepare', 'sign', 'broadcast', 'verify']) {
+    await assert.rejects(main([command]), /explicit --directory is required/);
+    await assert.rejects(main([command, '--directory', '   ']), /explicit --directory is required/);
+  }
+  await assert.rejects(main(['prepare', '--contract', 'DMXWebpRenderer']), /explicit --directory is required/);
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(fs.readdirSync(f.directory), []);
 });
 
 test('mainnet and unsafe credential arguments fail before any RPC operation', async t => {
@@ -155,7 +224,7 @@ test('one preparation owns the release before RPC and excludes preparation, sign
     const count = f.requests.length;
     for (const command of ['prepare', 'sign', 'broadcast', 'verify']) {
       await assert.rejects(main([command, '--directory', f.directory,
-        ...(command === 'prepare' ? ['--quote-signer', '0x3333333333333333333333333333333333333333'] : [])]),
+        ...(command === 'prepare' ? ['--quote-signer', '0x3333333333333333333333333333333333333333', '--renderer-directory', f.rendererDirectory] : [])]),
       /Another metadata operation owns/);
       assert.equal(f.requests.length, count);
       assert.deepEqual(fs.readdirSync(f.directory), ['operation.lock']);
@@ -184,7 +253,7 @@ for (const command of ['sign', 'broadcast', 'verify']) {
   test(`${command} holds exclusive ownership before loading the rest of the release and releases it after failure`, async t => {
     const f = fixture(t);
     await f.prepare();
-    const files = new Map(fs.readdirSync(f.directory).map(name => [name, fs.readFileSync(path.join(f.directory, name), 'utf8')]));
+    const files = new Map(fs.readdirSync(f.directory, { recursive: true }).filter(name => fs.statSync(path.join(f.directory, name)).isFile()).map(name => [name, fs.readFileSync(path.join(f.directory, name), 'utf8')]));
     const entered = Promise.withResolvers();
     const release = Promise.withResolvers();
     f.beforeRequest(async request => {
@@ -203,7 +272,7 @@ for (const command of ['sign', 'broadcast', 'verify']) {
       }
     } finally { release.resolve(); }
     assert.match((await first).message, /Fixture stops inside protected operation/);
-    assert.deepEqual(fs.readdirSync(f.directory).sort(), [...files.keys()].sort());
+    assert.deepEqual(fs.readdirSync(f.directory, { recursive: true }).filter(name => fs.statSync(path.join(f.directory, name)).isFile()).sort(), [...files.keys()].sort());
     for (const [name, content] of files) assert.equal(fs.readFileSync(path.join(f.directory, name), 'utf8'), content);
     f.beforeRequest(undefined);
     await assert.rejects(main(['sign', '--directory', f.directory]), /Signing requires/);
@@ -293,6 +362,108 @@ test('release locks stay inside private release directories', async t => {
   assert.deepEqual(fs.readdirSync(f.directory), []);
   assert.equal(f.requests.length, 0);
   const trackedDirectory = fileURLToPath(new URL('../scripts', import.meta.url));
-  await assert.rejects(main(['prepare', '--directory', trackedDirectory, '--quote-signer', quoteSigner]), /private ignored directory/);
+  await assert.rejects(main(['prepare', '--directory', trackedDirectory, '--quote-signer', quoteSigner, '--renderer-directory', f.rendererDirectory]), /private ignored directory/);
   assert.equal(fs.existsSync(path.join(trackedDirectory, 'operation.lock')), false);
+});
+
+test('renderer preparation freezes its own artifact and has no collection constructor arguments', async t => {
+  const f = fixture(t);
+  await main(['prepare', '--contract', 'DMXWebpRenderer', '--directory', f.directory]);
+  const manifest = f.read('manifest.json');
+  assert.equal(manifest.contractName, 'DMXWebpRenderer');
+  assert.equal(manifest.constructorArgs, '0x');
+  assert.equal(manifest.creationCode, f.renderer.artifact.bytecode.object);
+  assert.equal(Object.hasOwn(manifest, 'renderer'), false);
+  assert.deepEqual(f.read('DMXWebpRenderer.artifact.json'), f.renderer.artifact);
+  assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+});
+
+test('collection preparation requires a confirmed renderer release instead of a blind address', async t => {
+  const f = fixture(t);
+  await assert.rejects(main(['prepare', '--directory', f.directory, '--quote-signer', quoteSigner]), /verified renderer release/);
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(fs.readdirSync(f.directory), []);
+  const reportPath = path.join(f.rendererDirectory, 'deployment.json');
+  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  fs.writeFileSync(reportPath, json({ ...report, confirmations: 2 }));
+  await assert.rejects(f.prepare(), /three confirmations/);
+  assert.equal(f.requests.length, 0);
+});
+
+test('collection preparation freezes and independently checks renderer evidence', async t => {
+  const f = fixture(t);
+  await f.prepare();
+  const manifest = f.read('manifest.json');
+  assert.equal(manifest.renderer, rendererAddress);
+  const frozen = readRendererRelease(path.join(f.directory, 'renderer'));
+  assert.equal(manifest.rendererReleaseSha256, sha256(json(frozen.files)));
+  assert.equal(frozen.manifest.contractAddress, rendererAddress);
+  assert.ok(f.requests.some(request => request.method === 'eth_getCode' && request.params[0] === rendererAddress));
+  const artifactPath = path.join(f.directory, 'renderer/DMXWebpRenderer.artifact.json');
+  fs.writeFileSync(artifactPath, json({ ...frozen.artifact, bytecode: { object: '0x00' } }));
+  await assert.rejects(main(['sign', '--directory', f.directory]), /Frozen renderer artifact changed|strictly equal/);
+});
+
+test('changed renderer runtime prevents collection preparation', async t => {
+  const f = fixture(t, { eth_getCode: '0x00' });
+  await assert.rejects(f.prepare(), /Renderer runtime mismatch/);
+  assert.deepEqual(fs.readdirSync(f.directory), []);
+});
+
+test('noncanonical renderer deployment prevents collection preparation', async t => {
+  const f = fixture(t, { eth_getBlockByNumber: { number: '0x3', hash: '0x' + 'c'.repeat(64) } });
+  await assert.rejects(f.prepare(), /no longer canonical/);
+  assert.deepEqual(fs.readdirSync(f.directory), []);
+});
+
+test('legacy release directories cannot be silently repurposed', () => {
+  assert.throws(() => validateDeploymentConfiguration({ ...configuration(), releaseVersion: undefined }), /Legacy release is frozen/);
+});
+
+test('renderer metadata validation decodes JSON and checks collection identity', () => {
+  assert.deepEqual(validateCollectionMetadata(collectionURI), collectionMetadata);
+  assert.throws(() => validateCollectionMetadata('https://cdn.mons.shop/tarot-sepolia/v1/collection.json'), /inline JSON/);
+  for (const change of [{ name: 'Tarot Cards' }, { symbol: 'TAROT' }, { image: 'https://example.com/art.webp' }]) {
+    const uri = 'data:application/json;base64,' + Buffer.from(JSON.stringify({ ...collectionMetadata, ...change })).toString('base64');
+    assert.throws(() => validateCollectionMetadata(uri));
+  }
+  assert.match(rendererInterfaceId(), /^0x[0-9a-f]{8}$/);
+});
+
+
+function stateRpc(manifest, changes = {}) {
+  const encode = (type, ...args) => execFileSync('cast', ['abi-encode', 'value(' + type + ')', ...args.map(String)], { encoding: 'utf8' }).trim();
+  const values = [
+    ['owner()', 'address', manifest.admin], ['quoteSigner()', 'address', manifest.quoteSigner],
+    ['renderer()', 'address', manifest.renderer], ['INITIAL_CARDS()', 'uint256', 777], ['MAX_CARDS()', 'uint256', 999999],
+    ['RECEIPT_OFFSET()', 'uint256', 999999], ['REDEMPTION_RECEIPT_OFFSET()', 'uint256', 1000776],
+    ['MAX_TOKEN_ID()', 'uint256', 2000775], ['MAX_AUTHORIZATION_LIFETIME()', 'uint256', 600],
+    ['redemptionsPaused()', 'bool', true], ['mintingPaused()', 'bool', false],
+    ['name()', 'string', 'divination machina x'], ['symbol()', 'string', 'DMX'],
+    ['contractURI()', 'string', collectionURI], ['supportsInterface(bytes4)', 'bool', true, '0x49064906'],
+    ['receiptTokenId(uint256)', 'uint256', 1000000, '1'], ['receiptTokenId(uint256)', 'uint256', 1000776, '777'],
+    ['redemptionReceiptTokenId(uint256)', 'uint256', 1000777, '1'], ['redemptionReceiptTokenId(uint256)', 'uint256', 2000775, '999999'],
+  ];
+  const responses = new Map(values.map(([signature, type, value, ...args]) => [
+    execFileSync('cast', ['calldata', signature, ...args], { encoding: 'utf8' }).trim(), encode(type, changes[signature] ?? value),
+  ]));
+  responses.set(execFileSync('cast', ['calldata', 'eip712Domain()'], { encoding: 'utf8' }).trim(),
+    encode('bytes1,string,string,uint256,address,bytes32,uint256[]', '0x0f', changes.domainName ?? 'divination machina x',
+      '1', manifest.chainId, manifest.contractAddress, '0x' + '0'.repeat(64), '[]'));
+  return async (method, params) => {
+    assert.equal(method, 'eth_call');
+    assert.equal(params[0].to, manifest.contractAddress);
+    assert.equal(params[1], '0x5');
+    assert.ok(responses.has(params[0].data), 'Unexpected contract read');
+    return responses.get(params[0].data);
+  };
+}
+
+test('collection verification checks new ranges, renderer, paused redemption, EIP-712 domain and decoded metadata', async () => {
+  const manifest = { ...configuration(), contractAddress: '0x3333333333333333333333333333333333333333' };
+  assert.deepEqual(await verifyDeploymentState(manifest, stateRpc(manifest), '0x5'), collectionMetadata);
+  for (const change of [{ 'MAX_CARDS()': 777 }, { 'RECEIPT_OFFSET()': 777 }, { 'renderer()': quoteSigner },
+    { 'redemptionsPaused()': false }, { 'mintingPaused()': true }, { domainName: 'Tarot Cards' }, { 'symbol()': 'TAROT' }]) {
+    await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest, change), '0x5'));
+  }
 });

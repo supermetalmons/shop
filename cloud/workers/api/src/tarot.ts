@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { decodeReturn, encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.js';
 import { ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.js';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
+import { DMX_MAX_CARDS } from '../../../../shared/ethereum/dmx.js';
 import {
   TAROT_API_PATHS, TAROT_AUTHORIZATION_TTL_SECONDS, TAROT_MAX_CARDS, TAROT_RECEIPT_OFFSET,
   encodeTarotClaim, resolveTarotConfig, tarotCodeHashInput, tarotReceiptTokenId,
@@ -27,7 +28,7 @@ export type TarotEnvironment = Pick<Env,
 > & EthereumProviderEnvironment & Partial<Pick<Env, 'ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET'>>;
 
 type Context = EthereumReadContext & { env: TarotEnvironment; config: TarotConfig; nowMs: number };
-type State = { blockNumber: number; blockHash: string; timestamp: number; signer: string; claimed: boolean };
+type State = { blockNumber: number; blockHash: string; timestamp: number; signer: string; claimed: boolean; mintingPaused: boolean };
 type CodeRow = { code_hash: string; revoked_at_ms: number | null };
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const ZERO_ADDRESS = `0x${'0'.repeat(40)}`;
@@ -93,6 +94,7 @@ async function state(context: Context, tokenId: number, confirmed = false): Prom
     encodeCall('MAX_CARDS()', [], []), encodeCall('RECEIPT_OFFSET()', [], []),
     encodeCall('MAX_AUTHORIZATION_LIFETIME()', [], []), encodeCall('quoteSigner()', [], []),
     encodeCall('claimed(uint256)', ['uint256'], [tokenId]),
+    encodeCall('INITIAL_CARDS()', [], []), encodeCall('mintingPaused()', [], []),
   ], snapshot.blockHash);
   if (results.some(result => result.length !== 66)) return unavailable();
   const [maximum] = decodeReturn(['uint256'], results[0]);
@@ -100,17 +102,19 @@ async function state(context: Context, tokenId: number, confirmed = false): Prom
   const [lifetime] = decodeReturn(['uint256'], results[2]);
   const [signer] = decodeReturn(['address'], results[3]);
   const [claimed] = decodeReturn(['uint256'], results[4]);
-  if (maximum !== BigInt(TAROT_MAX_CARDS) || offset !== BigInt(TAROT_RECEIPT_OFFSET) ||
+  const [initial] = decodeReturn(['uint256'], results[5]);
+  const [mintingPaused] = decodeReturn(['uint256'], results[6]);
+  if (maximum !== BigInt(DMX_MAX_CARDS) || initial !== BigInt(TAROT_MAX_CARDS) || offset !== BigInt(TAROT_RECEIPT_OFFSET) ||
     lifetime !== BigInt(TAROT_AUTHORIZATION_TTL_SECONDS) || typeof signer !== 'string' || signer === ZERO_ADDRESS ||
-    (claimed !== 0n && claimed !== 1n)) return unavailable();
+    (claimed !== 0n && claimed !== 1n) || (mintingPaused !== 0n && mintingPaused !== 1n)) return unavailable();
   await verifyEthereumBlockSnapshot(read, snapshot);
-  return { ...snapshot, timestamp, signer, claimed: claimed === 1n };
+  return { ...snapshot, timestamp, signer, claimed: claimed === 1n, mintingPaused: mintingPaused === 1n };
 }
 
 async function status(context: Context, tokenId: number): Promise<TarotStatus> {
   const current = await state(context, tokenId, true);
   const signer = configuredSigner(context);
-  return { config: { ...context.config, enabled: context.config.enabled && signer?.address === current.signer },
+  return { config: { ...context.config, enabled: context.config.enabled && !current.mintingPaused && signer?.address === current.signer },
     tokenId, receiptTokenId: tarotReceiptTokenId(tokenId), claimed: current.claimed,
     observedBlock: current.blockNumber, observedTimestamp: current.timestamp, blockHash: current.blockHash };
 }
@@ -124,7 +128,7 @@ async function prepare(context: Context, tokenId: number, wallet: string): Promi
   const signer = configuredSigner(context);
   if (!signer) return unavailable();
   const current = await state(context, tokenId);
-  if (signer.address !== current.signer) return unavailable();
+  if (signer.address !== current.signer || current.mintingPaused) return unavailable();
   if (current.claimed) throw new EthereumApiError('failed-precondition', 'This Tarot Card has already been claimed.');
   const now = Math.floor(context.nowMs / 1000);
   const deadline = Math.min(now, current.timestamp) + TAROT_AUTHORIZATION_TTL_SECONDS;

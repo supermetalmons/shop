@@ -13,14 +13,18 @@ const read = name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf
 const save = (name, value) => fs.writeFileSync(path.join(directory, name), json(value), { mode: 0o600 });
 const manifest = read('manifest.json');
 const deployment = read('deployment.json');
-const input = read('TarotCards.standard-input.json');
-const artifact = read('TarotCards.artifact.json');
+const contractName = manifest.contractName || 'TarotCards';
+assert.ok(['TarotCards', 'DMXWebpRenderer'].includes(contractName), 'Unsupported source verification contract');
+const input = read(contractName + '.standard-input.json');
+const artifact = read(contractName + '.artifact.json');
 const chainId = manifest.chainId;
 assert.equal(chainId, 11155111, 'Tarot source verification supports Sepolia only');
 assert.equal(deployment.chainId, chainId, 'Deployment chain does not match manifest');
 assert.equal(deployment.contractAddress, manifest.contractAddress);
 assert.equal(sha256(json(input)), manifest.standardInputSha256);
 assert.equal(sha256(json(artifact)), manifest.artifactSha256);
+assert.equal(manifest.creationCode, artifact.bytecode.object + manifest.constructorArgs.slice(2),
+  'Frozen constructor arguments do not match creation bytecode');
 assert.ok(deployment.confirmations >= 3);
 const base = 'https://sourcify.dev/server/v2';
 const contractUrl = base + '/contract/' + chainId + '/' + deployment.contractAddress;
@@ -36,23 +40,23 @@ if (mode === 'submit') {
   } else {
     assert.ok(lookup.status === 200 || lookup.status === 404, 'Unexpected Sourcify lookup status');
     const body = { stdJsonInput: input, compilerVersion: artifact.metadata.compiler.version,
-      contractIdentifier: 'src/TarotCards.sol:TarotCards', creationTransactionHash: deployment.transactionHash };
-    save('TarotCards.sourcify-request.json', body);
+      contractIdentifier: 'src/' + contractName + '.sol:' + contractName, creationTransactionHash: deployment.transactionHash };
+    save(contractName + '.sourcify-request.json', body);
     const result = await request(base + '/verify/' + chainId + '/' + deployment.contractAddress, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
-    save('TarotCards.sourcify-submission.json', result);
+    save(contractName + '.sourcify-submission.json', result);
     assert.ok(result.status === 200 || result.status === 202, 'Sourcify submission failed');
     console.log(json(result.value));
   }
 } else if (mode === 'status') {
-  const submission = fs.existsSync(path.join(directory, 'TarotCards.sourcify-submission.json'))
-    ? read('TarotCards.sourcify-submission.json') : null;
+  const submission = fs.existsSync(path.join(directory, contractName + '.sourcify-submission.json'))
+    ? read(contractName + '.sourcify-submission.json') : null;
   const verificationId = submission?.value?.verificationId;
   const result = await request(verificationId ? base + '/verify/' + encodeURIComponent(verificationId) : contractUrl);
   assert.equal(result.status, 200, !verificationId && result.status === 404
     ? 'No local verification job or published contract; run submit first' : 'Sourcify status unavailable');
-  save('TarotCards.sourcify-job.json', result.value);
+  save(contractName + '.sourcify-job.json', result.value);
   console.log(json(result.value));
 } else {
   const fields = ['sources', 'compilation', 'deployment', 'creationBytecode.onchainBytecode',
@@ -69,7 +73,7 @@ if (mode === 'submit') {
   }
   assert.equal(published.deployment.transactionHash.toLowerCase(), deployment.transactionHash);
   assert.equal(published.compilation.compilerVersion.replace(/^v/, ''), artifact.metadata.compiler.version);
-  assert.equal(published.compilation.fullyQualifiedName, 'src/TarotCards.sol:TarotCards');
+  assert.equal(published.compilation.fullyQualifiedName, 'src/' + contractName + '.sol:' + contractName);
   assert.deepEqual(Object.keys(published.sources).sort(), Object.keys(input.sources).sort());
   const sourceSha256 = {};
   for (const [name, source] of Object.entries(published.sources)) {
@@ -78,20 +82,22 @@ if (mode === 'submit') {
   }
   assert.equal(published.creationBytecode.onchainBytecode, manifest.creationCode);
   assert.equal(published.creationBytecode.recompiledBytecode, artifact.bytecode.object);
-  assert.equal(published.creationBytecode.transformationValues.constructorArguments, manifest.constructorArgs);
+  const constructorArguments = published.creationBytecode.transformationValues?.constructorArguments;
+  assert.equal(constructorArguments ?? (manifest.constructorArgs === '0x' ? '0x' : undefined), manifest.constructorArgs,
+    'Published constructor arguments differ from release');
   for (const code of [published.runtimeBytecode.onchainBytecode, published.runtimeBytecode.recompiledBytecode]) {
-    assert.ok(matchingRuntime(artifact.deployedBytecode.object, code, artifact.deployedBytecode.immutableReferences));
+    assert.ok(matchingRuntime(artifact.deployedBytecode.object, code, artifact.deployedBytecode.immutableReferences ?? {}));
   }
-  save('TarotCards.sourcify-published.json', published);
+  save(contractName + '.sourcify-published.json', published);
   const report = { chainId, contractAddress: deployment.contractAddress, transactionHash: deployment.transactionHash,
     match: published.match, creationMatch: published.creationMatch, runtimeMatch: published.runtimeMatch,
     compilerVersion: artifact.metadata.compiler.version, metadataHash: input.settings.metadata.bytecodeHash,
     verifiedAt: published.verifiedAt, checkedAt: new Date().toISOString(), sourceSha256,
     creationBytecodeMatch: true, runtimeBytecodeMatch: true, frozenSourcesMatch: true,
     url: 'https://repo.sourcify.dev/' + chainId + '/' + deployment.contractAddress, apiUrl };
-  save('TarotCards.sourcify-verification.json', report);
+  save(contractName + '.sourcify-verification.json', report);
   save('source-manifest.json', { compilerVersion: artifact.metadata.compiler.version, settings: input.settings,
-    fullyQualifiedName: 'src/TarotCards.sol:TarotCards', sources: sourceSha256,
+    fullyQualifiedName: 'src/' + contractName + '.sol:' + contractName, sources: sourceSha256,
     artifactSha256: manifest.artifactSha256, standardInputSha256: manifest.standardInputSha256,
     constructorArgs: manifest.constructorArgs, runtimeBytes: deployment.runtimeBytes, runtimeKeccak256: deployment.runtimeKeccak256 });
   console.log(json(report));

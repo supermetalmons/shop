@@ -1,17 +1,18 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { TAROT_MAX_CARDS, TAROT_METADATA_BASE_URI, tarotReceiptTokenId } from '../../shared/ethereum/tarot.ts';
+import { TAROT_MAX_CARDS, TAROT_METADATA_BASE_URI } from '../../shared/ethereum/tarot.ts';
 import { metadataMd5, uploadWithConcurrency, type MetadataStorage } from '../ethereum-metadata/storage.ts';
 
 export const TAROT_METADATA_PREFIX = new URL(TAROT_METADATA_BASE_URI).pathname.slice(1);
+const LEGACY_RECEIPT_OFFSET = 777;
 
 export function tarotMetadataObjects(): Map<string, Buffer> {
   const objects = new Map<string, Buffer>();
   const add = (name: string, value: object) => objects.set(name, Buffer.from(JSON.stringify(value, null, 2) + '\n'));
   for (let tokenId = 1; tokenId <= TAROT_MAX_CARDS; tokenId++) {
     for (const receipt of [false, true]) {
-      add(`${receipt ? tarotReceiptTokenId(tokenId) : tokenId}.json`, {
+      add(`${receipt ? tokenId + LEGACY_RECEIPT_OFFSET : tokenId}.json`, {
         name: `${receipt ? 'Tarot Card Receipt' : 'Tarot Card'} #${tokenId}`,
         description: receipt ? 'Proves the authenticity of the physical Tarot card you scanned.' : 'A mutating Tarot card. Initial base artwork.',
         image: `https://wip.lil.org/tarot/${receipt ? 'receipts' : 'bases'}/${tokenId}.webp`,

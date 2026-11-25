@@ -1,6 +1,7 @@
 import { encodeCall } from './abi.ts';
 import type { EthereumPreparedTransaction } from './api.ts';
 import { normalizeEthereumAddress } from './protocol.ts';
+import { DMX_RECEIPT_OFFSET } from './dmx.ts';
 import { isTarotClaimCode, isTarotTokenId, TAROT_MAX_CARDS } from './tarotCard.ts';
 
 export { TAROT_MAX_CARDS } from './tarotCard.ts';
@@ -10,7 +11,7 @@ export const TAROT_API_PATHS = {
   prepare: '/ethereum/tarot/prepare',
   confirm: '/ethereum/tarot/confirm',
 } as const;
-export const TAROT_RECEIPT_OFFSET = 777;
+export const TAROT_RECEIPT_OFFSET = DMX_RECEIPT_OFFSET;
 export const TAROT_AUTHORIZATION_TTL_SECONDS = 600;
 export const TAROT_CHAIN_ID = 11155111;
 export const TAROT_METADATA_BASE_URI = 'https://cdn.mons.shop/tarot-sepolia/v1/';
@@ -70,4 +71,10 @@ export function resolveTarotConfig(input: {
 export function encodeTarotClaim(tokenId: number, deadline: number, signature: string): string {
   if (!isTarotTokenId(tokenId)) throw new Error('Invalid Tarot card ID');
   return encodeCall(TAROT_CLAIM_FUNCTION, ['uint256', 'uint256', 'bytes'], [tokenId, deadline, signature]);
+}
+
+export function encodeTarotClaimTo(recipient: string, tokenId: number, deadline: number, signature: string): string {
+  if (!isTarotTokenId(tokenId)) throw new Error('Invalid Tarot card ID');
+  return encodeCall('claimTo(address,uint256,uint256,bytes)', ['address', 'uint256', 'uint256', 'bytes'],
+    [recipient, tokenId, deadline, signature]);
 }

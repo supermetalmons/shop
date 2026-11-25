@@ -42,13 +42,13 @@ export default {
               transactionHash:params[0],blockNumber:'0x62',blockHash:'0x'+'ab'.repeat(32)});
             result = claimInput ? {transactionHash:params[0],blockNumber:'0x62',blockHash:'0x'+'ab'.repeat(32),
               from:${JSON.stringify(wallet)},to:${JSON.stringify(contractAddress)},status:'0x1',logs:[
-                log([TAROT_CLAIMED_TOPIC,encodeAbi(['address'],[${JSON.stringify(wallet)}]),encodeAbi(['uint256'],[1]),encodeAbi(['uint256'],[778])]),
-                ...[1,778].map(id=>log(['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
+                log([TAROT_CLAIMED_TOPIC,encodeAbi(['address'],[${JSON.stringify(wallet)}]),encodeAbi(['uint256'],[1]),encodeAbi(['uint256'],[1000000])]),
+                ...[1,1000000].map(id=>log(['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
                   encodeAbi(['uint256'],[0]),encodeAbi(['address'],[${JSON.stringify(wallet)}]),encodeAbi(['uint256'],[id])]))]} : null;
           }
           else if (method === 'eth_call') {
             if (params[1]?.blockHash !== '0x'+'ab'.repeat(32) || params[1]?.requireCanonical !== true) throw new Error('Expected canonical block hash');
-            const getters = {'MAX_CARDS()':777, 'RECEIPT_OFFSET()':777, 'MAX_AUTHORIZATION_LIFETIME()':600};
+            const getters = {'INITIAL_CARDS()':777, 'MAX_CARDS()':999999, 'RECEIPT_OFFSET()':999999, 'MAX_AUTHORIZATION_LIFETIME()':600, 'mintingPaused()':0};
             const getter = Object.entries(getters).find(([name]) => encodeCall(name, [], []) === params[0].data);
             result = getter ? encodeAbi(['uint256'], [getter[1]]) : params[0].data === encodeCall('quoteSigner()',[],[])
               ? encodeAbi(['address'], [${JSON.stringify(signer)}]) : encodeAbi(['uint256'], [claimed ? 1 : 0]);

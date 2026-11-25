@@ -2,7 +2,8 @@ pragma solidity 0.8.38;
 
 import {TarotCards} from "../src/TarotCards.sol";
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
-import {TestSupport, Vm} from "./TestSupport.sol";
+import {Vm} from "./TestSupport.sol";
+import {DMXTestSupport} from "./DMXTestSupport.sol";
 
 contract TarotReceiver is IERC721Receiver {
     TarotCards public token;
@@ -34,63 +35,28 @@ contract TarotReceiver is IERC721Receiver {
     }
 }
 
-contract TarotCardsTest is TestSupport {
-    uint256 internal constant SIGNER_KEY = 0xA11CE;
-    uint256 internal constant NEXT_SIGNER_KEY = 0xB0B;
-    address internal constant ALICE = address(0xA11CE);
-    address internal constant BOB = address(0xB0B);
-    string internal constant BASE_URI = "https://cdn.mons.shop/tarot-sepolia/v1/";
-    TarotCards internal token;
-
-    function setUp() public {
-        vm.chainId(11155111);
-        vm.warp(2_000_000_000);
-        token = new TarotCards(address(this), vm.addr(SIGNER_KEY), BASE_URI);
-    }
-
-    function _digest(address wallet, uint256 tokenId, uint256 deadline, address contractAddress, uint256 chainId)
-        internal
-        pure
-        returns (bytes32)
-    {
-        bytes32 domain = keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256("divination machina x"), keccak256("1"), chainId, contractAddress
-        ));
-        bytes32 data = keccak256(abi.encode(
-            keccak256("TarotClaim(address wallet,uint256 tokenId,uint256 deadline)"), wallet, tokenId, deadline
-        ));
-        return keccak256(abi.encodePacked(hex"1901", domain, data));
-    }
-
-    function _sign(uint256 key, bytes32 digest) internal returns (bytes memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _authorize(address wallet, uint256 tokenId, uint256 deadline) internal returns (bytes memory) {
-        return _sign(SIGNER_KEY, _digest(wallet, tokenId, deadline, address(token), block.chainid));
-    }
-
-    function _claim(address wallet, uint256 tokenId) internal {
-        uint256 deadline = block.timestamp + 600;
-        bytes memory signature = _authorize(wallet, tokenId, deadline);
-        vm.prank(wallet);
-        token.claim(tokenId, deadline, signature);
-    }
-
+contract TarotCardsTest is DMXTestSupport {
     function testConfigurationAndEip712Domain() public {
         assertEq(token.name(), "divination machina x");
         assertEq(token.symbol(), "DMX");
         assertEq(token.owner(), address(this));
         assertEq(token.quoteSigner(), vm.addr(SIGNER_KEY));
-        assertEq(token.MAX_CARDS(), 777);
-        assertEq(token.RECEIPT_OFFSET(), 777);
+        assertEq(token.INITIAL_CARDS(), 777);
+        assertEq(token.MAX_CARDS(), 999_999);
+        assertEq(token.RECEIPT_OFFSET(), 999_999);
+        assertEq(token.REDEMPTION_RECEIPT_OFFSET(), 1_000_776);
+        assertEq(token.MAX_TOKEN_ID(), 2_000_775);
+        assertEq(token.MAX_BATCH_SIZE(), 50);
+        assertEq(token.MAX_RELEASE_CONFIGS(), 32);
+        assertEq(token.PAYOUT_GAS_LIMIT(), 100_000);
         assertEq(token.MAX_AUTHORIZATION_LIFETIME(), 600);
-        assertEq(token.baseURI(), BASE_URI);
-        assertEq(token.contractURI(), string.concat(BASE_URI, "collection.json"));
+        assertEq(address(token.renderer()), address(renderer));
+        assertEq(token.contractURI(), "fixture-collection");
+        assertTrue(token.redemptionsPaused());
+        assertFalse(token.mintingPaused());
         assertTrue(token.supportsInterface(0x80ac58cd));
         assertTrue(token.supportsInterface(0x5b5e139f));
+        assertTrue(token.supportsInterface(0x49064906));
         (bytes1 fields, string memory name, string memory version, uint256 chain, address verifyingContract,,) =
             token.eip712Domain();
         assertEq(uint256(uint8(fields)), 15);
@@ -100,24 +66,27 @@ contract TarotCardsTest is TestSupport {
         assertEq(verifyingContract, address(token));
     }
 
-    function testConstructorRejectsMainnetAndUnknownChainsButAllowsLocal() public {
-        for (uint256 i; i < 2; ++i) {
-            vm.chainId(i == 0 ? 1 : 17000);
-            vm.expectRevert(TarotCards.UnsupportedChain.selector);
-            new TarotCards(address(this), ALICE, BASE_URI);
+    function testConstructorSupportsMainnetSepoliaAndLocalOnly() public {
+        uint256[3] memory chains = [uint256(1), 11155111, 31337];
+        for (uint256 i; i < chains.length; ++i) {
+            vm.chainId(chains[i]);
+            TarotCards supported = new TarotCards(address(this), ALICE, address(renderer));
+            assertEq(supported.owner(), address(this));
         }
-        vm.chainId(31337);
-        TarotCards local = new TarotCards(address(this), ALICE, BASE_URI);
-        assertEq(local.owner(), address(this));
+        vm.chainId(17000);
+        vm.expectRevert(TarotCards.UnsupportedChain.selector);
+        new TarotCards(address(this), ALICE, address(renderer));
     }
 
     function testConstructorRejectsInvalidAddressesAndMetadata() public {
         vm.expectRevert();
-        new TarotCards(address(0), ALICE, BASE_URI);
+        new TarotCards(address(0), ALICE, address(renderer));
         vm.expectRevert(TarotCards.InvalidAddress.selector);
-        new TarotCards(address(this), address(0), BASE_URI);
-        vm.expectRevert(TarotCards.InvalidBaseURI.selector);
-        new TarotCards(address(this), ALICE, "https://cdn.mons.shop/111k/");
+        new TarotCards(address(this), address(0), address(renderer));
+        vm.expectRevert();
+        new TarotCards(address(this), ALICE, address(0));
+        vm.expectRevert();
+        new TarotCards(address(this), ALICE, BOB);
     }
 
     function testClaimsBothBoundaryPairsAndEmitsExpectedEvent() public {
@@ -129,19 +98,19 @@ contract TarotCardsTest is TestSupport {
         assertEq(logs[2].topics[0], keccak256("TarotClaimed(address,uint256,uint256)"));
         assertEq(logs[2].topics[1], bytes32(uint256(uint160(ALICE))));
         assertEq(logs[2].topics[2], bytes32(uint256(1)));
-        assertEq(logs[2].topics[3], bytes32(uint256(778)));
+        assertEq(logs[2].topics[3], bytes32(uint256(1_000_000)));
         assertEq(logs[2].data.length, 0);
         assertEq(token.ownerOf(1), ALICE);
-        assertEq(token.ownerOf(778), ALICE);
+        assertEq(token.ownerOf(1_000_000), ALICE);
         assertEq(token.ownerOf(777), BOB);
-        assertEq(token.ownerOf(1554), BOB);
+        assertEq(token.ownerOf(1_000_776), BOB);
         assertEq(token.balanceOf(ALICE), 2);
         assertEq(token.balanceOf(BOB), 2);
         assertTrue(token.claimed(1));
         assertTrue(token.claimed(777));
-        assertEq(token.tokenURI(1), string.concat(BASE_URI, "1.json"));
-        assertEq(token.tokenURI(778), string.concat(BASE_URI, "778.json"));
-        assertEq(token.tokenURI(1554), string.concat(BASE_URI, "1554.json"));
+        assertEq(token.tokenURI(1), "fixture-token");
+        assertEq(token.tokenURI(1_000_000), "fixture-token");
+        assertEq(token.tokenURI(1_000_776), "fixture-token");
     }
 
     function testUnmintedTokenMetadataReverts() public {
@@ -161,8 +130,10 @@ contract TarotCardsTest is TestSupport {
         for (uint256 id = 1; id <= 777; ++id) {
             _claim(ALICE, id);
             assertEq(token.ownerOf(id), ALICE);
-            assertEq(token.ownerOf(id + 777), ALICE);
+            assertEq(token.ownerOf(id + 999_999), ALICE);
             assertTrue(token.claimed(id));
+            assertTrue(token.issued(id));
+            assertTrue(token.issued(id + 999_999));
         }
         assertEq(token.balanceOf(ALICE), 1554);
     }
@@ -242,7 +213,7 @@ contract TarotCardsTest is TestSupport {
         token.claim(1, deadline, bob);
         vm.startPrank(ALICE);
         token.transferFrom(ALICE, BOB, 1);
-        token.transferFrom(ALICE, BOB, 778);
+        token.transferFrom(ALICE, BOB, 1_000_000);
         vm.stopPrank();
         assertTrue(token.claimed(1));
         vm.prank(ALICE);
@@ -255,7 +226,7 @@ contract TarotCardsTest is TestSupport {
         uint256 deadline = block.timestamp + 600;
         bytes memory signature = _authorize(address(receiver), 1, deadline);
         for (uint256 i; i < 2; ++i) {
-            receiver.configure(token, i == 0 ? 1 : 778, "");
+            receiver.configure(token, i == 0 ? 1 : 1_000_000, "");
             vm.expectRevert();
             receiver.claim(1, deadline, signature);
             assertFalse(token.claimed(1));
@@ -320,8 +291,11 @@ contract TarotCardsTest is TestSupport {
         token.renounceOwnership();
     }
 
-    function testClaimRejectsMainnetEvenAfterChainIdChanges() public {
+    function testClaimSupportsMainnetAndRejectsUnknownChainChanges() public {
         vm.chainId(1);
+        _claim(ALICE, 1);
+        assertEq(token.ownerOf(1), ALICE);
+        vm.chainId(17000);
         bytes memory signature = _authorize(ALICE, 1, block.timestamp + 600);
         vm.prank(ALICE);
         vm.expectRevert(TarotCards.UnsupportedChain.selector);

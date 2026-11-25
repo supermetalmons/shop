@@ -6,7 +6,7 @@ import test, { type TestContext } from 'node:test';
 import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ethereumSignerAddress, recoverEthereumAddress } from '../../../../shared/ethereum/crypto.ts';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.ts';
-import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaim, tarotCodeHashInput,
+import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaim, tarotCodeHashInput, tarotReceiptTokenId,
   type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
 import { TAROT_CLAIMED_TOPIC, tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.ts';
 import { handleTarotRequest, type TarotEnvironment } from '../src/tarot.ts';
@@ -46,7 +46,7 @@ function fixture(t: TestContext) {
     TAROT_ACCESS_IP_RATE_LIMITER: limiter('access'), TAROT_PREPARE_RATE_LIMITER: limiter('prepare'), TAROT_CONFIRM_IP_RATE_LIMITER: limiter('confirm'),
   };
   const state = { chainId: Number(TAROT_CHAIN_ID), blockNumber: 100, canonicalHash: BLOCK_HASH, timestamp: NOW / 1000,
-    claimed: 0, maximum: 777, offset: 777, lifetime: 600, signer: String(SIGNER),
+    claimed: 0, initial: 777, maximum: 999_999, offset: 999_999, lifetime: 600, mintingPaused: 0, signer: String(SIGNER),
     callHash: null as string | null,
     claimBlock: 0,
     receipt: null as Record<string, unknown> | null, transaction: null as Record<string, unknown> | null,
@@ -71,6 +71,7 @@ function fixture(t: TestContext) {
     const blockNumber = typeof reference === 'string' ? Number(reference) : blockNumbers.get(reference.blockHash)!;
     const signature = (name: string) => encodeCall(`${name}()`, [], []);
     const values: Record<string, [string, unknown]> = {
+      [signature('INITIAL_CARDS')]: ['uint256', state.initial], [signature('mintingPaused')]: ['uint256', state.mintingPaused],
       [signature('MAX_CARDS')]: ['uint256', state.maximum], [signature('RECEIPT_OFFSET')]: ['uint256', state.offset],
       [signature('MAX_AUTHORIZATION_LIFETIME')]: ['uint256', state.lifetime], [signature('quoteSigner')]: ['address', state.signer],
       [encodeCall('claimed(uint256)', ['uint256'], [1])]: ['uint256', blockNumber >= state.claimBlock ? state.claimed : 0],
@@ -108,11 +109,11 @@ function fixture(t: TestContext) {
   };
   const mined = async () => {
     const quote = await prepared();
-    const topics = [TAROT_CLAIMED_TOPIC, encodeAbi(['address'], [WALLET]), encodeAbi(['uint256'], [1]), encodeAbi(['uint256'], [778])];
+    const topics = [TAROT_CLAIMED_TOPIC, encodeAbi(['address'], [WALLET]), encodeAbi(['uint256'], [1]), encodeAbi(['uint256'], [tarotReceiptTokenId(1)])];
     const log = (topics: string[]) => ({ address: CONTRACT, topics, data: '0x', removed: false, blockNumber: '0x62',
       blockHash: blockHash(98), transactionHash: HASH });
     state.receipt = { transactionHash: HASH, blockHash: blockHash(98), blockNumber: '0x62', from: WALLET, to: CONTRACT, status: '0x1',
-      logs: [log(topics), ...[1, 778].map(id => log([TRANSFER, encodeAbi(['uint256'], [0]), encodeAbi(['address'], [WALLET]), encodeAbi(['uint256'], [id])]))] };
+      logs: [log(topics), ...[1, tarotReceiptTokenId(1)].map(id => log([TRANSFER, encodeAbi(['uint256'], [0]), encodeAbi(['address'], [WALLET]), encodeAbi(['uint256'], [id])]))] };
     state.transaction = { hash: HASH, blockHash: blockHash(98), blockNumber: '0x62', from: WALLET, to: CONTRACT,
       chainId: ethereumHexQuantity(TAROT_CHAIN_ID), value: '0x0', input: quote.transaction.data };
     return quote;
@@ -126,7 +127,7 @@ test('Tarot signs a free atomic claim scoped to the token, wallet, chain and con
   for (const tokenId of [1, 777]) {
     const quotes = await Promise.all([f.prepared(tokenId), f.prepared(tokenId)]);
     for (const quote of quotes) {
-      assert.equal(quote.receiptTokenId, tokenId + 777);
+      assert.equal(quote.receiptTokenId, tarotReceiptTokenId(tokenId));
       assert.equal(quote.deadline, NOW / 1000 + 600);
       assert.equal(quote.transaction.value, '0x0');
       assert.equal(quote.transaction.chainId, TAROT_CHAIN_ID);
@@ -246,7 +247,10 @@ test('Tarot fails closed on unavailable admission, signer mismatch and invalid c
     (f: ReturnType<typeof fixture>) => { f.env.ETHEREUM_TAROT_SEPOLIA_SIGNER_SECRET = ''; },
     (f: ReturnType<typeof fixture>) => { f.state.signer = OTHER; },
     (f: ReturnType<typeof fixture>) => { f.state.chainId = 1; },
-    (f: ReturnType<typeof fixture>) => { f.state.maximum = 778; },
+    (f: ReturnType<typeof fixture>) => { f.state.maximum = 777; },
+    (f: ReturnType<typeof fixture>) => { f.state.initial = 778; },
+    (f: ReturnType<typeof fixture>) => { f.state.mintingPaused = 1; },
+    (f: ReturnType<typeof fixture>) => { f.state.mintingPaused = 2; },
     (f: ReturnType<typeof fixture>) => { f.state.offset = 778; },
     (f: ReturnType<typeof fixture>) => { f.state.lifetime = 601; },
     (f: ReturnType<typeof fixture>) => { f.state.claimed = 2; },
@@ -275,7 +279,7 @@ test('Tarot confirms only the matching card and receipt after three canonical co
   assert.equal(response.body.confirmations, 3);
   assert.equal(response.body.blockNumber, 98);
   assert.equal(response.body.blockHash, f.blockHash(98));
-  assert.equal(response.body.receiptTokenId, 778);
+  assert.equal(response.body.receiptTokenId, tarotReceiptTokenId(1));
   assert.equal(response.response.headers.get('Cache-Control'), 'no-store');
   f.state.blockNumber = 99;
   const pending = (await f.confirm()).body;
@@ -289,6 +293,20 @@ test('Tarot confirms only the matching card and receipt after three canonical co
   assert.equal(response.body.confirmations, 0);
   assert.equal(response.body.blockNumber, null);
   assert.equal(response.body.blockHash, null);
+});
+
+test('DMX minting pause disables initial claims while preserving status and confirmation recovery', async t => {
+  const f = fixture(t);
+  await f.mined();
+  f.state.mintingPaused = 1;
+  f.state.claimed = 1;
+  const response = await f.call(TAROT_API_PATHS.status);
+  assert.equal(response.response.status, 200);
+  assert.equal(response.body.claimed, true);
+  assert.equal((response.body.config as TarotStatus['config']).enabled, false);
+  f.state.claimed = 0;
+  assert.equal((await f.call(TAROT_API_PATHS.prepare, { ...credentials, wallet: WALLET })).response.status, 503);
+  assert.equal((await f.confirm()).body.status, 'confirmed');
 });
 
 test('Tarot rejects forged, unrelated and partial mint confirmations', async t => {

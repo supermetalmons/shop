@@ -13,7 +13,7 @@
     "pre111k:deploy": "node scripts/pre111k-deployment.mjs",
     "tarot:deploy": "node scripts/tarot-deployment.mjs",
     "tarot:verify-source": "node scripts/tarot-sourcify.mjs",
-    "test:tarot": "forge test --offline --match-contract '^TarotCards' --gas-snapshot-emit=false",
+    "test:tarot": "forge test --offline --match-contract '^(TarotCards|DMX)' --gas-snapshot-emit=false",
     "test:tarot-deployment": "node --test scripts/tarot-deployment.test.mjs scripts/tarot-sourcify.test.mjs",
     "nft111k:deploy": "node scripts/111k-deployment.mjs",
     "nft111k:mainnet": "node scripts/111k-mainnet-deployment.mjs",

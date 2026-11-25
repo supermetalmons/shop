@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach, beforeEach, mock, type TestContext } from 'node:test';
 import { createElement } from 'react';
-import { encodeTarotClaim, resolveTarotConfig, type TarotConfirmRequest, type TarotConfirmResponse, type TarotPrepareResponse, type TarotRequest, type TarotStatus } from '../shared/ethereum/tarot.ts';
+import { encodeTarotClaim, resolveTarotConfig, tarotReceiptTokenId, type TarotConfirmRequest, type TarotConfirmResponse, type TarotPrepareResponse, type TarotRequest, type TarotStatus } from '../shared/ethereum/tarot.ts';
 import type { EthereumWallet } from '../src/ethereum/useEthereum111k.ts';
 import type { EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
@@ -24,17 +24,17 @@ const config = resolveTarotConfig({ contractAddress: contract, enabled: true, de
 const request: TarotRequest = { code, tokenId: 1, testnet: true };
 const search = (tokenId = 1) => `?code=${code}&tokenId=${tokenId}&testnet=true`;
 const status = (tokenId = 1, claimed = false): TarotStatus => ({
-  config, tokenId, receiptTokenId: tokenId + 777, claimed, observedBlock: 5,
+  config, tokenId, receiptTokenId: tarotReceiptTokenId(tokenId), claimed, observedBlock: 5,
   observedTimestamp: Math.floor(Date.now() / 1000), blockHash: `0x${'b'.repeat(64)}`,
 });
 function prepared(tokenId = 1): TarotPrepareResponse {
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const signature = `0x${'c'.repeat(130)}`;
-  return { tokenId, receiptTokenId: tokenId + 777, wallet: owner, deadline, expiresAtMs: deadline * 1000, signature,
+  return { tokenId, receiptTokenId: tarotReceiptTokenId(tokenId), wallet: owner, deadline, expiresAtMs: deadline * 1000, signature,
     transaction: { to: contract, chainId: config.chainId, value: '0x0', data: encodeTarotClaim(tokenId, deadline, signature) } };
 }
 function confirmed(tokenId = 1, blockNumber = 6): TarotConfirmResponse {
-  return { status: 'confirmed', transactionHash, confirmations: 3, tokenId, receiptTokenId: tokenId + 777,
+  return { status: 'confirmed', transactionHash, confirmations: 3, tokenId, receiptTokenId: tarotReceiptTokenId(tokenId),
     blockNumber, blockHash: receiptBlockHash };
 }
 function wallet(connected = false): EthereumWallet {
@@ -120,7 +120,7 @@ function pendingClaimFixture(t: TestContext, method = 'eth_sendTransaction') {
   mock.method(tarotApi, 'status', async () => snapshot);
   const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
   const confirm = mock.method(tarotApi, 'confirm', async (input: TarotConfirmRequest): Promise<TarotConfirmResponse> => ({
-    status: 'pending', tokenId: 1, receiptTokenId: 778, transactionHash: input.transactionHash,
+    status: 'pending', tokenId: 1, receiptTokenId: tarotReceiptTokenId(1), transactionHash: input.transactionHash,
     confirmations: 0, blockNumber: null, blockHash: null,
   }));
   const mount = (input = value) => renderHook(({ wallet: current }) => useTarotClaim(request, current), { initialProps: { wallet: input } });
@@ -995,7 +995,7 @@ test('a dropped or cancelled transaction becomes claimable only after confirmed 
   let observedTimestamp = deadline;
   mock.method(tarotApi, 'status', async () => ({ ...status(), observedTimestamp }));
   mock.method(tarotApi, 'confirm', async () => ({ status: 'pending' as const, transactionHash, confirmations: 0, tokenId: 1,
-    receiptTokenId: 778, blockNumber: null, blockHash: null }));
+    receiptTokenId: tarotReceiptTokenId(1), blockNumber: null, blockHash: null }));
   const key = `mons.shop.tarot.pending:${config.chainId}:${contract}:1`;
   window.sessionStorage.setItem(key, JSON.stringify({ wallet: owner, transactionHash, deadline }));
   const view = render(page(search()));
@@ -1141,7 +1141,7 @@ for (const observedBlock of [105, 110]) {
 
 test('link identity and deployment changes reset chain observations', async () => {
   let snapshot = { ...status(1, true), observedBlock: 100 };
-  mock.method(tarotApi, 'status', async (input: TarotRequest) => ({ ...snapshot, tokenId: input.tokenId, receiptTokenId: input.tokenId + 777 }));
+  mock.method(tarotApi, 'status', async (input: TarotRequest) => ({ ...snapshot, tokenId: input.tokenId, receiptTokenId: tarotReceiptTokenId(input.tokenId) }));
   const value = wallet();
   const view = renderHook(({ input }) => useTarotClaim(input, value), { initialProps: { input: request } });
   await waitFor(() => assert.equal(view.result.current.status?.claimed, true));
