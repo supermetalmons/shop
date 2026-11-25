@@ -25,6 +25,14 @@
       "unitTests": 3822,
       "runtimeTests": 96,
       "version": "75af184b-e2e3-4330-b9bc-ee270ba8d5b2"
+    },
+    "apiRetirementEnforcement": {
+      "passed": true,
+      "unitTests": 3824,
+      "runtimeTests": 96,
+      "version": "8411b4bf-76f1-41fb-aa99-deb7a0e1b4cc",
+      "sourceCommit": "975ebf246986240875ca86286e70825572c8bbf7",
+      "liveVerification": "retirement-api-update.json"
     }
   },
   "optionalDeadCodeCheck": {

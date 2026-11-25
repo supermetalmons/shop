@@ -1,0 +1,48 @@
+{
+  "verified": true,
+  "checkedAt": "2026-11-25T14:09:02.287Z",
+  "sourceCommit": "975ebf246986240875ca86286e70825572c8bbf7",
+  "chainId": 11155111,
+  "contractAddress": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
+  "sepoliaClaimsEnabled": true,
+  "sampledCards": 2,
+  "claimedSamples": 0,
+  "signedSimulations": [
+    {
+      "valid": true,
+      "estimatedGas": 708690
+    },
+    {
+      "valid": true,
+      "estimatedGas": 708702
+    }
+  ],
+  "all777CredentialsVerified": true,
+  "retirementMarkerPresent": true,
+  "retiredCredentialRows": 0,
+  "mainnetDisabledAndStagingPreserved": true,
+  "original111kScopesHealthy": true,
+  "privateNfcHeaders": true,
+  "claimTransactionsBroadcast": 0,
+  "apiVersion": "8411b4bf-76f1-41fb-aa99-deb7a0e1b4cc",
+  "previousApiVersion": "75af184b-e2e3-4330-b9bc-ee270ba8d5b2",
+  "frontendVersion": "283308a2-dbac-4760-8d37-c6cafc0f3b80",
+  "frontendRedeployed": false,
+  "command": "npm run deploy:api",
+  "checks": {
+    "apiUnitTests": 3824,
+    "nativeRuntimeTests": 96,
+    "apiTypecheck": true,
+    "generatedSchemaChecks": true,
+    "bundleAndStartupChecks": true,
+    "opsIntegrity": true,
+    "boundedCommerceReadiness": true,
+    "fullCommerceAuditRequired": false
+  },
+  "retiredScopeRegression": {
+    "status": 503,
+    "prepare": 503,
+    "confirm": 503,
+    "verifiedInNativeRuntime": true
+  }
+}

@@ -44,5 +44,11 @@ deployment checks passed, including 3,822 API unit tests, 96 API runtime tests,
 The optional repository-wide dead-code checks still report pre-existing 111K
 export bookkeeping issues; see [validation](validation.json).
 
+The subsequent [API retirement-enforcement update](retirement-api-update.json)
+rejects retired Sepolia scopes before credential acceptance or signing. Its
+3,824 API unit tests, 96 native runtime tests, and live claim simulations passed.
+All 777 replacement credentials and mainnet staging were verified unchanged;
+retired credential rows remain absent. The frontend did not require redeployment.
+
 See the [operator guide](../../scripts/docs/tarot_cards.md) for the current
 deployment, credential rebind, validation, and retirement procedure.

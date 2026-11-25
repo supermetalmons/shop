@@ -3,13 +3,16 @@
   "chainId": 11155111,
   "contractAddress": "0x4dc87245ef8e09305407c352e6c535ffa4e31e6c",
   "api": {
-    "version": "75af184b-e2e3-4330-b9bc-ee270ba8d5b2",
+    "version": "8411b4bf-76f1-41fb-aa99-deb7a0e1b4cc",
     "command": "npm run deploy:api",
-    "enabled": true
+    "enabled": true,
+    "previousVersion": "75af184b-e2e3-4330-b9bc-ee270ba8d5b2",
+    "sourceCommit": "975ebf246986240875ca86286e70825572c8bbf7"
   },
   "frontend": {
     "version": "283308a2-dbac-4760-8d37-c6cafc0f3b80",
     "command": "npm run deploy"
   },
-  "mainnetEnabled": false
+  "mainnetEnabled": false,
+  "updatedAt": "2026-11-25T14:09:02.287Z"
 }
