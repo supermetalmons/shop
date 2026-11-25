@@ -6,7 +6,7 @@ import test, { type TestContext } from 'node:test';
 import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ethereumSignerAddress, recoverEthereumAddress } from '../../../../shared/ethereum/crypto.ts';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.ts';
-import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaim, tarotCodeHashInput, tarotReceiptTokenId, tarotChainId,
+import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaim, encodeTarotClaimTo, tarotCodeHashInput, tarotReceiptTokenId, tarotChainId,
   type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
 import { TAROT_CLAIMED_TOPIC, tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.ts';
 import { handleTarotRequest, type TarotEnvironment } from '../src/tarot.ts';
@@ -478,6 +478,61 @@ test('Tarot recognizes failed claims without consuming credentials and supports 
   f.state.transaction!.input = '0x1234';
   assert.equal((await f.confirm()).body.status, 'confirmed');
   f.state.receipt!.status = '0x0';
+  assert.equal((await f.confirm()).response.status, 400);
+});
+
+test('Tarot confirms direct and relayed claimTo transactions and identifies failed direct claims', async t => {
+  for (const testnet of [false, true]) {
+    const f = fixture(t, testnet);
+    const quote = await f.mined();
+    const input = encodeTarotClaimTo(WALLET, 1, quote.deadline, quote.signature);
+    f.state.transaction!.input = `0x${input.slice(2).toUpperCase()}`;
+    const direct = await f.confirm();
+    assert.equal(direct.response.status, 200);
+    assert.equal(direct.body.status, 'confirmed');
+    f.state.receipt!.from = OTHER;
+    f.state.transaction!.from = OTHER;
+    assert.equal((await f.confirm()).body.status, 'confirmed');
+    f.state.receipt!.status = '0x0';
+    f.state.receipt!.logs = [];
+    assert.equal((await f.confirm()).response.status, 400);
+    f.state.receipt!.from = WALLET;
+    f.state.transaction!.from = WALLET;
+    const failed = await f.confirm();
+    assert.equal(failed.response.status, 200);
+    assert.equal(failed.body.status, 'failed');
+    assert.equal(failed.body.confirmations, 3);
+  }
+});
+
+test('Tarot rejects mismatched, malformed and paid direct claimTo transactions', async t => {
+  const f = fixture(t, false);
+  const quote = await f.mined();
+  const input = encodeTarotClaimTo(WALLET, 1, quote.deadline, quote.signature);
+  const malformed = [
+    encodeTarotClaimTo(OTHER, 1, quote.deadline, quote.signature),
+    encodeTarotClaimTo(WALLET, 2, quote.deadline, quote.signature),
+    encodeTarotClaimTo(WALLET, 1, quote.deadline, `0x${'11'.repeat(64)}`),
+    encodeCall('claimTo(address,uint256,uint256,bytes)', ['address', 'uint256', 'uint256', 'bytes'],
+      [WALLET, 1, BigInt(Number.MAX_SAFE_INTEGER) + 1n, quote.signature]),
+    `0xdeadbeef${input.slice(10)}`, input.slice(0, -2), `${input}00`,
+    `${input.slice(0, 10)}01${input.slice(12)}`,
+  ];
+  for (const receiptStatus of ['0x1', '0x0']) {
+    f.state.receipt!.status = receiptStatus;
+    if (receiptStatus === '0x0') f.state.receipt!.logs = [];
+    for (const data of malformed) {
+      f.state.transaction!.input = data;
+      const result = await f.confirm();
+      assert.equal(result.response.status, 400);
+      assert.equal((result.body.error as { code: string }).code, 'invalid-argument');
+    }
+    f.state.transaction!.input = input;
+    f.state.transaction!.value = '0x1';
+    assert.equal((await f.confirm()).response.status, 400);
+    f.state.transaction!.value = '0x0';
+  }
+  f.state.receipt!.status = '0x1';
   assert.equal((await f.confirm()).response.status, 400);
 });
 

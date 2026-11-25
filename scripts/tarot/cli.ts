@@ -6,7 +6,7 @@ import { verifyTarotMedia } from './media.ts';
 import { assertExistingTarotCredentialPin, assertTarotDeploymentActive, createTarotClaimLinks, loadTarotClaimLinks,
   privateDirectory, provisionTarotCredentials, readTarotCredentials, recordVerifiedTarotCredentials } from './claimLinks.ts';
 import { rebindTarotCredentials } from './rebind.ts';
-import { bindMainnetCredentials, createMainnetClaimLinks, loadMainnetClaimLinks, mainnetBindingConfiguration,
+import { bindMainnetCredentials, createMainnetClaimLinks, loadMainnetBindingRelease, loadMainnetClaimLinks, mainnetBindingConfiguration,
   mainnetBindingRpc, mainnetCredentialFingerprint,
   stageMainnetCredentials, verifyMainnetCredentials } from './mainnetClaims.ts';
 import { withMetadataLock } from '../ethereum-metadata/lock.ts';
@@ -23,12 +23,18 @@ export async function runTarotOperations(argv: string[]) {
   if (positionals.length !== 1 || new Set(options).size !== options.length ||
     !['verify-media', 'links', 'rebind', 'provision', 'verify-codes',
       'mainnet-links', 'mainnet-provision', 'mainnet-verify', 'mainnet-bind'].includes(command)) {
-    throw new Error('Use verify-media|links|rebind|provision|verify-codes|mainnet-links|mainnet-provision|mainnet-verify|mainnet-bind [--directory PATH] [--contract ADDRESS for links or mainnet-bind] [--source-directory PATH --source-pin PATH --deployment-directory PATH for rebind] [--deployment-block BLOCK --deployment-transaction HASH for mainnet-bind].');
+    throw new Error('Use verify-media|links|rebind|provision|verify-codes|mainnet-links|mainnet-provision|mainnet-verify|mainnet-bind [--directory PATH] [--contract ADDRESS for links or mainnet-bind] [--source-directory PATH --source-pin PATH --deployment-directory PATH for rebind] [--deployment-block BLOCK --deployment-transaction HASH --deployment-directory PATH for mainnet-bind].');
   }
-  for (const option of ['source-directory', 'source-pin', 'deployment-directory'] as const) {
+  for (const option of ['source-directory', 'source-pin'] as const) {
     if (command === 'rebind' ? !values[option]?.trim() : values[option] !== undefined) {
       throw new Error('rebind requires --source-directory, --source-pin, and --deployment-directory; these options are only allowed for rebind.');
     }
+  }
+  if (command === 'rebind' && !values['deployment-directory']?.trim()) {
+    throw new Error('rebind requires --source-directory, --source-pin, and --deployment-directory.');
+  }
+  if (!['rebind', 'mainnet-bind'].includes(command) && values['deployment-directory'] !== undefined) {
+    throw new Error('--deployment-directory is only allowed for rebind or mainnet-bind.');
   }
   if (command !== 'links' && command !== 'mainnet-bind' && values.contract !== undefined) throw new Error('--contract is only allowed for links or mainnet-bind.');
   if (command !== 'mainnet-bind' && values['deployment-block'] !== undefined) throw new Error('--deployment-block is only allowed for mainnet-bind.');
@@ -46,11 +52,20 @@ export async function runTarotOperations(argv: string[]) {
   if (command.startsWith('mainnet-')) {
     const binding = command === 'mainnet-bind'
       ? mainnetBindingConfiguration(values.contract, values['deployment-block'], values['deployment-transaction']) : null;
+    if (binding && !values['deployment-directory']?.trim()) {
+      throw new Error('Mainnet binding requires --deployment-directory for the approved frozen collection release.');
+    }
+    const deploymentDirectory = binding ? resolve(root, values['deployment-directory']!) : null;
     const rpc = binding ? mainnetBindingRpc() : null;
     if (!binding && values.contract !== undefined) throw new Error('Mainnet staging must not bind a contract.');
     const directory = resolve(root, values.directory || '.operations/dmx-mainnet-v1');
     privateDirectory(directory, root);
-    return withMetadataLock(resolve(directory, 'claim-links.lock'), async () => {
+    const locks = [resolve(directory, 'claim-links.lock'),
+      ...(deploymentDirectory ? [resolve(deploymentDirectory, 'operation.lock')] : [])].sort();
+    const locked = async <T>(index: number, work: () => Promise<T>): Promise<T> => index === locks.length
+      ? work() : withMetadataLock(locks[index], () => locked(index + 1, work));
+    return locked(0, async () => {
+      const release = deploymentDirectory ? await loadMainnetBindingRelease(deploymentDirectory) : null;
       const manifest = command === 'mainnet-links'
         ? createMainnetClaimLinks(directory, root) : loadMainnetClaimLinks(directory, root);
       const fingerprint = mainnetCredentialFingerprint(manifest);
@@ -61,7 +76,7 @@ export async function runTarotOperations(argv: string[]) {
         status: 'local', contractAddress: null, verified: false, ...files };
       loadD1Credentials(root);
       const database = createD1MaintenanceRunner('ops');
-      const verified = binding && rpc ? await bindMainnetCredentials(manifest, database, binding, rpc)
+      const verified = binding && rpc && release ? await bindMainnetCredentials(manifest, database, binding, release, rpc)
         : command === 'mainnet-provision' ? stageMainnetCredentials(manifest, database) : verifyMainnetCredentials(manifest, database);
       if (mainnetCredentialFingerprint(loadMainnetClaimLinks(directory, root)) !== fingerprint) {
         throw new Error('Private mainnet files changed during provisioning.');

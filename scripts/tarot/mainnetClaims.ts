@@ -17,7 +17,16 @@ type Database = { query(sql: string): Row[]; executeCommand(sql: string): unknow
 type MainnetBinding = { contractAddress: string; deploymentBlock: number; transactionHash: string };
 type MainnetRpc = (method: string, params?: unknown[]) => Promise<unknown>;
 type RuntimeMatcher = (code: string) => boolean;
-type TrustedBuild = { matchesRuntime: RuntimeMatcher; creationCode: string };
+type TrustedBuild = { matchesRuntime: RuntimeMatcher; creationCode: string;
+  rendererCreationCode: string; matchesRendererRuntime: RuntimeMatcher };
+type DeploymentEvidence = MainnetBinding & {
+  chainId: 1; deploymentBlockHash: string; deployer: string; nonce: string; creationCode: string;
+  artifactSha256: string; standardInputSha256: string;
+};
+export type MainnetBindingRelease = DeploymentEvidence & {
+  admin: string; quoteSigner: string; renderer: string; constructorArgs: string;
+  manifestSha256: string; rendererReleaseSha256: string; rendererDeployment: DeploymentEvidence;
+};
 let trustedBuild: Promise<TrustedBuild> | undefined;
 export type MainnetClaimLinks = {
   version: 1; chainId: 1; collectionKey: 'dmx-mainnet-v1'; contractAddress: null;
@@ -267,13 +276,16 @@ function trustedDmxBuild(): Promise<TrustedBuild> {
     const project = fileURLToPath(new URL('../../onchain/ethereum/', import.meta.url));
     const build = mkdtempSync(resolve(tmpdir(), 'dmx-binding-build-'));
     try {
-      execFileSync('forge', ['build', '--offline', 'src/TarotCards.sol', '--out', resolve(build, 'out'),
+      execFileSync('forge', ['build', '--offline', 'src/TarotCards.sol', 'src/DMXWebpRenderer.sol', '--out', resolve(build, 'out'),
         '--cache-path', resolve(build, 'cache')], { cwd: project, stdio: 'pipe', timeout: 30_000 });
       const artifact = JSON.parse(readFileSync(resolve(build, 'out/TarotCards.sol/TarotCards.json'), 'utf8'));
-      if (artifact.metadata?.settings?.compilationTarget?.['src/TarotCards.sol'] !== 'TarotCards' ||
-        typeof artifact.deployedBytecode?.object !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(artifact.deployedBytecode.object) ||
-        typeof artifact.bytecode?.object !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(artifact.bytecode.object)) {
-        throw new Error('Trusted DMX build did not produce the expected contract.');
+      const renderer = JSON.parse(readFileSync(resolve(build, 'out/DMXWebpRenderer.sol/DMXWebpRenderer.json'), 'utf8'));
+      for (const [name, compiled] of [['TarotCards', artifact], ['DMXWebpRenderer', renderer]] as const) {
+        if (compiled.metadata?.settings?.compilationTarget?.[`src/${name}.sol`] !== name ||
+          typeof compiled.deployedBytecode?.object !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(compiled.deployedBytecode.object) ||
+          typeof compiled.bytecode?.object !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(compiled.bytecode.object)) {
+          throw new Error('Trusted DMX build did not produce the expected contract: ' + name);
+        }
       }
       const { matchingRuntime }: { matchingRuntime: (expected: string, actual: string,
         references: Record<string, { start: number; length: number }[]>) => boolean } =
@@ -281,13 +293,67 @@ function trustedDmxBuild(): Promise<TrustedBuild> {
       const expected: string = artifact.deployedBytecode.object;
       const references: Record<string, { start: number; length: number }[]> = artifact.deployedBytecode.immutableReferences ?? {};
       return { creationCode: artifact.bytecode.object.toLowerCase(),
-        matchesRuntime: (code: string) => matchingRuntime(expected, code, references) };
+        matchesRuntime: (code: string) => matchingRuntime(expected, code, references),
+        rendererCreationCode: renderer.bytecode.object.toLowerCase(),
+        matchesRendererRuntime: (code: string) => matchingRuntime(renderer.deployedBytecode.object, code,
+          renderer.deployedBytecode.immutableReferences ?? {}) };
     } finally { rmSync(build, { recursive: true, force: true }); }
   })().catch(error => { trustedBuild = undefined; throw error; });
 }
 
-async function verifyCreation(binding: MainnetBinding, deployment: { number: bigint; hash: string },
-  rpc: MainnetRpc, build: TrustedBuild): Promise<void> {
+function validateBindingRelease(release: MainnetBindingRelease, build: TrustedBuild): void {
+  if (!release || !release.rendererDeployment) throw new Error('Mainnet binding requires approved deployment release evidence.');
+  for (const evidence of [release, release.rendererDeployment]) {
+    const binding = mainnetBindingConfiguration(evidence.contractAddress, evidence.deploymentBlock, evidence.transactionHash);
+    if (evidence.chainId !== 1 || binding.contractAddress !== evidence.contractAddress || binding.transactionHash !== evidence.transactionHash ||
+      !/^0x[0-9a-f]{64}$/.test(evidence.deploymentBlockHash) ||
+      normalizeEthereumAddress(evidence.deployer) !== evidence.deployer || /^0x0{40}$/.test(evidence.deployer) ||
+      typeof evidence.nonce !== 'string' || !/^(0|[1-9][0-9]*)$/.test(evidence.nonce) ||
+      !/^[0-9a-f]{64}$/.test(evidence.artifactSha256) || !/^[0-9a-f]{64}$/.test(evidence.standardInputSha256)) {
+      throw new Error('Invalid approved mainnet deployment evidence.');
+    }
+  }
+  for (const address of [release.admin, release.quoteSigner, release.renderer]) {
+    if (normalizeEthereumAddress(address) !== address || /^0x0{40}$/.test(address) || address === release.contractAddress) {
+      throw new Error('Invalid approved mainnet deployment roles.');
+    }
+  }
+  if (!/^[0-9a-f]{64}$/.test(release.manifestSha256) || !/^[0-9a-f]{64}$/.test(release.rendererReleaseSha256) ||
+    release.renderer !== release.rendererDeployment.contractAddress || release.rendererDeployment.deploymentBlock > release.deploymentBlock ||
+    release.constructorArgs !== encodeAbi(['address', 'address', 'address'], [release.admin, release.quoteSigner, release.renderer]) ||
+    release.creationCode !== build.creationCode + release.constructorArgs.slice(2) ||
+    release.rendererDeployment.creationCode !== build.rendererCreationCode) {
+    throw new Error('Approved mainnet release does not match the trusted DMX collection and renderer build.');
+  }
+}
+
+export async function loadMainnetBindingRelease(directory: string): Promise<MainnetBindingRelease> {
+  type FrozenRelease = { manifest: Record<string, unknown>; deployment: Record<string, unknown>;
+    artifact: { deployedBytecode: { object: string } }; rendererRelease: Omit<FrozenRelease, 'rendererRelease'> };
+  const { readCollectionRelease }: { readCollectionRelease(directory: string, network: string): FrozenRelease } =
+    await import(new URL('../../onchain/ethereum/scripts/tarot-deployment.mjs', import.meta.url).href);
+  const frozen = readCollectionRelease(directory, 'mainnet');
+  const evidence = ({ manifest, deployment }: Omit<FrozenRelease, 'rendererRelease'>): DeploymentEvidence => ({
+    ...mainnetBindingConfiguration(manifest.contractAddress, deployment.deploymentBlock, deployment.transactionHash),
+    chainId: manifest.chainId as 1, deploymentBlockHash: String(deployment.deploymentBlockHash),
+    deployer: String(manifest.deployer), nonce: String(manifest.nonce), creationCode: String(manifest.creationCode),
+    artifactSha256: String(manifest.artifactSha256), standardInputSha256: String(manifest.standardInputSha256),
+  });
+  const release: MainnetBindingRelease = { ...evidence(frozen), admin: String(frozen.manifest.admin),
+    quoteSigner: String(frozen.manifest.quoteSigner), renderer: String(frozen.manifest.renderer),
+    constructorArgs: String(frozen.manifest.constructorArgs), manifestSha256: hash(JSON.stringify(frozen.manifest, null, 2) + '\n'),
+    rendererReleaseSha256: String(frozen.manifest.rendererReleaseSha256), rendererDeployment: evidence(frozen.rendererRelease) };
+  const build = await trustedDmxBuild();
+  validateBindingRelease(release, build);
+  if (!build.matchesRuntime(frozen.artifact.deployedBytecode.object) ||
+    !build.matchesRendererRuntime(frozen.rendererRelease.artifact.deployedBytecode.object)) {
+    throw new Error('Approved mainnet release contains an unexpected collection or renderer runtime.');
+  }
+  return release;
+}
+
+async function verifyCreation(binding: DeploymentEvidence, deployment: { number: bigint; hash: string },
+  rpc: MainnetRpc): Promise<void> {
   const [transaction, receipt] = await Promise.all([
     rpc('eth_getTransactionByHash', [binding.transactionHash]), rpc('eth_getTransactionReceipt', [binding.transactionHash]),
   ]);
@@ -299,29 +365,23 @@ async function verifyCreation(binding: MainnetBinding, deployment: { number: big
     !matchesHash(transaction.blockHash, deployment.hash) || !matchesHash(receipt.blockHash, deployment.hash) ||
     normalizeEthereumAddress(receipt.contractAddress) !== binding.contractAddress ||
     rpcQuantity(transaction.blockNumber) !== deployment.number || rpcQuantity(receipt.blockNumber) !== deployment.number ||
-    rpcQuantity(transaction.chainId) !== 1n || rpcQuantity(transaction.value) !== 0n) {
+    rpcQuantity(transaction.chainId) !== 1n || rpcQuantity(transaction.value) !== 0n ||
+    rpcQuantity(transaction.nonce) !== BigInt(binding.nonce) || deployment.hash !== binding.deploymentBlockHash) {
     throw new Error('Mainnet deployment transaction does not match the contract and canonical block.');
   }
   const from = normalizeEthereumAddress(transaction.from);
-  if (!from || /^0x0{40}$/.test(from) || normalizeEthereumAddress(receipt.from) !== from) {
-    throw new Error('Mainnet deployment sender is inconsistent.');
+  if (from !== binding.deployer || normalizeEthereumAddress(receipt.from) !== binding.deployer) {
+    throw new Error('Mainnet deployment sender does not match the approved release.');
   }
   if (typeof transaction.input !== 'string' || !/^0x(?:[0-9a-f]{2})+$/i.test(transaction.input)) {
     throw new Error('Mainnet deployment creation code is invalid.');
   }
-  const input = transaction.input.toLowerCase();
-  if (!input.startsWith(build.creationCode) || input.length !== build.creationCode.length + 3 * 64) {
-    throw new Error('Mainnet deployment creation code does not match the trusted DMX build.');
-  }
-  const encoded = '0x' + input.slice(build.creationCode.length);
-  const args = decodeReturn(['address', 'address', 'address'], encoded);
-  if (args.some(value => typeof value !== 'string' || /^0x0{40}$/.test(value) || value === binding.contractAddress) ||
-    encodeAbi(['address', 'address', 'address'], args) !== encoded) {
-    throw new Error('Mainnet deployment constructor arguments are invalid.');
+  if (transaction.input.toLowerCase() !== binding.creationCode) {
+    throw new Error('Mainnet deployment creation code or constructor roles differ from the approved release.');
   }
 }
 
-async function verifyBindingTarget(binding: MainnetBinding, rpc: MainnetRpc, build: TrustedBuild) {
+async function verifyBindingTarget(binding: MainnetBindingRelease, rpc: MainnetRpc, build: TrustedBuild) {
   if (rpcQuantity(await rpc('eth_chainId')) !== 1n) throw new Error('Mainnet binding requires Ethereum chain 1.');
   const deploymentTag = '0x' + binding.deploymentBlock.toString(16);
   const deployment = rpcBlock(await rpc('eth_getBlockByNumber', [deploymentTag, false]));
@@ -329,7 +389,7 @@ async function verifyBindingTarget(binding: MainnetBinding, rpc: MainnetRpc, bui
   if (deployment.number !== BigInt(binding.deploymentBlock) || current.number < deployment.number + 2n) {
     throw new Error('Mainnet deployment requires three canonical confirmations.');
   }
-  await verifyCreation(binding, deployment, rpc, build);
+  await verifyCreation(binding, deployment, rpc);
   const currentTag = '0x' + current.number.toString(16);
   const previous = await rpc('eth_getCode', [binding.contractAddress, '0x' + (deployment.number - 1n).toString(16)]);
   if (previous !== '0x') throw new Error('Mainnet contract already existed before the supplied deployment block.');
@@ -341,6 +401,21 @@ async function verifyBindingTarget(binding: MainnetBinding, rpc: MainnetRpc, bui
   const deployedCode = await readCode(binding.contractAddress, deploymentTag);
   if (await readCode(binding.contractAddress, currentTag) !== deployedCode) throw new Error('Mainnet collection runtime changed.');
   if (!build.matchesRuntime(deployedCode)) throw new Error('Mainnet collection runtime does not match the trusted DMX build.');
+  const rendererEvidence = binding.rendererDeployment;
+  const rendererTag = '0x' + rendererEvidence.deploymentBlock.toString(16);
+  const rendererDeployment = rpcBlock(await rpc('eth_getBlockByNumber', [rendererTag, false]));
+  if (rendererDeployment.number !== BigInt(rendererEvidence.deploymentBlock) || current.number < rendererDeployment.number + 2n) {
+    throw new Error('Approved mainnet renderer requires three canonical confirmations.');
+  }
+  await verifyCreation(rendererEvidence, rendererDeployment, rpc);
+  if (await rpc('eth_getCode', [binding.renderer, '0x' + (rendererDeployment.number - 1n).toString(16)]) !== '0x') {
+    throw new Error('Mainnet renderer already existed before the approved deployment block.');
+  }
+  const rendererCode = await readCode(binding.renderer, rendererTag);
+  if (!build.matchesRendererRuntime(rendererCode) || await readCode(binding.renderer, deploymentTag) !== rendererCode ||
+    await readCode(binding.renderer, currentTag) !== rendererCode) {
+    throw new Error('Mainnet renderer runtime does not match the approved DMX renderer.');
+  }
   const call = async (signature: string, types: string[]) => {
     const result = await rpc('eth_call', [{ to: binding.contractAddress, data: encodeCall(signature, [], []) }, currentTag]);
     if (typeof result !== 'string') throw new Error('Invalid mainnet contract response.');
@@ -358,17 +433,19 @@ async function verifyBindingTarget(binding: MainnetBinding, rpc: MainnetRpc, bui
     verifyingContract !== binding.contractAddress) throw new Error('Unexpected mainnet DMX signing domain.');
   const quoteSigner = normalizeEthereumAddress((await call('quoteSigner()', ['address']))[0]);
   const renderer = normalizeEthereumAddress((await call('renderer()', ['address']))[0]);
-  if (!quoteSigner || /^0x0{40}$/.test(quoteSigner) || !renderer || /^0x0{40}$/.test(renderer) || renderer === binding.contractAddress) {
-    throw new Error('Invalid mainnet DMX signer or renderer.');
+  const owner = normalizeEthereumAddress((await call('owner()', ['address']))[0]);
+  const pendingOwner = normalizeEthereumAddress((await call('pendingOwner()', ['address']))[0]);
+  if (quoteSigner !== binding.quoteSigner || renderer !== binding.renderer || owner !== binding.admin || pendingOwner !== '0x' + '0'.repeat(40)) {
+    throw new Error('Mainnet DMX owner, pending owner, signer or renderer differs from the approved release.');
   }
-  await readCode(renderer, currentTag);
-  for (const [tag, expected] of [[deploymentTag, deployment], [currentTag, current]] as const) {
+  for (const [tag, expected] of [[deploymentTag, deployment], [rendererTag, rendererDeployment], [currentTag, current]] as const) {
     const canonical = rpcBlock(await rpc('eth_getBlockByNumber', [tag, false]));
     if (canonical.number !== expected.number || canonical.hash !== expected.hash) throw new Error('Mainnet binding block is no longer canonical.');
   }
   return { deploymentBlock: binding.deploymentBlock, deploymentBlockHash: deployment.hash,
     deploymentTransactionHash: binding.transactionHash,
-    observedBlock: Number(current.number), observedBlockHash: current.hash, quoteSigner, renderer };
+    observedBlock: Number(current.number), observedBlockHash: current.hash, owner, quoteSigner, renderer,
+    approvedManifestSha256: binding.manifestSha256, rendererReleaseSha256: binding.rendererReleaseSha256 };
 }
 
 function readBoundCredentials(manifest: MainnetClaimLinks, database: Database): Row[] {
@@ -394,7 +471,7 @@ function verifyBoundRows(manifest: MainnetClaimLinks, contractAddress: string, r
 }
 
 export async function bindMainnetCredentials(manifest: MainnetClaimLinks, database: Database, requested: MainnetBinding,
-  rpc: MainnetRpc = mainnetBindingRpc()) {
+  approvedRelease: MainnetBindingRelease, rpc: MainnetRpc = mainnetBindingRpc()) {
   const binding = mainnetBindingConfiguration(requested.contractAddress, requested.deploymentBlock, requested.transactionHash);
   mainnetCredentials(manifest);
   const batch = readBatch(manifest, database, binding.contractAddress);
@@ -402,7 +479,11 @@ export async function bindMainnetCredentials(manifest: MainnetClaimLinks, databa
   verifyRows(manifest, readCredentials(manifest, database), true);
   verifyBoundRows(manifest, binding.contractAddress, readBoundCredentials(manifest, database), batch.status === 'bound');
   const build = await trustedDmxBuild();
-  let deployment = await verifyBindingTarget(binding, rpc, build);
+  const approved = structuredClone(approvedRelease);
+  validateBindingRelease(approved, build);
+  if (binding.contractAddress !== approved.contractAddress || binding.deploymentBlock !== approved.deploymentBlock ||
+    binding.transactionHash !== approved.transactionHash) throw new Error('Mainnet binding target differs from the approved deployment release.');
+  let deployment = await verifyBindingTarget(approved, rpc, build);
   const fingerprint = mainnetCredentialFingerprint(manifest);
   if (batch.status !== 'bound') {
     const credentials = manifest.links.map(link => ({ tokenId: link.tokenId, codeHash: hash(tarotCodeHashInput({
@@ -426,7 +507,7 @@ export async function bindMainnetCredentials(manifest: MainnetClaimLinks, databa
     }
     verifyRows(manifest, readCredentials(manifest, database), true);
     verifyBoundRows(manifest, binding.contractAddress, readBoundCredentials(manifest, database), true);
-    deployment = await verifyBindingTarget(binding, rpc, build);
+    deployment = await verifyBindingTarget(approved, rpc, build);
     database.executeCommand(`UPDATE dmx_mainnet_claim_batches SET status='bound',contract_address='${binding.contractAddress}',
       bound_at_ms=${Math.max(Date.now(), Number(batch.verified_at_ms))}
       WHERE batch_id='${manifest.batchId}' AND status='staged' AND contract_address IS NULL

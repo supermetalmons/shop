@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -12,9 +12,11 @@ import { dmxRedemptionReceiptTokenId, encodeDmxMintTo, encodeDmxMintToAuthorized
 import { dmxMintDigest, dmxRedemptionDigest, tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.ts';
 import { TAROT_API_PATHS, encodeTarotClaimTo, tarotChainId, tarotCodeHashInput, tarotReceiptTokenId,
   type TarotConfirmResponse, type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
-import { bindMainnetCredentials, stageMainnetCredentials, type MainnetClaimLinks } from '../../../../scripts/tarot/mainnetClaims.ts';
+import { bindMainnetCredentials, loadMainnetBindingRelease, stageMainnetCredentials,
+  type MainnetClaimLinks } from '../../../../scripts/tarot/mainnetClaims.ts';
 import { handleTarotRequest, type TarotEnvironment } from '../src/tarot.ts';
 import { d1Database } from '../test/commerceD1Harness.ts';
+import { writeTarotMainnetReleaseFixture } from './tarotReleaseFixture.ts';
 
 const root = resolve(import.meta.dirname, '../../../..');
 const project = resolve(root, 'onchain/ethereum');
@@ -33,7 +35,8 @@ const port = await new Promise<number>((done, reject) => {
     server.close(error => error ? reject(error) : done(address.port));
   });
 });
-const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--chain-id', String(chainId), '--hardfork', 'prague', '--silent'],
+const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--chain-id', String(chainId),
+  '--hardfork', testnet ? 'prague' : 'osaka', ...(!testnet ? ['--enable-tx-gas-limit'] : []), '--silent'],
   { stdio: ['ignore', 'ignore', 'pipe'] });
 let anvilError = '';
 anvil.stderr.on('data', data => { anvilError += String(data); });
@@ -41,6 +44,7 @@ anvil.on('error', error => { anvilError += error.message; });
 const rpcUrl = `http://127.0.0.1:${port}`;
 const db = new DatabaseSync(':memory:');
 db.exec('PRAGMA foreign_keys = ON');
+let releaseDirectory: string | undefined;
 let rpcId = 0;
 async function rpc<T>(method: string, params: unknown[] = []): Promise<T> {
   const response = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -139,8 +143,14 @@ try {
     await api(TAROT_API_PATHS.prepare, { ...request(1), wallet }, 503);
     assert.equal(apiRpcRequests, 0);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dmx_mainnet_bound_claim_codes').get()?.count, 0);
+    await mkdir(resolve(root, '.cache'), { recursive: true });
+    releaseDirectory = await mkdtemp(resolve(root, '.cache/dmx-e2e-release-'));
+    await writeTarotMainnetReleaseFixture(releaseDirectory, project,
+      { ...deployment, contractAddress },
+      { ...rendererDeployment, contractAddress: rendererDeployment.contractAddress }, admin, ethereumSignerAddress(key), rpc);
+    const approvedRelease = await loadMainnetBindingRelease(releaseDirectory);
     const bound = await bindMainnetCredentials(manifest, database,
-      { contractAddress, deploymentBlock, transactionHash: deployment.transactionHash }, rpc);
+      { contractAddress, deploymentBlock, transactionHash: deployment.transactionHash }, approvedRelease, rpc);
     assert.equal(bound.status, 'bound');
     assert.equal(bound.credentialCount, 777);
     assert.equal(bound.contractAddress, contractAddress);
@@ -181,7 +191,8 @@ try {
   assert.equal(await ownerOf(2), wallet);
   assert.equal(await ownerOf(tarotReceiptTokenId(2)), wallet);
   const boundary = await prepare(777, other);
-  const boundaryReceipt = await send(other, boundary.transaction);
+  const boundaryReceipt = await send(other, { ...boundary.transaction,
+    data: encodeTarotClaimTo(other, 777, boundary.deadline, boundary.signature) });
   await rpc('anvil_mine', ['0x2']);
   assert.equal((await confirm(777, boundaryReceipt.transactionHash, other)).status, 'confirmed');
   assert.equal(await ownerOf(777), other);
@@ -319,4 +330,5 @@ try {
 } finally {
   db.close();
   anvil.kill('SIGTERM');
+  if (releaseDirectory) await rm(releaseDirectory, { recursive: true, force: true });
 }

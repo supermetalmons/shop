@@ -14,6 +14,7 @@ import {
   bindMainnetCredentials, createMainnetClaimLinks, loadMainnetClaimLinks, mainnetBindingConfiguration,
   mainnetBindingRpc, mainnetClaimCsv, mainnetCredentials,
   mainnetCredentialFingerprint, stageMainnetCredentials, verifyMainnetCredentials,
+  type MainnetBindingRelease,
 } from '../scripts/tarot/mainnetClaims.ts';
 
 type Manifest = ReturnType<typeof createMainnetClaimLinks>;
@@ -23,14 +24,16 @@ const csvName = 'claim-links.private.csv';
 type RuntimeArtifact = { bytecode: { object: string };
   deployedBytecode: { object: string; immutableReferences: Record<string, { start: number; length: number }[]> } };
 let runtimeArtifact: RuntimeArtifact;
+let rendererArtifact: RuntimeArtifact;
 let getterOnlyRuntime: string;
 let build: string;
 
 before(() => {
   build = mkdtempSync(join(tmpdir(), 'dmx-binding-build-test-'));
-  execFileSync('forge', ['build', '--offline', 'src/TarotCards.sol', '--out', join(build, 'out'), '--cache-path', join(build, 'cache')],
+  execFileSync('forge', ['build', '--offline', 'src/TarotCards.sol', 'src/DMXWebpRenderer.sol', '--out', join(build, 'out'), '--cache-path', join(build, 'cache')],
     { cwd: fileURLToPath(new URL('../onchain/ethereum/', import.meta.url)), stdio: 'pipe', timeout: 30_000 });
   runtimeArtifact = JSON.parse(readFileSync(join(build, 'out', 'TarotCards.sol', 'TarotCards.json'), 'utf8')) as RuntimeArtifact;
+  rendererArtifact = JSON.parse(readFileSync(join(build, 'out', 'DMXWebpRenderer.sol', 'DMXWebpRenderer.json'), 'utf8')) as RuntimeArtifact;
   const getterOnly = join(build, 'getter-only');
   mkdirSync(join(getterOnly, 'src'), { recursive: true });
   writeFileSync(join(getterOnly, 'src', 'GetterOnly.sol'), `pragma solidity 0.8.38;
@@ -399,17 +402,35 @@ const signerAddress = '0x' + '78'.repeat(20);
 const deployerAddress = '0x' + '9a'.repeat(20);
 const deploymentHash = '0x' + 'a'.repeat(64);
 const currentHash = '0x' + 'b'.repeat(64);
+const rendererTransactionHash = '0x' + 'd'.repeat(64);
+const rendererBlockHash = '0x' + 'e'.repeat(64);
+
+function approvedRelease(): MainnetBindingRelease {
+  const constructorArgs = encodeAbi(['address', 'address', 'address'], [deployerAddress, signerAddress, rendererAddress]);
+  return { ...binding, chainId: 1, deploymentBlockHash: deploymentHash, deployer: deployerAddress, nonce: '2',
+    creationCode: runtimeArtifact.bytecode.object + constructorArgs.slice(2), constructorArgs,
+    admin: deployerAddress, quoteSigner: signerAddress, renderer: rendererAddress,
+    artifactSha256: '1'.repeat(64), standardInputSha256: '2'.repeat(64), manifestSha256: '3'.repeat(64),
+    rendererReleaseSha256: '4'.repeat(64), rendererDeployment: {
+      chainId: 1, contractAddress: rendererAddress, deploymentBlock: 90, transactionHash: rendererTransactionHash,
+      deploymentBlockHash: rendererBlockHash, deployer: deployerAddress, nonce: '1',
+      creationCode: rendererArtifact.bytecode.object, artifactSha256: '5'.repeat(64), standardInputSha256: '6'.repeat(64),
+    } };
+}
 
 function bindingRpcFixture(overrides: {
   chainId?: unknown; currentBlock?: number; previousCode?: unknown; deployedCode?: unknown;
   currentCode?: unknown; rendererCode?: unknown; getters?: Record<string, unknown>;
   domain?: unknown[]; reorgAfterDeploymentRead?: number;
   transaction?: Record<string, unknown> | null; receipt?: Record<string, unknown> | null;
+  rendererTransaction?: Record<string, unknown> | null; rendererReceipt?: Record<string, unknown> | null;
+  rendererPreviousCode?: unknown; rendererDeploymentCode?: unknown; rendererDeploymentHash?: string;
 } = {}) {
   const getters: Array<[string, string, unknown]> = [
     ['name()', 'string', 'divination machina x'], ['symbol()', 'string', 'DMX'],
     ['INITIAL_CARDS()', 'uint256', 777], ['MAX_CARDS()', 'uint256', 999999], ['RECEIPT_OFFSET()', 'uint256', 999999],
     ['quoteSigner()', 'address', signerAddress], ['renderer()', 'address', rendererAddress],
+    ['owner()', 'address', deployerAddress], ['pendingOwner()', 'address', '0x' + '0'.repeat(40)],
   ];
   const responses = new Map(getters.map(([signature, type, value]) => [encodeCall(signature, [], []),
     encodeAbi([type], [overrides.getters?.[signature] ?? value])]));
@@ -424,6 +445,10 @@ function bindingRpcFixture(overrides: {
     requests.push({ method, params });
     if (method === 'eth_chainId') return overrides.chainId ?? '0x1';
     if (method === 'eth_getTransactionByHash') {
+      if (params[0] === rendererTransactionHash) return overrides.rendererTransaction === null ? null : {
+        hash: rendererTransactionHash, from: deployerAddress, to: null, blockNumber: '0x5a', blockHash: rendererBlockHash,
+        chainId: '0x1', value: '0x0', nonce: '0x1', input: rendererArtifact.bytecode.object, ...overrides.rendererTransaction,
+      };
       assert.deepEqual(params, [binding.transactionHash]);
       return overrides.transaction === null ? null : {
         hash: binding.transactionHash, from: deployerAddress, to: null, blockNumber: '0x64', blockHash: deploymentHash,
@@ -433,6 +458,10 @@ function bindingRpcFixture(overrides: {
       };
     }
     if (method === 'eth_getTransactionReceipt') {
+      if (params[0] === rendererTransactionHash) return overrides.rendererReceipt === null ? null : {
+        transactionHash: rendererTransactionHash, from: deployerAddress, to: null, status: '0x1',
+        contractAddress: rendererAddress, blockNumber: '0x5a', blockHash: rendererBlockHash, ...overrides.rendererReceipt,
+      };
       assert.deepEqual(params, [binding.transactionHash]);
       return overrides.receipt === null ? null : {
         transactionHash: binding.transactionHash, from: deployerAddress, to: null, status: '0x1',
@@ -440,6 +469,7 @@ function bindingRpcFixture(overrides: {
       };
     }
     if (method === 'eth_getBlockByNumber') {
+      if (params[0] === '0x5a') return { number: '0x5a', hash: overrides.rendererDeploymentHash ?? rendererBlockHash };
       if (params[0] === '0x64') {
         deploymentReads++;
         return { number: '0x64', hash: deploymentReads > (overrides.reorgAfterDeploymentRead ?? Infinity) ? currentHash : deploymentHash };
@@ -448,7 +478,11 @@ function bindingRpcFixture(overrides: {
       return { number: '0x' + currentBlock.toString(16), hash: currentHash };
     }
     if (method === 'eth_getCode') {
-      if (params[0] === rendererAddress) return overrides.rendererCode ?? '0x6001';
+      if (params[0] === rendererAddress) {
+        if (params[1] === '0x59') return overrides.rendererPreviousCode ?? '0x';
+        if (params[1] === '0x5a') return overrides.rendererDeploymentCode ?? rendererArtifact.deployedBytecode.object;
+        return overrides.rendererCode ?? rendererArtifact.deployedBytecode.object;
+      }
       assert.equal(params[0], binding.contractAddress);
       if (params[1] === '0x63') return overrides.previousCode ?? '0x';
       if (params[1] === '0x64') return overrides.deployedCode ?? runtimeArtifact.deployedBytecode.object;
@@ -484,6 +518,11 @@ test('mainnet binding requires explicit deployment scope and HTTPS read-only RPC
   }
   await assert.rejects(runTarotOperations(['mainnet-verify', '--deployment-block', '100']), /only allowed for mainnet-bind/);
   await assert.rejects(runTarotOperations(['mainnet-verify', '--deployment-transaction', binding.transactionHash]), /only allowed for mainnet-bind/);
+  await assert.rejects(runTarotOperations(['mainnet-bind', '--contract', binding.contractAddress,
+    '--deployment-block', '100', '--deployment-transaction', binding.transactionHash]), /requires --deployment-directory/);
+  for (const command of ['mainnet-links', 'mainnet-provision', 'mainnet-verify']) {
+    await assert.rejects(runTarotOperations([command, '--deployment-directory', '.operations/reviewed']), /only allowed for rebind or mainnet-bind/);
+  }
   assert.throws(() => mainnetBindingRpc({ ETHEREUM_TAROT_MAINNET_RPC_URL: 'http://rpc.example' }), /HTTPS/);
   const calls: { url: string; method: string }[] = [];
   t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
@@ -529,13 +568,16 @@ test('binding verifies Ethereum deployment and all credentials before making the
   const before = { staged: fixture.credentials(), sepolia: fixture.sepolia(), verifiedAt: fixture.batches()[0].verified_at_ms,
     files: [manifestName, csvName].map(name => readFileSync(join(directory, name), 'utf8')) };
   const rpc = bindingRpcFixture();
-  const result = await bindMainnetCredentials(manifest, fixture.adapter, binding, rpc.rpc);
+  const result = await bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), rpc.rpc);
   assert.equal(result.status, 'bound');
   assert.equal(result.contractAddress, binding.contractAddress);
   assert.equal(result.deploymentBlock, binding.deploymentBlock);
   assert.equal(result.deploymentBlockHash, deploymentHash);
+  assert.equal(result.owner, deployerAddress);
   assert.equal(result.quoteSigner, signerAddress);
   assert.equal(result.renderer, rendererAddress);
+  assert.equal(result.approvedManifestSha256, approvedRelease().manifestSha256);
+  assert.equal(result.rendererReleaseSha256, approvedRelease().rendererReleaseSha256);
   assert.equal(fixture.batches()[0].status, 'bound');
   assert.equal(fixture.batches()[0].verified_at_ms, before.verifiedAt);
   assert.ok(Number(fixture.batches()[0].bound_at_ms) >= Number(before.verifiedAt));
@@ -564,7 +606,7 @@ test('binding verifies Ethereum deployment and all credentials before making the
   for (const link of manifest.links) assert.ok(!emitted.includes(link.code) && !emitted.includes(link.url));
   const writes = fixture.commands.length;
   const boundAt = fixture.batches()[0].bound_at_ms;
-  assert.deepEqual(await bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture().rpc), result);
+  assert.deepEqual(await bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture().rpc), result);
   assert.equal(fixture.commands.length, writes);
   assert.equal(fixture.batches()[0].bound_at_ms, boundAt);
   assert.throws(() => verifyMainnetCredentials(manifest, fixture.adapter));
@@ -610,23 +652,105 @@ test('missing or inconsistent deployment transactions and receipts cannot bind o
     stageMainnetCredentials(manifest, fixture.adapter);
     const before = { batches: fixture.batches(), credentials: fixture.credentials(), sepolia: fixture.sepolia() };
     const writes = fixture.commands.length;
-    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture(overrides).rpc), label);
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture(overrides).rpc), label);
     assert.equal(fixture.commands.length, writes, label);
     assert.deepEqual({ batches: fixture.batches(), credentials: fixture.credentials(), sepolia: fixture.sepolia() }, before, label);
     assert.equal(fixture.boundCredentials().length, 0, label);
   }
 });
 
-test('verified constructor evidence still permits legitimate quote signer rotation', async t => {
+test('binding rejects role changes after the approved deployment before writing credentials', async t => {
   const { manifest } = bundle(t);
-  const fixture = database(t);
-  stageMainnetCredentials(manifest, fixture.adapter);
-  const rotatedSigner = '0x' + 'ab'.repeat(20);
-  const result = await bindMainnetCredentials(manifest, fixture.adapter, binding,
-    bindingRpcFixture({ getters: { 'quoteSigner()': rotatedSigner } }).rpc);
-  assert.equal(result.status, 'bound');
-  assert.equal(result.quoteSigner, rotatedSigner);
-  assert.equal(fixture.boundCredentials().length, 777);
+  for (const signature of ['owner()', 'pendingOwner()', 'quoteSigner()', 'renderer()']) {
+    const fixture = database(t);
+    stageMainnetCredentials(manifest, fixture.adapter);
+    const writes = fixture.commands.length;
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(),
+      bindingRpcFixture({ getters: { [signature]: '0x' + 'ab'.repeat(20) } }).rpc), /differs from the approved release/);
+    assert.equal(fixture.commands.length, writes);
+    assert.equal(fixture.boundCredentials().length, 0);
+    assert.equal(fixture.batches()[0].status, 'staged');
+  }
+});
+
+test('binding requires matching approved mainnet collection and renderer evidence before RPC or writes', async t => {
+  const { manifest } = bundle(t);
+  const changes: Array<(release: MainnetBindingRelease) => void> = [
+    release => { Object.assign(release, { chainId: 11155111 }); },
+    release => { release.contractAddress = '0x' + 'ab'.repeat(20); },
+    release => { release.deploymentBlock++; },
+    release => { release.transactionHash = currentHash; },
+    release => { release.admin = signerAddress; },
+    release => { release.quoteSigner = deployerAddress; },
+    release => { release.renderer = deployerAddress; },
+    release => { release.creationCode = '0x6001'; },
+    release => { release.constructorArgs = '0x'; },
+    release => { release.manifestSha256 = ''; },
+    release => { release.rendererReleaseSha256 = ''; },
+    release => { Object.assign(release.rendererDeployment, { chainId: 11155111 }); },
+    release => { release.rendererDeployment.contractAddress = deployerAddress; },
+    release => { release.rendererDeployment.creationCode = '0x6001'; },
+    release => { release.rendererDeployment.deploymentBlock = 101; },
+  ];
+  const invalid = changes.map(change => { const release = approvedRelease(); change(release); return release; });
+  invalid.push(undefined as unknown as MainnetBindingRelease);
+  for (const release of invalid) {
+    const fixture = database(t);
+    stageMainnetCredentials(manifest, fixture.adapter);
+    const writes = fixture.commands.length;
+    const rpc = bindingRpcFixture();
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, release, rpc.rpc));
+    assert.equal(rpc.requests.length, 0);
+    assert.equal(fixture.commands.length, writes);
+    assert.equal(fixture.boundCredentials().length, 0);
+    assert.equal(fixture.batches()[0].status, 'staged');
+  }
+});
+
+test('a correct-code clone with different deployment roles or deployer cannot receive the staged credentials', async t => {
+  const { manifest } = bundle(t);
+  const other = '0x' + 'ab'.repeat(20);
+  const cases: Parameters<typeof bindingRpcFixture>[0][] = [
+    { transaction: { from: other }, receipt: { from: other } },
+    { transaction: { nonce: '0x3' } },
+    ...['owner()', 'quoteSigner()', 'renderer()'].map((signature, index) => ({
+      transaction: { input: runtimeArtifact.bytecode.object + encodeAbi(['address', 'address', 'address'],
+        [deployerAddress, signerAddress, rendererAddress].map((address, position) => position === index ? other : address)).slice(2) },
+      getters: { [signature]: other },
+    })),
+  ];
+  for (const overrides of cases) {
+    const fixture = database(t);
+    stageMainnetCredentials(manifest, fixture.adapter);
+    const writes = fixture.commands.length;
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture(overrides).rpc));
+    assert.equal(fixture.commands.length, writes);
+    assert.equal(fixture.boundCredentials().length, 0);
+    assert.equal(fixture.batches()[0].status, 'staged');
+  }
+});
+
+test('renderer deployment, source bytecode, runtime, and canonical evidence must match before binding', async t => {
+  const { manifest } = bundle(t);
+  const cases: Parameters<typeof bindingRpcFixture>[0][] = [
+    { rendererTransaction: null }, { rendererReceipt: null },
+    { rendererTransaction: { from: signerAddress }, rendererReceipt: { from: signerAddress } },
+    { rendererTransaction: { input: '0x6001' } }, { rendererTransaction: { nonce: '0x2' } },
+    { rendererTransaction: { chainId: '0xaa36a7' } }, { rendererTransaction: { to: deployerAddress } },
+    { rendererReceipt: { status: '0x0' } }, { rendererReceipt: { contractAddress: deployerAddress } },
+    { rendererReceipt: { blockHash: currentHash } }, { rendererDeploymentHash: currentHash },
+    { rendererPreviousCode: '0x6001' }, { rendererDeploymentCode: '0x6001' },
+    { rendererCode: '0x6001' }, { rendererDeploymentCode: '0x6001', rendererCode: '0x6001' },
+  ];
+  for (const overrides of cases) {
+    const fixture = database(t);
+    stageMainnetCredentials(manifest, fixture.adapter);
+    const writes = fixture.commands.length;
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture(overrides).rpc));
+    assert.equal(fixture.commands.length, writes);
+    assert.equal(fixture.boundCredentials().length, 0);
+    assert.equal(fixture.batches()[0].status, 'staged');
+  }
 });
 
 test('matching DMX getters cannot bind a getter-only contract without the approved runtime', async t => {
@@ -635,7 +759,7 @@ test('matching DMX getters cannot bind a getter-only contract without the approv
   stageMainnetCredentials(manifest, fixture.adapter);
   const before = { batches: fixture.batches(), credentials: fixture.credentials(), writes: fixture.commands.length };
   const rpc = bindingRpcFixture({ deployedCode: getterOnlyRuntime, currentCode: getterOnlyRuntime });
-  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, rpc.rpc));
+  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), rpc.rpc));
   assert.equal(fixture.commands.length, before.writes);
   assert.deepEqual(fixture.batches(), before.batches);
   assert.deepEqual(fixture.credentials(), before.credentials);
@@ -654,7 +778,7 @@ test('binding rejects a changed runtime byte outside compiler-declared immutable
   bytes[offset] ^= 1;
   const modifiedRuntime = '0x' + bytes.toString('hex');
   const writes = fixture.commands.length;
-  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding,
+  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(),
     bindingRpcFixture({ deployedCode: modifiedRuntime, currentCode: modifiedRuntime }).rpc));
   assert.equal(fixture.commands.length, writes);
   assert.equal(fixture.boundCredentials().length, 0);
@@ -671,7 +795,7 @@ test('binding accepts matching runtime with compiler-declared immutable differen
   for (const { start, length } of references) bytes.fill(0x5a, start, start + length);
   const deployedRuntime = '0x' + bytes.toString('hex');
   assert.notEqual(deployedRuntime, runtimeArtifact.deployedBytecode.object);
-  const bound = await bindMainnetCredentials(manifest, fixture.adapter, binding,
+  const bound = await bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(),
     bindingRpcFixture({ deployedCode: deployedRuntime, currentCode: deployedRuntime }).rpc);
   assert.equal(bound.status, 'bound');
   assert.equal(fixture.boundCredentials().length, 777);
@@ -686,12 +810,12 @@ test('interrupted binding leaves the batch staged and resumes the exact partial 
     if (sql.includes('INSERT INTO dmx_mainnet_bound_claim_codes') && ++inserts === 4) throw new Error('Synthetic interruption');
     return fixture.adapter.executeCommand(sql);
   } };
-  await assert.rejects(bindMainnetCredentials(manifest, interrupted, binding, bindingRpcFixture().rpc), /Synthetic interruption/);
+  await assert.rejects(bindMainnetCredentials(manifest, interrupted, binding, approvedRelease(), bindingRpcFixture().rpc), /Synthetic interruption/);
   const partial = fixture.boundCredentials();
   assert.equal(partial.length, 150);
   assert.equal(fixture.batches()[0].status, 'staged');
   assert.equal(fixture.batches()[0].contract_address, null);
-  await bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture().rpc);
+  await bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture().rpc);
   assert.deepEqual(fixture.boundCredentials().slice(0, 150), partial);
   assert.equal(fixture.boundCredentials().length, 777);
   assert.equal(fixture.batches()[0].status, 'bound');
@@ -701,12 +825,12 @@ test('a canonicality failure after all final inserts leaves binding inactive and
   const { manifest } = bundle(t);
   const fixture = database(t);
   stageMainnetCredentials(manifest, fixture.adapter);
-  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding,
+  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(),
     bindingRpcFixture({ reorgAfterDeploymentRead: 3 }).rpc), /no longer canonical/);
   assert.equal(fixture.boundCredentials().length, 777);
   assert.equal(fixture.batches()[0].status, 'staged');
   assert.equal(fixture.batches()[0].contract_address, null);
-  await bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture().rpc);
+  await bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture().rpc);
   assert.equal(fixture.batches()[0].status, 'bound');
 });
 
@@ -726,7 +850,7 @@ test('wrong chain, deployment code, getters, domain, signer, renderer, or confir
     const fixture = database(t);
     stageMainnetCredentials(manifest, fixture.adapter);
     const writes = fixture.commands.length;
-    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture(overrides).rpc));
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture(overrides).rpc));
     assert.equal(fixture.commands.length, writes);
     assert.equal(fixture.boundCredentials().length, 0);
     assert.equal(fixture.batches()[0].status, 'staged');
@@ -742,7 +866,7 @@ test('binding refuses incomplete or revoked staged credentials before RPC and fi
     fixture.db.exec(corruption);
     const rpc = bindingRpcFixture();
     const writes = fixture.commands.length;
-    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, rpc.rpc));
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), rpc.rpc));
     assert.equal(fixture.commands.length, writes);
     assert.equal(rpc.requests.length, 0);
     assert.equal(fixture.boundCredentials().length, 0);
@@ -762,7 +886,7 @@ test('binding refuses conflicting partial rows and revoked final rows without ov
       .run(manifest.batchId, address, value, manifest.createdAtMs, revoked);
     const before = fixture.boundCredentials();
     const writes = fixture.commands.length;
-    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture().rpc));
+    await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture().rpc));
     assert.equal(fixture.commands.length, writes);
     assert.deepEqual(fixture.boundCredentials(), before);
     assert.equal(fixture.batches()[0].status, 'staged');
@@ -773,14 +897,14 @@ test('a completed binding cannot change contract or silently repair missing or r
   const { manifest } = bundle(t);
   const fixture = database(t);
   stageMainnetCredentials(manifest, fixture.adapter);
-  await bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture().rpc);
+  await bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture().rpc);
   const writes = fixture.commands.length;
   await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter,
-    { ...binding, contractAddress: rendererAddress }, bindingRpcFixture().rpc));
+    { ...binding, contractAddress: rendererAddress }, approvedRelease(), bindingRpcFixture().rpc));
   fixture.db.exec('UPDATE dmx_mainnet_bound_claim_codes SET revoked_at_ms=created_at_ms WHERE token_id=1');
-  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture().rpc));
+  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture().rpc));
   fixture.db.exec('DELETE FROM dmx_mainnet_bound_claim_codes WHERE token_id=1');
-  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, bindingRpcFixture().rpc));
+  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), bindingRpcFixture().rpc));
   assert.equal(fixture.commands.length, writes);
 });
 
@@ -796,7 +920,7 @@ test('revocation during final chain verification prevents marking the batch boun
     }
     return mock.rpc(method, params);
   };
-  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, rpc));
+  await assert.rejects(bindMainnetCredentials(manifest, fixture.adapter, binding, approvedRelease(), rpc));
   assert.equal(fixture.batches()[0].status, 'staged');
   assert.equal(fixture.batches()[0].contract_address, null);
 });

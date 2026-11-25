@@ -10,9 +10,11 @@ metadata renderer. The collection and EIP-712 domain name are
 `divination machina x`, the symbol is `DMX`, and the domain version is `1`.
 The contract permits Ethereum mainnet, Sepolia, and local chain 31337. NFC links
 default to mainnet and support explicit Sepolia links. Mainnet remains
-unconfigured and disabled; the contract deployment runner supports Sepolia only.
+unconfigured and disabled; the contract deployment runner supports explicit
+mainnet releases as well as Sepolia.
 
-This guide describes the Sepolia replacement workflow. Rebind the existing 777
+This guide covers mainnet preparation and the Sepolia replacement workflow.
+For Sepolia replacements, rebind the existing 777
 NFC codes and URLs to the verified DMX collection, update the deployment settings
 and credential pin, then retire the superseded deployment in the same rollout.
 The application supports the DMX contract and renderer only. Existing NFTs are
@@ -37,6 +39,8 @@ receipts survive independently when the corresponding card is redeemed.
 the same recipient-bound authorization. Both use
 `TarotClaim(address wallet,uint256 tokenId,uint256 deadline)`, with `wallet`
 equal to the NFT recipient. `TarotClaimed` records that recipient, not a relayer.
+API confirmation accepts both direct `claim` and recipient-bound `claimTo`,
+including a recipient submitting their own `claimTo` transaction.
 
 The owner can use `mintTo(recipient, cardIds)` without an authorization signature.
 `mintToAuthorized(cardIds, quote, signature)` accepts a signed `DMXMint` binding
@@ -127,20 +131,26 @@ At a separately authorized mainnet launch, apply OPS migration
 `0016_dmx_mainnet_bound_claim_codes.sql`, then bind the retained batch:
 
 ```sh
-npm run tarot:ops -- mainnet-bind --contract <verified-mainnet-contract> --deployment-block <creation-block> --deployment-transaction <creation-transaction-hash>
+npm run tarot:ops -- mainnet-bind --contract <verified-mainnet-contract> --deployment-block <creation-block> --deployment-transaction <creation-transaction-hash> --deployment-directory <approved-private-collection-release>
 ```
 
 This uses `ETHEREUM_TAROT_MAINNET_RPC_URL` when supplied, otherwise the public
-Ethereum RPC. Only HTTPS and read-only RPC methods are allowed. Binding builds
-`TarotCards` from the current checkout in a temporary directory and compares the
-deployed bytecode with that trusted build. It also verifies the successful direct
-creation transaction and receipt against the canonical deployment block, exact
-trusted creation bytecode, and canonical owner/signer/renderer constructor arguments.
+Ethereum RPC. Only HTTPS and read-only RPC methods are allowed. Binding requires
+the approved frozen collection release, including its verified renderer evidence.
+It validates the manifest, source and artifact hashes, deployment report, and
+chain-1 identity before writing credentials. Binding builds `TarotCards` and its
+renderer from the current checkout in a temporary directory and compares the
+deployed bytecode with those trusted builds. It also verifies successful direct
+creation transactions and receipts against canonical deployment blocks, exact
+trusted creation bytecode, and the approved deployer and constructor arguments.
 This proves initialization of signing constants that vary in deployed bytecode.
 Factory deployments are not accepted. Use the reviewed source revision and compiler
 settings that were deployed. No credentials are bound if these checks fail.
 Binding also checks chain 1, canonical confirmations, the DMX identity and
-signing domain, and the signer/renderer addresses. It derives contract-scoped
+signing domain. The current owner, quote signer, and renderer must match the
+approved release, with no pending ownership transfer. A correct-code deployment
+with different roles is rejected. The credential and deployment operation locks
+are held together during binding. It derives contract-scoped
 hashes into `dmx_mainnet_bound_claim_codes`, verifies all 777, then marks the batch
 `bound` with that address. Partial writes remain inactive; retrying the same
 binding verifies or resumes it. A different address or conflicting credential
@@ -383,7 +393,7 @@ npm --prefix onchain/ethereum run tarot:verify-source -- verify <private-release
 ```
 
 RPC configuration comes from `ETHEREUM_TAROT_RPC_URL` or `ALCHEMY_API_KEY`. The
-runner accepts only Sepolia and freezes source, constructor inputs, bytecode,
+runner defaults to Sepolia and freezes source, constructor inputs, bytecode,
 nonce, and fees. New manifests also pin `expectedCollectionImage` to the DMX
 collection image. Original manifests without that field are verified against
 their matching original deployment metadata; preserve that evidence unchanged.
@@ -393,8 +403,37 @@ with an explicit `contractName`; older manifests are rejected before requests.
 Resume the same signed journal after interrupted broadcasts. Preserve the new
 renderer and collection release evidence. Remove superseded local release trees
 only after retirement verification. Never redeploy or replace 111K as part of
-Tarot work. Mainnet is supported by the collection and application source but
-remains outside the current contract deployment runner. Local Anvil is test-only.
+Tarot work. Local Anvil is test-only.
+
+### Mainnet release preparation
+
+Mainnet requires `--network mainnet` on every deployment command. Preparation
+also requires explicit `--deployer`, `--admin`, and `--maximum-fee-wei` values;
+there are no default mainnet wallets or fee ceiling. The quote signer must be a
+dedicated address distinct from the deployer and administrator. Prepare the
+renderer first, and verify its mainnet deployment before preparing the collection:
+
+```sh
+npm --prefix onchain/ethereum run tarot:deploy -- prepare --network mainnet --contract DMXWebpRenderer --directory <private-mainnet-renderer-release> --deployer <deployer-address> --admin <owner-address> --maximum-fee-wei <approved-fee-ceiling>
+npm --prefix onchain/ethereum run tarot:deploy -- prepare --network mainnet --directory <private-mainnet-collection-release> --deployer <deployer-address> --admin <owner-address> --maximum-fee-wei <approved-fee-ceiling> --quote-signer <mainnet-quote-signer> --renderer-directory <verified-private-mainnet-renderer-release>
+```
+
+These are separate stages: the renderer must be signed, broadcast, and verified
+before collection preparation. When deployment is authorized, use the existing
+`sign`, `broadcast`, and `verify` commands with `--network mainnet` and the same
+release directory. Set `ETHEREUM_TAROT_MAINNET_RPC_URL` to the intended HTTPS
+mainnet RPC, or use `ALCHEMY_API_KEY` for the mainnet endpoint. The Sepolia
+`ETHEREUM_TAROT_RPC_URL` is not used for mainnet. Preparation does not sign or
+broadcast. Later stages use the
+frozen roles and fee ceiling; preparation-only flags cannot override them.
+The manifest stores the approved cap in `feeCeilingWei` and the transaction's
+buffered maximum fee in `maximumFeeWei`. Both renderer and collection evidence
+must belong to chain 1. Source verification derives the chain from the frozen
+manifest and supports both mainnet and Sepolia.
+
+Review the collection manifest before signing and retain that exact release for
+`mainnet-bind --deployment-directory`. Binding, API configuration, and enabling
+mainnet claims are separate launch steps; preparing releases does not perform them.
 
 All four deployment commands exclusively own `operation.lock` inside the
 release directory, including `verify`, which only reads the chain but records

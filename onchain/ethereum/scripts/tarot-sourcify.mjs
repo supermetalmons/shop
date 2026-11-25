@@ -19,7 +19,10 @@ const deployment = read('deployment.json');
 const input = read(contractName + '.standard-input.json');
 const artifact = read(contractName + '.artifact.json');
 const chainId = manifest.chainId;
-assert.equal(chainId, 11155111, 'Tarot source verification supports Sepolia only');
+assert.ok([1, 11155111].includes(chainId), 'Tarot source verification supports Sepolia or Ethereum mainnet only');
+if (Object.hasOwn(manifest, 'network')) {
+  assert.equal(manifest.network, chainId === 1 ? 'mainnet' : 'sepolia', 'Manifest network does not match chain');
+}
 assert.equal(deployment.chainId, chainId, 'Deployment chain does not match manifest');
 assert.equal(deployment.contractAddress, manifest.contractAddress);
 assert.equal(sha256(json(input)), manifest.standardInputSha256);

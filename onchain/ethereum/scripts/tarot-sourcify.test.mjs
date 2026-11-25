@@ -122,7 +122,7 @@ test('status reports that submission is needed when neither a job nor publicatio
   assert.equal(fs.existsSync(path.join(f.directory, 'TarotCards.sourcify-job.json')), false);
 });
 
-for (const chainId of [11155111]) {
+for (const chainId of [1, 11155111]) {
   test(`verification records the selected chain ${chainId} and its source URLs`, async t => {
     const f = fixture(t, chainId);
     const manifest = f.read('manifest.json');
@@ -187,7 +187,7 @@ for (const contractName of [undefined, null, '', 'LegacyTarotCards']) {
   });
 }
 
-for (const [manifestChain, deploymentChain] of [[11155111, 1], [11155111, '11155111'], [11155111, undefined]]) {
+for (const [manifestChain, deploymentChain] of [[1, 11155111], [1, '1'], [11155111, 1], [11155111, '11155111'], [11155111, undefined]]) {
   test(`rejects deployment chain ${deploymentChain} against manifest chain ${manifestChain} before requests`, async t => {
     const f = fixture(t, manifestChain);
     f.write('deployment.json', { ...f.read('deployment.json'), chainId: deploymentChain });
@@ -199,17 +199,43 @@ for (const [manifestChain, deploymentChain] of [[11155111, 1], [11155111, '11155
   });
 }
 
-for (const chainId of [1, 10, '11155111', undefined]) {
+for (const chainId of [10, '1', '11155111', undefined]) {
   test(`rejects unsupported or malformed manifest chain ${chainId} before requests`, async t => {
     const f = fixture(t);
     f.write('manifest.json', { ...f.read('manifest.json'), chainId });
     const fetchMock = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected request'); });
     for (const mode of ['submit', 'status', 'verify']) {
-      await assert.rejects(f.run(mode), /Tarot source verification supports Sepolia only/);
+      await assert.rejects(f.run(mode), /Tarot source verification supports Sepolia or Ethereum mainnet only/);
     }
     assert.equal(fetchMock.mock.callCount(), 0);
   });
 }
+
+for (const [chainId, network] of [[1, 'sepolia'], [11155111, 'mainnet']]) {
+  test(`source verification rejects network ${network} on chain ${chainId}`, async t => {
+    const f = fixture(t, chainId);
+    f.write('manifest.json', { ...f.read('manifest.json'), network });
+    const request = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected request'); });
+    for (const mode of ['submit', 'status', 'verify']) await assert.rejects(f.run(mode), /network does not match chain/);
+    assert.equal(request.mock.callCount(), 0);
+  });
+}
+
+test('mainnet source submission targets chain one for collection and renderer', async t => {
+  for (const contractName of ['TarotCards', 'DMXWebpRenderer']) {
+    const f = fixture(t, 1, contractName);
+    const requests = [];
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+      requests.push(url);
+      if (!init.method) return Response.json({}, { status: 404 });
+      assert.equal(JSON.parse(init.body).contractIdentifier, 'src/' + contractName + '.sol:' + contractName);
+      return Response.json({ verificationId: 'mainnet-job' }, { status: 202 });
+    });
+    await f.run('submit');
+    assert.deepEqual(requests, ['https://sourcify.dev/server/v2/contract/1/' + address,
+      'https://sourcify.dev/server/v2/verify/1/' + address]);
+  }
+});
 
 
 test('renderer source verification submits and verifies the renderer target independently', async t => {

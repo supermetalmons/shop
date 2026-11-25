@@ -4,16 +4,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   deploymentConfiguration, deploymentConstructorArgs, deploymentGas, main, TAROT_SEPOLIA,
   validateDeploymentConfiguration, validateSignedDeployment, readRendererRelease, rendererInterfaceId, validateCollectionMetadata,
-  verifyDeploymentState, verifyRendererRelease,
+  verifyDeploymentState, verifyRendererRelease, readCollectionRelease,
 } from './tarot-deployment.mjs';
 
 const quoteSigner = '0x2222222222222222222222222222222222222222';
 const rendererAddress = '0x4444444444444444444444444444444444444444';
+const mainnetRoles = { deployer: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266',
+  admin: '0x3333333333333333333333333333333333333333', feeCeilingWei: '5000000000000000' };
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const configuration = () => ({ network: 'sepolia', ...deploymentConfiguration('sepolia', quoteSigner, rendererAddress),
@@ -50,13 +54,34 @@ test('DMX configuration pins Sepolia, the approved admin and verified renderer',
   assert.equal(config.renderer, rendererAddress);
   assert.equal(config.releaseVersion, 2);
   assert.equal(config.quoteSigner, quoteSigner);
-  for (const network of ['mainnet', 'devnet', 'local', 'other']) {
-    assert.throws(() => deploymentConfiguration(network, quoteSigner), /Sepolia only/);
+  for (const network of ['devnet', 'local', 'other']) {
+    assert.throws(() => deploymentConfiguration(network, quoteSigner), /Sepolia or Ethereum mainnet only/);
   }
   for (const signer of [undefined, '', 'wrong', '0x' + '0'.repeat(40)]) {
     assert.throws(() => deploymentConfiguration('sepolia', signer), /quote-signer/);
   }
   assert.throws(() => deploymentConfiguration('sepolia', TAROT_SEPOLIA.deployer), /dedicated/);
+});
+
+test('mainnet requires explicit roles and fee ceiling with a dedicated signer', () => {
+  const config = deploymentConfiguration('mainnet', quoteSigner, rendererAddress, 'TarotCards', mainnetRoles);
+  assert.equal(config.chainId, 1);
+  for (const key of ['deployer', 'admin', 'feeCeilingWei']) assert.equal(config[key], mainnetRoles[key]);
+  for (const [key, values] of Object.entries({ deployer: [undefined, 'bad', '0x' + '0'.repeat(40)],
+    admin: [undefined, 'bad', '0x' + '0'.repeat(40)], feeCeilingWei: [undefined, 1000, '0', '-1', '1.5', '01', (2n ** 256n).toString()] })) {
+    for (const value of values) {
+      assert.throws(() => deploymentConfiguration('mainnet', quoteSigner, rendererAddress, 'TarotCards', { ...mainnetRoles, [key]: value }));
+    }
+  }
+  for (const signer of [mainnetRoles.deployer, mainnetRoles.admin]) {
+    assert.throws(() => deploymentConfiguration('mainnet', signer, rendererAddress, 'TarotCards', mainnetRoles), /dedicated/);
+  }
+  assert.throws(() => deploymentConfiguration('sepolia', quoteSigner, rendererAddress, 'TarotCards', mainnetRoles), /only to mainnet/);
+  const manifest = { network: 'mainnet', ...config };
+  assert.deepEqual(validateDeploymentConfiguration(manifest, 'mainnet'), config);
+  for (const change of [{ chainId: 11155111 }, { network: 'sepolia' }, { feeCeilingWei: undefined }, { releaseVersion: 1 }]) {
+    assert.throws(() => validateDeploymentConfiguration({ ...manifest, ...change }, 'mainnet'));
+  }
 });
 
 test('frozen deployment identity rejects changed roles, network and release version', () => {
@@ -90,12 +115,25 @@ test('journaled signed transaction cannot change chain, nonce, payment, signer, 
   assert.throws(() => deploymentGas('2000000', '3000000000', TAROT_SEPOLIA.maximumFeeWei), /fee ceiling/);
 });
 
-function rendererFixture(directory) {
+test('mainnet signed deployment binds approved roles, chain and fee ceiling', () => {
+  const manifest = { network: 'mainnet', ...deploymentConfiguration('mainnet', quoteSigner, rendererAddress, 'TarotCards', mainnetRoles),
+    nonce: '2', gasPrice: '1000', gasLimit: '2000000', maximumFeeWei: '2000000000', creationCode: '0x60006000f3' };
+  const transaction = { signer: manifest.deployer, type: '0x0', chainId: '0x1', nonce: '0x2',
+    gasPrice: '0x3e8', gas: '0x1e8480', to: null, value: '0x0', input: manifest.creationCode, hash: '0x1234' };
+  validateSignedDeployment(transaction, manifest, transaction.hash);
+  for (const change of [{ chainId: '0xaa36a7' }, { signer: TAROT_SEPOLIA.deployer }, { value: '0x1' }, { input: '0x' }]) {
+    assert.throws(() => validateSignedDeployment({ ...transaction, ...change }, manifest, transaction.hash));
+  }
+  assert.throws(() => validateSignedDeployment(transaction, { ...manifest, feeCeilingWei: '1999999999' }, transaction.hash), /fee ceiling/);
+  assert.throws(() => validateSignedDeployment(transaction, { ...manifest, maximumFeeWei: '2000000001' }, transaction.hash), /maximum deployment fee/);
+});
+
+function rendererFixture(directory, network = 'sepolia') {
   const artifact = artifacts.DMXWebpRenderer;
   const sources = Object.fromEntries(Object.keys(artifact.metadata.sources).map(name => [name, { content: fs.readFileSync(path.join(project, name), 'utf8') }]));
   const { compilationTarget, ...settings } = artifact.metadata.settings;
   const input = { language: 'Solidity', sources, settings };
-  const manifest = { network: 'sepolia', ...deploymentConfiguration('sepolia', undefined, undefined, 'DMXWebpRenderer'),
+  const manifest = { network, ...deploymentConfiguration(network, undefined, undefined, 'DMXWebpRenderer', network === 'mainnet' ? mainnetRoles : {}),
     expectedCollectionImage: collectionMetadata.image,
     contractAddress: rendererAddress, constructorArgs: '0x', creationCode: artifact.bytecode.object,
     artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(input)),
@@ -109,12 +147,13 @@ function rendererFixture(directory) {
   return { manifest, deployment, artifact, input };
 }
 
-function fixture(t, overrides = {}) {
+function fixture(t, overrides = {}, network = 'sepolia') {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tarot-deployment-test-'));
   const rendererDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'dmx-renderer-test-'));
-  const renderer = rendererFixture(rendererDirectory);
-  const previous = process.env.ETHEREUM_TAROT_RPC_URL;
-  process.env.ETHEREUM_TAROT_RPC_URL = 'https://tarot-rpc.invalid';
+  const renderer = rendererFixture(rendererDirectory, network);
+  const rpcKey = network === 'mainnet' ? 'ETHEREUM_TAROT_MAINNET_RPC_URL' : 'ETHEREUM_TAROT_RPC_URL';
+  const previous = process.env[rpcKey];
+  process.env[rpcKey] = 'https://tarot-rpc.invalid';
   const read = fs.readFileSync.bind(fs);
   const artifactFiles = new Map(Object.entries(artifacts).map(([name, artifact]) => [
     path.join(project, 'out', name + '.sol', name + '.json'), json(artifact),
@@ -134,13 +173,14 @@ function fixture(t, overrides = {}) {
     const request = JSON.parse(options.body);
     requests.push(request);
     await beforeRequest?.(request);
-    const results = { eth_chainId: '0xaa36a7', eth_getTransactionCount: '0x0',
+    const chainId = network === 'mainnet' ? '0x1' : '0xaa36a7';
+    const results = { eth_chainId: chainId, eth_getTransactionCount: '0x0',
       eth_getCode: request.params[0] === rendererAddress ? renderer.artifact.deployedBytecode.object : '0x',
       eth_getTransactionReceipt: { status: '0x1', contractAddress: rendererAddress, blockNumber: '0x1',
-        blockHash: renderer.manifest.deploymentBlockHash, from: TAROT_SEPOLIA.deployer, to: null },
+        blockHash: renderer.manifest.deploymentBlockHash, from: renderer.manifest.deployer, to: null },
       eth_getBlockByNumber: { number: '0x3', hash: renderer.manifest.deploymentBlockHash },
-      eth_getTransactionByHash: { input: renderer.artifact.bytecode.object, from: TAROT_SEPOLIA.deployer, to: null,
-        chainId: '0xaa36a7', value: '0x0' },
+      eth_getTransactionByHash: { input: renderer.artifact.bytecode.object, from: renderer.manifest.deployer, to: null,
+        chainId, value: '0x0' },
       eth_call: request.params[0]?.data?.startsWith('0x01ffc9a7') ? '0x' + '0'.repeat(63) + '1' : execFileSync('cast',
         ['abi-encode', 'value(string)', 'data:application/json;base64,' +
           Buffer.from(JSON.stringify(renderer.deployment.collectionMetadata)).toString('base64')], { encoding: 'utf8' }).trim(),
@@ -151,12 +191,14 @@ function fixture(t, overrides = {}) {
   t.after(() => {
     fs.rmSync(directory, { recursive: true, force: true });
     fs.rmSync(rendererDirectory, { recursive: true, force: true });
-    if (previous === undefined) delete process.env.ETHEREUM_TAROT_RPC_URL;
-    else process.env.ETHEREUM_TAROT_RPC_URL = previous;
+    if (previous === undefined) delete process.env[rpcKey];
+    else process.env[rpcKey] = previous;
   });
   return { directory, rendererDirectory, renderer, logs, requests,
     read: name => JSON.parse(read(path.join(directory, name), 'utf8')),
-    prepare: () => main(['prepare', '--directory', directory, '--quote-signer', quoteSigner, '--renderer-directory', rendererDirectory]),
+    prepare: () => main(['prepare', '--directory', directory, '--quote-signer', quoteSigner, '--renderer-directory', rendererDirectory,
+      ...(network === 'mainnet' ? ['--network', 'mainnet', '--deployer', mainnetRoles.deployer, '--admin', mainnetRoles.admin,
+        '--maximum-fee-wei', mainnetRoles.feeCeilingWei] : [])]),
     beforeRequest: callback => { beforeRequest = callback; },
   };
 }
@@ -183,6 +225,174 @@ test('preparation freezes real compiler sources and artifacts and never sends a 
   await assert.rejects(main(['verify', '--directory', f.directory]), /Renderer prerequisite address changed/);
 });
 
+test('mainnet preparation freezes explicit roles, chain, renderer and fee ceiling', async t => {
+  const f = fixture(t, {}, 'mainnet');
+  await f.prepare();
+  const manifest = f.read('manifest.json');
+  assert.equal(manifest.chainId, 1);
+  assert.equal(manifest.network, 'mainnet');
+  assert.equal(manifest.deployer, mainnetRoles.deployer);
+  assert.equal(manifest.admin, mainnetRoles.admin);
+  assert.equal(manifest.quoteSigner, quoteSigner);
+  assert.equal(manifest.feeCeilingWei, mainnetRoles.feeCeilingWei);
+  assert.equal(BigInt(manifest.maximumFeeWei), BigInt(manifest.gasLimit) * BigInt(manifest.gasPrice));
+  assert.ok(BigInt(manifest.maximumFeeWei) <= BigInt(manifest.feeCeilingWei));
+  assert.equal(readRendererRelease(path.join(f.directory, 'renderer'), 'mainnet').manifest.chainId, 1);
+  assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+  for (const command of ['sign', 'broadcast', 'verify']) {
+    await assert.rejects(main([command, '--directory', f.directory]), /Unexpected deployment chainId|only to mainnet|network/);
+    for (const [flag, value] of [['--deployer', mainnetRoles.deployer], ['--admin', mainnetRoles.admin], ['--maximum-fee-wei', '1']]) {
+      await assert.rejects(main([command, '--network', 'mainnet', '--directory', f.directory, flag, value]), /only allowed for prepare/);
+    }
+  }
+});
+
+test('mainnet preparation refuses Sepolia renderer evidence and the wrong RPC chain', async t => {
+  const f = fixture(t, { eth_chainId: '0xaa36a7' }, 'mainnet');
+  await assert.rejects(f.prepare(), /selected deployment network/);
+  assert.deepEqual(f.requests.map(request => request.method), ['eth_chainId']);
+  assert.deepEqual(fs.readdirSync(f.directory), []);
+  fs.writeFileSync(path.join(f.rendererDirectory, 'manifest.json'), json({ ...f.renderer.manifest, chainId: 11155111, network: 'sepolia' }));
+  await assert.rejects(f.prepare(), /Unexpected deployment chainId/);
+  assert.equal(f.requests.length, 1);
+});
+
+test('mainnet renderer preparation uses its own explicit release and mainnet RPC', async t => {
+  const f = fixture(t, {}, 'mainnet');
+  await main(['prepare', '--network', 'mainnet', '--contract', 'DMXWebpRenderer', '--directory', f.directory,
+    '--deployer', mainnetRoles.deployer, '--admin', mainnetRoles.admin, '--maximum-fee-wei', mainnetRoles.feeCeilingWei]);
+  const manifest = f.read('manifest.json');
+  assert.equal(manifest.chainId, 1);
+  assert.equal(manifest.constructorArgs, '0x');
+  assert.equal(manifest.creationCode, artifacts.DMXWebpRenderer.bytecode.object);
+  assert.equal(manifest.quoteSigner, undefined);
+  assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+});
+
+test('mainnet collection reader rejects altered roles, constructor and frozen renderer evidence', async t => {
+  const f = fixture(t, {}, 'mainnet');
+  await f.prepare();
+  const manifest = f.read('manifest.json');
+  const deployment = { ...manifest, deploymentBlock: 5, deploymentBlockHash: '0x' + 'c'.repeat(64),
+    transactionHash: '0x' + 'd'.repeat(64), confirmations: 3, collectionMetadata };
+  fs.writeFileSync(path.join(f.directory, 'deployment.json'), json(deployment));
+  const release = readCollectionRelease(f.directory, 'mainnet');
+  assert.equal(release.manifest.admin, mainnetRoles.admin);
+  assert.equal(release.rendererRelease.manifest.chainId, 1);
+  const cases = [
+    ['deployment.json', { ...deployment, admin: quoteSigner }, /differs from manifest/],
+    ['deployment.json', { ...deployment, confirmations: 2 }, /three confirmations/],
+    ['manifest.json', { ...manifest, admin: rendererAddress }, /Constructor configuration changed/],
+    ['manifest.json', { ...manifest, constructorArgs: '0x' }, /Constructor configuration changed/],
+    ['manifest.json', { ...manifest, contractAddress: rendererAddress }, /Predicted CREATE address/],
+    ['manifest.json', { ...manifest, rendererReleaseSha256: 'changed' }, /Frozen renderer release changed/],
+    ['TarotCards.standard-input.json', { ...release.input, sources: {} }, /Frozen .* sources changed/],
+    ['renderer/deployment.json', { ...release.rendererRelease.deployment, deployer: quoteSigner }, /differs from manifest/],
+  ];
+  for (const [name, value, error] of cases) {
+    const filename = path.join(f.directory, name);
+    const original = fs.readFileSync(filename, 'utf8');
+    fs.writeFileSync(filename, json(value));
+    assert.throws(() => readCollectionRelease(f.directory, 'mainnet'), error);
+    fs.writeFileSync(filename, original);
+  }
+});
+
+test('mainnet journal lifecycle signs offline, resumes one broadcast and verifies exact deployment', async t => {
+  const f = fixture(t, {}, 'mainnet');
+  await f.prepare();
+  const manifest = f.read('manifest.json');
+  const chainState = stateRpc(manifest);
+  const blockHash = '0x' + 'c'.repeat(64);
+  const rpc = globalThis.fetch;
+  let chainId = '0x1';
+  let broadcasted = false;
+  let sends = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const request = JSON.parse(options.body);
+    const { method, params } = request;
+    const respond = result => Response.json({ jsonrpc: '2.0', id: 1, result });
+    if (method === 'eth_chainId') return respond(chainId);
+    if (method === 'eth_getBlockByNumber' && params[0] !== '0x1') {
+      return respond({ number: params[0] === '0x5' ? '0x5' : '0x7', hash: blockHash, baseFeePerGas: '0x1' });
+    }
+    if (method === 'eth_getTransactionByHash' && params[0] !== f.renderer.deployment.transactionHash) {
+      return respond(broadcasted ? { input: manifest.creationCode, from: manifest.deployer, to: null,
+        value: '0x0', nonce: '0x0', chainId: '0x1' } : null);
+    }
+    if (method === 'eth_sendRawTransaction') {
+      const journal = f.read('transactions.private.json');
+      assert.equal(journal.raw, params[0]);
+      assert.ok(journal.broadcastAttemptedAt);
+      sends += 1;
+      broadcasted = true;
+      return respond(journal.transactionHash);
+    }
+    if (method === 'eth_getTransactionReceipt' && params[0] !== f.renderer.deployment.transactionHash) {
+      return respond({ status: '0x1', contractAddress: manifest.contractAddress, from: manifest.deployer, to: null,
+        blockNumber: '0x5', blockHash });
+    }
+    if (method === 'eth_getCode' && params[0] === manifest.contractAddress) return respond(artifacts.TarotCards.deployedBytecode.object);
+    if (method === 'eth_getBalance' && params[0] === manifest.contractAddress) return respond('0x0');
+    if (method === 'eth_call' && params[0].to === manifest.contractAddress) return respond(await chainState(method, params));
+    return rpc(url, options);
+  });
+  const execute = childProcess.execFileSync;
+  let walletAddress = mainnetRoles.deployer;
+  const castMock = t.mock.method(childProcess, 'execFileSync', (program, args, options) => {
+    if (program === 'cast' && args[0] === 'wallet' && args[1] === 'address') return walletAddress + '\n';
+    if (program === 'cast' && args[0] === 'mktx') {
+      assert.equal(args[args.indexOf('--chain') + 1], '1');
+      const offlineArgs = args.filter((value, index) => !['--keystore', '--password-file'].includes(value)
+        && !['--keystore', '--password-file'].includes(args[index - 1]));
+      offlineArgs.splice(offlineArgs.indexOf('--create'), 0, '--private-key',
+        '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
+      return execute(program, offlineArgs, options);
+    }
+    return execute(program, args, options);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { castMock.mock.restore(); syncBuiltinESMExports(); });
+  const invoke = command => main([command, '--network', 'mainnet', '--directory', f.directory,
+    ...(command === 'sign' ? ['--keystore', 'offline-test-wallet', '--password-file', 'offline-test-password'] : [])]);
+  chainId = '0xaa36a7';
+  await assert.rejects(invoke('sign'), /selected deployment network/);
+  assert.equal(fs.existsSync(path.join(f.directory, 'transactions.private.json')), false);
+  chainId = '0x1';
+  walletAddress = quoteSigner;
+  await assert.rejects(invoke('sign'), /Wrong deployer keystore/);
+  walletAddress = mainnetRoles.deployer;
+  await invoke('sign');
+  const originalJournal = f.read('transactions.private.json');
+  assert.equal(originalJournal.manifestSha256, sha256(json(manifest)));
+  assert.equal(fs.statSync(path.join(f.directory, 'transactions.private.json')).mode & 0o777, 0o600);
+  await assert.rejects(invoke('sign'), /already journaled/);
+  fs.writeFileSync(path.join(f.directory, 'manifest.json'), json({ ...manifest, feeCeilingWei: '6000000000000000' }));
+  await assert.rejects(invoke('broadcast'), /Manifest changed after signing/);
+  fs.writeFileSync(path.join(f.directory, 'manifest.json'), json(manifest));
+  fs.writeFileSync(path.join(f.directory, 'transactions.private.json'), json({ ...originalJournal, raw: '0x00' }));
+  await assert.rejects(invoke('broadcast'), /Journaled transaction changed/);
+  fs.writeFileSync(path.join(f.directory, 'transactions.private.json'), json(originalJournal));
+  chainId = '0xaa36a7';
+  await assert.rejects(invoke('broadcast'), /selected deployment network/);
+  assert.equal(sends, 0);
+  chainId = '0x1';
+  await invoke('broadcast');
+  await invoke('broadcast');
+  assert.equal(sends, 1);
+  chainId = '0xaa36a7';
+  await assert.rejects(invoke('verify'), /selected deployment network/);
+  assert.equal(fs.existsSync(path.join(f.directory, 'deployment.json')), false);
+  chainId = '0x1';
+  await invoke('verify');
+  const release = readCollectionRelease(f.directory, 'mainnet');
+  assert.equal(release.deployment.transactionHash, originalJournal.transactionHash);
+  assert.equal(release.deployment.chainId, 1);
+  assert.equal(release.deployment.admin, mainnetRoles.admin);
+  assert.equal(release.deployment.quoteSigner, quoteSigner);
+  assert.equal(f.read('transactions.private.json').raw, originalJournal.raw);
+});
+
 test('every deployment command requires an explicit release directory before any RPC operation', async t => {
   const f = fixture(t);
   for (const command of ['prepare', 'sign', 'broadcast', 'verify']) {
@@ -194,9 +404,9 @@ test('every deployment command requires an explicit release directory before any
   assert.deepEqual(fs.readdirSync(f.directory), []);
 });
 
-test('mainnet and unsafe credential arguments fail before any RPC operation', async t => {
+test('mainnet without approved roles and unsafe credential arguments fail before any RPC operation', async t => {
   const f = fixture(t);
-  await assert.rejects(main(['prepare', '--network', 'mainnet', '--directory', f.directory, '--quote-signer', quoteSigner]), /Sepolia only/);
+  await assert.rejects(main(['prepare', '--network', 'mainnet', '--directory', f.directory, '--quote-signer', quoteSigner]), /--deployer/);
   for (const option of ['--private-key', '--password', '--rpc-url']) {
     await assert.rejects(main(['sign', '--directory', f.directory, option, 'never-accepted']), /Invalid or repeated option/);
   }

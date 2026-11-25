@@ -6,7 +6,7 @@ import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
 import { DMX_MAX_CARDS } from '../../../../shared/ethereum/dmx.js';
 import {
   TAROT_API_PATHS, TAROT_AUTHORIZATION_TTL_SECONDS, TAROT_MAX_CARDS, TAROT_RECEIPT_OFFSET,
-  encodeTarotClaim, resolveTarotConfig, tarotCodeHashInput, tarotReceiptTokenId,
+  encodeTarotClaim, encodeTarotClaimTo, resolveTarotConfig, tarotCodeHashInput, tarotReceiptTokenId,
   type TarotConfig, type TarotConfirmResponse, type TarotPrepareResponse, type TarotStatus,
 } from '../../../../shared/ethereum/tarot.js';
 import { TAROT_CLAIMED_TOPIC, tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.js';
@@ -163,13 +163,19 @@ async function prepare(context: Context, tokenId: number, wallet: string): Promi
       value: '0x0', data: encodeTarotClaim(tokenId, deadline, signature) } };
 }
 
-function requireClaimInput(input: unknown, tokenId: number): void {
+function requireClaimInput(input: unknown, tokenId: number, wallet: string): void {
   try {
     if (typeof input !== 'string' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(input)) throw new Error();
-    const [card, deadline, signature] = decodeReturn(['uint256', 'uint256', 'bytes'], `0x${input.slice(10)}`);
+    const claimTo = input.slice(0, 10).toLowerCase() === encodeCall('claimTo(address,uint256,uint256,bytes)', [], []);
+    const args = decodeReturn(claimTo ? ['address', 'uint256', 'uint256', 'bytes'] : ['uint256', 'uint256', 'bytes'],
+      `0x${input.slice(10)}`);
+    if (claimTo && args.shift() !== wallet) throw new Error();
+    const [card, deadline, signature] = args;
     if (card !== BigInt(tokenId) || typeof deadline !== 'bigint' || deadline < 0n || deadline > BigInt(Number.MAX_SAFE_INTEGER) ||
-      typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature) ||
-      encodeTarotClaim(tokenId, Number(deadline), signature).toLowerCase() !== input.toLowerCase()) throw new Error();
+      typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature)) throw new Error();
+    const canonical = claimTo ? encodeTarotClaimTo(wallet, tokenId, Number(deadline), signature)
+      : encodeTarotClaim(tokenId, Number(deadline), signature);
+    if (canonical.toLowerCase() !== input.toLowerCase()) throw new Error();
   } catch { throw new EthereumApiError('invalid-argument', 'This transaction does not match the Tarot Card.'); }
 }
 
@@ -230,7 +236,7 @@ async function confirm(context: Context, tokenId: number, wallet: string, transa
     transaction.chainId !== undefined && rpcInteger(transaction.chainId) !== context.config.chainId) return unavailable();
   const direct = sender === wallet && recipient === context.config.contractAddress;
   if (direct) {
-    requireClaimInput(transaction.input, tokenId);
+    requireClaimInput(transaction.input, tokenId, wallet);
     if (rpcInteger(transaction.value) !== 0) throw new EthereumApiError('invalid-argument', 'Tarot Card claims must be free.');
   } else if (receipt.status === '0x0') {
     throw new EthereumApiError('invalid-argument', 'This failed transaction does not identify the Tarot Card claim.');

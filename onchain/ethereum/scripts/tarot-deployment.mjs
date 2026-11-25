@@ -25,22 +25,39 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 const hashHex = value => '0x' + Buffer.from(keccak_256(Buffer.from(value.slice(2), 'hex'))).toString('hex');
 const run = args => execFileSync('cast', args, { cwd: project, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-export function deploymentConfiguration(network = 'sepolia', quoteSigner, renderer, contractName = 'TarotCards') {
-  assert.equal(network, 'sepolia', 'Tarot deployment supports Sepolia only');
+function deploymentAddress(value, option) {
+  assert.ok(typeof value === 'string' && /^0x[0-9a-f]{40}$/i.test(value) && !/^0x0{40}$/i.test(value),
+    'Preparation requires a nonzero --' + option + ' address');
+  return value.toLowerCase();
+}
+
+export function deploymentConfiguration(network = 'sepolia', quoteSigner, renderer, contractName = 'TarotCards', roles = {}) {
+  assert.ok(['sepolia', 'mainnet'].includes(network), 'Tarot deployment supports Sepolia or Ethereum mainnet only');
   assert.ok(['TarotCards', 'DMXWebpRenderer'].includes(contractName), 'Unsupported deployment contract');
-  const common = { ...TAROT_SEPOLIA, releaseVersion: 2, contractName };
+  let configuration = TAROT_SEPOLIA;
+  if (network === 'mainnet') {
+    const deployer = deploymentAddress(roles.deployer, 'deployer');
+    const admin = deploymentAddress(roles.admin, 'admin');
+    assert.ok(typeof roles.feeCeilingWei === 'string' && /^[1-9][0-9]*$/.test(roles.feeCeilingWei)
+      && BigInt(roles.feeCeilingWei) < 2n ** 256n, 'Mainnet preparation requires a positive --maximum-fee-wei ceiling');
+    configuration = { chainId: 1, deployer, admin, maximumFeeWei: roles.feeCeilingWei, feeCeilingWei: roles.feeCeilingWei };
+  } else {
+    assert.equal(Object.keys(roles).length, 0, 'Explicit deployment roles and fee ceiling apply only to mainnet');
+  }
+  const common = { ...configuration, releaseVersion: 2, contractName };
   if (contractName === 'DMXWebpRenderer') return common;
-  assert.ok(typeof quoteSigner === 'string' && /^0x[0-9a-f]{40}$/i.test(quoteSigner) && !/^0x0{40}$/i.test(quoteSigner),
-    'Preparation requires a nonzero --quote-signer address');
-  assert.notEqual(quoteSigner.toLowerCase(), TAROT_SEPOLIA.deployer, 'Use a dedicated Tarot quote signer');
+  const signer = deploymentAddress(quoteSigner, 'quote-signer');
+  assert.ok(signer !== common.deployer && signer !== common.admin, 'Use a dedicated Tarot quote signer');
   assert.ok(typeof renderer === 'string' && /^0x[0-9a-f]{40}$/i.test(renderer) && !/^0x0{40}$/i.test(renderer),
     'Preparation requires a verified renderer release');
-  return { ...common, quoteSigner: quoteSigner.toLowerCase(), renderer: renderer.toLowerCase() };
+  return { ...common, quoteSigner: signer, renderer: deploymentAddress(renderer, 'renderer') };
 }
 
 export function validateDeploymentConfiguration(manifest, network = 'sepolia') {
   assert.equal(manifest.releaseVersion, 2, 'Legacy release is frozen; use a new private release directory for DMX');
-  const configuration = deploymentConfiguration(network, manifest.quoteSigner, manifest.renderer, manifest.contractName);
+  const roles = network === 'mainnet'
+    ? { deployer: manifest.deployer, admin: manifest.admin, feeCeilingWei: manifest.feeCeilingWei } : {};
+  const configuration = deploymentConfiguration(network, manifest.quoteSigner, manifest.renderer, manifest.contractName, roles);
   for (const key of Object.keys(configuration).filter(key => key !== 'maximumFeeWei')) {
     assert.equal(manifest[key], configuration[key], 'Unexpected deployment ' + key);
   }
@@ -89,39 +106,77 @@ export function validateCollectionMetadata(uri, expectedImage = collectionImage)
   return metadata;
 }
 
-export function readRendererRelease(directory) {
+function validateFrozenContract(manifest, artifact, input) {
+  const contractName = manifest.contractName;
+  assert.equal(sha256(json(artifact)), manifest.artifactSha256, 'Frozen ' + contractName + ' artifact changed');
+  assert.equal(sha256(json(input)), manifest.standardInputSha256, 'Frozen ' + contractName + ' sources changed');
+  assert.deepEqual(artifact.metadata.settings.compilationTarget, { ['src/' + contractName + '.sol']: contractName });
+  assert.deepEqual(Object.keys(input.sources).sort(), Object.keys(artifact.metadata.sources).sort());
+  for (const [source, metadata] of Object.entries(artifact.metadata.sources)) {
+    assert.equal(hashHex('0x' + Buffer.from(input.sources[source].content).toString('hex')), metadata.keccak256,
+      'Frozen source differs from artifact: ' + source);
+  }
+  const { compilationTarget, ...settings } = artifact.metadata.settings;
+  const { outputSelection, ...inputSettings } = input.settings;
+  assert.deepEqual(inputSettings, settings, 'Frozen compiler settings differ from artifact');
+}
+
+function validateDeploymentEvidence(manifest, deployment, keys) {
+  for (const key of keys) {
+    assert.equal(deployment[key], manifest[key], 'Deployment differs from manifest: ' + key);
+  }
+  assert.ok(deployment.confirmations >= 3, 'Deployment needs three confirmations');
+  assert.match(deployment.transactionHash, /^0x[0-9a-f]{64}$/);
+  assert.match(deployment.deploymentBlockHash, /^0x[0-9a-f]{64}$/);
+  assert.ok(Number.isSafeInteger(deployment.deploymentBlock) && deployment.deploymentBlock > 0);
+  assert.equal(deployment.collectionMetadata?.image, deploymentCollectionImage(manifest, deployment),
+    'Deployment collection image differs from manifest');
+}
+
+export function readRendererRelease(directory, network = 'sepolia') {
   const names = ['manifest.json', 'deployment.json', 'DMXWebpRenderer.artifact.json', 'DMXWebpRenderer.standard-input.json'];
   const files = Object.fromEntries(names.map(name => [name, JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'))]));
   const manifest = files['manifest.json'];
   const deployment = files['deployment.json'];
   const artifact = files['DMXWebpRenderer.artifact.json'];
   const input = files['DMXWebpRenderer.standard-input.json'];
-  validateDeploymentConfiguration(manifest);
+  validateDeploymentConfiguration(manifest, network);
   assert.equal(manifest.contractName, 'DMXWebpRenderer', 'Prerequisite must be a DMXWebpRenderer release');
   assert.equal(manifest.constructorArgs, '0x');
   assert.equal(manifest.creationCode, artifact.bytecode.object);
-  assert.equal(sha256(json(artifact)), manifest.artifactSha256, 'Frozen renderer artifact changed');
-  assert.equal(sha256(json(input)), manifest.standardInputSha256, 'Frozen renderer sources changed');
-  assert.deepEqual(artifact.metadata.settings.compilationTarget, { 'src/DMXWebpRenderer.sol': 'DMXWebpRenderer' });
-  assert.deepEqual(Object.keys(input.sources).sort(), Object.keys(artifact.metadata.sources).sort());
-  for (const [source, metadata] of Object.entries(artifact.metadata.sources)) {
-    assert.equal(hashHex('0x' + Buffer.from(input.sources[source].content).toString('hex')), metadata.keccak256,
-      'Renderer source differs from artifact: ' + source);
-  }
-  for (const key of ['chainId', 'contractName', 'contractAddress', 'artifactSha256', 'standardInputSha256', 'expectedCollectionImage']) {
-    assert.equal(deployment[key], manifest[key], 'Renderer deployment differs from manifest: ' + key);
-  }
-  assert.ok(deployment.confirmations >= 3, 'Renderer deployment needs three confirmations');
-  assert.match(deployment.transactionHash, /^0x[0-9a-f]{64}$/);
-  assert.match(deployment.deploymentBlockHash, /^0x[0-9a-f]{64}$/);
-  assert.ok(Number.isSafeInteger(deployment.deploymentBlock) && deployment.deploymentBlock >= 0);
-  assert.equal(deployment.collectionMetadata?.image, deploymentCollectionImage(manifest, deployment),
-    'Renderer deployment collection image differs from manifest');
+  validateFrozenContract(manifest, artifact, input);
+  validateDeploymentEvidence(manifest, deployment,
+    ['chainId', 'contractName', 'contractAddress', 'artifactSha256', 'standardInputSha256', 'expectedCollectionImage',
+      ...(network === 'mainnet' ? ['releaseVersion', 'deployer', 'admin', 'constructorArgs'] : [])]);
   return { files, manifest, deployment, artifact, input };
+}
+
+export function readCollectionRelease(directory, network = 'sepolia') {
+  const read = name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
+  const manifest = read('manifest.json');
+  const configuration = validateDeploymentConfiguration(manifest, network);
+  assert.equal(manifest.contractName, 'TarotCards', 'Binding requires a TarotCards collection release');
+  const deployment = read('deployment.json');
+  const artifact = read('TarotCards.artifact.json');
+  const input = read('TarotCards.standard-input.json');
+  validateFrozenContract(manifest, artifact, input);
+  assert.equal(manifest.constructorArgs, deploymentConstructorArgs(configuration), 'Constructor configuration changed');
+  assert.equal(manifest.creationCode, artifact.bytecode.object + manifest.constructorArgs.slice(2), 'Creation bytecode changed');
+  validateDeploymentFee(manifest, configuration.maximumFeeWei);
+  const predicted = run(['compute-address', configuration.deployer, '--nonce', manifest.nonce])
+    .match(/0x[0-9a-fA-F]{40}/)?.[0]?.toLowerCase();
+  assert.equal(manifest.contractAddress, predicted, 'Predicted CREATE address changed');
+  validateDeploymentEvidence(manifest, deployment, ['releaseVersion', 'chainId', 'contractName', 'contractAddress',
+    'deployer', 'admin', 'quoteSigner', 'renderer', 'constructorArgs', 'artifactSha256', 'standardInputSha256', 'expectedCollectionImage']);
+  const rendererRelease = readRendererRelease(path.join(directory, 'renderer'), network);
+  assert.equal(rendererRelease.manifest.contractAddress, manifest.renderer, 'Renderer prerequisite address changed');
+  assert.equal(manifest.rendererReleaseSha256, sha256(json(rendererRelease.files)), 'Frozen renderer release changed');
+  return { manifest, deployment, artifact, input, rendererRelease };
 }
 
 export async function verifyRendererRelease(release, rpc) {
   const { manifest, deployment, artifact } = release;
+  assert.equal(BigInt(await rpc('eth_chainId', [])), BigInt(manifest.chainId), 'Renderer RPC chain differs from release');
   const block = '0x' + deployment.deploymentBlock.toString(16);
   const receipt = await rpc('eth_getTransactionReceipt', [deployment.transactionHash]);
   assert.equal(receipt?.status, '0x1', 'Renderer deployment receipt is missing or failed');
@@ -197,12 +252,15 @@ export async function verifyDeploymentState(manifest, rpc, block, deployment) {
 }
 
 function validateDeploymentFee(manifest, maximumFeeWei) {
-  assert.ok(BigInt(manifest.gasPrice) > 0n && BigInt(manifest.gasLimit) > 0n, 'Invalid deployment gas allowance');
-  assert.ok(BigInt(manifest.gasPrice) * BigInt(manifest.gasLimit) <= BigInt(maximumFeeWei), 'Deployment exceeds the network fee ceiling');
+  assert.ok([manifest.gasPrice, manifest.gasLimit].every(value => typeof value === 'string' && /^[1-9][0-9]*$/.test(value)),
+    'Invalid deployment gas allowance');
+  const fee = BigInt(manifest.gasPrice) * BigInt(manifest.gasLimit);
+  assert.ok(fee <= BigInt(maximumFeeWei), 'Deployment exceeds the network fee ceiling');
+  if (manifest.network === 'mainnet') assert.equal(manifest.maximumFeeWei, fee.toString(), 'Frozen maximum deployment fee changed');
 }
 
 export function validateSignedDeployment(transaction, manifest, hash) {
-  const configuration = validateDeploymentConfiguration(manifest);
+  const configuration = validateDeploymentConfiguration(manifest, manifest.network);
   assert.equal(transaction.signer.toLowerCase(), configuration.deployer, 'Unexpected transaction signer');
   assert.equal(transaction.type, '0x0', 'Expected legacy transaction');
   assert.equal(BigInt(transaction.chainId), BigInt(configuration.chainId), 'Unexpected transaction chain');
@@ -254,26 +312,35 @@ function privateDirectory(directory) {
 export async function main(argv = process.argv.slice(2)) {
   const [command, ...arguments_] = argv;
   assert.ok(['prepare', 'sign', 'broadcast', 'verify'].includes(command),
-    'Use prepare|sign|broadcast|verify --directory PATH [--contract TarotCards|DMXWebpRenderer for prepare] [--quote-signer ADDRESS --renderer-directory VERIFIED_RELEASE for collection prepare] [--keystore PATH --password-file PATH]. RPC: ETHEREUM_TAROT_RPC_URL or ALCHEMY_API_KEY.');
+    'Use prepare|sign|broadcast|verify --directory PATH [--network sepolia|mainnet] [--contract TarotCards|DMXWebpRenderer for prepare] [--deployer ADDRESS --admin ADDRESS --maximum-fee-wei INTEGER for mainnet prepare] [--quote-signer ADDRESS --renderer-directory VERIFIED_RELEASE for collection prepare] [--keystore PATH --password-file PATH].');
   const options = {};
   for (let index = 0; index < arguments_.length; index += 2) {
     const key = arguments_[index];
-    assert.ok(['--network', '--contract', '--renderer-directory', '--quote-signer', '--directory', '--keystore', '--password-file'].includes(key) && arguments_[index + 1] && !options[key], 'Invalid or repeated option');
+    assert.ok(['--network', '--contract', '--renderer-directory', '--quote-signer', '--directory', '--keystore', '--password-file',
+      '--deployer', '--admin', '--maximum-fee-wei'].includes(key) && arguments_[index + 1] && !options[key], 'Invalid or repeated option');
     options[key] = arguments_[index + 1];
   }
   const network = options['--network'] || 'sepolia';
-  assert.equal(network, 'sepolia', 'Tarot deployment supports Sepolia only');
-  for (const option of ['--quote-signer', '--renderer-directory', '--contract']) {
+  assert.ok(['sepolia', 'mainnet'].includes(network), 'Tarot deployment supports Sepolia or Ethereum mainnet only');
+  for (const option of ['--quote-signer', '--renderer-directory', '--contract', '--deployer', '--admin', '--maximum-fee-wei']) {
     assert.ok(!options[option] || command === 'prepare', option + ' is only allowed for prepare');
   }
+  assert.ok(command === 'sign' || !options['--keystore'] && !options['--password-file'], 'Signing credentials apply only to sign');
   assert.ok(options['--directory']?.trim(), 'An explicit --directory is required for every deployment command');
   const directory = path.resolve(options['--directory']);
   if (command === 'prepare') {
-    const renderer = options['--renderer-directory'] ? readRendererRelease(path.resolve(options['--renderer-directory'])) : null;
-    deploymentConfiguration(network, options['--quote-signer'], renderer?.manifest.contractAddress, options['--contract']);
+    const roles = preparationRoles(options);
+    if (network === 'mainnet') deploymentConfiguration(network, undefined, undefined, 'DMXWebpRenderer', roles);
+    const renderer = options['--renderer-directory'] ? readRendererRelease(path.resolve(options['--renderer-directory']), network) : null;
+    deploymentConfiguration(network, options['--quote-signer'], renderer?.manifest.contractAddress, options['--contract'], roles);
   }
   const canonical = privateDirectory(directory);
   return withMetadataLock(path.join(canonical, 'operation.lock'), () => runDeployment(command, options, network, canonical));
+}
+
+function preparationRoles(options) {
+  const pairs = [['--deployer', 'deployer'], ['--admin', 'admin'], ['--maximum-fee-wei', 'feeCeilingWei']];
+  return Object.fromEntries(pairs.filter(([option]) => options[option] !== undefined).map(([option, key]) => [key, options[option]]));
 }
 
 async function runDeployment(command, options, network, directory) {
@@ -284,13 +351,13 @@ async function runDeployment(command, options, network, directory) {
   if (command === 'sign') assert.ok(!fs.existsSync(journalPath),
     'A transaction is already journaled; resume broadcast or verification');
   const manifest = command === 'prepare' ? null : JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  const rendererRelease = manifest?.contractName === 'TarotCards' ? readRendererRelease(path.join(directory, 'renderer'))
-    : command === 'prepare' && options['--renderer-directory'] ? readRendererRelease(path.resolve(options['--renderer-directory'])) : null;
+  const rendererRelease = manifest?.contractName === 'TarotCards' ? readRendererRelease(path.join(directory, 'renderer'), network)
+    : command === 'prepare' && options['--renderer-directory'] ? readRendererRelease(path.resolve(options['--renderer-directory']), network) : null;
   const configuration = manifest ? validateDeploymentConfiguration(manifest, network)
-    : deploymentConfiguration(network, options['--quote-signer'], rendererRelease?.manifest.contractAddress, options['--contract']);
+    : deploymentConfiguration(network, options['--quote-signer'], rendererRelease?.manifest.contractAddress, options['--contract'], preparationRoles(options));
   const contractName = configuration.contractName;
   const deployer = configuration.deployer;
-  const rpcUrl = process.env.ETHEREUM_TAROT_RPC_URL ||
+  const rpcUrl = (network === 'mainnet' ? process.env.ETHEREUM_TAROT_MAINNET_RPC_URL : process.env.ETHEREUM_TAROT_RPC_URL) ||
     (process.env.ALCHEMY_API_KEY ? 'https://eth-' + network + '.g.alchemy.com/v2/' + encodeURIComponent(process.env.ALCHEMY_API_KEY) : null);
   assert.ok(rpcUrl, 'Missing ' + network + ' RPC configuration');
   const parsedRpcUrl = new URL(rpcUrl);
@@ -322,8 +389,11 @@ async function runDeployment(command, options, network, directory) {
   if (command === 'prepare') {
     const artifact = JSON.parse(fs.readFileSync(path.join(project, 'out', contractName + '.sol', contractName + '.json'), 'utf8'));
     assert.equal(artifact.metadata.compiler.version, '0.8.38+commit.1835d247');
+    assert.equal(artifact.metadata.settings.optimizer.enabled, true);
     assert.equal(artifact.metadata.settings.optimizer.runs, 200);
     assert.equal(artifact.metadata.settings.evmVersion, 'prague');
+    assert.ok(!artifact.metadata.settings.viaIR, 'Unexpected via-IR compiler setting');
+    assert.equal(artifact.metadata.settings.metadata.bytecodeHash, 'none');
     const nonce = BigInt(await rpc('eth_getTransactionCount', [deployer, 'latest']));
     assert.equal(BigInt(await rpc('eth_getTransactionCount', [deployer, 'pending'])), nonce, 'Resolve pending deployer transactions first');
     const predicted = run(['compute-address', deployer, '--nonce', nonce.toString()]).match(/0x[0-9a-fA-F]{40}/)?.[0]?.toLowerCase();
@@ -371,6 +441,7 @@ async function runDeployment(command, options, network, directory) {
   const standardInput = JSON.parse(fs.readFileSync(path.join(directory, contractName + '.standard-input.json'), 'utf8'));
   assert.equal(sha256(json(artifact)), manifest.artifactSha256, 'Frozen artifact changed');
   assert.equal(sha256(json(standardInput)), manifest.standardInputSha256, 'Frozen compiler input changed');
+  validateFrozenContract(manifest, artifact, standardInput);
   assert.equal(manifest.creationCode, artifact.bytecode.object + manifest.constructorArgs.slice(2), 'Creation bytecode changed');
   const manifestSha256 = sha256(json(manifest));
 
