@@ -16,3 +16,11 @@ Final confirmed issuance: mainnet 0 existing NFTs; Sepolia 0 existing NFTs. Meta
 Collection addresses, credentials, signers and pause controls are unchanged. Original deployment evidence is preserved; this release appends renderer deployment and activation proof. API and databases were unchanged. Mainnet deployment plus activation cost 0.000067523543805904 ETH, within the approved 0.0005 ETH combined cap.
 
 [Complete migration, validation and acceptance evidence](migration.json). Use the current activation journal for read-only health verification; do not rerun original mainnet credential binding after this renderer swap. See [DMX operations](../../scripts/docs/tarot_cards.md#contract-operations).
+
+## Subsequent offchain metadata update
+
+The [offchain metadata migration](../dmx-offchain-v1/README.md) subsequently
+replaced these renderers with `DMXOffchainRenderer` on both existing collections.
+Use that release's activation journals for current health verification. Both
+networks now share `https://cdn.mons.shop/dmx/<tokenId>.json` and
+`collection.json`; this release's PNG and WebP media remain in use.

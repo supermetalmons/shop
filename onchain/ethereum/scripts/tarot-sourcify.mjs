@@ -14,7 +14,7 @@ const save = (name, value) => fs.writeFileSync(path.join(directory, name), json(
 const manifest = read('manifest.json');
 assert.equal(manifest.releaseVersion, 2, 'Source verification requires a version 2 DMX release');
 const contractName = manifest.contractName;
-assert.ok(['TarotCards', 'DMXWebpRenderer'].includes(contractName), 'Unsupported source verification contract');
+assert.ok(['TarotCards', 'DMXWebpRenderer', 'DMXOffchainRenderer'].includes(contractName), 'Unsupported source verification contract');
 const deployment = read('deployment.json');
 const input = read(contractName + '.standard-input.json');
 const artifact = read(contractName + '.artifact.json');

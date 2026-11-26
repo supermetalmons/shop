@@ -1,0 +1,254 @@
+{
+  "completedAt": "2026-11-26T12:06:06.987Z",
+  "metadata": {
+    "baseURI": "https://cdn.mons.shop/dmx/",
+    "objectCount": 1555,
+    "tokenCount": 1554,
+    "collectionURI": "https://cdn.mons.shop/dmx/collection.json",
+    "manifestSha256": "102271b15bfbc9cb1bf6413a84d6f1940c64e466a6b0c35cbeb3d29ea371724e",
+    "objectsSha256": "0d2d1d26133cfb0dbdd59ff7c14ce2df98a42b7593ae27a5f9acda79ae775afa",
+    "storageVerified": true,
+    "publicVerified": true,
+    "verifiedAt": "2026-11-26T11:55:58.811Z",
+    "sharedAcrossNetworks": true,
+    "contentType": "application/json; charset=utf-8",
+    "cacheControl": "no-store",
+    "cors": "*"
+  },
+  "networks": {
+    "sepolia": {
+      "collection": "0xc465f98f824a9d4017d09ef219f3b546794e49ef",
+      "rendererDeployment": {
+        "contractAddress": "0x1ee12a393c15b9ecaeec6af8bcbeca6bda15f92f",
+        "transactionHash": "0xc4f8b76b0a3bb656d71adf2b057af37720ee194e07bf104c7277a6c41fe533a1",
+        "deploymentBlock": 12216332,
+        "deploymentBlockHash": "0xa413779ee0164f96dd9f9d05b52ae6c4a1a5ac982e135aa23949d07b285f7fa1",
+        "confirmations": 3,
+        "artifactSha256": "3783c9213f036fee76486c3e72c73e412853bb0a746ee789fd3891392dc0c44b",
+        "standardInputSha256": "61b36c4ffa632b4d6d504dd5b7b02eacf587ebdbe7e118ab7a00ad41312bd81f",
+        "runtimeKeccak256": "0x28f0cb4a9c1d59ec4bc5bd4357d02616f06ec34e97be5d5c1a76302538c39563",
+        "verifiedAt": "2026-11-26T11:57:07.069Z",
+        "actualFeeWei": "1750965000"
+      },
+      "activation": {
+        "verified": true,
+        "network": "sepolia",
+        "chainId": 11155111,
+        "collection": "0xc465f98f824a9d4017d09ef219f3b546794e49ef",
+        "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "previousRenderer": "0xc337f07ec00ab64f67bca19f67b7272bb3153b2a",
+        "nextRenderer": "0x1ee12a393c15b9ecaeec6af8bcbeca6bda15f92f",
+        "transactionHash": "0xf5be1121a8bad030dba784d435c2edad3ffcadeef313ebb3138657b967daf350",
+        "blockNumber": 12216352,
+        "blockHash": "0xa130966b23830a3fe93fa6ef782ba6726dcef14973f62d3aab58fecd61fea7c1",
+        "confirmations": 4,
+        "collectionImage": "https://cdn.lil.org/nft/dmx/cards/1.png",
+        "refreshEventsVerified": true,
+        "collectionStateUnchanged": true,
+        "gasUsed": "39529",
+        "actualFeeWei": "39529000",
+        "feeCeilingWei": "5000000000000000",
+        "checkedAt": "2026-11-26T12:01:23.677Z",
+        "expectedCollectionUri": "https://cdn.mons.shop/dmx/collection.json",
+        "collectionMetadataSha256": "5dd9a2582148799e3b895eeb630c78af9462fc7aa999e4b7a97cdf6862a44324",
+        "metadataManifestSha256": "102271b15bfbc9cb1bf6413a84d6f1940c64e466a6b0c35cbeb3d29ea371724e"
+      },
+      "sourceVerification": {
+        "sourcify": {
+          "url": "https://repo.sourcify.dev/11155111/0x1ee12a393c15b9ecaeec6af8bcbeca6bda15f92f",
+          "creationMatch": "match",
+          "runtimeMatch": "match",
+          "creationBytecodeMatch": true,
+          "runtimeBytecodeMatch": true,
+          "frozenSourcesMatch": true,
+          "checkedAt": "2026-11-26T11:58:59.067Z",
+          "compilerVersion": "0.8.38+commit.1835d247",
+          "sourceSha256": {
+            "node_modules/@openzeppelin/contracts/utils/Bytes.sol": "3ce9120a27934c75a074cb785d3a88868069ef6529dbe4dc6b845af0836f3c70",
+            "node_modules/@openzeppelin/contracts/utils/Panic.sol": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
+            "node_modules/@openzeppelin/contracts/utils/Strings.sol": "e318709bbe73a7831d64c1351e8bdc43780b245f25191234e361e6ab9b98c67b",
+            "node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol": "61a2b12c96857aaa35f48aeda67a4281637a42494c0b3795be0ae976aa7b3793",
+            "node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol": "9055c2994b37dea1a41b7b7926dcb510f05dbe2540b0aafc5fbee9558fffd0ca",
+            "node_modules/@openzeppelin/contracts/utils/math/Math.sol": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
+            "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
+            "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
+            "src/DMXOffchainRenderer.sol": "45b7d4bbda4c05fc7b61a8d5e78ac81c96f985aa2579c57b97a1d5486b1fa7ba",
+            "src/IDMXRenderer.sol": "9545abddb8493fdf40668582857a0b01f9911f3005f1a932ed235882583094c4"
+          }
+        },
+        "etherscan": {
+          "url": "https://sepolia.etherscan.io/address/0x1ee12a393c15b9ecaeec6af8bcbeca6bda15f92f#code",
+          "match": "exact_match",
+          "frozenSourcesMatch": true,
+          "compilerSettingsMatch": true,
+          "abiMatches": true,
+          "checkedAt": "2026-11-26T11:58:20.713Z"
+        }
+      },
+      "acceptance": {
+        "chainId": 11155111,
+        "collection": "0xc465f98f824a9d4017d09ef219f3b546794e49ef",
+        "renderer": "0x1ee12a393c15b9ecaeec6af8bcbeca6bda15f92f",
+        "checkedBlock": 12216374,
+        "blockHash": "0xd9afc18b754130359ea840966a579a9c9f28312ccf1ecba92affaf8e5603be08",
+        "collectionURI": "https://cdn.mons.shop/dmx/collection.json",
+        "initialCardBoundaries": true,
+        "nfcReceiptBoundaries": true,
+        "futureTokenBoundaries": true,
+        "rendererSampleCount": 8,
+        "noClaimTransactions": true,
+        "finalBlock": 12216375,
+        "finalBlockHash": "0xc1e47760c0dc6419bc0af6246e1f806fa9a6abc8fc51215844b7c84312794ba0",
+        "issuance": {
+          "minted": 0,
+          "burned": 0,
+          "live": 0,
+          "futureCardsMinted": 0,
+          "verifiedTokens": 0
+        },
+        "mintingPaused": false,
+        "redemptionsPaused": true
+      },
+      "totalFeeWei": "1790494000"
+    },
+    "mainnet": {
+      "collection": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+      "rendererDeployment": {
+        "contractAddress": "0xbf5c6c8cbf0fb2ce37f5315092148ab2fc95681c",
+        "transactionHash": "0xedc8b11b5ffd24ef5f07e6c6497961eed2e4897520a04171fb5fb3920e762d0f",
+        "deploymentBlock": 26499243,
+        "deploymentBlockHash": "0x0b52a5925ceefdf99d68a89ac2fda851b8488d5a415a3a89bce7db9d1f7ea2da",
+        "confirmations": 3,
+        "artifactSha256": "3783c9213f036fee76486c3e72c73e412853bb0a746ee789fd3891392dc0c44b",
+        "standardInputSha256": "61b36c4ffa632b4d6d504dd5b7b02eacf587ebdbe7e118ab7a00ad41312bd81f",
+        "runtimeKeccak256": "0x28f0cb4a9c1d59ec4bc5bd4357d02616f06ec34e97be5d5c1a76302538c39563",
+        "verifiedAt": "2026-11-26T12:02:40.552Z",
+        "actualFeeWei": "22995953582193"
+      },
+      "activation": {
+        "verified": true,
+        "network": "mainnet",
+        "chainId": 1,
+        "collection": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+        "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "previousRenderer": "0xead755be25fd1504890aeb790e1798a7beb5b1b3",
+        "nextRenderer": "0xbf5c6c8cbf0fb2ce37f5315092148ab2fc95681c",
+        "transactionHash": "0x8eb637ea58c0e9f7d7716581c71d454c5ab3382aa906ddecc1ece2614ae8955a",
+        "blockNumber": 26499256,
+        "blockHash": "0x234c1934974ffc061c26657d494a35ce7686f6446acfe30067ba5eca60d52130",
+        "confirmations": 4,
+        "collectionImage": "https://cdn.lil.org/nft/dmx/cards/1.png",
+        "refreshEventsVerified": true,
+        "collectionStateUnchanged": true,
+        "gasUsed": "37829",
+        "actualFeeWei": "5086597044100",
+        "feeCeilingWei": "200000000000000",
+        "checkedAt": "2026-11-26T12:05:32.324Z",
+        "expectedCollectionUri": "https://cdn.mons.shop/dmx/collection.json",
+        "collectionMetadataSha256": "5dd9a2582148799e3b895eeb630c78af9462fc7aa999e4b7a97cdf6862a44324",
+        "metadataManifestSha256": "102271b15bfbc9cb1bf6413a84d6f1940c64e466a6b0c35cbeb3d29ea371724e"
+      },
+      "sourceVerification": {
+        "sourcify": {
+          "url": "https://repo.sourcify.dev/1/0xbf5c6c8cbf0fb2ce37f5315092148ab2fc95681c",
+          "creationMatch": "match",
+          "runtimeMatch": "match",
+          "creationBytecodeMatch": true,
+          "runtimeBytecodeMatch": true,
+          "frozenSourcesMatch": true,
+          "checkedAt": "2026-11-26T12:03:09.664Z",
+          "compilerVersion": "0.8.38+commit.1835d247",
+          "sourceSha256": {
+            "node_modules/@openzeppelin/contracts/utils/Bytes.sol": "3ce9120a27934c75a074cb785d3a88868069ef6529dbe4dc6b845af0836f3c70",
+            "node_modules/@openzeppelin/contracts/utils/Panic.sol": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
+            "node_modules/@openzeppelin/contracts/utils/Strings.sol": "e318709bbe73a7831d64c1351e8bdc43780b245f25191234e361e6ab9b98c67b",
+            "node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol": "61a2b12c96857aaa35f48aeda67a4281637a42494c0b3795be0ae976aa7b3793",
+            "node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol": "9055c2994b37dea1a41b7b7926dcb510f05dbe2540b0aafc5fbee9558fffd0ca",
+            "node_modules/@openzeppelin/contracts/utils/math/Math.sol": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
+            "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
+            "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
+            "src/DMXOffchainRenderer.sol": "45b7d4bbda4c05fc7b61a8d5e78ac81c96f985aa2579c57b97a1d5486b1fa7ba",
+            "src/IDMXRenderer.sol": "9545abddb8493fdf40668582857a0b01f9911f3005f1a932ed235882583094c4"
+          }
+        },
+        "etherscan": {
+          "url": "https://etherscan.io/address/0xbf5c6c8cbf0fb2ce37f5315092148ab2fc95681c#code",
+          "match": "exact_match",
+          "frozenSourcesMatch": true,
+          "compilerSettingsMatch": true,
+          "abiMatches": true,
+          "checkedAt": "2026-11-26T12:03:16.681Z"
+        }
+      },
+      "acceptance": {
+        "chainId": 1,
+        "collection": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+        "renderer": "0xbf5c6c8cbf0fb2ce37f5315092148ab2fc95681c",
+        "checkedBlock": 26499258,
+        "blockHash": "0x4956b6d7f28625c19175fe319e17c24582d7b2ecc9f9d31b3f5513842ce406c7",
+        "collectionURI": "https://cdn.mons.shop/dmx/collection.json",
+        "initialCardBoundaries": true,
+        "nfcReceiptBoundaries": true,
+        "futureTokenBoundaries": true,
+        "rendererSampleCount": 8,
+        "noClaimTransactions": true,
+        "finalBlock": 26499259,
+        "finalBlockHash": "0x65dea8ad172f3a2a91bb36bab5e7334e9013e1a5f16dec2c7cf68b1b83100014",
+        "issuance": {
+          "minted": 0,
+          "burned": 0,
+          "live": 0,
+          "futureCardsMinted": 0,
+          "verifiedTokens": 0
+        },
+        "mintingPaused": false,
+        "redemptionsPaused": true
+      },
+      "totalFeeWei": "28082550626293"
+    }
+  },
+  "validation": {
+    "passed": true,
+    "checkedAt": "2026-11-26T11:55:27.782Z",
+    "tests": [
+      {
+        "suite": "DMX contracts",
+        "passed": 99
+      },
+      {
+        "suite": "DMX deployment, activation and source verification",
+        "passed": 116
+      },
+      {
+        "suite": "DMX metadata publication",
+        "passed": 9
+      },
+      {
+        "suite": "Mainnet credential binding regression",
+        "passed": 32
+      },
+      {
+        "suite": "Tarot operations regression",
+        "passed": 13
+      }
+    ],
+    "localE2E": {
+      "sepolia": true,
+      "mainnet": true
+    },
+    "typechecks": {
+      "api": true,
+      "tools": true,
+      "tests": true
+    },
+    "diffWhitespace": true,
+    "publicationConcurrencyVerified": 32
+  },
+  "collectionAddressesUnchanged": true,
+  "credentialFilesUnchanged": true,
+  "signersAndControlsUnchanged": true,
+  "apiDeploymentChanged": false,
+  "frontendDeploymentChanged": false,
+  "databaseMigrationsApplied": false,
+  "testClaimsBroadcast": 0
+}

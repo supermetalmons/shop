@@ -10,6 +10,8 @@ import { bindMainnetCredentials, createMainnetClaimLinks, loadMainnetBindingRele
   mainnetBindingRpc, mainnetCredentialFingerprint,
   stageMainnetCredentials, verifyMainnetCredentials } from './mainnetClaims.ts';
 import { withMetadataLock } from '../ethereum-metadata/lock.ts';
+import { dmxMetadataManifestSha256, generateDmxMetadata } from './metadata.ts';
+import { publishDmxMetadata, verifyDmxMetadata } from './metadataPublication.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -21,9 +23,20 @@ export async function runTarotOperations(argv: string[]) {
   const options = tokens.filter(token => token.kind === 'option').map(token => token.name);
   const command = positionals[0];
   if (positionals.length !== 1 || new Set(options).size !== options.length ||
-    !['verify-media', 'links', 'rebind', 'provision', 'verify-codes',
+    !['verify-media', 'links', 'rebind', 'provision', 'verify-codes', 'metadata-generate', 'metadata-publish', 'metadata-verify',
       'mainnet-links', 'mainnet-provision', 'mainnet-verify', 'mainnet-bind'].includes(command)) {
-    throw new Error('Use verify-media|links|rebind|provision|verify-codes|mainnet-links|mainnet-provision|mainnet-verify|mainnet-bind [--directory PATH] [--contract ADDRESS for links or mainnet-bind] [--source-directory PATH --source-pin PATH --deployment-directory PATH for rebind] [--deployment-block BLOCK --deployment-transaction HASH --deployment-directory PATH for mainnet-bind].');
+    throw new Error('Use verify-media|metadata-generate|metadata-publish|metadata-verify|links|rebind|provision|verify-codes|mainnet-links|mainnet-provision|mainnet-verify|mainnet-bind [--directory PATH] [--contract ADDRESS for links or mainnet-bind] [--source-directory PATH --source-pin PATH --deployment-directory PATH for rebind] [--deployment-block BLOCK --deployment-transaction HASH --deployment-directory PATH for mainnet-bind].');
+  }
+  if (command.startsWith('metadata-')) {
+    if (options.length !== 1 || options[0] !== 'directory' || !values.directory?.trim()) {
+      throw new Error('DMX metadata commands require only --directory beneath .cache/dmx-metadata');
+    }
+    const directory = resolve(root, values.directory);
+    if (command === 'metadata-publish') return publishDmxMetadata(directory);
+    if (command === 'metadata-verify') return verifyDmxMetadata(directory);
+    const manifest = await generateDmxMetadata(directory);
+    return { operation: command, directory, objectCount: manifest.objectCount, tokenCount: manifest.tokenCount,
+      manifestSha256: dmxMetadataManifestSha256(manifest), objectsSha256: manifest.objectsSha256 };
   }
   for (const option of ['source-directory', 'source-pin'] as const) {
     if (command === 'rebind' ? !values[option]?.trim() : values[option] !== undefined) {

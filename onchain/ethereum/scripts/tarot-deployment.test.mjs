@@ -11,8 +11,10 @@ import { fileURLToPath } from 'node:url';
 import {
   deploymentConfiguration, deploymentConstructorArgs, deploymentGas, main, TAROT_SEPOLIA,
   validateDeploymentConfiguration, validateSignedDeployment, readRendererRelease, rendererInterfaceId, validateCollectionMetadata,
-  verifyDeploymentState, verifyRendererRelease, readCollectionRelease,
+  verifyDeploymentState, verifyRendererRelease, readCollectionRelease, resolveCollectionMetadata,
+  OFFCHAIN_COLLECTION_URI, metadataPins, validateMetadataPublication, verifyRendererPublication,
 } from './tarot-deployment.mjs';
+import { generateDmxMetadata, loadDmxMetadataManifest, dmxMetadataManifestSha256 } from '../../../scripts/tarot/metadata.ts';
 
 const quoteSigner = '0x2222222222222222222222222222222222222222';
 const rendererAddress = '0x4444444444444444444444444444444444444444';
@@ -36,7 +38,7 @@ let artifacts;
 
 before(async () => {
   build = fs.mkdtempSync(path.join(os.tmpdir(), 'tarot-build-test-'));
-  const contracts = ['TarotCards', 'DMXWebpRenderer'];
+  const contracts = ['TarotCards', 'DMXWebpRenderer', 'DMXOffchainRenderer'];
   execFileSync('forge', ['build', '--offline', ...contracts.map(name => 'src/' + name + '.sol'),
     '--out', path.join(build, 'out'), '--cache-path', path.join(build, 'cache')],
   { cwd: project, stdio: 'pipe', timeout: 30_000 });
@@ -47,6 +49,77 @@ before(async () => {
 after(() => {
   if (build) fs.rmSync(build, { recursive: true, force: true });
   assert.equal(fs.readFileSync, originalReadFileSync, 'Filesystem mock must be restored after tests');
+});
+
+async function metadataFixture(t) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dmx-publication-test-')));
+  const directory = path.join(root, '.cache/dmx-metadata/test');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await generateDmxMetadata(directory, { root });
+  const publication = await loadDmxMetadataManifest(directory);
+  const pins = { expectedCollectionUri: OFFCHAIN_COLLECTION_URI,
+    collectionMetadataSha256: publication.objects.find(object => object.file === 'collection.json').sha256,
+    metadataManifestSha256: dmxMetadataManifestSha256(publication) };
+  const verification = { version: 1, baseURI: publication.baseURI, manifestSha256: pins.metadataManifestSha256,
+    objectsSha256: publication.objectsSha256, objectCount: publication.objectCount,
+    complete: true, publicVerified: true, storageVerified: true, checkedAt: '2026-11-26T11:00:00.000Z' };
+  fs.writeFileSync(path.join(directory, 'verification.json'), json(verification));
+  return { directory, publication, pins, verification };
+}
+
+function publicMetadataFixture(t, metadata) {
+  const previousFetch = globalThis.fetch;
+  const state = { unavailable: null, reads: new Set() };
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (!String(url).startsWith(metadata.publication.baseURI)) return previousFetch(url, options);
+    const file = String(url).slice(metadata.publication.baseURI.length);
+    state.reads.add(file);
+    return new Response(file === state.unavailable ? 'missing' : fs.readFileSync(path.join(metadata.directory, file)),
+      { status: file === state.unavailable ? 404 : 200, headers: { 'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store', 'access-control-allow-origin': '*' } });
+  });
+  return state;
+}
+
+test('offchain collection metadata requires the pinned URL, exact body hash and JSON response', async t => {
+  const f = await metadataFixture(t);
+  const bytes = Buffer.from(json(collectionMetadata));
+  const manifest = { contractName: 'DMXOffchainRenderer', ...f.pins, collectionMetadataSha256: sha256(bytes) };
+  const requests = [];
+  const fetcher = async (url, options) => {
+    requests.push({ url, options });
+    return new Response(bytes, { headers: { 'content-type': 'application/json; charset=utf-8' } });
+  };
+  assert.deepEqual(await resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, manifest, collectionMetadata.image, fetcher), collectionMetadata);
+  assert.equal(requests[0].url, OFFCHAIN_COLLECTION_URI);
+  assert.equal(requests[0].options.redirect, 'error');
+  for (const uri of ['https://cdn.mons.shop/dmx/other.json', collectionURI]) {
+    await assert.rejects(resolveCollectionMetadata(uri, manifest, collectionMetadata.image, fetcher), /URI differs/);
+  }
+  await assert.rejects(resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI,
+    { ...manifest, collectionMetadataSha256: '0'.repeat(64) }, collectionMetadata.image, fetcher), /content hash differs/);
+  for (const [status, contentType, message] of [[404, 'application/json', /HTTP failure/],
+    [302, 'application/json', /HTTP failure/], [200, 'text/html', /content type/]]) {
+    await assert.rejects(resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, manifest, collectionMetadata.image,
+      async () => new Response(bytes, { status, headers: { 'content-type': contentType } })), message);
+  }
+  await assert.rejects(resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, manifest, collectionMetadata.image,
+    async () => ({ status: 200, redirected: true })), /redirect/);
+  assert.throws(() => metadataPins({ contractName: 'DMXOffchainRenderer' }), /metadata URI/);
+});
+
+test('offchain publication evidence binds all objects and the collection document', async t => {
+  const f = await metadataFixture(t);
+  validateMetadataPublication(f.publication, f.verification, f.pins);
+  for (const change of [{ complete: false }, { publicVerified: false }, { objectCount: 1554 },
+    { manifestSha256: 'a'.repeat(64) }, { objectsSha256: 'a'.repeat(64) }, { baseURI: 'https://cdn.example/' }]) {
+    assert.throws(() => validateMetadataPublication(f.publication, { ...f.verification, ...change }, f.pins));
+  }
+  assert.throws(() => validateMetadataPublication(f.publication, f.verification,
+    { ...f.pins, collectionMetadataSha256: 'b'.repeat(64) }), /Collection metadata hash/);
+  await assert.rejects(verifyRendererPublication({ manifest: { contractName: 'DMXOffchainRenderer', ...f.pins },
+    publicationManifest: f.publication, publicationVerification: f.verification },
+  { fetch: async () => new Response('missing', { status: 404 }) }));
 });
 
 test('DMX configuration pins Sepolia, the approved admin and verified renderer', () => {
@@ -130,12 +203,14 @@ test('mainnet signed deployment binds approved roles, chain and fee ceiling', ()
   assert.throws(() => validateSignedDeployment(transaction, { ...manifest, maximumFeeWei: '2000000001' }, transaction.hash), /maximum deployment fee/);
 });
 
-function rendererFixture(directory, network = 'sepolia') {
-  const artifact = artifacts.DMXWebpRenderer;
+function rendererFixture(directory, network = 'sepolia', metadata) {
+  const contractName = metadata ? 'DMXOffchainRenderer' : 'DMXWebpRenderer';
+  const artifact = artifacts[contractName];
   const sources = Object.fromEntries(Object.keys(artifact.metadata.sources).map(name => [name, { content: fs.readFileSync(path.join(project, name), 'utf8') }]));
   const { compilationTarget, ...settings } = artifact.metadata.settings;
   const input = { language: 'Solidity', sources, settings };
-  const manifest = { network, ...deploymentConfiguration(network, undefined, undefined, 'DMXWebpRenderer', network === 'mainnet' ? mainnetRoles : {}),
+  const manifest = { network, ...deploymentConfiguration(network, undefined, undefined, contractName, network === 'mainnet' ? mainnetRoles : {}),
+    ...metadata?.pins,
     expectedCollectionImage: collectionMetadata.image,
     contractAddress: rendererAddress, constructorArgs: '0x', creationCode: artifact.bytecode.object,
     artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(input)),
@@ -143,16 +218,17 @@ function rendererFixture(directory, network = 'sepolia') {
   const deployment = { ...manifest, deploymentBlock: 1, transactionHash: '0x' + 'b'.repeat(64), confirmations: 3,
     collectionMetadata };
   for (const [name, value] of Object.entries({ 'manifest.json': manifest, 'deployment.json': deployment,
-    'DMXWebpRenderer.artifact.json': artifact, 'DMXWebpRenderer.standard-input.json': input })) {
+    [contractName + '.artifact.json']: artifact, [contractName + '.standard-input.json']: input,
+    ...(metadata ? { 'publication-manifest.json': metadata.publication, 'publication-verification.json': metadata.verification } : {}) })) {
     fs.writeFileSync(path.join(directory, name), json(value));
   }
   return { manifest, deployment, artifact, input };
 }
 
-function fixture(t, overrides = {}, network = 'sepolia') {
+function fixture(t, overrides = {}, network = 'sepolia', metadata) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tarot-deployment-test-'));
   const rendererDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'dmx-renderer-test-'));
-  const renderer = rendererFixture(rendererDirectory, network);
+  const renderer = rendererFixture(rendererDirectory, network, metadata);
   const rpcKey = network === 'mainnet' ? 'ETHEREUM_TAROT_MAINNET_RPC_URL' : 'ETHEREUM_TAROT_RPC_URL';
   const previous = process.env[rpcKey];
   process.env[rpcKey] = 'https://tarot-rpc.invalid';
@@ -184,7 +260,7 @@ function fixture(t, overrides = {}, network = 'sepolia') {
       eth_getTransactionByHash: { input: renderer.artifact.bytecode.object, from: renderer.manifest.deployer, to: null,
         chainId, value: '0x0' },
       eth_call: request.params[0]?.data?.startsWith('0x01ffc9a7') ? '0x' + '0'.repeat(63) + '1' : execFileSync('cast',
-        ['abi-encode', 'value(string)', 'data:application/json;base64,' +
+        ['abi-encode', 'value(string)', metadata ? OFFCHAIN_COLLECTION_URI : 'data:application/json;base64,' +
           Buffer.from(JSON.stringify(renderer.deployment.collectionMetadata)).toString('base64')], { encoding: 'utf8' }).trim(),
       eth_estimateGas: '0x1e8480', eth_gasPrice: '0x5f5e100', eth_getBalance: '0x11c37937e08000', ...overrides };
     assert.ok(Object.hasOwn(results, request.method), 'Unexpected RPC operation ' + request.method);
@@ -269,6 +345,69 @@ test('mainnet renderer preparation uses its own explicit release and mainnet RPC
   assert.equal(manifest.creationCode, artifacts.DMXWebpRenderer.bytecode.object);
   assert.equal(manifest.quoteSigner, undefined);
   assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+});
+
+for (const network of ['sepolia', 'mainnet']) {
+  test(`${network} offchain renderer preparation freezes published metadata and its exact URI`, async t => {
+    const f = fixture(t, {}, network);
+    const m = await metadataFixture(t);
+    const cdn = publicMetadataFixture(t, m);
+    const args = ['prepare', '--network', network, '--contract', 'DMXOffchainRenderer', '--directory', f.directory,
+      '--metadata-directory', m.directory, ...(network === 'mainnet'
+        ? ['--deployer', mainnetRoles.deployer, '--admin', mainnetRoles.admin, '--maximum-fee-wei', mainnetRoles.feeCeilingWei] : [])];
+    await main(args);
+    assert.equal(cdn.reads.size, 1555);
+    const manifest = f.read('manifest.json');
+    assert.equal(manifest.contractName, 'DMXOffchainRenderer');
+    assert.equal(manifest.constructorArgs, '0x');
+    assert.deepEqual(metadataPins(manifest), m.pins);
+    assert.equal(manifest.creationCode, artifacts.DMXOffchainRenderer.bytecode.object);
+    assert.deepEqual(f.read('publication-manifest.json'), m.publication);
+    assert.deepEqual(f.read('publication-verification.json'), m.verification);
+    assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+    const deployment = { ...manifest, deploymentBlock: 1, deploymentBlockHash: '0x' + 'a'.repeat(64),
+      transactionHash: '0x' + 'b'.repeat(64), confirmations: 3, collectionMetadata };
+    fs.writeFileSync(path.join(f.directory, 'deployment.json'), json(deployment));
+    const release = readRendererRelease(f.directory, network);
+    assert.deepEqual(release.publicationManifest, m.publication);
+    fs.writeFileSync(path.join(f.directory, 'publication-verification.json'), json({ ...m.verification, storageVerified: false }));
+    assert.throws(() => readRendererRelease(f.directory, network), /storage verification/);
+  });
+}
+
+for (const contractName of ['DMXOffchainRenderer', 'TarotCards']) {
+  test(`${contractName} deployment rejects stale token verification during preparation and later stages`, async t => {
+    const metadata = await metadataFixture(t);
+    const f = fixture(t, {}, 'mainnet', metadata);
+    const cdn = publicMetadataFixture(t, metadata);
+    const prepare = contractName === 'TarotCards' ? f.prepare : () => main(['prepare', '--network', 'mainnet',
+      '--contract', contractName, '--directory', f.directory, '--metadata-directory', metadata.directory,
+      '--deployer', mainnetRoles.deployer, '--admin', mainnetRoles.admin, '--maximum-fee-wei', mainnetRoles.feeCeilingWei]);
+    cdn.unavailable = '1.json';
+    await assert.rejects(prepare(), /DMX public metadata headers failed/);
+    assert.equal(fs.existsSync(path.join(f.directory, 'manifest.json')), false);
+    cdn.unavailable = null;
+    await prepare();
+    assert.equal(cdn.reads.size, 1555);
+    const frozen = fs.readFileSync(path.join(f.directory, 'manifest.json'), 'utf8');
+    cdn.unavailable = '1000000.json';
+    for (const command of ['sign', 'broadcast', 'verify']) {
+      await assert.rejects(main([command, '--network', 'mainnet', '--directory', f.directory]), /DMX public metadata headers failed/);
+    }
+    assert.equal(fs.readFileSync(path.join(f.directory, 'manifest.json'), 'utf8'), frozen);
+    assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+  });
+}
+
+test('offchain preparation refuses unpublished metadata before RPC or a frozen manifest', async t => {
+  const f = fixture(t);
+  const m = await metadataFixture(t);
+  fs.writeFileSync(path.join(m.directory, 'verification.json'), json({ ...m.verification, storageVerified: false }));
+  await assert.rejects(main(['prepare', '--contract', 'DMXOffchainRenderer', '--directory', f.directory,
+    '--metadata-directory', m.directory]), /storage verification/);
+  assert.equal(f.requests.length, 0);
+  assert.equal(fs.existsSync(path.join(f.directory, 'manifest.json')), false);
+  await assert.rejects(main(['prepare', '--contract', 'DMXOffchainRenderer', '--directory', f.directory]), /metadata-directory/);
 });
 
 test('mainnet collection reader rejects altered roles, constructor and frozen renderer evidence', async t => {

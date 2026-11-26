@@ -14,6 +14,8 @@ import { TAROT_API_PATHS, encodeTarotClaimTo, tarotChainId, tarotCodeHashInput, 
   type TarotConfirmResponse, type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
 import { bindMainnetCredentials, loadMainnetBindingRelease, stageMainnetCredentials,
   type MainnetClaimLinks } from '../../../../scripts/tarot/mainnetClaims.ts';
+import { buildDmxCollectionMetadata, buildDmxMetadata, dmxMetadataBody,
+  DMX_COLLECTION_METADATA_URI, DMX_METADATA_BASE_URI } from '../../../../scripts/tarot/metadata.ts';
 import { handleTarotRequest, type TarotEnvironment } from '../src/tarot.ts';
 import { d1Database } from '../test/commerceD1Harness.ts';
 import { writeTarotMainnetReleaseFixture } from './tarotReleaseFixture.ts';
@@ -24,6 +26,31 @@ const args = process.argv.slice(2);
 if (args.length > 1 || args.length === 1 && args[0] !== '--mainnet') throw new Error('Use tarot-e2e.ts [--mainnet].');
 const testnet = args.length === 0;
 const chainId = tarotChainId(testnet);
+const metadataFixtures = new Map<string, string>([
+  [DMX_COLLECTION_METADATA_URI, dmxMetadataBody(buildDmxCollectionMetadata()).toString()],
+  ...Array.from({ length: 777 }, (_, index) => [index + 1, tarotReceiptTokenId(index + 1)]).flat().map(tokenId =>
+    [`${DMX_METADATA_BASE_URI}${tokenId}.json`, dmxMetadataBody(buildDmxMetadata(tokenId)).toString()] as [string, string]),
+]);
+const futureCards = [778, 779, 780, 781, 782, ...Array.from({ length: 50 }, (_, index) => 999_950 + index)];
+const redeemedCards = [2, 779, 780, 781, ...Array.from({ length: 50 }, (_, index) => 100 + index)];
+for (const [card, cardIds] of [[true, futureCards], [false, redeemedCards]] as const) {
+  for (const cardId of cardIds) {
+    const tokenId = card ? cardId : dmxRedemptionReceiptTokenId(cardId);
+    metadataFixtures.set(`${DMX_METADATA_BASE_URI}${tokenId}.json`, dmxMetadataBody({
+      name: `${card ? 'Tarot Card' : 'DMX Redemption Receipt'} #${cardId}`,
+      description: card ? 'A mutating Tarot card.' : 'Records the redemption of a divination machina x card.',
+      image: `https://cdn.lil.org/nft/dmx/${card ? 'cards' : 'receipts'}/${cardId}.png`,
+      attributes: [{ trait_type: 'Kind', value: card ? 'Mutating Card' : 'Redemption Receipt' },
+        { trait_type: 'Card ID', value: cardId }],
+    }).toString());
+  }
+}
+async function metadataFetch(uri: string): Promise<Response> {
+  const body = metadataFixtures.get(uri);
+  return new Response(body ?? 'Missing local metadata fixture', { status: body ? 200 : 404,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*' } });
+}
 const build = spawnSync('forge', ['build', '--offline'], { cwd: project, stdio: 'inherit' });
 if (build.status !== 0) throw new Error('Contract compilation failed');
 const port = await new Promise<number>((done, reject) => {
@@ -74,8 +101,8 @@ try {
   if (!connected) throw new Error(`Anvil did not start: ${anvilError}`);
   const [admin, wallet, other] = await rpc<string[]>('eth_accounts');
   const key = `0x${'44'.repeat(32)}`;
-  const rendererArtifact = JSON.parse(await readFile(resolve(project, 'out/DMXWebpRenderer.sol/DMXWebpRenderer.json'), 'utf8')) as { bytecode: { object: string } };
-  const rendererDeployment = await send(admin, { data: rendererArtifact.bytecode.object });
+  const originalRendererArtifact = JSON.parse(await readFile(resolve(project, 'out/DMXWebpRenderer.sol/DMXWebpRenderer.json'), 'utf8')) as { bytecode: { object: string } };
+  const rendererDeployment = await send(admin, { data: originalRendererArtifact.bytecode.object });
   assert.ok(rendererDeployment.contractAddress);
   const artifact = JSON.parse(await readFile(resolve(project, 'out/TarotCards.sol/TarotCards.json'), 'utf8')) as { bytecode: { object: string } };
   const deployment = await send(admin, { data: `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(
@@ -156,6 +183,15 @@ try {
     assert.equal(bound.contractAddress, contractAddress);
     assert.equal((await api<TarotStatus>(TAROT_API_PATHS.status, { tokenId: 1, code: codeFor(1) })).config.chainId, 1);
   }
+  const rendererArtifact = JSON.parse(await readFile(resolve(project, 'out/DMXOffchainRenderer.sol/DMXOffchainRenderer.json'), 'utf8')) as { bytecode: { object: string } };
+  const offchainRendererDeployment = await send(admin, { data: rendererArtifact.bytecode.object });
+  assert.ok(offchainRendererDeployment.contractAddress);
+  await send(admin, { to: contractAddress, data: encodeCall('setRenderer(address)', ['address'],
+    [offchainRendererDeployment.contractAddress]) });
+  const [collectionUri] = decodeReturn(['string'], await rpc<string>('eth_call', [{ to: contractAddress,
+    data: encodeCall('contractURI()', [], []) }, 'latest']));
+  assert.equal(collectionUri, DMX_COLLECTION_METADATA_URI);
+  assert.deepEqual(await (await metadataFetch(collectionUri as string)).json(), buildDmxCollectionMetadata());
   const initial = await status(1);
   assert.equal(initial.claimed, false);
   assert.equal(initial.config.chainId, chainId);
@@ -208,14 +244,20 @@ try {
   const domain = { chainId, contractAddress };
   const metadata = async (tokenId: number | bigint) => {
     const [uri] = await read('tokenURI(uint256)', ['uint256'], [tokenId], ['string']);
-    assert.equal(typeof uri, 'string');
-    assert.ok((uri as string).startsWith('data:application/json;base64,'));
-    return JSON.parse(Buffer.from((uri as string).slice('data:application/json;base64,'.length), 'base64').toString()) as {
+    assert.equal(uri, `${DMX_METADATA_BASE_URI}${tokenId}.json`);
+    const response = await metadataFetch(uri as string);
+    assert.equal(response.status, 200, `No metadata published for token ${tokenId}`);
+    return await response.json() as {
       image: string; attributes: { trait_type: string; value: string | number }[];
     };
   };
+  assert.deepEqual(await metadata(1), buildDmxMetadata(1));
+  assert.deepEqual(await metadata(777), buildDmxMetadata(777));
+  assert.deepEqual(await metadata(tarotReceiptTokenId(777)), buildDmxMetadata(tarotReceiptTokenId(777)));
   assert.equal((await metadata(1)).image, 'https://cdn.lil.org/nft/dmx/cards/1.png');
   assert.equal((await metadata(tarotReceiptTokenId(1))).image, 'https://cdn.lil.org/nft/dmx/receipts/1.png');
+  await assert.rejects(metadata(0), /revert/);
+  await assert.rejects(metadata(6), /revert/);
 
   await send(admin, { to: contractAddress, data: encodeDmxMintTo(other, [3, 778]) });
   assert.equal(await ownerOf(3), other);
@@ -249,6 +291,7 @@ try {
   await assert.rejects(send(wallet, redemptionTransaction), /revert/);
   for (const id of [2, 779]) {
     await assert.rejects(ownerOf(id), /revert/);
+    await assert.rejects(metadata(id), /revert/);
     assert.equal((await read('redeemedByOrder(uint256)', ['uint256'], [id], ['uint256']))[0], 1n);
     assert.equal((await read('ownerOf(uint256)', ['uint256'], [dmxRedemptionReceiptTokenId(id)], ['address']))[0], wallet);
   }
@@ -275,10 +318,16 @@ try {
     await send(wallet, { to: contractAddress, data: encodeDmxRedeem(inputs, outputs, quote, signature) });
     assert.equal((await read('ownerOf(uint256)', ['uint256'], [dmxRedemptionReceiptTokenId(inputs[0])], ['address']))[0], recipient);
     const receiptMetadata = await metadata(dmxRedemptionReceiptTokenId(inputs[0]));
-    assert.equal(receiptMetadata.attributes.find(attribute => attribute.trait_type === 'Redeemed By Order')?.value, String(orderId));
+    assert.equal(receiptMetadata.attributes.find(attribute => attribute.trait_type === 'Card ID')?.value, inputs[0]);
+    const [receiptInfo] = await read('getTokenInfo(uint256)', ['uint256'], [dmxRedemptionReceiptTokenId(inputs[0])],
+      ['(uint8,uint256,uint256,uint256,uint256,bool)']);
+    assert.deepEqual(receiptInfo, [3n, BigInt(inputs[0]), 1n, 1n, orderId, false]);
     if (outputs.length) {
       const cardMetadata = await metadata(outputs[0]);
-      assert.equal(cardMetadata.attributes.find(attribute => attribute.trait_type === 'Created By Order')?.value, String(orderId));
+      assert.equal(cardMetadata.attributes.find(attribute => attribute.trait_type === 'Card ID')?.value, outputs[0]);
+      const [cardInfo] = await read('getTokenInfo(uint256)', ['uint256'], [outputs[0]],
+        ['(uint8,uint256,uint256,uint256,uint256,bool)']);
+      assert.deepEqual(cardInfo, [1n, BigInt(outputs[0]), 2n, orderId, 0n, false]);
     }
   }
   assert.equal((await read('generation(uint256)', ['uint256'], [782], ['uint256']))[0], 2n);
@@ -296,6 +345,7 @@ try {
   assert.ok(maximumBatchGas < 16_000_000n, 'Maximum redemption must fit below the EIP-7825 transaction gas cap');
   await send(wallet, batchTransaction);
   assert.equal(await ownerOf(999_999), other);
+  assert.equal((await metadata(999_999)).image, 'https://cdn.lil.org/nft/dmx/cards/999999.png');
   assert.equal(await ownerOf(tarotReceiptTokenId(149)), wallet);
   assert.equal((await read('ownerOf(uint256)', ['uint256'], [dmxRedemptionReceiptTokenId(149)], ['address']))[0], other);
   assert.deepEqual(await read('getRedemption(uint256)', ['uint256'], [99], ['address', 'address', 'uint256[]', 'uint256[]']),
@@ -326,7 +376,7 @@ try {
     assert.equal(db.prepare('SELECT status FROM dmx_mainnet_claim_batches').get()?.status, 'bound');
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dmx_mainnet_claim_codes WHERE revoked_at_ms IS NULL').get()?.count, 777);
   }
-  console.log(`DMX ${testnet ? 'Sepolia' : 'mainnet'} E2E passed: initial claims, relayed and owner mints, signed multi-generation redemption, fee splitting, receipt provenance, renderer swaps, replay rejection and paused recovery. Maximum 50-input/50-output redemption gas estimate:`, maximumBatchGas.toString());
+  console.log(`DMX ${testnet ? 'Sepolia' : 'mainnet'} E2E passed: offchain metadata migration, initial claims, relayed and owner mints, signed multi-generation redemption, fee splitting, onchain provenance, renderer swaps, replay rejection and paused recovery. Maximum 50-input/50-output redemption gas estimate:`, maximumBatchGas.toString());
 } finally {
   db.close();
   anvil.kill('SIGTERM');

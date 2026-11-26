@@ -20,7 +20,7 @@ function fixture(t, chainId = 11155111, contractName = 'TarotCards') {
   const artifact = { metadata: { compiler: { version: compilerVersion } }, bytecode: { object: '0x60016002' },
     deployedBytecode: { object: '0x60016003', immutableReferences: {} } };
   const write = (name, value) => fs.writeFileSync(path.join(directory, name), json(value));
-  const constructorArgs = contractName === 'DMXWebpRenderer' ? '0x' : '0x0001';
+  const constructorArgs = contractName === 'TarotCards' ? '0x0001' : '0x';
   write('manifest.json', { releaseVersion: 2, contractName, chainId, contractAddress: address, standardInputSha256: sha256(json(input)), artifactSha256: sha256(json(artifact)),
     creationCode: artifact.bytecode.object + constructorArgs.slice(2), constructorArgs });
   write('deployment.json', { chainId, contractAddress: address, transactionHash, confirmations: 3,
@@ -222,7 +222,7 @@ for (const [chainId, network] of [[1, 'sepolia'], [11155111, 'mainnet']]) {
 }
 
 test('mainnet source submission targets chain one for collection and renderer', async t => {
-  for (const contractName of ['TarotCards', 'DMXWebpRenderer']) {
+  for (const contractName of ['TarotCards', 'DMXWebpRenderer', 'DMXOffchainRenderer']) {
     const f = fixture(t, 1, contractName);
     const requests = [];
     t.mock.method(globalThis, 'fetch', async (url, init) => {
@@ -276,6 +276,17 @@ function publishedRelease(f, contractName) {
     creationBytecode: { onchainBytecode: manifest.creationCode, recompiledBytecode: artifact.bytecode.object },
     runtimeBytecode: { onchainBytecode: artifact.deployedBytecode.object, recompiledBytecode: artifact.deployedBytecode.object } };
 }
+
+test('offchain renderer source verification preserves the independent no-argument target', async t => {
+  const name = 'DMXOffchainRenderer';
+  const f = fixture(t, 11155111, name);
+  const published = publishedRelease(f, name);
+  published.creationBytecode.transformationValues = { constructorArguments: '0x' };
+  t.mock.method(globalThis, 'fetch', async () => Response.json(published));
+  await f.run('verify');
+  assert.equal(f.read(name + '.sourcify-verification.json').creationBytecodeMatch, true);
+  assert.equal(f.read('source-manifest.json').fullyQualifiedName, 'src/' + name + '.sol:' + name);
+});
 
 for (const values of [undefined, null, {}, { constructorArguments: null }, { constructorArguments: '0x' }]) {
   test(`renderer verification accepts empty constructor representation ${JSON.stringify(values)}`, async t => {

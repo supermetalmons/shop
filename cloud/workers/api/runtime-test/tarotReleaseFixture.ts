@@ -17,7 +17,9 @@ export async function writeTarotMainnetReleaseFixture(directory: string, project
   collection: Deployment, renderer: Deployment, admin: string, quoteSigner: string, rpc: Rpc): Promise<void> {
   const [uri] = decodeReturn(['string'], await rpc<string>('eth_call', [{ to: collection.contractAddress,
     data: encodeCall('contractURI()', [], []) }, 'latest']));
-  if (typeof uri !== 'string') throw new Error('Missing local collection metadata');
+  if (typeof uri !== 'string' || !uri.startsWith('data:application/json;base64,')) {
+    throw new Error('Original mainnet binding fixture requires its historical inline collection metadata');
+  }
   const collectionMetadata = JSON.parse(Buffer.from(uri.slice('data:application/json;base64,'.length), 'base64').toString());
   const current = await rpc<{ number: string }>('eth_getBlockByNumber', ['latest', false]);
   async function freeze(contractName: 'TarotCards' | 'DMXWebpRenderer', deployment: Deployment,

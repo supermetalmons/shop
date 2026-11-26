@@ -10,6 +10,8 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { encodeAbi, encodeCall } from '../../../shared/ethereum/abi.ts';
 import { withMetadataLock } from '../../../scripts/ethereum-metadata/lock.ts';
 import { COLLECTION_IMAGE, main, parseArguments, readState, runActivation, validateTransaction, verifyEvents } from './tarot-renderer.mjs';
+import { OFFCHAIN_COLLECTION_URI } from './tarot-deployment.mjs';
+import { generateDmxMetadata, loadDmxMetadataManifest, dmxMetadataManifestSha256 } from '../../../scripts/tarot/metadata.ts';
 
 const owner = '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf';
 const collection = '0x2222222222222222222222222222222222222222';
@@ -228,6 +230,31 @@ test('confirmed activation verifies collection PNG metadata, preserved state and
   assert.deepEqual(await f.verify(), result);
 });
 
+test('confirmed offchain activation verifies the pinned URI and body and rejects changed metadata pins', async t => {
+  const f = fixture();
+  const body = Buffer.from(uri(COLLECTION_IMAGE).split(',')[1], 'base64');
+  const pins = { expectedCollectionUri: OFFCHAIN_COLLECTION_URI,
+    collectionMetadataSha256: createHash('sha256').update(body).digest('hex'), metadataManifestSha256: 'c'.repeat(64) };
+  Object.assign(f.deps.scope, pins);
+  const state = f.deps.state;
+  f.deps.state = async () => {
+    const result = await state();
+    return { ...result, uri: result.renderer === next ? OFFCHAIN_COLLECTION_URI : result.uri };
+  };
+  f.deps.fetch = async url => {
+    assert.equal(url, OFFCHAIN_COLLECTION_URI);
+    return new Response(body, { headers: { 'content-type': 'application/json' } });
+  };
+  await f.prepare(); await f.sign(); await f.broadcast();
+  const result = await f.verify();
+  for (const [name, value] of Object.entries(pins)) assert.equal(result[name], value);
+  f.deps.scope.metadataManifestSha256 = 'd'.repeat(64);
+  await assert.rejects(f.verify(), /metadata pins changed/);
+  f.deps.scope.metadataManifestSha256 = pins.metadataManifestSha256;
+  f.deps.fetch = async () => new Response('{}', { headers: { 'content-type': 'application/json' } });
+  await assert.rejects(f.verify(), /content hash differs/);
+});
+
 test('verify rejects pending, failed, insufficiently confirmed and noncanonical activations', async () => {
   const f = fixture(); await f.prepare(); await f.sign(); await assert.rejects(f.verify(), /has not succeeded/);
   await f.broadcast();
@@ -282,8 +309,9 @@ test('readState pins one canonical block, validates collection identity, and dec
   await assert.rejects(readState(rpc, collection), /reorg/);
 });
 
-test('main freezes independent release evidence with private permissions and refuses concurrent operations or network changes', async t => {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'dmx-renderer-activation-test-'));
+for (const rendererName of ['DMXWebpRenderer', 'DMXOffchainRenderer']) {
+test(`main freezes ${rendererName} evidence and refuses concurrent operations or network changes`, async t => {
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dmx-renderer-activation-test-')));
   const project = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
   const originalFetch = globalThis.fetch, originalRpc = process.env.ETHEREUM_TAROT_MAINNET_RPC_URL;
   t.after(() => {
@@ -292,10 +320,22 @@ test('main freezes independent release evidence with private permissions and ref
     else process.env.ETHEREUM_TAROT_MAINNET_RPC_URL = originalRpc;
     fs.rmSync(temporary, { recursive: true, force: true });
   });
-  execFileSync('forge', ['build', '--offline', 'src/TarotCards.sol', 'src/DMXWebpRenderer.sol',
+  execFileSync('forge', ['build', '--offline', 'src/TarotCards.sol', 'src/DMXWebpRenderer.sol', 'src/DMXOffchainRenderer.sol',
     '--out', path.join(temporary, 'out'), '--cache-path', path.join(temporary, 'cache')], { cwd: project, stdio: 'pipe', timeout: 30_000 });
   const json = value => JSON.stringify(value, null, 2) + '\n';
   const hash = value => createHash('sha256').update(value).digest('hex');
+  const metadataDirectory = path.join(temporary, '.cache/dmx-metadata/test');
+  let publication, verification, pins;
+  if (rendererName === 'DMXOffchainRenderer') {
+    await generateDmxMetadata(metadataDirectory, { root: temporary });
+    publication = await loadDmxMetadataManifest(metadataDirectory);
+    pins = { expectedCollectionUri: OFFCHAIN_COLLECTION_URI,
+      collectionMetadataSha256: publication.objects.find(object => object.file === 'collection.json').sha256,
+      metadataManifestSha256: dmxMetadataManifestSha256(publication) };
+    verification = { version: 1, baseURI: publication.baseURI, manifestSha256: pins.metadataManifestSha256,
+      objectsSha256: publication.objectsSha256, objectCount: publication.objectCount, complete: true,
+      publicVerified: true, storageVerified: true, checkedAt: '2026-11-26T11:00:00.000Z' };
+  }
   const predicted = cast(['compute-address', owner, '--nonce', '7']).match(/0x[0-9a-fA-F]{40}/)[0].toLowerCase();
   const buildRelease = (name, directory, contractAddress, block, image, rendererRelease) => {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -307,6 +347,7 @@ test('main freezes independent release evidence with private permissions and ref
       outputSelection: { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode', 'metadata'] } } } };
     const constructorArgs = name === 'TarotCards' ? encodeAbi(['address', 'address', 'address'], [owner, signer, previous]) : '0x';
     const manifest = { releaseVersion: 2, network: 'mainnet', chainId: 1, contractName: name, deployer: owner, admin: owner,
+      ...(name === 'DMXOffchainRenderer' ? pins : {}),
       contractAddress, expectedCollectionImage: image, constructorArgs, creationCode: artifact.bytecode.object + constructorArgs.slice(2),
       artifactSha256: hash(json(artifact)), standardInputSha256: hash(json(input)), feeCeilingWei: '300000000000000',
       maximumFeeWei: '6000000000', gasPrice: '1000', gasLimit: '6000000', nonce: '7',
@@ -315,7 +356,9 @@ test('main freezes independent release evidence with private permissions and ref
       transactionHash: '0x' + (block + 100).toString(16).padStart(64, '0'), confirmations: 3,
       collectionMetadata: JSON.parse(Buffer.from(uri(image).split(',')[1], 'base64').toString()) };
     const files = { 'manifest.json': manifest, 'deployment.json': deployment,
-      [name + '.artifact.json']: artifact, [name + '.standard-input.json']: input };
+      [name + '.artifact.json']: artifact, [name + '.standard-input.json']: input,
+      ...(name === 'DMXOffchainRenderer' ? { 'publication-manifest.json': publication,
+        'publication-verification.json': verification } : {}) };
     for (const [filename, value] of Object.entries(files)) fs.writeFileSync(path.join(directory, filename), json(value), { mode: 0o600 });
     return { manifest, deployment, artifact, files };
   };
@@ -323,9 +366,10 @@ test('main freezes independent release evidence with private permissions and ref
   const old = buildRelease('DMXWebpRenderer', path.join(originalCollection, 'renderer'), previous, 10, 'https://wip.lil.org/dmx/cards/1.webp');
   const original = buildRelease('TarotCards', originalCollection, predicted, 11, 'https://wip.lil.org/dmx/cards/1.webp', old);
   const rendererDirectory = path.join(temporary, 'new-renderer');
-  const replacement = buildRelease('DMXWebpRenderer', rendererDirectory, next, 20, COLLECTION_IMAGE);
+  const replacement = buildRelease(rendererName, rendererDirectory, next, 20, COLLECTION_IMAGE);
   const releases = [original, replacement];
   const methods = [];
+  const publicReads = new Set();
   process.env.ETHEREUM_TAROT_MAINNET_RPC_URL = 'https://rpc.example.invalid';
   const getters = Object.fromEntries(Object.entries({ 'owner()': ['address', owner], 'pendingOwner()': ['address', ZERO],
     'renderer()': ['address', previous], 'quoteSigner()': ['address', signer], 'mintingPaused()': ['bool', false],
@@ -333,6 +377,12 @@ test('main freezes independent release evidence with private permissions and ref
     'MAX_TOKEN_ID()': ['uint256', 2000775], 'contractURI()': ['string', uri('https://wip.lil.org/dmx/cards/1.webp')],
   }).map(([signature, [type, value]]) => [encodeCall(signature, [], []), encodeAbi([type], [value])]));
   globalThis.fetch = async (_url, init) => {
+    if (String(_url).startsWith('https://cdn.mons.shop/dmx/')) {
+      publicReads.add(_url);
+      return new Response(fs.readFileSync(path.join(metadataDirectory, new URL(_url).pathname.split('/').pop())),
+        { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
+          'access-control-allow-origin': '*' } });
+    }
     const { method, params } = JSON.parse(init.body); methods.push(method);
     let result;
     if (method === 'eth_chainId') result = '0x1';
@@ -351,7 +401,8 @@ test('main freezes independent release evidence with private permissions and ref
         contractAddress: release.manifest.contractAddress, input: release.manifest.creationCode };
     } else if (method === 'eth_call') {
       const request = params[0];
-      if (request.to === next) result = request.data.startsWith('0x01ffc9a7') ? encodeAbi(['bool'], [true]) : encodeAbi(['string'], [uri(COLLECTION_IMAGE)]);
+      if (request.to === next) result = request.data.startsWith('0x01ffc9a7') ? encodeAbi(['bool'], [true])
+        : encodeAbi(['string'], [rendererName === 'DMXOffchainRenderer' ? OFFCHAIN_COLLECTION_URI : uri(COLLECTION_IMAGE)]);
       else result = request.data === encodeCall('setRenderer(address)', ['address'], [next]) ? '0x' : getters[request.data];
     } else throw new Error('Unexpected integration RPC: ' + method);
     assert.notEqual(result, undefined, 'A mocked RPC result must exist');
@@ -369,10 +420,25 @@ test('main freezes independent release evidence with private permissions and ref
   assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'collection/manifest.json'), 'utf8')), original.manifest);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'renderer/manifest.json'), 'utf8')), replacement.manifest);
+  if (publication) {
+    assert.equal(publicReads.size, 1555);
+    assert.equal(manifest.metadataManifestSha256, pins.metadataManifestSha256);
+    assert.equal(manifest.collectionMetadataSha256, pins.collectionMetadataSha256);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'renderer/publication-manifest.json'), 'utf8')), publication);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'renderer/publication-verification.json'), 'utf8')), verification);
+  }
   assert.deepEqual(await main(args), result);
+  if (publication) {
+    const workingFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => String(url).endsWith('/1.json')
+      ? new Response('missing', { status: 404 }) : workingFetch(url, init);
+    await assert.rejects(main(args), /metadata headers failed/);
+    globalThis.fetch = workingFetch;
+  }
   assert.equal(methods.includes('eth_sendRawTransaction'), false);
   await withMetadataLock(path.join(directory, 'operation.lock'), () => assert.rejects(main(args), /Another metadata operation/));
   await assert.rejects(main(['verify', '--network', 'sepolia', '--directory', directory]));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(originalCollection, 'manifest.json'), 'utf8')), original.manifest);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(rendererDirectory, 'manifest.json'), 'utf8')), replacement.manifest);
 });
+}

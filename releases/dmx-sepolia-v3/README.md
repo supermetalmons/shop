@@ -56,4 +56,12 @@ manifests remain alongside those records.
 The [26 November 2026 CDN migration](../dmx-cdn-v1/README.md) activated a new PNG
 metadata renderer on this same collection and deployed the WebP storefront
 assets. The original deployment evidence remains unchanged; the migration
-record contains the current renderer, activation transaction and verification.
+record contains that migration's renderer, activation transaction and verification.
+
+## Subsequent offchain metadata update
+
+The [offchain metadata migration](../dmx-offchain-v1/README.md) activated
+`DMXOffchainRenderer` on this same collection. Sepolia and mainnet now share
+`https://cdn.mons.shop/dmx/<tokenId>.json` and `collection.json`. That release
+contains the current renderer identity, activation and complete publication
+verification. Original deployment evidence and NFC credentials remain unchanged.

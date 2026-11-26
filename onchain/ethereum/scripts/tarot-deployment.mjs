@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { withMetadataLock } from '../../../scripts/ethereum-metadata/lock.ts';
+import { dmxMetadataManifestSha256, loadDmxMetadataManifest, validateDmxMetadataManifest,
+  verifyDmxPublishedMetadata } from '../../../scripts/tarot/metadata.ts';
 import { deploymentGas, matchingRuntime, validateDeploymentBalance, validateDeploymentGasPrice } from './pre111k-deployment.mjs';
 
 export { deploymentGas, matchingRuntime, validateDeploymentBalance, validateDeploymentGasPrice };
@@ -20,6 +22,9 @@ export const TAROT_SEPOLIA = Object.freeze({
 const project = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const repository = path.resolve(project, '../..');
 const collectionImage = 'https://cdn.lil.org/nft/dmx/cards/1.png';
+export const OFFCHAIN_COLLECTION_URI = 'https://cdn.mons.shop/dmx/collection.json';
+const rendererNames = ['DMXWebpRenderer', 'DMXOffchainRenderer'];
+const metadataPinNames = ['expectedCollectionUri', 'collectionMetadataSha256', 'metadataManifestSha256'];
 const legacyCollectionImage = 'https://wip.lil.org/dmx/cards/1.webp';
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -38,7 +43,7 @@ function validatePinnedCollectionImage(image) {
 
 export function deploymentConfiguration(network = 'sepolia', quoteSigner, renderer, contractName = 'TarotCards', roles = {}) {
   assert.ok(['sepolia', 'mainnet'].includes(network), 'Tarot deployment supports Sepolia or Ethereum mainnet only');
-  assert.ok(['TarotCards', 'DMXWebpRenderer'].includes(contractName), 'Unsupported deployment contract');
+  assert.ok(['TarotCards', ...rendererNames].includes(contractName), 'Unsupported deployment contract');
   let configuration = TAROT_SEPOLIA;
   if (network === 'mainnet') {
     const deployer = deploymentAddress(roles.deployer, 'deployer');
@@ -50,7 +55,7 @@ export function deploymentConfiguration(network = 'sepolia', quoteSigner, render
     assert.equal(Object.keys(roles).length, 0, 'Explicit deployment roles and fee ceiling apply only to mainnet');
   }
   const common = { ...configuration, releaseVersion: 2, contractName };
-  if (contractName === 'DMXWebpRenderer') return common;
+  if (rendererNames.includes(contractName)) return common;
   const signer = deploymentAddress(quoteSigner, 'quote-signer');
   assert.ok(signer !== common.deployer && signer !== common.admin, 'Use a dedicated Tarot quote signer');
   assert.ok(typeof renderer === 'string' && /^0x[0-9a-f]{40}$/i.test(renderer) && !/^0x0{40}$/i.test(renderer),
@@ -70,11 +75,14 @@ export function validateDeploymentConfiguration(manifest, network = 'sepolia') {
   if (Object.hasOwn(manifest, 'expectedCollectionImage')) {
     validatePinnedCollectionImage(manifest.expectedCollectionImage);
   }
+  if (manifest.contractName === 'DMXOffchainRenderer' || metadataPinNames.some(name => Object.hasOwn(manifest, name))) {
+    metadataPins(manifest);
+  }
   return configuration;
 }
 
 export function deploymentConstructorArgs(configuration) {
-  if (configuration.contractName === 'DMXWebpRenderer') return '0x';
+  if (rendererNames.includes(configuration.contractName)) return '0x';
   return run(['abi-encode', 'constructor(address,address,address)', configuration.admin,
     configuration.quoteSigner, configuration.renderer]);
 }
@@ -103,12 +111,68 @@ export function validateCollectionMetadata(uri, expectedImage = collectionImage)
   const encoded = uri.slice('data:application/json;base64,'.length);
   const bytes = Buffer.from(encoded, 'base64');
   assert.equal(bytes.toString('base64'), encoded, 'Malformed renderer metadata encoding');
-  const metadata = JSON.parse(bytes.toString('utf8'));
+  return validateMetadataObject(JSON.parse(bytes.toString('utf8')), expectedImage);
+}
+
+function validateMetadataObject(metadata, expectedImage) {
   assert.equal(metadata.name, 'divination machina x');
   assert.equal(metadata.symbol, 'DMX');
   assert.equal(metadata.image, expectedImage);
   assert.equal(metadata.external_link, 'https://mons.shop');
   return metadata;
+}
+
+export function metadataPins(manifest) {
+  if (manifest.contractName !== 'DMXOffchainRenderer' && !metadataPinNames.some(name => Object.hasOwn(manifest, name))) return {};
+  assert.equal(manifest.expectedCollectionUri, OFFCHAIN_COLLECTION_URI, 'Unexpected offchain collection metadata URI');
+  for (const name of metadataPinNames.slice(1)) assert.match(manifest[name] ?? '', /^[0-9a-f]{64}$/, 'Missing metadata pin: ' + name);
+  return Object.fromEntries(metadataPinNames.map(name => [name, manifest[name]]));
+}
+
+export async function resolveCollectionMetadata(uri, manifest = {}, expectedImage = collectionImage, fetcher = fetch) {
+  const pins = metadataPins(manifest);
+  if (!pins.expectedCollectionUri) return validateCollectionMetadata(uri, expectedImage);
+  assert.equal(uri, pins.expectedCollectionUri, 'Offchain collection metadata URI differs from release');
+  const response = await fetcher(uri, { redirect: 'error', signal: AbortSignal.timeout(30_000),
+    headers: { accept: 'application/json', 'cache-control': 'no-cache' } });
+  assert.equal(response.status, 200, 'Offchain collection metadata HTTP failure');
+  assert.ok(!response.redirected && (!response.url || response.url === uri), 'Offchain collection metadata redirect');
+  assert.match(response.headers.get('content-type') ?? '', /^application\/json(?:\s*;|$)/i, 'Offchain collection metadata content type');
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.ok(bytes.length > 0 && bytes.length <= 1_048_576, 'Invalid offchain collection metadata size');
+  assert.equal(sha256(bytes), pins.collectionMetadataSha256, 'Offchain collection metadata content hash differs');
+  return validateMetadataObject(JSON.parse(bytes.toString('utf8')), expectedImage);
+}
+
+export function validateMetadataPublication(publication, verification, manifest) {
+  validateDmxMetadataManifest(publication);
+  const pins = metadataPins(manifest);
+  assert.equal(dmxMetadataManifestSha256(publication), pins.metadataManifestSha256, 'Frozen metadata publication manifest changed');
+  const collection = publication.objects.find(object => object.file === 'collection.json');
+  assert.equal(collection?.sha256, pins.collectionMetadataSha256, 'Collection metadata hash differs from publication');
+  assert.equal(verification?.version, 1, 'Missing metadata publication verification');
+  assert.equal(verification.complete, true, 'Metadata publication is incomplete');
+  assert.equal(verification.publicVerified, true, 'Metadata public verification is missing');
+  assert.equal(verification.baseURI, publication.baseURI, 'Metadata verification origin changed');
+  assert.equal(verification.manifestSha256, pins.metadataManifestSha256, 'Metadata verification manifest changed');
+  assert.equal(verification.objectsSha256, publication.objectsSha256, 'Metadata verification objects changed');
+  assert.equal(verification.objectCount, publication.objectCount, 'Metadata verification count changed');
+}
+
+function readMetadataPublication(directory, manifest) {
+  const publicationManifest = JSON.parse(fs.readFileSync(path.join(directory, 'publication-manifest.json'), 'utf8'));
+  const publicationVerification = JSON.parse(fs.readFileSync(path.join(directory, 'publication-verification.json'), 'utf8'));
+  validateMetadataPublication(publicationManifest, publicationVerification, manifest);
+  assert.equal(publicationVerification.storageVerified, true, 'Metadata storage verification is missing');
+  return { publicationManifest, publicationVerification };
+}
+
+export async function verifyRendererPublication(release, options = {}) {
+  if (!metadataPins(release.manifest).expectedCollectionUri) return;
+  validateMetadataPublication(release.publicationManifest, release.publicationVerification, release.manifest);
+  const verification = await verifyDmxPublishedMetadata(release.publicationManifest, { fetcher: options.fetch });
+  validateMetadataPublication(release.publicationManifest, verification, release.manifest);
+  return verification;
 }
 
 function validateFrozenContract(manifest, artifact, input) {
@@ -127,7 +191,7 @@ function validateFrozenContract(manifest, artifact, input) {
 }
 
 function validateDeploymentEvidence(manifest, deployment, keys) {
-  for (const key of keys) {
+  for (const key of [...keys, ...Object.keys(metadataPins(manifest))]) {
     assert.equal(deployment[key], manifest[key], 'Deployment differs from manifest: ' + key);
   }
   assert.ok(deployment.confirmations >= 3, 'Deployment needs three confirmations');
@@ -139,21 +203,27 @@ function validateDeploymentEvidence(manifest, deployment, keys) {
 }
 
 export function readRendererRelease(directory, network = 'sepolia') {
-  const names = ['manifest.json', 'deployment.json', 'DMXWebpRenderer.artifact.json', 'DMXWebpRenderer.standard-input.json'];
-  const files = Object.fromEntries(names.map(name => [name, JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'))]));
-  const manifest = files['manifest.json'];
-  const deployment = files['deployment.json'];
-  const artifact = files['DMXWebpRenderer.artifact.json'];
-  const input = files['DMXWebpRenderer.standard-input.json'];
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
   validateDeploymentConfiguration(manifest, network);
-  assert.equal(manifest.contractName, 'DMXWebpRenderer', 'Prerequisite must be a DMXWebpRenderer release');
+  assert.ok(rendererNames.includes(manifest.contractName), 'Prerequisite must be a supported DMX renderer release');
+  const name = manifest.contractName;
+  const names = ['manifest.json', 'deployment.json', name + '.artifact.json', name + '.standard-input.json'];
+  const files = Object.fromEntries(names.map(name => [name, JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'))]));
+  const deployment = files['deployment.json'];
+  const artifact = files[name + '.artifact.json'];
+  const input = files[name + '.standard-input.json'];
   assert.equal(manifest.constructorArgs, '0x');
   assert.equal(manifest.creationCode, artifact.bytecode.object);
   validateFrozenContract(manifest, artifact, input);
   validateDeploymentEvidence(manifest, deployment,
     ['chainId', 'contractName', 'contractAddress', 'artifactSha256', 'standardInputSha256', 'expectedCollectionImage',
       ...(network === 'mainnet' ? ['releaseVersion', 'deployer', 'admin', 'constructorArgs'] : [])]);
-  return { files, manifest, deployment, artifact, input };
+  const publication = metadataPins(manifest).expectedCollectionUri ? readMetadataPublication(directory, manifest) : {};
+  if (publication.publicationManifest) {
+    files['publication-manifest.json'] = publication.publicationManifest;
+    files['publication-verification.json'] = publication.publicationVerification;
+  }
+  return { files, manifest, deployment, artifact, input, ...publication };
 }
 
 export function readCollectionRelease(directory, network = 'sepolia') {
@@ -179,7 +249,7 @@ export function readCollectionRelease(directory, network = 'sepolia') {
   return { manifest, deployment, artifact, input, rendererRelease };
 }
 
-export async function verifyRendererRelease(release, rpc) {
+export async function verifyRendererRelease(release, rpc, options = {}) {
   const { manifest, deployment, artifact } = release;
   assert.equal(BigInt(await rpc('eth_chainId', [])), BigInt(manifest.chainId), 'Renderer RPC chain differs from release');
   const block = '0x' + deployment.deploymentBlock.toString(16);
@@ -209,11 +279,11 @@ export async function verifyRendererRelease(release, rpc) {
   assert.equal(BigInt(supports), 1n, 'Renderer interface is unsupported');
   const metadata = await rpc('eth_call', [{ to: manifest.contractAddress,
     data: run(['calldata', 'contractURI(address)', manifest.admin]) }, 'latest']);
-  validateCollectionMetadata(JSON.parse(run(['abi-decode', 'value()(string)', metadata, '--json']))[0],
-    deploymentCollectionImage(manifest, deployment));
+  await resolveCollectionMetadata(JSON.parse(run(['abi-decode', 'value()(string)', metadata, '--json']))[0], manifest,
+    deploymentCollectionImage(manifest, deployment), options.fetch);
 }
 
-export async function verifyDeploymentState(manifest, rpc, block, deployment) {
+export async function verifyDeploymentState(manifest, rpc, block, deployment, options = {}) {
   const contractName = manifest.contractName;
   const expectedImage = deploymentCollectionImage(manifest, deployment);
   const call = async (signature, type, ...args) => {
@@ -248,10 +318,10 @@ export async function verifyDeploymentState(manifest, rpc, block, deployment) {
     assert.equal(domain[2], '1');
     assert.equal(String(domain[3]), String(manifest.chainId));
     assert.equal(domain[4].toLowerCase(), manifest.contractAddress);
-    metadata = validateCollectionMetadata(await call('contractURI()', 'string'), expectedImage);
+    metadata = await resolveCollectionMetadata(await call('contractURI()', 'string'), manifest, expectedImage, options.fetch);
   } else {
     assert.equal(await call('supportsInterface(bytes4)', 'uint256', rendererInterfaceId()), '1');
-    metadata = validateCollectionMetadata(await call('contractURI(address)', 'string', manifest.admin), expectedImage);
+    metadata = await resolveCollectionMetadata(await call('contractURI(address)', 'string', manifest.admin), manifest, expectedImage, options.fetch);
   }
   return metadata;
 }
@@ -317,23 +387,25 @@ function privateDirectory(directory) {
 export async function main(argv = process.argv.slice(2)) {
   const [command, ...arguments_] = argv;
   assert.ok(['prepare', 'sign', 'broadcast', 'verify'].includes(command),
-    'Use prepare|sign|broadcast|verify --directory PATH [--network sepolia|mainnet] [--contract TarotCards|DMXWebpRenderer for prepare] [--deployer ADDRESS --admin ADDRESS --maximum-fee-wei INTEGER for mainnet prepare] [--quote-signer ADDRESS --renderer-directory VERIFIED_RELEASE for collection prepare] [--keystore PATH --password-file PATH].');
+    'Use prepare|sign|broadcast|verify --directory PATH [--network sepolia|mainnet] [--contract TarotCards|DMXWebpRenderer|DMXOffchainRenderer for prepare] [--metadata-directory PUBLISHED_METADATA for offchain renderer prepare] [--deployer ADDRESS --admin ADDRESS --maximum-fee-wei INTEGER for mainnet prepare] [--quote-signer ADDRESS --renderer-directory VERIFIED_RELEASE for collection prepare] [--keystore PATH --password-file PATH].');
   const options = {};
   for (let index = 0; index < arguments_.length; index += 2) {
     const key = arguments_[index];
     assert.ok(['--network', '--contract', '--renderer-directory', '--quote-signer', '--directory', '--keystore', '--password-file',
-      '--deployer', '--admin', '--maximum-fee-wei'].includes(key) && arguments_[index + 1] && !options[key], 'Invalid or repeated option');
+      '--deployer', '--admin', '--maximum-fee-wei', '--metadata-directory'].includes(key) && arguments_[index + 1] && !options[key], 'Invalid or repeated option');
     options[key] = arguments_[index + 1];
   }
   const network = options['--network'] || 'sepolia';
   assert.ok(['sepolia', 'mainnet'].includes(network), 'Tarot deployment supports Sepolia or Ethereum mainnet only');
-  for (const option of ['--quote-signer', '--renderer-directory', '--contract', '--deployer', '--admin', '--maximum-fee-wei']) {
+  for (const option of ['--quote-signer', '--renderer-directory', '--contract', '--deployer', '--admin', '--maximum-fee-wei', '--metadata-directory']) {
     assert.ok(!options[option] || command === 'prepare', option + ' is only allowed for prepare');
   }
   assert.ok(command === 'sign' || !options['--keystore'] && !options['--password-file'], 'Signing credentials apply only to sign');
   assert.ok(options['--directory']?.trim(), 'An explicit --directory is required for every deployment command');
   const directory = path.resolve(options['--directory']);
   if (command === 'prepare') {
+    assert.equal(Boolean(options['--metadata-directory']), options['--contract'] === 'DMXOffchainRenderer',
+      '--metadata-directory is required only for DMXOffchainRenderer preparation');
     const roles = preparationRoles(options);
     if (network === 'mainnet') deploymentConfiguration(network, undefined, undefined, 'DMXWebpRenderer', roles);
     const renderer = options['--renderer-directory'] ? readRendererRelease(path.resolve(options['--renderer-directory']), network) : null;
@@ -361,6 +433,22 @@ async function runDeployment(command, options, network, directory) {
   const configuration = manifest ? validateDeploymentConfiguration(manifest, network)
     : deploymentConfiguration(network, options['--quote-signer'], rendererRelease?.manifest.contractAddress, options['--contract'], preparationRoles(options));
   const contractName = configuration.contractName;
+  let publication;
+  let pins = manifest ? metadataPins(manifest) : rendererRelease ? metadataPins(rendererRelease.manifest) : {};
+  if (contractName === 'DMXOffchainRenderer') {
+    if (command === 'prepare') {
+      const publicationManifest = await loadDmxMetadataManifest(path.resolve(options['--metadata-directory']));
+      const publicationVerification = JSON.parse(fs.readFileSync(path.join(path.resolve(options['--metadata-directory']), 'verification.json'), 'utf8'));
+      pins = { expectedCollectionUri: OFFCHAIN_COLLECTION_URI,
+        collectionMetadataSha256: publicationManifest.objects.find(object => object.file === 'collection.json')?.sha256,
+        metadataManifestSha256: dmxMetadataManifestSha256(publicationManifest) };
+      validateMetadataPublication(publicationManifest, publicationVerification, { contractName, ...pins });
+      assert.equal(publicationVerification.storageVerified, true, 'Metadata storage verification is missing');
+      publication = { publicationManifest, publicationVerification };
+    } else publication = readMetadataPublication(directory, manifest);
+    await resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, { contractName, ...pins });
+    await verifyRendererPublication({ manifest: { contractName, ...pins }, ...publication });
+  }
   const deployer = configuration.deployer;
   const rpcUrl = (network === 'mainnet' ? process.env.ETHEREUM_TAROT_MAINNET_RPC_URL : process.env.ETHEREUM_TAROT_RPC_URL) ||
     (process.env.ALCHEMY_API_KEY ? 'https://eth-' + network + '.g.alchemy.com/v2/' + encodeURIComponent(process.env.ALCHEMY_API_KEY) : null);
@@ -389,6 +477,7 @@ async function runDeployment(command, options, network, directory) {
         'New collection preparation requires the current DMX renderer media');
     }
     await verifyRendererRelease(rendererRelease, rpc);
+    await verifyRendererPublication(rendererRelease);
   }
 
   if (command === 'prepare') {
@@ -421,13 +510,17 @@ async function runDeployment(command, options, network, directory) {
     assert.deepEqual(compilationTarget, { ['src/' + contractName + '.sol']: contractName });
     const standardInput = { language: 'Solidity', sources,
       settings: { ...settings, outputSelection: { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode', 'metadata'] } } } };
-    const manifest = { network, ...configuration, expectedCollectionImage: collectionImage,
+    const manifest = { network, ...configuration, expectedCollectionImage: collectionImage, ...pins,
       preparedAt: new Date().toISOString(), contractAddress: predicted,
       nonce: nonce.toString(), constructorArgs, creationCode, ...gas,
       ...(rendererRelease ? { rendererReleaseSha256: sha256(json(rendererRelease.files)) } : {}),
       artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(standardInput)) };
     if (rendererRelease) {
       for (const [name, value] of Object.entries(rendererRelease.files)) durableWrite(path.join(directory, 'renderer', name), value);
+    }
+    if (publication) {
+      durableWrite(path.join(directory, 'publication-manifest.json'), publication.publicationManifest);
+      durableWrite(path.join(directory, 'publication-verification.json'), publication.publicationVerification);
     }
     durableWrite(path.join(directory, contractName + '.artifact.json'), artifact);
     durableWrite(path.join(directory, contractName + '.standard-input.json'), standardInput);
@@ -527,6 +620,7 @@ async function runDeployment(command, options, network, directory) {
   const metadata = await verifyDeploymentState(manifest, rpc, receipt.blockNumber, previousDeployment);
   assert.equal(BigInt(await rpc('eth_getBalance', [manifest.contractAddress, receipt.blockNumber])), 0n);
   const report = { releaseVersion: 2, contractName, chainId: manifest.chainId, contractAddress: manifest.contractAddress,
+    ...metadataPins(manifest),
     ...(Object.hasOwn(manifest, 'expectedCollectionImage') ? { expectedCollectionImage: manifest.expectedCollectionImage } : {}),
     deploymentBlock: Number(BigInt(receipt.blockNumber)), deploymentBlockHash: receipt.blockHash,
     transactionHash: journal.transactionHash, deployer, admin: manifest.admin,

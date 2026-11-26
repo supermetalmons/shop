@@ -8,7 +8,8 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { decodeReturn, encodeAbi, encodeCall } from '../../../shared/ethereum/abi.ts';
 import { withMetadataLock } from '../../../scripts/ethereum-metadata/lock.ts';
 import { deploymentGas, matchingRuntime, readCollectionRelease, readRendererRelease, verifyRendererRelease,
-  validateCollectionMetadata, validateDeploymentBalance, validateDeploymentGasPrice } from './tarot-deployment.mjs';
+  metadataPins, resolveCollectionMetadata, verifyRendererPublication,
+  validateDeploymentBalance, validateDeploymentGasPrice } from './tarot-deployment.mjs';
 
 const repository = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
 export const COLLECTION_IMAGE = 'https://cdn.lil.org/nft/dmx/cards/1.png';
@@ -88,6 +89,8 @@ function privateFiles(directory) {
 
 function releaseHash(release) {
   return sha256(json({ manifest: release.manifest, deployment: release.deployment, artifact: release.artifact, input: release.input,
+    ...(release.publicationManifest ? { publicationManifest: release.publicationManifest,
+      publicationVerification: release.publicationVerification } : {}),
     ...(release.rendererRelease ? { rendererRelease: releaseHash(release.rendererRelease) } : {}) }));
 }
 
@@ -97,6 +100,10 @@ function freezeRelease(directory, release) {
   files.save('deployment.json', release.deployment, true);
   files.save(name + '.artifact.json', release.artifact, true);
   files.save(name + '.standard-input.json', release.input, true);
+  if (release.publicationManifest) {
+    files.save('publication-manifest.json', release.publicationManifest, true);
+    files.save('publication-verification.json', release.publicationVerification, true);
+  }
   if (release.rendererRelease) freezeRelease(path.join(target, 'renderer'), release.rendererRelease);
 }
 
@@ -154,6 +161,7 @@ function validateManifest(manifest, deps) {
     assert.equal(manifest[field], deps.scope[field], 'Frozen activation identity changed: ' + field);
   }
   assert.equal(manifest.expectedCollectionImage, COLLECTION_IMAGE, 'Unexpected activation collection image');
+  assert.deepEqual(metadataPins(manifest), metadataPins(deps.scope), 'Frozen activation metadata pins changed');
   assert.equal(manifest.pendingOwner, ZERO, 'Pending collection ownership transfer');
   assert.notEqual(address(manifest.previousRenderer), manifest.nextRenderer, 'Renderer is already active');
   assert.equal(manifest.data, dataFor(manifest.nextRenderer), 'Frozen activation calldata changed');
@@ -278,7 +286,7 @@ export async function runActivation(command, options, deps) {
   for (const tag of [receipt.blockNumber, 'latest']) {
     const state = await deps.state(tag);
     assertState(state, manifest, manifest.nextRenderer);
-    validateCollectionMetadata(state.uri, COLLECTION_IMAGE);
+    await resolveCollectionMetadata(state.uri, manifest, COLLECTION_IMAGE, deps.fetch);
   }
   assert.equal((await deps.rpc('eth_getBlockByNumber', [receipt.blockNumber, false]))?.hash, receipt.blockHash, 'Activation verification encountered a reorg');
   const result = { verified: true, network: manifest.network, chainId: manifest.chainId, collection: manifest.collection,
@@ -288,6 +296,7 @@ export async function runActivation(command, options, deps) {
     collectionStateUnchanged: true, gasUsed: quantity(receipt.gasUsed).toString(),
     actualFeeWei: (quantity(receipt.gasUsed) * quantity(receipt.effectiveGasPrice)).toString(),
     feeCeilingWei: manifest.feeCeilingWei, checkedAt: deps.now() };
+  Object.assign(result, metadataPins(manifest));
   assert.ok(BigInt(result.actualFeeWei) <= BigInt(manifest.maximumFeeWei), 'Actual activation fee exceeds frozen allowance');
   deps.save('activation.json', result);
   return result;
@@ -307,6 +316,7 @@ export async function main(argv = process.argv.slice(2)) {
     assert.equal(renderer.manifest.admin, collection.manifest.admin, 'Renderer administrator differs from collection');
     const scope = { network, chainId: NETWORKS[network], collection: collection.manifest.contractAddress,
       owner: collection.manifest.admin, nextRenderer: renderer.manifest.contractAddress,
+      ...metadataPins(renderer.manifest),
       collectionReleaseSha256: releaseHash(collection), rendererReleaseSha256: releaseHash(renderer) };
     const endpoint = (network === 'mainnet' ? process.env.ETHEREUM_TAROT_MAINNET_RPC_URL : process.env.ETHEREUM_TAROT_RPC_URL) ||
       (process.env.ALCHEMY_API_KEY ? 'https://eth-' + network + '.g.alchemy.com/v2/' + encodeURIComponent(process.env.ALCHEMY_API_KEY) : null);
@@ -325,6 +335,7 @@ export async function main(argv = process.argv.slice(2)) {
         assert.equal(quantity(await rpc('eth_chainId')), BigInt(scope.chainId), 'Wrong activation chain');
         await collectionProof(collection, rpc);
         await verifyRendererRelease(renderer, rpc);
+        await verifyRendererPublication(renderer);
       },
       decode: raw => { const result = JSON.parse(cast(['decode-transaction', raw])); return typeof result === 'string' ? JSON.parse(result) : result; },
       sign: manifest => {
