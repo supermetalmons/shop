@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveTarotConfig, TAROT_MAX_CARDS } from '../shared/ethereum/tarot.ts';
 import { assertTarotCredentialPin, TAROT_CREDENTIAL_PIN_PATH, type TarotClaimLinks } from './tarot/claimLinks.ts';
-import { mainnetCredentials } from './tarot/mainnetClaims.ts';
+import { mainnetCredentialFingerprint } from './tarot/mainnetClaims.ts';
 
 const options = process.argv.slice(2);
 if (options.length > 1 || options.some(option => option !== '--require-tarot-manifest')) {
@@ -10,6 +10,14 @@ if (options.length > 1 || options.some(option => option !== '--require-tarot-man
   process.exit(1);
 }
 const requireTarotManifest = options.includes('--require-tarot-manifest');
+const apiVars = requireTarotManifest ? (JSON.parse(readFileSync(
+  new URL('../cloud/workers/api/wrangler.jsonc', import.meta.url), 'utf8')) as {
+  vars?: {
+    ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS?: string;
+    ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS?: string;
+    ETHEREUM_TAROT_MAINNET_ENABLED?: string;
+  };
+}).vars : undefined;
 
 const distDirectory = resolve(process.cwd(), 'dist');
 const forbiddenStrings = [
@@ -57,10 +65,7 @@ if (requireTarotManifest || existsSync(tarotManifest) || process.env.ETHEREUM_TA
     if (requireTarotManifest) {
       const pin = JSON.parse(readFileSync(new URL('../' + TAROT_CREDENTIAL_PIN_PATH, import.meta.url), 'utf8'));
       assertTarotCredentialPin(manifest, pin);
-      const api = JSON.parse(readFileSync(new URL('../cloud/workers/api/wrangler.jsonc', import.meta.url), 'utf8')) as {
-        vars?: { ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS?: string };
-      };
-      const expected = resolveTarotConfig({ testnet: true, contractAddress: api.vars?.ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS });
+      const expected = resolveTarotConfig({ testnet: true, contractAddress: apiVars?.ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS });
       if (!expected.contractAddress || manifest.chainId !== expected.chainId || manifest.contractAddress !== expected.contractAddress) throw new Error();
     } else if (manifest.links.length !== TAROT_MAX_CARDS || manifest.links.some(link => typeof link.code !== 'string' ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(link.code))) throw new Error();
@@ -74,14 +79,26 @@ if (requireTarotManifest || existsSync(tarotManifest) || process.env.ETHEREUM_TA
 }
 
 const mainnetManifest = resolve(process.env.ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST || '.operations/dmx-mainnet-v1/claim-links.private.json');
+const requireMainnetManifest = requireTarotManifest && !!(apiVars?.ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS ||
+  apiVars?.ETHEREUM_TAROT_MAINNET_ENABLED === 'true');
 let mainnetCodes: string[] = [];
-if (existsSync(mainnetManifest) || process.env.ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST) {
+if (requireMainnetManifest || existsSync(mainnetManifest) || process.env.ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST) {
   try {
-    const manifest: Parameters<typeof mainnetCredentials>[0] = JSON.parse(readFileSync(mainnetManifest, 'utf8'));
-    mainnetCredentials(manifest);
+    const manifest: Parameters<typeof mainnetCredentialFingerprint>[0] = JSON.parse(readFileSync(mainnetManifest, 'utf8'));
+    const fingerprint = mainnetCredentialFingerprint(manifest);
+    if (requireMainnetManifest) {
+      const { contractAddress } = resolveTarotConfig({ contractAddress: apiVars?.ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS });
+      const pin = JSON.parse(readFileSync(new URL('../releases/dmx-mainnet-v1/credential-binding.json', import.meta.url), 'utf8'));
+      if (!contractAddress || !pin || pin.chainId !== 1 || pin.collectionKey !== manifest.collectionKey ||
+        pin.contractAddress !== contractAddress || pin.status !== 'bound' || pin.credentialCount !== TAROT_MAX_CARDS ||
+        pin.allCredentialsVerified !== true || pin.credentialSetSha256 !== fingerprint ||
+        typeof pin.checkedAt !== 'string' || !Number.isFinite(Date.parse(pin.checkedAt))) throw new Error();
+    }
     mainnetCodes = manifest.links.map(link => link.code);
   } catch {
-    console.error('[browser-bundle] Invalid private DMX mainnet staging manifest.');
+    console.error(requireMainnetManifest
+      ? '[browser-bundle] A valid private DMX mainnet manifest matching the configured deployment and verified credential-set fingerprint is required.'
+      : '[browser-bundle] Invalid private DMX mainnet staging manifest.');
     process.exit(1);
   }
 }

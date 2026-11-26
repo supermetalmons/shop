@@ -41,6 +41,12 @@ Use the default `.operations/dmx-sepolia-v3/claim-links.private.json` or set
 `dist`; only the Node validator reads it, and it is never a Vite input or Worker
 upload. Ordinary builds and local scans do not require a Tarot manifest.
 
+When mainnet is configured, release scans also require the private mainnet
+manifest and its verified fingerprint in `releases/dmx-mainnet-v1/credential-binding.json`,
+even while mainnet claims are disabled. The default manifest is
+`.operations/dmx-mainnet-v1/claim-links.private.json`; override its location with
+`ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST`. Missing or mismatched inputs block release.
+
 ```bash
 npm run check:frontend
 npm run dry-run:frontend

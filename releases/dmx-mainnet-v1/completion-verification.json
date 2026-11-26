@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "status": "complete",
+  "checkedAt": "2026-11-25T21:32:20.626Z",
+  "chainId": 1,
+  "contractAddress": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+  "apiVersionId": "cf7c7986-b2f3-4fd7-b35b-c36544309770",
+  "sourceRevision": "65ab7425d5972d21cc688eaad290e6a100a9be00",
+  "launchDate": "2026-11-26",
+  "timezone": "Asia/Yerevan",
+  "credentialFilesUnchanged": true,
+  "temporaryPasswordsRemoved": true,
+  "privateCredentialMaterialExcluded": true,
+  "credentialManifestsAudited": 2,
+  "credentialsAudited": 1554,
+  "initialPairsUnclaimedAtVerification": 777,
+  "liveClaimsEnabled": true,
+  "sepoliaHealthy": true
+}

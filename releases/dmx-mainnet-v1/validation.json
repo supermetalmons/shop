@@ -1,0 +1,21 @@
+{
+  "verifiedAt": "2026-11-25T21:07:36.132116+00:00",
+  "sourceRevision": "65ab7425d5972d21cc688eaad290e6a100a9be00",
+  "passed": true,
+  "contractTests": 93,
+  "deploymentAndSourceTests": 88,
+  "gasBenchmarks": 9,
+  "sepoliaLocalE2E": true,
+  "mainnetLocalE2E": true,
+  "mediaArtworkCount": 2341,
+  "mediaVerified": true,
+  "mainnetCredentialTests": 32,
+  "tarotNfcFrontendTests": 231,
+  "frontendBuild": true,
+  "browserBundleReleaseScan": true,
+  "apiTests": 3826,
+  "apiRuntimeTests": 96,
+  "apiReleaseChecks": true,
+  "boundedCommerceReadiness": true,
+  "noCommerceMigrationsApplied": true
+}

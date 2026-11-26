@@ -1,0 +1,16 @@
+{
+  "worker": "mons-shop-api",
+  "deploymentId": "601260ae-e3a5-4756-b845-02bfb651361c",
+  "versionId": "cf7c7986-b2f3-4fd7-b35b-c36544309770",
+  "createdOn": "2026-11-25T21:30:18.690233Z",
+  "percentage": 100,
+  "chainId": 1,
+  "contractAddress": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+  "deploymentBlock": 26494793,
+  "verified": true,
+  "sepoliaUnchanged": true,
+  "unrelatedBindingsUnchanged": true,
+  "credentialFilesUnchanged": true,
+  "mainnetSignerPresent": true,
+  "checkedAt": "2026-11-25T21:31:49.051Z"
+}

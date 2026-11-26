@@ -1,0 +1,74 @@
+{
+  "renderer": {
+    "etherscan": {
+      "chainId": 1,
+      "contractAddress": "0x7ec5ec98b380558612c4d0b4c7a61063f2430233",
+      "transactionHash": "0xe478ee2267e1cf4265e48b1ffb502a83205cee40a00d499bf51ef4dd8fdfa44d",
+      "checkedAt": "2026-11-25T21:11:27.086Z",
+      "url": "https://etherscan.io/address/0x7ec5ec98b380558612c4d0b4c7a61063f2430233#code",
+      "compilerVersion": "0.8.38+commit.1835d247",
+      "optimizationRuns": 200,
+      "evmVersion": "prague",
+      "metadataBytecodeHash": "none",
+      "constructorArgsMatch": true,
+      "frozenSourcesMatch": true,
+      "compilerSettingsMatch": true,
+      "abiMatches": true,
+      "sourceCount": 11,
+      "match": "exact_match",
+      "verified": true
+    },
+    "sourcify": {
+      "chainId": 1,
+      "contractAddress": "0x7ec5ec98b380558612c4d0b4c7a61063f2430233",
+      "transactionHash": "0xe478ee2267e1cf4265e48b1ffb502a83205cee40a00d499bf51ef4dd8fdfa44d",
+      "match": "match",
+      "creationMatch": "match",
+      "runtimeMatch": "match",
+      "compilerVersion": "0.8.38+commit.1835d247",
+      "metadataHash": "none",
+      "verifiedAt": "2026-11-25T21:09:12Z",
+      "checkedAt": "2026-11-25T21:09:47.294Z",
+      "creationBytecodeMatch": true,
+      "runtimeBytecodeMatch": true,
+      "frozenSourcesMatch": true,
+      "url": "https://repo.sourcify.dev/1/0x7ec5ec98b380558612c4d0b4c7a61063f2430233"
+    }
+  },
+  "collection": {
+    "etherscan": {
+      "chainId": 1,
+      "contractAddress": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+      "transactionHash": "0x94229501a52864aabae97ee9bc9898476b4c26f83a8e2ba450d81733969a9429",
+      "checkedAt": "2026-11-25T21:11:41.551Z",
+      "url": "https://etherscan.io/address/0xe7801065a91aa8e472dffe893dfb29d2c3d4798a#code",
+      "compilerVersion": "0.8.38+commit.1835d247",
+      "optimizationRuns": 200,
+      "evmVersion": "prague",
+      "metadataBytecodeHash": "none",
+      "constructorArgsMatch": true,
+      "frozenSourcesMatch": true,
+      "compilerSettingsMatch": true,
+      "abiMatches": true,
+      "sourceCount": 29,
+      "match": "exact_match",
+      "verified": true
+    },
+    "sourcify": {
+      "chainId": 1,
+      "contractAddress": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+      "transactionHash": "0x94229501a52864aabae97ee9bc9898476b4c26f83a8e2ba450d81733969a9429",
+      "match": "match",
+      "creationMatch": "match",
+      "runtimeMatch": "match",
+      "compilerVersion": "0.8.38+commit.1835d247",
+      "metadataHash": "none",
+      "verifiedAt": "2026-11-25T21:11:00Z",
+      "checkedAt": "2026-11-25T21:11:13.520Z",
+      "creationBytecodeMatch": true,
+      "runtimeBytecodeMatch": true,
+      "frozenSourcesMatch": true,
+      "url": "https://repo.sourcify.dev/1/0xe7801065a91aa8e472dffe893dfb29d2c3d4798a"
+    }
+  }
+}

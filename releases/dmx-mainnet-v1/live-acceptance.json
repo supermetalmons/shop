@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-11-25T21:31:06.838Z",
+  "chainId": 1,
+  "contractAddress": "0xe7801065a91aa8e472dffe893dfb29d2c3d4798a",
+  "renderer": "0x7ec5ec98b380558612c4d0b4c7a61063f2430233",
+  "quoteSigner": "0xef2dce4856be44b2061251c0286791d0e66331e9",
+  "apiEnabled": true,
+  "apiVersionId": "cf7c7986-b2f3-4fd7-b35b-c36544309770",
+  "unclaimedPairs": 777,
+  "observedBlock": 26494895,
+  "blockHash": "0xc42ab514ab84e270f8c2a2f8c7ce161a47f641aba8680fb27b7591dfeb4e46c8",
+  "privateNfcHeaders": true,
+  "inlineMetadataVerified": true,
+  "redemptionsPaused": true,
+  "boundCredentialCount": 777,
+  "boundaryCredentialsAccepted": 2,
+  "credentialFilesUnchanged": true,
+  "sepoliaHealthy": true,
+  "sepoliaUnchanged": true,
+  "credentialNetworkIsolation": true,
+  "claimTransactionsBroadcast": 0,
+  "successfulClaimSimulations": 4,
+  "claimGasEstimateRange": {
+    "minimum": 131878,
+    "maximum": 132350
+  }
+}

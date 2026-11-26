@@ -1,5 +1,10 @@
 # divination machina x (DMX)
 
+The [mainnet v1 release](../../releases/dmx-mainnet-v1/README.md) activates all
+777 existing mainnet NFC links against the verified Ethereum mainnet collection.
+The original URLs and credentials are unchanged. Each holder claim mints its
+initial card and paired NFC receipt; redemption remains paused.
+
 The [Sepolia v3 release](../../releases/dmx-sepolia-v3/README.md) records the
 rollout of a fresh renderer, the gas-optimized collection, and a new authorization
 signer. The v2-to-v3 replacement retains all 777 existing NFC codes and URLs and
@@ -11,11 +16,11 @@ redemption into future generations, configurable fee payouts, and a replaceable
 metadata renderer. The collection and EIP-712 domain name are
 `divination machina x`, the symbol is `DMX`, and the domain version is `1`.
 The contract permits Ethereum mainnet, Sepolia, and local chain 31337. NFC links
-default to mainnet and support explicit Sepolia links. Mainnet remains
-unconfigured and disabled; the contract deployment runner supports explicit
-mainnet releases as well as Sepolia.
+default to mainnet and support explicit Sepolia links. Both networks are active;
+the contract deployment runner supports explicit mainnet releases as well as
+Sepolia.
 
-This guide covers mainnet preparation and the Sepolia replacement workflow.
+This guide covers mainnet operations and the Sepolia replacement workflow.
 For Sepolia replacements, rebind the existing 777
 NFC codes and URLs to the verified DMX collection, update the deployment settings
 and credential pin, then retire the superseded deployment in the same rollout.
@@ -115,6 +120,11 @@ without moving old balances when new configurations are registered.
 
 ### Prelaunch mainnet credentials
 
+The current mainnet batch is already bound and active. The staging commands
+below describe prelaunch setup. Verify an active batch by repeating its original
+`mainnet-bind` command with the retained deployment release; `mainnet-verify`
+only accepts a staged, unbound batch. Do not generate replacement credentials.
+
 Mainnet links can be prepared before a contract address is known. Apply OPS
 migration `0015_dmx_mainnet_claim_staging.sql`, then use:
 
@@ -140,8 +150,11 @@ is marked `staged` only after all 777 rows match the private manifest, with its
 contract binding still null. Claim authorization never accepts staging hashes.
 The existing Sepolia credential table and release pin remain separate.
 
-Browser-bundle validation also scans all codes in the private mainnet manifest
-when present; use `ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST` for a non-default path.
+Release browser-bundle scans require the private mainnet manifest whenever
+mainnet is configured, including while claims are disabled. The manifest must
+match the verified fingerprint in `releases/dmx-mainnet-v1/credential-binding.json`.
+Local scans keep the manifest optional; use `ETHEREUM_DMX_MAINNET_PRIVATE_MANIFEST`
+for a non-default path.
 Only generic diagnostics are emitted. Do not add actual credentials, CSVs, or
 private manifests to source files, tests, logs, release evidence, or public media.
 
@@ -177,8 +190,9 @@ set is rejected. The private CSV/manifest and original URLs stay unchanged.
 Configure `ETHEREUM_TAROT_MAINNET_CONTRACT_ADDRESS`,
 `ETHEREUM_TAROT_MAINNET_DEPLOYMENT_BLOCK`, and the independent
 `ETHEREUM_TAROT_MAINNET_SIGNER_SECRET` for the verified deployment before setting
-`ETHEREUM_TAROT_MAINNET_ENABLED=true`. The signer secret is optional while mainnet
-is disabled; there is no fallback to the Sepolia key. API access also requires
+`ETHEREUM_TAROT_MAINNET_ENABLED=true`. The production release configuration
+requires this secret even while claims are temporarily disabled; there is no
+fallback to the Sepolia key. API access also requires
 the matching bound batch. None of these launch actions is performed by preparing
 the application source or by staging commands.
 
