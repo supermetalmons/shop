@@ -109,18 +109,17 @@ async function updatedRevision(files: string[]) {
   return { directory: target, manifest: next, bodies: targetBodies, storage };
 }
 
-test('initial DMX templates preserve renderer metadata and reject future or invalid identities', () => {
+test('DMX templates use the approved metadata format and reject future or invalid identities', () => {
   for (const cardId of [1, 777]) {
     const card = buildDmxMetadata(cardId);
     const receipt = buildDmxMetadata(cardId + 999_999);
-    assert.deepEqual(card, { name: `Tarot Card #${cardId}`, description: 'A mutating Tarot card. Initial base artwork.',
+    assert.deepEqual(card, { name: `Card #${cardId}`, description: '',
       image: `https://cdn.lil.org/nft/dmx/cards/${cardId}.png`, attributes: [
-        { trait_type: 'Kind', value: 'Mutating Card' }, { trait_type: 'Card ID', value: cardId },
+        { trait_type: 'type', value: 'card' },
       ] });
-    assert.deepEqual(receipt, { name: `Tarot Card Receipt #${cardId}`,
-      description: 'Proves the authenticity of the physical Tarot card you scanned.',
+    assert.deepEqual(receipt, { name: `Receipt #${cardId}`, description: '',
       image: `https://cdn.lil.org/nft/dmx/receipts/${cardId}.png`, attributes: [
-        { trait_type: 'Kind', value: 'NFC Card Receipt' }, { trait_type: 'Card ID', value: cardId },
+        { trait_type: 'type', value: 'receipt' },
       ] });
   }
   assert.deepEqual(buildDmxCollectionMetadata(), { name: 'divination machina x', symbol: 'DMX',

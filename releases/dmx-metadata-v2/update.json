@@ -1,0 +1,49 @@
+{
+  "completedAt": "2026-11-26T13:48:18.070Z",
+  "baseURI": "https://cdn.mons.shop/dmx/",
+  "previousManifestSha256": "102271b15bfbc9cb1bf6413a84d6f1940c64e466a6b0c35cbeb3d29ea371724e",
+  "manifestSha256": "0713a699b51515394521d5646244e3ca1403920f492d4a1d23404b7ed775695c",
+  "objectsSha256": "c9144a4ff8961a38f33b78a98cd96f610cdbf22b0fc72376cf358f4ceb85a0e9",
+  "cardsUpdated": 777,
+  "receiptsUpdated": 777,
+  "objectsUpdated": 1554,
+  "objectsVerified": 1555,
+  "approvedTemplatesMatch": true,
+  "templates": {
+    "card": {
+      "name": "Card #{{cardId}}",
+      "description": "",
+      "image": "https://cdn.lil.org/nft/dmx/cards/{{cardId}}.png",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "card"
+        }
+      ]
+    },
+    "receipt": {
+      "name": "Receipt #{{cardId}}",
+      "description": "",
+      "image": "https://cdn.lil.org/nft/dmx/receipts/{{cardId}}.png",
+      "attributes": [
+        {
+          "trait_type": "type",
+          "value": "receipt"
+        }
+      ]
+    }
+  },
+  "collectionMetadataUnchanged": true,
+  "imageUrlsUnchanged": true,
+  "sharedAcrossNetworks": true,
+  "storageVerified": true,
+  "publicVerified": true,
+  "contentType": "application/json; charset=utf-8",
+  "cacheControl": "no-store",
+  "cors": "*",
+  "verifiedAt": "2026-11-26T13:48:18.070Z",
+  "validation": {
+    "metadataTestsPassed": 18,
+    "toolsTypecheckPassed": true
+  }
+}

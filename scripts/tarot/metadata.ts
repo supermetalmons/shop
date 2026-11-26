@@ -51,9 +51,7 @@ export function buildDmxMetadata(tokenId: number): DmxTokenMetadata {
   }
   const metadata: DmxTokenMetadata = JSON.parse(JSON.stringify(receipt ? receiptTemplate : cardTemplate)
     .replaceAll('{{cardId}}', String(cardId)));
-  const cardIdTrait = metadata.attributes.find(attribute => attribute.trait_type === 'Card ID');
-  if (!cardIdTrait || JSON.stringify(metadata).includes('{{')) throw new Error('Invalid DMX metadata template');
-  cardIdTrait.value = cardId;
+  if (JSON.stringify(metadata).includes('{{')) throw new Error('Invalid DMX metadata template');
   return metadata;
 }
 

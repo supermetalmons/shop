@@ -1,9 +1,8 @@
 {
-  "name": "Tarot Card #{{cardId}}",
-  "description": "A mutating Tarot card. Initial base artwork.",
+  "name": "Card #{{cardId}}",
+  "description": "",
   "image": "https://cdn.lil.org/nft/dmx/cards/{{cardId}}.png",
   "attributes": [
-    { "trait_type": "Kind", "value": "Mutating Card" },
-    { "trait_type": "Card ID", "value": "{{cardId}}" }
+    { "trait_type": "type", "value": "card" }
   ]
 }

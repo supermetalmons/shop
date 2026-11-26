@@ -374,9 +374,15 @@ unissued and burned NFTs cannot return a collection `tokenURI()`.
 The initial publication contains 777 cards (`1.json`–`777.json`), 777 NFC receipts
 (`1000000.json`–`1000776.json`), and `collection.json`: 1,555 objects total.
 Receipt filenames use ERC-721 token IDs; their displayed Card IDs remain 1–777.
-Names, descriptions and attributes match the preceding inline renderer. Card
+The initial names, descriptions and attributes matched the preceding inline renderer. Card
 artwork remains `https://cdn.lil.org/nft/dmx/cards/<cardId>.png`; NFC receipt
 artwork remains `https://cdn.lil.org/nft/dmx/receipts/<cardId>.png`.
+
+The [current metadata revision](../../releases/dmx-metadata-v2/README.md) names
+these tokens `Card #<cardId>` and `Receipt #<cardId>`, leaves descriptions empty,
+and includes only a lowercase `type` trait with value `card` or `receipt`.
+It removes the `Kind` and `Card ID` traits. All 777 card and 777 receipt image
+URLs are preserved, and `collection.json` is unchanged.
 
 Editable authoring templates live under `scripts/tarot/metadata/`. Generate,
 publish, and verify from the repository root with the existing R2 credentials
@@ -403,7 +409,7 @@ revision unchanged:
 
 ```sh
 npm run tarot:ops -- metadata-generate --directory .cache/dmx-metadata/<new-revision>
-npm run tarot:ops -- metadata-update --directory .cache/dmx-metadata/<new-revision> --previous-manifest releases/dmx-offchain-v1/metadata-manifest.json
+npm run tarot:ops -- metadata-update --directory .cache/dmx-metadata/<new-revision> --previous-manifest releases/dmx-metadata-v2/metadata-manifest.json
 ```
 
 For later updates, pass the latest successful revision's `manifest.json` as

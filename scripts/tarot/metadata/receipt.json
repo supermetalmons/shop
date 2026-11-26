@@ -1,9 +1,8 @@
 {
-  "name": "Tarot Card Receipt #{{cardId}}",
-  "description": "Proves the authenticity of the physical Tarot card you scanned.",
+  "name": "Receipt #{{cardId}}",
+  "description": "",
   "image": "https://cdn.lil.org/nft/dmx/receipts/{{cardId}}.png",
   "attributes": [
-    { "trait_type": "Kind", "value": "NFC Card Receipt" },
-    { "trait_type": "Card ID", "value": "{{cardId}}" }
+    { "trait_type": "type", "value": "receipt" }
   ]
 }
