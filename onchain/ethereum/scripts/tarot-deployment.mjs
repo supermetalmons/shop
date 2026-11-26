@@ -37,7 +37,13 @@ function deploymentAddress(value, option) {
   return value.toLowerCase();
 }
 
-function validatePinnedCollectionImage(image) {
+function validatePinnedCollectionImage(image, offchain = false) {
+  if (offchain) {
+    assert.equal(typeof image, 'string', 'Invalid offchain collection image');
+    const url = new URL(image);
+    assert.ok(url.protocol === 'https:' && !url.username && !url.password, 'Invalid offchain collection image');
+    return;
+  }
   assert.ok(image === collectionImage || image === legacyCollectionImage, 'Unexpected deployment collection image');
 }
 
@@ -73,7 +79,7 @@ export function validateDeploymentConfiguration(manifest, network = 'sepolia') {
   }
   assert.equal(manifest.network, network, 'Deployment network changed');
   if (Object.hasOwn(manifest, 'expectedCollectionImage')) {
-    validatePinnedCollectionImage(manifest.expectedCollectionImage);
+    validatePinnedCollectionImage(manifest.expectedCollectionImage, Boolean(metadataPins(manifest).expectedCollectionUri));
   }
   if (manifest.contractName === 'DMXOffchainRenderer' || metadataPinNames.some(name => Object.hasOwn(manifest, name))) {
     metadataPins(manifest);
@@ -94,7 +100,7 @@ export function rendererInterfaceId() {
 
 function deploymentCollectionImage(manifest, deployment) {
   if (Object.hasOwn(manifest, 'expectedCollectionImage')) {
-    validatePinnedCollectionImage(manifest.expectedCollectionImage);
+    validatePinnedCollectionImage(manifest.expectedCollectionImage, Boolean(metadataPins(manifest).expectedCollectionUri));
     return manifest.expectedCollectionImage;
   }
   assert.ok(deployment, 'Historical release requires its original deployment metadata evidence');
@@ -114,11 +120,14 @@ export function validateCollectionMetadata(uri, expectedImage = collectionImage)
   return validateMetadataObject(JSON.parse(bytes.toString('utf8')), expectedImage);
 }
 
-function validateMetadataObject(metadata, expectedImage) {
+function validateMetadataObject(metadata, expectedImage, offchain = false) {
   assert.equal(metadata.name, 'divination machina x');
   assert.equal(metadata.symbol, 'DMX');
-  assert.equal(metadata.image, expectedImage);
-  assert.equal(metadata.external_link, 'https://mons.shop');
+  if (expectedImage !== undefined) assert.equal(metadata.image, expectedImage);
+  if (offchain) {
+    validatePinnedCollectionImage(metadata.image, true);
+    assert.equal(typeof metadata.external_link, 'string');
+  } else assert.equal(metadata.external_link, 'https://mons.shop');
   return metadata;
 }
 
@@ -129,9 +138,9 @@ export function metadataPins(manifest) {
   return Object.fromEntries(metadataPinNames.map(name => [name, manifest[name]]));
 }
 
-export async function resolveCollectionMetadata(uri, manifest = {}, expectedImage = collectionImage, fetcher = fetch) {
+export async function resolveCollectionMetadata(uri, manifest = {}, expectedImage = manifest.expectedCollectionImage, fetcher = fetch) {
   const pins = metadataPins(manifest);
-  if (!pins.expectedCollectionUri) return validateCollectionMetadata(uri, expectedImage);
+  if (!pins.expectedCollectionUri) return validateCollectionMetadata(uri, expectedImage ?? collectionImage);
   assert.equal(uri, pins.expectedCollectionUri, 'Offchain collection metadata URI differs from release');
   const response = await fetcher(uri, { redirect: 'error', signal: AbortSignal.timeout(30_000),
     headers: { accept: 'application/json', 'cache-control': 'no-cache' } });
@@ -141,7 +150,7 @@ export async function resolveCollectionMetadata(uri, manifest = {}, expectedImag
   const bytes = Buffer.from(await response.arrayBuffer());
   assert.ok(bytes.length > 0 && bytes.length <= 1_048_576, 'Invalid offchain collection metadata size');
   assert.equal(sha256(bytes), pins.collectionMetadataSha256, 'Offchain collection metadata content hash differs');
-  return validateMetadataObject(JSON.parse(bytes.toString('utf8')), expectedImage);
+  return validateMetadataObject(JSON.parse(bytes.toString('utf8')), expectedImage, true);
 }
 
 export function validateMetadataPublication(publication, verification, manifest) {
@@ -434,6 +443,7 @@ async function runDeployment(command, options, network, directory) {
     : deploymentConfiguration(network, options['--quote-signer'], rendererRelease?.manifest.contractAddress, options['--contract'], preparationRoles(options));
   const contractName = configuration.contractName;
   let publication;
+  let expectedCollectionImage = manifest?.expectedCollectionImage ?? collectionImage;
   let pins = manifest ? metadataPins(manifest) : rendererRelease ? metadataPins(rendererRelease.manifest) : {};
   if (contractName === 'DMXOffchainRenderer') {
     if (command === 'prepare') {
@@ -446,7 +456,9 @@ async function runDeployment(command, options, network, directory) {
       assert.equal(publicationVerification.storageVerified, true, 'Metadata storage verification is missing');
       publication = { publicationManifest, publicationVerification };
     } else publication = readMetadataPublication(directory, manifest);
-    await resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, { contractName, ...pins });
+    const metadata = await resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, { contractName, ...pins },
+      manifest?.expectedCollectionImage);
+    expectedCollectionImage = metadata.image;
     await verifyRendererPublication({ manifest: { contractName, ...pins }, ...publication });
   }
   const deployer = configuration.deployer;
@@ -472,10 +484,11 @@ async function runDeployment(command, options, network, directory) {
   if (rendererRelease) {
     assert.equal(rendererRelease.manifest.contractAddress, configuration.renderer, 'Renderer prerequisite address changed');
     if (manifest) assert.equal(manifest.rendererReleaseSha256, sha256(json(rendererRelease.files)), 'Frozen renderer release changed');
-    if (command === 'prepare') {
+    if (command === 'prepare' && !metadataPins(rendererRelease.manifest).expectedCollectionUri) {
       assert.equal(deploymentCollectionImage(rendererRelease.manifest, rendererRelease.deployment), collectionImage,
         'New collection preparation requires the current DMX renderer media');
     }
+    expectedCollectionImage = deploymentCollectionImage(rendererRelease.manifest, rendererRelease.deployment);
     await verifyRendererRelease(rendererRelease, rpc);
     await verifyRendererPublication(rendererRelease);
   }
@@ -510,7 +523,7 @@ async function runDeployment(command, options, network, directory) {
     assert.deepEqual(compilationTarget, { ['src/' + contractName + '.sol']: contractName });
     const standardInput = { language: 'Solidity', sources,
       settings: { ...settings, outputSelection: { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode', 'metadata'] } } } };
-    const manifest = { network, ...configuration, expectedCollectionImage: collectionImage, ...pins,
+    const manifest = { network, ...configuration, expectedCollectionImage, ...pins,
       preparedAt: new Date().toISOString(), contractAddress: predicted,
       nonce: nonce.toString(), constructorArgs, creationCode, ...gas,
       ...(rendererRelease ? { rendererReleaseSha256: sha256(json(rendererRelease.files)) } : {}),

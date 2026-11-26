@@ -1,0 +1,40 @@
+{
+  "completedAt": "2026-11-26T13:56:18.778Z",
+  "baseURI": "https://cdn.mons.shop/dmx/",
+  "previousManifestSha256": "0713a699b51515394521d5646244e3ca1403920f492d4a1d23404b7ed775695c",
+  "manifestSha256": "4eb4e0db1f4379d93a6cb8f1085783636e62a07d74783f6a9b1a6507c7f3e13d",
+  "objectsSha256": "9b424f2938f824b85e4cf7911e13df8c92c69bca32c389f4a1ce765ea8606f72",
+  "updatedFiles": [
+    "collection.json"
+  ],
+  "objectsUpdated": 1,
+  "objectsVerified": 1555,
+  "unchangedTokenCount": 1554,
+  "approvedTemplateMatch": true,
+  "collectionMetadata": {
+    "name": "divination machina x",
+    "symbol": "DMX",
+    "description": "",
+    "image": "https://cdn.lil.org/nft/dmx/receipts/7.png",
+    "external_link": ""
+  },
+  "imageVerification": {
+    "url": "https://cdn.lil.org/nft/dmx/receipts/7.png",
+    "status": 200,
+    "contentType": "image/png",
+    "checkedAt": "2026-11-26T13:55:31.609Z"
+  },
+  "sharedAcrossNetworks": true,
+  "storageVerified": true,
+  "publicVerified": true,
+  "contentType": "application/json; charset=utf-8",
+  "cacheControl": "no-store",
+  "cors": "*",
+  "verifiedAt": "2026-11-26T13:56:18.778Z",
+  "validation": {
+    "metadataTestsPassed": 18,
+    "deploymentAndActivationTestsPassed": 76,
+    "finalTargetedTestsPassed": 2,
+    "toolsTypecheckPassed": true
+  }
+}

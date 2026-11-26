@@ -64,7 +64,8 @@ async function metadataFixture(t) {
     objectsSha256: publication.objectsSha256, objectCount: publication.objectCount,
     complete: true, publicVerified: true, storageVerified: true, checkedAt: '2026-11-26T11:00:00.000Z' };
   fs.writeFileSync(path.join(directory, 'verification.json'), json(verification));
-  return { directory, publication, pins, verification };
+  return { directory, publication, pins, verification,
+    collection: JSON.parse(fs.readFileSync(path.join(directory, 'collection.json'), 'utf8')) };
 }
 
 function publicMetadataFixture(t, metadata) {
@@ -120,6 +121,22 @@ test('offchain publication evidence binds all objects and the collection documen
   await assert.rejects(verifyRendererPublication({ manifest: { contractName: 'DMXOffchainRenderer', ...f.pins },
     publicationManifest: f.publication, publicationVerification: f.verification },
   { fetch: async () => new Response('missing', { status: 404 }) }));
+});
+
+test('offchain collection metadata accepts revised fields only under their exact publication hash', async () => {
+  const metadata = { ...collectionMetadata, description: '', image: 'https://cdn.lil.org/nft/dmx/receipts/7.png', external_link: '' };
+  const body = Buffer.from(json(metadata));
+  const manifest = { contractName: 'DMXOffchainRenderer', expectedCollectionUri: OFFCHAIN_COLLECTION_URI,
+    collectionMetadataSha256: sha256(body), metadataManifestSha256: 'a'.repeat(64) };
+  const fetcher = async () => new Response(body, { headers: { 'content-type': 'application/json' } });
+  assert.deepEqual(await resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, manifest, undefined, fetcher), metadata);
+  assert.deepEqual(await resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, manifest, metadata.image, fetcher), metadata);
+  await assert.rejects(resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI,
+    { ...manifest, expectedCollectionImage: collectionMetadata.image }, undefined, fetcher));
+  await assert.rejects(resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI, manifest, collectionMetadata.image, fetcher));
+  await assert.rejects(resolveCollectionMetadata(OFFCHAIN_COLLECTION_URI,
+    { ...manifest, collectionMetadataSha256: sha256(Buffer.from(json(collectionMetadata))) }, undefined, fetcher), /content hash differs/);
+  assert.throws(() => validateCollectionMetadata('data:application/json;base64,' + body.toString('base64'), metadata.image));
 });
 
 test('DMX configuration pins Sepolia, the approved admin and verified renderer', () => {
@@ -205,18 +222,19 @@ test('mainnet signed deployment binds approved roles, chain and fee ceiling', ()
 
 function rendererFixture(directory, network = 'sepolia', metadata) {
   const contractName = metadata ? 'DMXOffchainRenderer' : 'DMXWebpRenderer';
+  const rendererMetadata = metadata?.collection ?? collectionMetadata;
   const artifact = artifacts[contractName];
   const sources = Object.fromEntries(Object.keys(artifact.metadata.sources).map(name => [name, { content: fs.readFileSync(path.join(project, name), 'utf8') }]));
   const { compilationTarget, ...settings } = artifact.metadata.settings;
   const input = { language: 'Solidity', sources, settings };
   const manifest = { network, ...deploymentConfiguration(network, undefined, undefined, contractName, network === 'mainnet' ? mainnetRoles : {}),
     ...metadata?.pins,
-    expectedCollectionImage: collectionMetadata.image,
+    expectedCollectionImage: rendererMetadata.image,
     contractAddress: rendererAddress, constructorArgs: '0x', creationCode: artifact.bytecode.object,
     artifactSha256: sha256(json(artifact)), standardInputSha256: sha256(json(input)),
     deploymentBlockHash: '0x' + 'a'.repeat(64) };
   const deployment = { ...manifest, deploymentBlock: 1, transactionHash: '0x' + 'b'.repeat(64), confirmations: 3,
-    collectionMetadata };
+    collectionMetadata: rendererMetadata };
   for (const [name, value] of Object.entries({ 'manifest.json': manifest, 'deployment.json': deployment,
     [contractName + '.artifact.json']: artifact, [contractName + '.standard-input.json']: input,
     ...(metadata ? { 'publication-manifest.json': metadata.publication, 'publication-verification.json': metadata.verification } : {}) })) {
@@ -360,13 +378,14 @@ for (const network of ['sepolia', 'mainnet']) {
     const manifest = f.read('manifest.json');
     assert.equal(manifest.contractName, 'DMXOffchainRenderer');
     assert.equal(manifest.constructorArgs, '0x');
+    assert.equal(manifest.expectedCollectionImage, m.collection.image);
     assert.deepEqual(metadataPins(manifest), m.pins);
     assert.equal(manifest.creationCode, artifacts.DMXOffchainRenderer.bytecode.object);
     assert.deepEqual(f.read('publication-manifest.json'), m.publication);
     assert.deepEqual(f.read('publication-verification.json'), m.verification);
     assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
     const deployment = { ...manifest, deploymentBlock: 1, deploymentBlockHash: '0x' + 'a'.repeat(64),
-      transactionHash: '0x' + 'b'.repeat(64), confirmations: 3, collectionMetadata };
+      transactionHash: '0x' + 'b'.repeat(64), confirmations: 3, collectionMetadata: m.collection };
     fs.writeFileSync(path.join(f.directory, 'deployment.json'), json(deployment));
     const release = readRendererRelease(f.directory, network);
     assert.deepEqual(release.publicationManifest, m.publication);

@@ -378,11 +378,17 @@ The initial names, descriptions and attributes matched the preceding inline rend
 artwork remains `https://cdn.lil.org/nft/dmx/cards/<cardId>.png`; NFC receipt
 artwork remains `https://cdn.lil.org/nft/dmx/receipts/<cardId>.png`.
 
-The [current metadata revision](../../releases/dmx-metadata-v2/README.md) names
+The [card metadata revision](../../releases/dmx-metadata-v2/README.md) names
 these tokens `Card #<cardId>` and `Receipt #<cardId>`, leaves descriptions empty,
 and includes only a lowercase `type` trait with value `card` or `receipt`.
 It removes the `Kind` and `Card ID` traits. All 777 card and 777 receipt image
 URLs are preserved, and `collection.json` is unchanged.
+
+The [collection metadata revision](../../releases/dmx-metadata-v3/README.md)
+subsequently sets the collection image to
+`https://cdn.lil.org/nft/dmx/receipts/7.png`, with empty `description` and
+`external_link` strings. The collection name and symbol remain
+`divination machina x` and `DMX`.
 
 Editable authoring templates live under `scripts/tarot/metadata/`. Generate,
 publish, and verify from the repository root with the existing R2 credentials
@@ -409,7 +415,7 @@ revision unchanged:
 
 ```sh
 npm run tarot:ops -- metadata-generate --directory .cache/dmx-metadata/<new-revision>
-npm run tarot:ops -- metadata-update --directory .cache/dmx-metadata/<new-revision> --previous-manifest releases/dmx-metadata-v2/metadata-manifest.json
+npm run tarot:ops -- metadata-update --directory .cache/dmx-metadata/<new-revision> --previous-manifest releases/dmx-metadata-v3/metadata-manifest.json
 ```
 
 For later updates, pass the latest successful revision's `manifest.json` as

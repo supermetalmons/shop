@@ -123,8 +123,7 @@ test('DMX templates use the approved metadata format and reject future or invali
       ] });
   }
   assert.deepEqual(buildDmxCollectionMetadata(), { name: 'divination machina x', symbol: 'DMX',
-    description: '777 Tarot cards and their paired NFC receipts.', image: 'https://cdn.lil.org/nft/dmx/cards/1.png',
-    external_link: 'https://mons.shop' });
+    description: '', image: 'https://cdn.lil.org/nft/dmx/receipts/7.png', external_link: '' });
   for (const tokenId of [0, -1, 1.5, NaN, 778, 999_999, 1_000_777, 2_000_775]) {
     assert.throws(() => buildDmxMetadata(tokenId), /initial card or NFC receipt/);
   }

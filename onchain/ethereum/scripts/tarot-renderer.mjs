@@ -160,7 +160,8 @@ function validateManifest(manifest, deps) {
   for (const field of ['network', 'chainId', 'collection', 'owner', 'nextRenderer', 'collectionReleaseSha256', 'rendererReleaseSha256']) {
     assert.equal(manifest[field], deps.scope[field], 'Frozen activation identity changed: ' + field);
   }
-  assert.equal(manifest.expectedCollectionImage, COLLECTION_IMAGE, 'Unexpected activation collection image');
+  assert.equal(manifest.expectedCollectionImage, deps.scope.expectedCollectionImage ?? COLLECTION_IMAGE,
+    'Unexpected activation collection image');
   assert.deepEqual(metadataPins(manifest), metadataPins(deps.scope), 'Frozen activation metadata pins changed');
   assert.equal(manifest.pendingOwner, ZERO, 'Pending collection ownership transfer');
   assert.notEqual(address(manifest.previousRenderer), manifest.nextRenderer, 'Renderer is already active');
@@ -234,7 +235,8 @@ export async function runActivation(command, options, deps) {
     const allowance = deploymentGas(await deps.rpc('eth_estimateGas', [request]), await deps.rpc('eth_gasPrice', []), options.feeCeilingWei);
     manifest = { version: 1, ...deps.scope, previousRenderer: state.renderer, pendingOwner: state.pendingOwner,
       quoteSigner: state.quoteSigner, mintingPaused: state.mintingPaused, redemptionsPaused: state.redemptionsPaused,
-      expectedCollectionImage: COLLECTION_IMAGE, data: request.data, feeCeilingWei: options.feeCeilingWei,
+      expectedCollectionImage: deps.scope.expectedCollectionImage ?? COLLECTION_IMAGE,
+      data: request.data, feeCeilingWei: options.feeCeilingWei,
       nonce: quantity(await deps.rpc('eth_getTransactionCount', [state.owner, 'latest'])).toString(), ...allowance,
       observedBlock: state.blockNumber, observedBlockHash: state.blockHash, preparedAt: deps.now() };
     validateManifest(manifest, deps);
@@ -286,13 +288,13 @@ export async function runActivation(command, options, deps) {
   for (const tag of [receipt.blockNumber, 'latest']) {
     const state = await deps.state(tag);
     assertState(state, manifest, manifest.nextRenderer);
-    await resolveCollectionMetadata(state.uri, manifest, COLLECTION_IMAGE, deps.fetch);
+    await resolveCollectionMetadata(state.uri, manifest, manifest.expectedCollectionImage, deps.fetch);
   }
   assert.equal((await deps.rpc('eth_getBlockByNumber', [receipt.blockNumber, false]))?.hash, receipt.blockHash, 'Activation verification encountered a reorg');
   const result = { verified: true, network: manifest.network, chainId: manifest.chainId, collection: manifest.collection,
     owner: manifest.owner, previousRenderer: manifest.previousRenderer, nextRenderer: manifest.nextRenderer,
     transactionHash: journal.transactionHash, blockNumber: Number(quantity(receipt.blockNumber)), blockHash: receipt.blockHash,
-    confirmations: Number(confirmations), collectionImage: COLLECTION_IMAGE, refreshEventsVerified: true,
+    confirmations: Number(confirmations), collectionImage: manifest.expectedCollectionImage, refreshEventsVerified: true,
     collectionStateUnchanged: true, gasUsed: quantity(receipt.gasUsed).toString(),
     actualFeeWei: (quantity(receipt.gasUsed) * quantity(receipt.effectiveGasPrice)).toString(),
     feeCeilingWei: manifest.feeCeilingWei, checkedAt: deps.now() };
@@ -312,11 +314,13 @@ export async function main(argv = process.argv.slice(2)) {
     }
     const collection = readCollectionRelease(path.join(directory, 'collection'), network);
     const renderer = readRendererRelease(path.join(directory, 'renderer'), network);
-    assert.equal(renderer.deployment.collectionMetadata.image, COLLECTION_IMAGE, 'Activation requires the CDN PNG renderer');
+    const expectedCollectionImage = metadataPins(renderer.manifest).expectedCollectionUri
+      ? renderer.manifest.expectedCollectionImage : COLLECTION_IMAGE;
+    assert.equal(renderer.deployment.collectionMetadata.image, expectedCollectionImage, 'Activation collection image differs from its release');
     assert.equal(renderer.manifest.admin, collection.manifest.admin, 'Renderer administrator differs from collection');
     const scope = { network, chainId: NETWORKS[network], collection: collection.manifest.contractAddress,
       owner: collection.manifest.admin, nextRenderer: renderer.manifest.contractAddress,
-      ...metadataPins(renderer.manifest),
+      ...metadataPins(renderer.manifest), expectedCollectionImage,
       collectionReleaseSha256: releaseHash(collection), rendererReleaseSha256: releaseHash(renderer) };
     const endpoint = (network === 'mainnet' ? process.env.ETHEREUM_TAROT_MAINNET_RPC_URL : process.env.ETHEREUM_TAROT_RPC_URL) ||
       (process.env.ALCHEMY_API_KEY ? 'https://eth-' + network + '.g.alchemy.com/v2/' + encodeURIComponent(process.env.ALCHEMY_API_KEY) : null);

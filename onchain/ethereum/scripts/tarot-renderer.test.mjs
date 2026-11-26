@@ -230,12 +230,14 @@ test('confirmed activation verifies collection PNG metadata, preserved state and
   assert.deepEqual(await f.verify(), result);
 });
 
-test('confirmed offchain activation verifies the pinned URI and body and rejects changed metadata pins', async t => {
+for (const image of [COLLECTION_IMAGE, 'https://cdn.lil.org/nft/dmx/receipts/7.png']) {
+test(`confirmed offchain activation preserves publication fields for ${image}`, async t => {
   const f = fixture();
-  const body = Buffer.from(uri(COLLECTION_IMAGE).split(',')[1], 'base64');
+  const body = image === COLLECTION_IMAGE ? Buffer.from(uri(image).split(',')[1], 'base64')
+    : Buffer.from(JSON.stringify({ name: 'divination machina x', symbol: 'DMX', description: '', image, external_link: '' }));
   const pins = { expectedCollectionUri: OFFCHAIN_COLLECTION_URI,
     collectionMetadataSha256: createHash('sha256').update(body).digest('hex'), metadataManifestSha256: 'c'.repeat(64) };
-  Object.assign(f.deps.scope, pins);
+  Object.assign(f.deps.scope, pins, { expectedCollectionImage: image });
   const state = f.deps.state;
   f.deps.state = async () => {
     const result = await state();
@@ -247,6 +249,8 @@ test('confirmed offchain activation verifies the pinned URI and body and rejects
   };
   await f.prepare(); await f.sign(); await f.broadcast();
   const result = await f.verify();
+  assert.equal(result.collectionImage, image);
+  assert.equal(f.files.get('manifest.json').expectedCollectionImage, image);
   for (const [name, value] of Object.entries(pins)) assert.equal(result[name], value);
   f.deps.scope.metadataManifestSha256 = 'd'.repeat(64);
   await assert.rejects(f.verify(), /metadata pins changed/);
@@ -254,6 +258,7 @@ test('confirmed offchain activation verifies the pinned URI and body and rejects
   f.deps.fetch = async () => new Response('{}', { headers: { 'content-type': 'application/json' } });
   await assert.rejects(f.verify(), /content hash differs/);
 });
+}
 
 test('verify rejects pending, failed, insufficiently confirmed and noncanonical activations', async () => {
   const f = fixture(); await f.prepare(); await f.sign(); await assert.rejects(f.verify(), /has not succeeded/);
@@ -354,7 +359,9 @@ test(`main freezes ${rendererName} evidence and refuses concurrent operations or
       ...(rendererRelease ? { quoteSigner: signer, renderer: previous, rendererReleaseSha256: hash(json(rendererRelease.files)) } : {}) };
     const deployment = { ...manifest, deploymentBlock: block, deploymentBlockHash: '0x' + block.toString(16).padStart(64, '0'),
       transactionHash: '0x' + (block + 100).toString(16).padStart(64, '0'), confirmations: 3,
-      collectionMetadata: JSON.parse(Buffer.from(uri(image).split(',')[1], 'base64').toString()) };
+      collectionMetadata: name === 'DMXOffchainRenderer'
+        ? JSON.parse(fs.readFileSync(path.join(metadataDirectory, 'collection.json'), 'utf8'))
+        : JSON.parse(Buffer.from(uri(image).split(',')[1], 'base64').toString()) };
     const files = { 'manifest.json': manifest, 'deployment.json': deployment,
       [name + '.artifact.json']: artifact, [name + '.standard-input.json']: input,
       ...(name === 'DMXOffchainRenderer' ? { 'publication-manifest.json': publication,
@@ -366,7 +373,9 @@ test(`main freezes ${rendererName} evidence and refuses concurrent operations or
   const old = buildRelease('DMXWebpRenderer', path.join(originalCollection, 'renderer'), previous, 10, 'https://wip.lil.org/dmx/cards/1.webp');
   const original = buildRelease('TarotCards', originalCollection, predicted, 11, 'https://wip.lil.org/dmx/cards/1.webp', old);
   const rendererDirectory = path.join(temporary, 'new-renderer');
-  const replacement = buildRelease(rendererName, rendererDirectory, next, 20, COLLECTION_IMAGE);
+  const replacementImage = publication
+    ? JSON.parse(fs.readFileSync(path.join(metadataDirectory, 'collection.json'), 'utf8')).image : COLLECTION_IMAGE;
+  const replacement = buildRelease(rendererName, rendererDirectory, next, 20, replacementImage);
   const releases = [original, replacement];
   const methods = [];
   const publicReads = new Set();
@@ -416,6 +425,7 @@ test(`main freezes ${rendererName} evidence and refuses concurrent operations or
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
   assert.equal(manifest.nextRenderer, next);
   assert.equal(manifest.previousRenderer, previous);
+  assert.equal(manifest.expectedCollectionImage, replacementImage);
   assert.equal(fs.statSync(path.join(directory, 'manifest.json')).mode & 0o777, 0o600);
   assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'collection/manifest.json'), 'utf8')), original.manifest);
