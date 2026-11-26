@@ -19,7 +19,8 @@ export const TAROT_SEPOLIA = Object.freeze({
 
 const project = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const repository = path.resolve(project, '../..');
-const collectionImage = 'https://wip.lil.org/dmx/cards/1.webp';
+const collectionImage = 'https://cdn.lil.org/nft/dmx/cards/1.png';
+const legacyCollectionImage = 'https://wip.lil.org/dmx/cards/1.webp';
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const hashHex = value => '0x' + Buffer.from(keccak_256(Buffer.from(value.slice(2), 'hex'))).toString('hex');
@@ -29,6 +30,10 @@ function deploymentAddress(value, option) {
   assert.ok(typeof value === 'string' && /^0x[0-9a-f]{40}$/i.test(value) && !/^0x0{40}$/i.test(value),
     'Preparation requires a nonzero --' + option + ' address');
   return value.toLowerCase();
+}
+
+function validatePinnedCollectionImage(image) {
+  assert.ok(image === collectionImage || image === legacyCollectionImage, 'Unexpected deployment collection image');
 }
 
 export function deploymentConfiguration(network = 'sepolia', quoteSigner, renderer, contractName = 'TarotCards', roles = {}) {
@@ -63,7 +68,7 @@ export function validateDeploymentConfiguration(manifest, network = 'sepolia') {
   }
   assert.equal(manifest.network, network, 'Deployment network changed');
   if (Object.hasOwn(manifest, 'expectedCollectionImage')) {
-    assert.equal(manifest.expectedCollectionImage, collectionImage, 'Unexpected deployment collection image');
+    validatePinnedCollectionImage(manifest.expectedCollectionImage);
   }
   return configuration;
 }
@@ -81,7 +86,7 @@ export function rendererInterfaceId() {
 
 function deploymentCollectionImage(manifest, deployment) {
   if (Object.hasOwn(manifest, 'expectedCollectionImage')) {
-    assert.equal(manifest.expectedCollectionImage, collectionImage, 'Unexpected deployment collection image');
+    validatePinnedCollectionImage(manifest.expectedCollectionImage);
     return manifest.expectedCollectionImage;
   }
   assert.ok(deployment, 'Historical release requires its original deployment metadata evidence');

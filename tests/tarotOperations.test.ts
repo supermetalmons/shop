@@ -128,29 +128,40 @@ test('credential pins require complete verification and cannot be replaced by an
     pin.credentialSetSha256);
 });
 
-test('media verification checks all DMX cards, heroes, receipts, and layers without publishing metadata', async () => {
+test('media verification checks DMX metadata PNGs and claim-page WebPs without publishing metadata', async () => {
   const media: string[] = [];
   const result = await verifyTarotMedia(async (input, init) => {
     assert.equal(init?.method, 'HEAD');
     assert.equal(init?.redirect, 'error');
     media.push(String(input));
-    return new Response(null, { headers: { 'content-type': 'image/webp', 'content-length': '100' } });
+    return new Response(null, { headers: {
+      'content-type': String(input).endsWith('.png') ? 'image/png' : 'image/webp', 'content-length': '100',
+    } });
   });
-  assert.deepEqual(result, { verified: true, artworkCount: 2341 });
-  assert.equal(new Set(media).size, 2341);
-  for (const [kind, count] of [['cards', 777], ['heroes', 777], ['receipts', 777], ['layers', 10]] as const) {
-    const prefix = `https://wip.lil.org/dmx/${kind}/`;
-    const ids = media.filter(url => url.startsWith(prefix)).map(url => Number(url.slice(prefix.length, -5)));
-    assert.deepEqual(ids.sort((a, b) => a - b), Array.from({ length: count }, (_, index) => index + 1));
+  assert.deepEqual(result, { verified: true, artworkCount: 3118 });
+  assert.equal(media.length, 3118);
+  assert.equal(new Set(media).size, 3118);
+  for (const [kind, extension, count] of [
+    ['cards', 'png', 777], ['receipts', 'png', 777], ['receipts', 'webp', 777],
+    ['clean', 'webp', 777], ['layers', 'webp', 10],
+  ] as const) {
+    const prefix = `https://cdn.lil.org/nft/dmx/${kind}/`;
+    const urls = media.filter(url => url.startsWith(prefix) && url.endsWith(`.${extension}`));
+    assert.deepEqual(new Set(urls), new Set(Array.from({ length: count }, (_, index) => `${prefix}${index + 1}.${extension}`)));
   }
   const invalidResponses: ResponseInit[] = [
     { status: 404 },
     { headers: { 'content-type': 'text/html', 'content-length': '100' } },
-    { headers: { 'content-type': 'image/webp', 'content-length': '0' } },
-    { headers: { 'content-type': 'image/webp' } },
+    { headers: { 'content-type': 'image/png', 'content-length': '0' } },
+    { headers: { 'content-type': 'image/png' } },
   ];
   for (const response of invalidResponses) {
     await assert.rejects(() => verifyTarotMedia(async () => new Response(null, response)), /media unavailable/);
+  }
+  for (const contentType of ['image/png', 'image/webp']) {
+    await assert.rejects(() => verifyTarotMedia(async () => new Response(null, {
+      headers: { 'content-type': contentType, 'content-length': '100' },
+    })), /media unavailable/);
   }
 });
 

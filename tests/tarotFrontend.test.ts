@@ -232,7 +232,7 @@ test('a scanned card can be claimed after reloading its shareable URL, while a r
   const previousRequests = service.status.mock.callCount();
   const recipient = render(createElement(RoutedCard, { value }));
   const artwork = within(recipient.getByRole('main', { name: 'Tarot card' }));
-  assert.equal(artwork.getByRole('img').getAttribute('src'), 'https://wip.lil.org/dmx/heroes/1.webp');
+  assert.equal(artwork.getByRole('img').getAttribute('src'), 'https://cdn.lil.org/nft/dmx/clean/1.webp');
   assert.equal(artwork.queryByRole('button', { name: 'Claim' }), null);
   assert.equal(service.status.mock.callCount(), previousRequests);
 });
@@ -524,7 +524,7 @@ test('Basel preserves the placeholder video and a supplied card ID switches to p
   assert.deepEqual(open.mock.calls[0].arguments, ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank', 'noopener,noreferrer']);
   assert.equal(service.mock.callCount(), 0);
   view.rerender(page('?code=basel&tokenId=1&testnet=true', value));
-  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/dmx/heroes/1.webp');
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://cdn.lil.org/nft/dmx/clean/1.webp');
   assert.equal(service.mock.callCount(), 0);
 });
 
@@ -535,7 +535,7 @@ test('the header and large artwork appear before validation and remain mounted w
   const header = view.getByRole('banner');
   assert.ok(within(header).getByRole('button', { name: 'Shop header' }));
   const artwork = assertArtworkPage(view).getByRole('img');
-  assert.equal(artwork.getAttribute('src'), 'https://wip.lil.org/dmx/heroes/777.webp');
+  assert.equal(artwork.getAttribute('src'), 'https://cdn.lil.org/nft/dmx/clean/777.webp');
   await act(async () => finish(status(777, true)));
   assert.equal(view.getByRole('banner'), header);
   assert.equal(assertArtworkPage(view).getByRole('img'), artwork);
@@ -547,12 +547,12 @@ test('valid unclaimed links display one decorative layer per category with their
   await view.findByRole('button', { name: 'Claim' });
   assert.equal(view.getAllByRole('img').length, 2);
   const hero = view.getByRole('img', { name: 'Mutating Card' });
-  assert.equal(hero.getAttribute('src'), 'https://wip.lil.org/dmx/heroes/777.webp');
-  assert.equal(view.getByRole('img', { name: 'NFC Card Receipt' }).getAttribute('src'), 'https://wip.lil.org/dmx/receipts/777.webp');
+  assert.equal(hero.getAttribute('src'), 'https://cdn.lil.org/nft/dmx/clean/777.webp');
+  assert.equal(view.getByRole('img', { name: 'NFC Card Receipt' }).getAttribute('src'), 'https://cdn.lil.org/nft/dmx/receipts/777.webp');
   const layers = cardLayers(view.container);
   assert.equal(layers.length, 3);
   for (const [index, ids] of [[1, 6, 7, 10], [3, 4, 5], [2, 8, 9]].entries()) {
-    const urls = ids.map(id => `https://wip.lil.org/dmx/layers/${id}.webp`);
+    const urls = ids.map(id => `https://cdn.lil.org/nft/dmx/layers/${id}.webp`);
     assert.ok(urls.includes(layers[index].src));
   }
   for (const layer of layers) assert.equal(layer.alt, '');
@@ -603,7 +603,7 @@ test('public artwork links render immediately without validation, receipt loadin
     const view = render(page(query, value));
     const tokenId = new URLSearchParams(query).get('tokenId');
     const image = assertArtworkPage(view).getByRole('img');
-    assert.equal(image.getAttribute('src'), `https://wip.lil.org/dmx/heroes/${tokenId}.webp`);
+    assert.equal(image.getAttribute('src'), `https://cdn.lil.org/nft/dmx/clean/${tokenId}.webp`);
     assert.equal(image.getAttribute('referrerpolicy'), 'no-referrer');
     assert.equal(view.container.querySelector('img[src*="/dmx/receipts/"]'), null);
     assert.equal(view.queryByRole('alert'), null);
@@ -696,7 +696,7 @@ test('changing credentials for the same card resets validation without accepting
   });
   const value = wallet();
   const view = render(page('?tokenId=1', value));
-  const artworkSrc = 'https://wip.lil.org/dmx/heroes/1.webp';
+  const artworkSrc = 'https://cdn.lil.org/nft/dmx/clean/1.webp';
   assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), artworkSrc);
   assert.equal(service.mock.callCount(), 0);
   view.rerender(page(search(), value));
@@ -1257,7 +1257,7 @@ test('unavailable mainnet preparation preserves the scanned credential and artwo
   const view = render(createElement(RoutedCard, { value }));
   await act(async () => undefined);
   const artwork = within(view.getByRole('main', { name: 'Tarot card' }));
-  assert.equal(artwork.getByRole('img', { name: 'Mutating Card' }).getAttribute('src'), 'https://wip.lil.org/dmx/heroes/1.webp');
+  assert.equal(artwork.getByRole('img', { name: 'Mutating Card' }).getAttribute('src'), 'https://cdn.lil.org/nft/dmx/clean/1.webp');
   assert.equal(artwork.queryByRole('button'), null);
   assert.equal(artwork.queryByRole('alert'), null);
   assert.equal(window.localStorage.getItem('mons.shop.tarot.claim:mainnet:1'), code);
@@ -1292,7 +1292,7 @@ test('route changes discard stale validation results', async () => {
   view.rerender(page(search(777)));
   await waitFor(() => assert.ok(view.queryByRole('main', { name: 'Tarot card' })));
   await act(async () => finish(status(1, false)));
-  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://wip.lil.org/dmx/heroes/777.webp');
+  assert.equal(assertArtworkPage(view).getByRole('img').getAttribute('src'), 'https://cdn.lil.org/nft/dmx/clean/777.webp');
 });
 
 for (const testnet of [false, true]) {

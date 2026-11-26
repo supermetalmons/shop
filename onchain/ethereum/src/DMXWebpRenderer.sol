@@ -29,14 +29,14 @@ contract DMXWebpRenderer is ERC165, IDMXRenderer {
                 : "Records the redemption of a divination machina x card.";
         return _dataURI(string.concat(
             '{"name":"', name, ' #', displayId, '","description":"', description,
-            '","image":"https://wip.lil.org/dmx/', card ? "cards/" : "receipts/", displayId,
-            '.webp","attributes":[{"trait_type":"Kind","value":"', kind,
+            '","image":"https://cdn.lil.org/nft/dmx/', card ? "cards/" : "receipts/", displayId,
+            '.png","attributes":[{"trait_type":"Kind","value":"', kind,
             '"},{"trait_type":"Card ID","value":', displayId, '}', _provenance(info), ']}'
         ));
     }
 
     function contractURI(address) external pure returns (string memory) {
-        return _dataURI('{"name":"divination machina x","symbol":"DMX","description":"777 Tarot cards and their paired NFC receipts.","image":"https://wip.lil.org/dmx/cards/1.webp","external_link":"https://mons.shop"}');
+        return _dataURI('{"name":"divination machina x","symbol":"DMX","description":"777 Tarot cards and their paired NFC receipts.","image":"https://cdn.lil.org/nft/dmx/cards/1.png","external_link":"https://mons.shop"}');
     }
 
     function _provenance(IDMXTokenInfo.TokenInfo memory info) private pure returns (string memory) {

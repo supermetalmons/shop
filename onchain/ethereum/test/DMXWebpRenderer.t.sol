@@ -160,19 +160,19 @@ contract DMXWebpRendererTest is TestSupport {
         return string(decoded);
     }
 
-    function testInitialCardAndNfcMetadataKeepExistingArtworkAndDescriptions() public {
+    function testInitialCardAndNfcMetadataUsePngArtworkAndKeepDescriptions() public {
         collection.set(1, IDMXTokenInfo.TokenInfo(IDMXTokenInfo.TokenKind.Card, 1, 0, 0, 0, false));
         collection.set(1_000_000, IDMXTokenInfo.TokenInfo(IDMXTokenInfo.TokenKind.NFCReceipt, 1, 0, 0, 0, false));
         string memory card = _decode(renderer.tokenURI(address(collection), 1));
         assertEq(vm.parseJsonString(card, ".name"), "Tarot Card #1");
         assertEq(vm.parseJsonString(card, ".description"), "A mutating Tarot card. Initial base artwork.");
-        assertEq(vm.parseJsonString(card, ".image"), "https://wip.lil.org/dmx/cards/1.webp");
+        assertEq(vm.parseJsonString(card, ".image"), "https://cdn.lil.org/nft/dmx/cards/1.png");
         assertEq(vm.parseJsonString(card, ".attributes[0].value"), "Mutating Card");
         assertEq(vm.parseJsonUint(card, ".attributes[1].value"), 1);
         string memory receipt = _decode(renderer.tokenURI(address(collection), 1_000_000));
         assertEq(vm.parseJsonString(receipt, ".name"), "Tarot Card Receipt #1");
         assertEq(vm.parseJsonString(receipt, ".description"), "Proves the authenticity of the physical Tarot card you scanned.");
-        assertEq(vm.parseJsonString(receipt, ".image"), "https://wip.lil.org/dmx/receipts/1.webp");
+        assertEq(vm.parseJsonString(receipt, ".image"), "https://cdn.lil.org/nft/dmx/receipts/1.png");
         assertEq(vm.parseJsonString(receipt, ".attributes[0].value"), "NFC Card Receipt");
     }
 
@@ -180,12 +180,12 @@ contract DMXWebpRendererTest is TestSupport {
         collection.set(999_999, IDMXTokenInfo.TokenInfo(IDMXTokenInfo.TokenKind.Card, 999_999, 7, 42, 43, true));
         collection.set(2_000_775, IDMXTokenInfo.TokenInfo(IDMXTokenInfo.TokenKind.RedemptionReceipt, 999_999, 7, 42, 43, false));
         string memory card = _decode(renderer.tokenURI(address(collection), 999_999));
-        assertEq(vm.parseJsonString(card, ".image"), "https://wip.lil.org/dmx/cards/999999.webp");
+        assertEq(vm.parseJsonString(card, ".image"), "https://cdn.lil.org/nft/dmx/cards/999999.png");
         assertEq(vm.parseJsonUint(card, ".attributes[2].value"), 7);
         assertEq(vm.parseJsonString(card, ".attributes[3].value"), "42");
         string memory receipt = _decode(renderer.tokenURI(address(collection), 2_000_775));
         assertEq(vm.parseJsonString(receipt, ".name"), "DMX Redemption Receipt #999999");
-        assertEq(vm.parseJsonString(receipt, ".image"), "https://wip.lil.org/dmx/receipts/999999.webp");
+        assertEq(vm.parseJsonString(receipt, ".image"), "https://cdn.lil.org/nft/dmx/receipts/999999.png");
         assertEq(vm.parseJsonString(receipt, ".attributes[0].value"), "Redemption Receipt");
         assertEq(vm.parseJsonString(receipt, ".attributes[4].value"), "43");
     }
@@ -205,7 +205,7 @@ contract DMXWebpRendererTest is TestSupport {
         string memory metadata = _decode(renderer.contractURI(address(collection)));
         assertEq(vm.parseJsonString(metadata, ".name"), "divination machina x");
         assertEq(vm.parseJsonString(metadata, ".symbol"), "DMX");
-        assertEq(vm.parseJsonString(metadata, ".image"), "https://wip.lil.org/dmx/cards/1.webp");
+        assertEq(vm.parseJsonString(metadata, ".image"), "https://cdn.lil.org/nft/dmx/cards/1.png");
         assertTrue(renderer.supportsInterface(type(IDMXRenderer).interfaceId));
         assertTrue(renderer.supportsInterface(0x01ffc9a7));
         assertFalse(renderer.supportsInterface(0xffffffff));

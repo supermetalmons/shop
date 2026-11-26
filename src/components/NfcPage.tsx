@@ -44,7 +44,7 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
         {eligible && <li className="nfc-claim-nft nfc-claim-reveal" hidden={!compact}>
           <img ref={receiptRef} className="nfc-claim-nft__image--certificate nfc-tarot-receipt"
             data-ready={receiptState === 'ready'} hidden={receiptState === 'failed'}
-            src={`https://wip.lil.org/dmx/receipts/${tokenId}.webp`}
+            src={`https://cdn.lil.org/nft/dmx/receipts/${tokenId}.webp`}
             alt="NFC Card Receipt" width={1400} height={1400} style={{ aspectRatio: '1 / 1' }}
             loading="eager" decoding="async" draggable={false} referrerPolicy="no-referrer" />
           {receiptState === 'failed' && <span className="nfc-claim-nft__image--certificate nfc-tarot-receipt__fallback">

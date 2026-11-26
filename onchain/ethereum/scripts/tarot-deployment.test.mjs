@@ -23,10 +23,12 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 const configuration = () => ({ network: 'sepolia', ...deploymentConfiguration('sepolia', quoteSigner, rendererAddress),
   expectedCollectionImage: collectionMetadata.image });
 const collectionMetadata = { name: 'divination machina x', symbol: 'DMX', description: '777 Tarot cards and their paired NFC receipts.',
-  image: 'https://wip.lil.org/dmx/cards/1.webp', external_link: 'https://mons.shop' };
+  image: 'https://cdn.lil.org/nft/dmx/cards/1.png', external_link: 'https://mons.shop' };
 const collectionURI = 'data:application/json;base64,' + Buffer.from(JSON.stringify(collectionMetadata)).toString('base64');
 const historicalMetadata = { ...collectionMetadata, image: 'https://wip.lil.org/tarot/bases/1.webp' };
 const historicalURI = 'data:application/json;base64,' + Buffer.from(JSON.stringify(historicalMetadata)).toString('base64');
+const pinnedHistoricalMetadata = { ...collectionMetadata, image: 'https://wip.lil.org/dmx/cards/1.webp' };
+const pinnedHistoricalURI = 'data:application/json;base64,' + Buffer.from(JSON.stringify(pinnedHistoricalMetadata)).toString('base64');
 const project = fileURLToPath(new URL('../', import.meta.url));
 const originalReadFileSync = fs.readFileSync;
 let build;
@@ -650,13 +652,53 @@ test('renderer metadata validation decodes JSON and checks collection identity',
   assert.match(rendererInterfaceId(), /^0x[0-9a-f]{8}$/);
 });
 
-function useHistoricalRenderer(f) {
-  delete f.renderer.manifest.expectedCollectionImage;
-  delete f.renderer.deployment.expectedCollectionImage;
-  f.renderer.deployment.collectionMetadata = historicalMetadata;
+function useHistoricalRenderer(f, pinned = false) {
+  if (pinned) {
+    f.renderer.manifest.expectedCollectionImage = pinnedHistoricalMetadata.image;
+    f.renderer.deployment.expectedCollectionImage = pinnedHistoricalMetadata.image;
+  } else {
+    delete f.renderer.manifest.expectedCollectionImage;
+    delete f.renderer.deployment.expectedCollectionImage;
+  }
+  f.renderer.deployment.collectionMetadata = pinned ? pinnedHistoricalMetadata : historicalMetadata;
   fs.writeFileSync(path.join(f.rendererDirectory, 'manifest.json'), json(f.renderer.manifest));
   fs.writeFileSync(path.join(f.rendererDirectory, 'deployment.json'), json(f.renderer.deployment));
 }
+
+for (const network of ['sepolia', 'mainnet']) {
+  test(`${network} frozen renderer with an explicit WIP image pin stays verifiable and cannot seed a new collection`, async t => {
+    const f = fixture(t, {}, network);
+    useHistoricalRenderer(f, true);
+    const before = fs.readdirSync(f.rendererDirectory).map(name => [name, fs.readFileSync(path.join(f.rendererDirectory, name), 'utf8')]);
+    const release = readRendererRelease(f.rendererDirectory, network);
+    await verifyRendererRelease(release, async (method, params) => {
+      const response = await fetch('https://tarot-rpc.invalid', { body: JSON.stringify({ method, params }) });
+      return (await response.json()).result;
+    });
+    await assert.rejects(f.prepare(), /current DMX renderer media/);
+    assert.deepEqual(fs.readdirSync(f.directory), []);
+    assert.deepEqual(fs.readdirSync(f.rendererDirectory).map(name => [name, fs.readFileSync(path.join(f.rendererDirectory, name), 'utf8')]), before);
+    assert.equal(f.requests.some(request => request.method === 'eth_sendRawTransaction'), false);
+  });
+}
+
+test('historical explicit image pins reject mismatched evidence and rewritten metadata against the chain', async t => {
+  const f = fixture(t);
+  useHistoricalRenderer(f, true);
+  const manifestPath = path.join(f.rendererDirectory, 'manifest.json');
+  const deploymentPath = path.join(f.rendererDirectory, 'deployment.json');
+  for (const change of [{ expectedCollectionImage: collectionMetadata.image }, { collectionMetadata },
+    { artifactSha256: 'changed' }, { contractAddress: quoteSigner }]) {
+    fs.writeFileSync(deploymentPath, json({ ...f.renderer.deployment, ...change }));
+    assert.throws(() => readRendererRelease(f.rendererDirectory), /differs from manifest/);
+  }
+  fs.writeFileSync(manifestPath, json({ ...f.renderer.manifest, expectedCollectionImage: collectionMetadata.image }));
+  fs.writeFileSync(deploymentPath, json({ ...f.renderer.deployment, expectedCollectionImage: collectionMetadata.image, collectionMetadata }));
+  await assert.rejects(verifyRendererRelease(readRendererRelease(f.rendererDirectory), async (method, params) => {
+    const response = await fetch('https://tarot-rpc.invalid', { body: JSON.stringify({ method, params }) });
+    return (await response.json()).result;
+  }));
+});
 
 test('historical renderer verification uses original deployment image evidence without changing frozen files', async t => {
   const f = fixture(t);
@@ -741,4 +783,13 @@ test('historical collection verification pins the image recorded by its original
   await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest), '0x5'), /original deployment metadata evidence/);
   await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest), '0x5', { ...deployment, artifactSha256: 'changed' }),
     /differs from manifest: artifactSha256/);
+});
+
+test('historical collection verification retains its explicit WIP image pin', async () => {
+  const manifest = { ...configuration(), contractAddress: '0x3333333333333333333333333333333333333333',
+    expectedCollectionImage: pinnedHistoricalMetadata.image };
+  validateDeploymentConfiguration(manifest);
+  assert.deepEqual(await verifyDeploymentState(manifest,
+    stateRpc(manifest, { 'contractURI()': pinnedHistoricalURI }), '0x5'), pinnedHistoricalMetadata);
+  await assert.rejects(verifyDeploymentState(manifest, stateRpc(manifest), '0x5'));
 });
