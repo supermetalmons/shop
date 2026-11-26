@@ -96,7 +96,10 @@ export function dmxMetadataManifestSha256(manifest: DmxMetadataManifest): string
 }
 
 export async function loadDmxMetadataManifest(directory: string): Promise<DmxMetadataManifest> {
-  const path = join(directory, 'manifest.json');
+  return readDmxMetadataManifest(join(directory, 'manifest.json'));
+}
+
+export async function readDmxMetadataManifest(path: string): Promise<DmxMetadataManifest> {
   const info = await lstat(path);
   if (!info.isFile() || info.size > 1024 * 1024) throw new Error('Invalid DMX metadata manifest file');
   const body = await readFile(path);

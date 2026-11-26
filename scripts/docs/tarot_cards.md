@@ -397,6 +397,29 @@ contents and headers. Keep generated files in `.cache/` and private journals in
 `.operations/`. Reviewed release evidence contains the manifest and aggregate
 verification results, never signing material or claim credentials.
 
+To update existing JSONs, edit the authoring templates, generate a new revision,
+and review its JSON files and manifest before applying it. Keep the previous
+revision unchanged:
+
+```sh
+npm run tarot:ops -- metadata-generate --directory .cache/dmx-metadata/<new-revision>
+npm run tarot:ops -- metadata-update --directory .cache/dmx-metadata/<new-revision> --previous-manifest releases/dmx-offchain-v1/metadata-manifest.json
+```
+
+For later updates, pass the latest successful revision's `manifest.json` as
+`--previous-manifest`. The update checks the existing inventory against that
+baseline, writes only changed files with matching ETags, and accepts files that
+already match the target when resuming. Missing or extra objects and unexpected
+contents stop the operation. Updates preserve JSON UTF-8 and `no-store`, then
+verify all storage and public CDN contents and save the new verification report.
+If interrupted, resume the same command with the same two manifests.
+
+These JSON updates affect both networks and require no onchain transaction or
+renderer change. Marketplaces may still need to refresh cached metadata.
+Historical deployment and activation evidence retains its original hashes;
+use `metadata-verify --directory .cache/dmx-metadata/<new-revision>` to check
+current metadata after an update, without rewriting frozen release evidence.
+
 Future cards and redemption receipts use the same offchain URL pattern, but
 their metadata and images must be published before issuance. This initial
 publisher creates only the 777 initial pairs and collection metadata. Shared

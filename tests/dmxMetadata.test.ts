@@ -9,7 +9,7 @@ import { buildDmxCollectionMetadata, buildDmxMetadata, DMX_METADATA_BASE_URI, dm
   dmxMetadataManifestSha256, dmxMetadataSha256, generateDmxMetadata, loadDmxMetadataBody,
   loadDmxMetadataManifest, validateDmxMetadataManifest, verifyDmxPublishedMetadata,
   type DmxMetadataManifest } from '../scripts/tarot/metadata.ts';
-import { publishDmxMetadata, verifyDmxMetadata } from '../scripts/tarot/metadataPublication.ts';
+import { publishDmxMetadata, updateDmxMetadata, verifyDmxMetadata } from '../scripts/tarot/metadataPublication.ts';
 
 let root: string;
 let directory: string;
@@ -29,8 +29,11 @@ class Storage implements MetadataStorage {
   destination = { endpoint: `https://${'a'.repeat(32)}.r2.cloudflarestorage.com`, bucket: 'cdn-mons-shop' };
   objects = new Map<string, Buffer>();
   writes: string[] = [];
+  conditions: Array<string | null> = [];
   failAt: number | null = null;
   loseResponse = false;
+  beforePut?: (key: string) => void;
+  beforeGet?: (key: string) => void;
 
   async *list(prefix: string) {
     assert.equal(prefix, 'dmx/');
@@ -40,18 +43,24 @@ class Storage implements MetadataStorage {
   }
 
   async get(key: string) {
+    this.beforeGet?.(key);
     const body = this.objects.get(key);
     if (!body) throw Object.assign(new Error('Not found'), { name: 'NoSuchKey' });
     return Buffer.from(body);
   }
 
   async put(key: string, body: Buffer, expectedEtag?: string | null) {
-    assert.equal(expectedEtag, null);
+    assert.notEqual(expectedEtag, undefined);
     assert.ok(bodies.has(key));
     if (this.failAt === this.writes.length) throw new Error('interrupted transport');
-    if (this.objects.has(key)) throw new Error('Conditional write conflict');
+    this.beforePut?.(key);
+    const existing = this.objects.get(key);
+    if (expectedEtag === null ? existing !== undefined : !existing || expectedEtag !== `"${metadataMd5(existing)}"`) {
+      throw Object.assign(new Error('Conditional write conflict'), { name: 'PreconditionFailed' });
+    }
     this.objects.set(key, Buffer.from(body));
     this.writes.push(key);
+    this.conditions.push(expectedEtag!);
     if (this.loseResponse) throw new Error('lost response');
   }
 
@@ -74,6 +83,30 @@ function publicFetcher(storage: Storage, seen = new Set<string>()): typeof fetch
     const body = storage.objects.get(url.pathname.slice(1));
     return new Response(body ? new Uint8Array(body) : null, { status: body ? 200 : 404, headers });
   };
+}
+
+let revision = 1;
+async function updatedRevision(files: string[]) {
+  const target = join(root, `.cache/dmx-metadata/revision-${++revision}`);
+  await mkdir(target, { recursive: true });
+  const targetBodies = new Map(bodies);
+  for (const file of files) {
+    const metadata = JSON.parse(targetBodies.get(`dmx/${file}`)!.toString());
+    metadata.description = `Updated revision ${revision}: ${file}`;
+    targetBodies.set(`dmx/${file}`, dmxMetadataBody(metadata));
+  }
+  await Promise.all([...targetBodies].map(([key, body]) => writeFile(join(target, key.slice(4)), body)));
+  const next = structuredClone(manifest);
+  next.objects = manifest.objects.map(object => {
+    const body = targetBodies.get(`dmx/${object.file}`)!;
+    return { file: object.file, bytes: body.length, sha256: dmxMetadataSha256(body) };
+  });
+  next.totalBytes = next.objects.reduce((total, object) => total + object.bytes, 0);
+  next.objectsSha256 = dmxMetadataSha256(dmxMetadataBody(next.objects));
+  await writeFile(join(target, 'manifest.json'), dmxMetadataBody(next));
+  const storage = new Storage();
+  storage.objects = new Map(bodies);
+  return { directory: target, manifest: next, bodies: targetBodies, storage };
 }
 
 test('initial DMX templates preserve renderer metadata and reject future or invalid identities', () => {
@@ -222,6 +255,126 @@ test('concurrent verifications atomically save valid evidence without sharing te
   assert.deepEqual((await readdir(directory)).filter(file => file.endsWith('.tmp')), []);
 });
 
+test('updates replace only changed cards, receipts and collection JSON with matching ETags', async () => {
+  const files = ['1.json', '1000000.json', 'collection.json'];
+  const f = await updatedRevision(files);
+  const seen = new Set<string>();
+  const options = { root, storage: f.storage, fetcher: publicFetcher(f.storage, seen), concurrency: 1 };
+  const result = await updateDmxMetadata(f.directory, manifest, options);
+  assert.equal(result.complete, true);
+  assert.equal(result.storageVerified, true);
+  assert.equal(result.publicVerified, true);
+  assert.equal(result.manifestSha256, dmxMetadataManifestSha256(f.manifest));
+  assert.equal(result.previousManifestSha256, dmxMetadataManifestSha256(manifest));
+  assert.equal(result.updated, files.length);
+  assert.equal(result.skipped, 1555 - files.length);
+  assert.deepEqual(f.storage.writes, files.map(file => `dmx/${file}`));
+  assert.deepEqual(f.storage.conditions, f.storage.writes.map(key => `"${metadataMd5(bodies.get(key)!)}"`));
+  assert.equal(seen.size, 1555);
+  for (const [key, body] of f.bodies) assert.ok(f.storage.objects.get(key)!.equals(body));
+  const proof = JSON.parse(await readFile(join(f.directory, 'verification.json'), 'utf8'));
+  assert.equal(proof.manifestSha256, dmxMetadataManifestSha256(f.manifest));
+  assert.equal(proof.publicVerified, true);
+  const repeated = await updateDmxMetadata(f.directory, manifest, options);
+  assert.equal(repeated.updated, 0);
+  assert.equal(repeated.skipped, 1555);
+  assert.equal(f.storage.writes.length, files.length);
+});
+
+test('an unchanged update verifies existing metadata without writing objects', async () => {
+  const storage = new Storage();
+  storage.objects = new Map(bodies);
+  const result = await updateDmxMetadata(directory, manifest, { root, storage, fetcher: publicFetcher(storage) });
+  assert.equal(result.complete, true);
+  assert.equal(result.publicVerified, true);
+  assert.equal(result.updated, 0);
+  assert.equal(storage.writes.length, 0);
+});
+
+test('updates reject stale, missing and unexpected remote objects before any replacement', async () => {
+  const f = await updatedRevision(['1.json']);
+  const cases = [
+    (storage: Storage) => storage.objects.set('dmx/777.json', Buffer.from('{}')),
+    (storage: Storage) => storage.objects.delete('dmx/1000776.json'),
+    (storage: Storage) => storage.objects.set('dmx/778.json', Buffer.from('{}')),
+    (storage: Storage) => { storage.destination.bucket = 'other-bucket'; },
+  ];
+  for (const change of cases) {
+    const storage = new Storage();
+    storage.objects = new Map(bodies);
+    change(storage);
+    await assert.rejects(updateDmxMetadata(f.directory, manifest, { root, storage, fetcher: publicFetcher(storage) }));
+    assert.equal(storage.writes.length, 0);
+  }
+});
+
+test('conditional updates preserve concurrent changes after preflight', async () => {
+  const f = await updatedRevision(['1.json']);
+  const concurrent = dmxMetadataBody({ name: 'Someone else changed this token' });
+  f.storage.beforePut = key => { f.storage.objects.set(key, concurrent); };
+  await assert.rejects(updateDmxMetadata(f.directory, manifest,
+    { root, storage: f.storage, fetcher: publicFetcher(f.storage), concurrency: 1 }));
+  assert.equal(f.storage.writes.length, 0);
+  assert.ok(f.storage.objects.get('dmx/1.json')!.equals(concurrent));
+});
+
+test('updates reject a listing ETag that does not match the checked baseline body', async () => {
+  const f = await updatedRevision(['1.json']);
+  f.storage.objects.set('dmx/1.json', Buffer.from('{}'));
+  f.storage.beforeGet = key => {
+    if (key === 'dmx/1.json') f.storage.objects.set(key, bodies.get(key)!);
+  };
+  await assert.rejects(updateDmxMetadata(f.directory, manifest,
+    { root, storage: f.storage, fetcher: publicFetcher(f.storage) }));
+  assert.equal(f.storage.writes.length, 0);
+});
+
+test('updates resume a partial replacement and reconcile lost write responses', async () => {
+  const f = await updatedRevision(['1.json', '2.json', '1000000.json']);
+  const options = { root, storage: f.storage, fetcher: publicFetcher(f.storage), concurrency: 1 };
+  f.storage.failAt = 1;
+  await assert.rejects(updateDmxMetadata(f.directory, manifest, options), /interrupted transport/);
+  assert.deepEqual(f.storage.writes, ['dmx/1.json']);
+  f.storage.failAt = null;
+  f.storage.loseResponse = true;
+  const resumed = await updateDmxMetadata(f.directory, manifest, options);
+  assert.equal(resumed.complete, true);
+  assert.deepEqual(f.storage.writes, ['dmx/1.json', 'dmx/2.json', 'dmx/1000000.json']);
+  assert.equal(f.storage.conditions.every(value => typeof value === 'string'), true);
+  await updateDmxMetadata(f.directory, manifest, options);
+  assert.equal(f.storage.writes.length, 3);
+});
+
+test('update recovery rejects a journal whose expected baseline changed', async () => {
+  const f = await updatedRevision(['1.json', '2.json']);
+  const options = { root, storage: f.storage, fetcher: publicFetcher(f.storage), concurrency: 1 };
+  f.storage.failAt = 1;
+  await assert.rejects(updateDmxMetadata(f.directory, manifest, options), /interrupted transport/);
+  const journal = join(root, '.operations/dmx-metadata', dmxMetadataManifestSha256(f.manifest),
+    `update-${dmxMetadataManifestSha256(manifest)}.jsonl`);
+  const lines = (await readFile(journal, 'utf8')).trimEnd().split('\n');
+  const header = JSON.parse(lines[0]);
+  assert.equal(header.mode, 'update');
+  assert.equal(header.previousManifestSha256, dmxMetadataManifestSha256(manifest));
+  lines[0] = JSON.stringify({ ...header, previousManifestSha256: 'f'.repeat(64) });
+  await writeFile(journal, `${lines.join('\n')}\n`);
+  f.storage.failAt = null;
+  await assert.rejects(updateDmxMetadata(f.directory, manifest, options), /journal/i);
+  assert.equal(f.storage.writes.length, 1);
+});
+
+test('updates are not complete until the CDN serves the replacement bytes', async () => {
+  const f = await updatedRevision(['1.json']);
+  await assert.rejects(updateDmxMetadata(f.directory, manifest,
+    { root, storage: f.storage, fetcher: async () => new Response('missing', { status: 404 }) }));
+  assert.equal(f.storage.writes.length, 1);
+  await assert.rejects(readFile(join(f.directory, 'verification.json')), { code: 'ENOENT' });
+  const resumed = await updateDmxMetadata(f.directory, manifest,
+    { root, storage: f.storage, fetcher: publicFetcher(f.storage) });
+  assert.equal(resumed.publicVerified, true);
+  assert.equal(f.storage.writes.length, 1);
+});
+
 test('CDN verification rejects stale, redirected, malformed and wrong-byte responses', async () => {
   const valid = bodies.get('dmx/1.json')!;
   const cases: Array<ResponseInit & { body?: Buffer; redirected?: boolean }> = [
@@ -245,11 +398,17 @@ test('metadata CLI accepts only explicit revision directory and rejects credenti
   for (const concurrency of [0, 33, 1.5, NaN]) {
     await assert.rejects(publishDmxMetadata('missing', { concurrency }), /Invalid DMX metadata concurrency/);
     await assert.rejects(verifyDmxMetadata('missing', { concurrency }), /Invalid DMX metadata concurrency/);
+    await assert.rejects(updateDmxMetadata('missing', manifest, { concurrency }), /Invalid DMX metadata concurrency/);
     await assert.rejects(verifyDmxPublishedMetadata(manifest, { concurrency }), /Invalid DMX metadata concurrency/);
   }
   for (const command of ['metadata-generate', 'metadata-publish', 'metadata-verify']) {
     await assert.rejects(runTarotOperations([command]), /require only --directory/);
     await assert.rejects(runTarotOperations([command, '--directory', directory, '--contract', '0x1234']), /require only --directory/);
+    await assert.rejects(runTarotOperations([command, '--directory', directory, '--previous-manifest', 'baseline.json']));
+  }
+  for (const args of [[], ['--directory', directory], ['--previous-manifest', 'baseline.json'],
+    ['--directory', directory, '--previous-manifest', 'baseline.json', '--contract', '0x1234']]) {
+    await assert.rejects(runTarotOperations(['metadata-update', ...args]), /previous-manifest|require/i);
   }
   await assert.rejects(runTarotOperations(['metadata-generate', '--directory', directory]), /beneath/);
   assert.ok(dmxMetadataBody(buildDmxMetadata(1)).equals(bodies.get('dmx/1.json')!));

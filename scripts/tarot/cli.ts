@@ -10,8 +10,8 @@ import { bindMainnetCredentials, createMainnetClaimLinks, loadMainnetBindingRele
   mainnetBindingRpc, mainnetCredentialFingerprint,
   stageMainnetCredentials, verifyMainnetCredentials } from './mainnetClaims.ts';
 import { withMetadataLock } from '../ethereum-metadata/lock.ts';
-import { dmxMetadataManifestSha256, generateDmxMetadata } from './metadata.ts';
-import { publishDmxMetadata, verifyDmxMetadata } from './metadataPublication.ts';
+import { dmxMetadataManifestSha256, generateDmxMetadata, readDmxMetadataManifest } from './metadata.ts';
+import { publishDmxMetadata, updateDmxMetadata, verifyDmxMetadata } from './metadataPublication.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -19,15 +19,23 @@ export async function runTarotOperations(argv: string[]) {
   const { values, positionals, tokens } = parseArgs({ args: argv, allowPositionals: true, tokens: true,
     options: { directory: { type: 'string' }, contract: { type: 'string' }, 'deployment-block': { type: 'string' },
       'deployment-transaction': { type: 'string' }, 'source-directory': { type: 'string' }, 'source-pin': { type: 'string' },
-      'deployment-directory': { type: 'string' } } });
+      'deployment-directory': { type: 'string' }, 'previous-manifest': { type: 'string' } } });
   const options = tokens.filter(token => token.kind === 'option').map(token => token.name);
   const command = positionals[0];
   if (positionals.length !== 1 || new Set(options).size !== options.length ||
-    !['verify-media', 'links', 'rebind', 'provision', 'verify-codes', 'metadata-generate', 'metadata-publish', 'metadata-verify',
+    !['verify-media', 'links', 'rebind', 'provision', 'verify-codes', 'metadata-generate', 'metadata-publish', 'metadata-update', 'metadata-verify',
       'mainnet-links', 'mainnet-provision', 'mainnet-verify', 'mainnet-bind'].includes(command)) {
-    throw new Error('Use verify-media|metadata-generate|metadata-publish|metadata-verify|links|rebind|provision|verify-codes|mainnet-links|mainnet-provision|mainnet-verify|mainnet-bind [--directory PATH] [--contract ADDRESS for links or mainnet-bind] [--source-directory PATH --source-pin PATH --deployment-directory PATH for rebind] [--deployment-block BLOCK --deployment-transaction HASH --deployment-directory PATH for mainnet-bind].');
+    throw new Error('Use verify-media|metadata-generate|metadata-publish|metadata-update|metadata-verify|links|rebind|provision|verify-codes|mainnet-links|mainnet-provision|mainnet-verify|mainnet-bind [--directory PATH] [--previous-manifest PATH for metadata-update] [--contract ADDRESS for links or mainnet-bind] [--source-directory PATH --source-pin PATH --deployment-directory PATH for rebind] [--deployment-block BLOCK --deployment-transaction HASH --deployment-directory PATH for mainnet-bind].');
   }
   if (command.startsWith('metadata-')) {
+    if (command === 'metadata-update') {
+      if (options.length !== 2 || !options.includes('directory') || !options.includes('previous-manifest') ||
+        !values.directory?.trim() || !values['previous-manifest']?.trim()) {
+        throw new Error('DMX metadata-update requires only --directory and --previous-manifest');
+      }
+      const previous = await readDmxMetadataManifest(resolve(root, values['previous-manifest']));
+      return updateDmxMetadata(resolve(root, values.directory), previous);
+    }
     if (options.length !== 1 || options[0] !== 'directory' || !values.directory?.trim()) {
       throw new Error('DMX metadata commands require only --directory beneath .cache/dmx-metadata');
     }
@@ -38,6 +46,7 @@ export async function runTarotOperations(argv: string[]) {
     return { operation: command, directory, objectCount: manifest.objectCount, tokenCount: manifest.tokenCount,
       manifestSha256: dmxMetadataManifestSha256(manifest), objectsSha256: manifest.objectsSha256 };
   }
+  if (values['previous-manifest'] !== undefined) throw new Error('--previous-manifest is only allowed for metadata-update');
   for (const option of ['source-directory', 'source-pin'] as const) {
     if (command === 'rebind' ? !values[option]?.trim() : values[option] !== undefined) {
       throw new Error('rebind requires --source-directory, --source-pin, and --deployment-directory; these options are only allowed for rebind.');

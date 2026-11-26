@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, realpath, rename, rm, truncate, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { withMetadataLock } from '../ethereum-metadata/lock.ts';
-import { environmentStorage, uploadWithConcurrency, type MetadataStorage } from '../ethereum-metadata/storage.ts';
+import { environmentStorage, metadataMd5, uploadWithConcurrency, type MetadataStorage } from '../ethereum-metadata/storage.ts';
 import { DMX_METADATA_BASE_URI, DMX_METADATA_PREFIX, DMX_METADATA_ROOT, dmxMetadataBody,
-  dmxMetadataConcurrency, dmxMetadataDirectory, dmxMetadataManifestSha256, loadDmxMetadataBody, loadDmxMetadataManifest,
+  dmxMetadataConcurrency, dmxMetadataDirectory, dmxMetadataManifestSha256, dmxMetadataSha256,
+  loadDmxMetadataBody, loadDmxMetadataManifest, validateDmxMetadataManifest,
   verifyDmxPublishedMetadata, type DmxMetadataManifest } from './metadata.ts';
 
 type Options = { root?: string; storage?: MetadataStorage; fetcher?: typeof fetch; concurrency?: number };
@@ -20,22 +21,31 @@ async function loadPublication(directory: string): Promise<Publication> {
 }
 
 async function checkStorage(storage: MetadataStorage, publication: Publication, allowMissing: boolean,
-  concurrency: number): Promise<Set<string>> {
+  concurrency: number, previous?: DmxMetadataManifest): Promise<Map<string, string | null>> {
   if (storage.destination.bucket !== 'cdn-mons-shop') throw new Error('DMX metadata requires the cdn-mons-shop bucket');
-  const present = new Set<string>();
+  const present = new Map<string, string>();
   for await (const object of storage.list(DMX_METADATA_PREFIX)) {
     const file = object.key.slice(DMX_METADATA_PREFIX.length);
     if (object.key !== `${DMX_METADATA_PREFIX}${file}` || !publication.bodies.has(file) || present.has(file)) {
       throw new Error(`Unexpected DMX metadata object: ${object.key}`);
     }
-    present.add(file);
+    present.set(file, object.md5);
   }
   if (!allowMissing && present.size !== publication.manifest.objectCount) throw new Error('DMX metadata publication is incomplete');
-  await uploadWithConcurrency(present, concurrency, async file => {
+  const baseline = new Map(previous?.objects.map(object => [object.file, object]));
+  const matches = new Map<string, string | null>();
+  await uploadWithConcurrency(present, concurrency, async ([file, etag]) => {
     const body = await storage.get(`${DMX_METADATA_PREFIX}${file}`);
-    if (!body.equals(publication.bodies.get(file)!)) throw new Error(`Existing DMX metadata differs: ${file}`);
+    if (body.equals(publication.bodies.get(file)!)) matches.set(file, null);
+    else {
+      const original = baseline.get(file);
+      if (!original || body.length !== original.bytes || dmxMetadataSha256(body) !== original.sha256 || metadataMd5(body) !== etag) {
+        throw new Error(`Existing DMX metadata differs: ${file}`);
+      }
+      matches.set(file, `"${etag}"`);
+    }
   });
-  return present;
+  return matches;
 }
 
 async function writeReport(path: string, value: unknown): Promise<void> {
@@ -47,11 +57,20 @@ async function writeReport(path: string, value: unknown): Promise<void> {
 }
 
 export async function publishDmxMetadata(directory: string, options: Options = {}) {
+  return writeDmxMetadata(directory, options);
+}
+
+export async function updateDmxMetadata(directory: string, previous: DmxMetadataManifest, options: Options = {}) {
+  return writeDmxMetadata(directory, options, validateDmxMetadataManifest(previous));
+}
+
+async function writeDmxMetadata(directory: string, options: Options, previous?: DmxMetadataManifest) {
   const concurrency = dmxMetadataConcurrency(options.concurrency);
   const root = options.root ?? DMX_METADATA_ROOT;
   const target = await dmxMetadataDirectory(directory, root);
   const publication = await loadPublication(target);
   const manifestSha256 = dmxMetadataManifestSha256(publication.manifest);
+  const previousManifestSha256 = previous ? dmxMetadataManifestSha256(previous) : undefined;
   const operations = resolve(root, '.operations/dmx-metadata');
   const operationDirectory = join(operations, manifestSha256);
   await mkdir(operationDirectory, { recursive: true, mode: 0o700 });
@@ -59,9 +78,10 @@ export async function publishDmxMetadata(directory: string, options: Options = {
   const storage = options.storage ?? environmentStorage(concurrency);
   try {
     return await withMetadataLock(join(operations, 'publication.lock'), async () => {
-      const present = await checkStorage(storage, publication, true, concurrency);
-      const header = { version: 1, ...storage.destination, prefix: DMX_METADATA_PREFIX, manifestSha256 };
-      const journalPath = join(operationDirectory, 'publication.jsonl');
+      const present = await checkStorage(storage, publication, !previous, concurrency, previous);
+      const header = { version: 1, ...storage.destination, prefix: DMX_METADATA_PREFIX, manifestSha256,
+        ...(previous ? { mode: 'update', previousManifestSha256 } : {}) };
+      const journalPath = join(operationDirectory, previous ? `update-${previousManifestSha256}.jsonl` : 'publication.jsonl');
       const headerLine = JSON.stringify(header);
       try { await writeFile(journalPath, `${headerLine}\n`, { flag: 'wx', mode: 0o600 }); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
@@ -86,9 +106,9 @@ export async function publishDmxMetadata(directory: string, options: Options = {
         await uploadWithConcurrency(publication.manifest.objects, concurrency, async object => {
           const key = `${DMX_METADATA_PREFIX}${object.file}`;
           const body = publication.bodies.get(object.file)!;
-          if (present.has(object.file)) skipped++;
+          if (present.has(object.file) && present.get(object.file) === null) skipped++;
           else {
-            try { await storage.put(key, body, null); uploaded++; }
+            try { await storage.put(key, body, present.get(object.file) ?? null); uploaded++; }
             catch (error) {
               let accepted = false;
               try { accepted = (await storage.get(key)).equals(body); } catch {}
@@ -107,7 +127,16 @@ export async function publishDmxMetadata(directory: string, options: Options = {
       await checkStorage(storage, publication, false, concurrency);
       const report = { version: 1, baseURI: DMX_METADATA_BASE_URI, bucket: storage.destination.bucket,
         manifestSha256, objectsSha256: publication.manifest.objectsSha256, objectCount: publication.manifest.objectCount,
-        uploaded, skipped, complete: true, storageVerified: true, finishedAt: new Date().toISOString() };
+        ...(previous ? { updated: uploaded, previousManifestSha256 } : {}),
+        uploaded, skipped, complete: true, storageVerified: true, publicVerified: false, finishedAt: new Date().toISOString() };
+      if (previous) {
+        const verification = { ...await verifyDmxPublishedMetadata(publication.manifest, { ...options, concurrency }),
+          storageVerified: true, bucket: storage.destination.bucket };
+        await writeReport(join(target, 'verification.json'), verification);
+        const result = { ...report, publicVerified: true, finishedAt: verification.checkedAt };
+        await writeReport(join(target, 'publication.json'), result);
+        return result;
+      }
       await writeReport(join(target, 'publication.json'), report);
       return report;
     });
