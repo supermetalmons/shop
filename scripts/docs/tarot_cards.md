@@ -1,5 +1,11 @@
 # divination machina x (DMX)
 
+The [CDN media migration](../../releases/dmx-cdn-v1/README.md) updates the renderers
+on both existing collections and the storefront to `cdn.lil.org/nft/dmx/`.
+NFT metadata uses PNGs; claim pages use WebPs. Collection addresses and NFC
+credentials are unchanged. Use that release for current renderer identities and
+activation verification.
+
 The [mainnet v1 release](../../releases/dmx-mainnet-v1/README.md) activates all
 777 existing mainnet NFC links against the verified Ethereum mainnet collection.
 The original URLs and credentials are unchanged. Each holder claim mints its

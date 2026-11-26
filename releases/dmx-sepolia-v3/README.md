@@ -50,3 +50,10 @@ Frozen deployment evidence: [collection](collection-deployment.json),
 [renderer](renderer-deployment.json), [credential fingerprint](credential-set.json),
 and [verified media](media-verification.json). Source verification and compiler
 manifests remain alongside those records.
+
+## Subsequent media update
+
+The [26 November 2026 CDN migration](../dmx-cdn-v1/README.md) activated a new PNG
+metadata renderer on this same collection and deployed the WebP storefront
+assets. The original deployment evidence remains unchanged; the migration
+record contains the current renderer, activation transaction and verification.

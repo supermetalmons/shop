@@ -22,3 +22,10 @@ Validation passed 93 contract tests, 88 deployment/source-verification tests, 32
 To stop issuing new claim authorizations, set `ETHEREUM_TAROT_MAINNET_ENABLED=false` in `cloud/workers/api/wrangler.jsonc`, release with `npm run deploy:api`, and verify the active API configuration and unavailable prepare response. Already issued signatures can remain valid for up to ten minutes. An immediate onchain stop requires the owner to call `setMintingPaused(true)` after simulation and transaction journaling, then verify the receipt and pause flag with three canonical confirmations.
 
 To resume, retain this collection, bound credentials, and dedicated signer; restore minting if paused, set the mainnet API flag to true, release with `npm run deploy:api`, and repeat live and browser acceptance. Preserve frozen deployment evidence and signed transaction journals privately. If interrupted deployment or binding work is encountered, reconcile and resume the original journals and bound batch; do not generate replacement links or deploy another collection. See the [DMX operations guide](../../scripts/docs/tarot_cards.md#mainnet-release-preparation).
+
+## Subsequent media update
+
+The [26 November 2026 CDN migration](../dmx-cdn-v1/README.md) activated a new PNG
+metadata renderer on this same collection and deployed the WebP storefront
+assets. The original deployment evidence remains unchanged; the migration
+record contains the current renderer, activation transaction and verification.
