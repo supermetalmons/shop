@@ -20,7 +20,7 @@ test('Tarot routes enforce storefront CORS and retain POST-only behavior', async
     assert.match(preflight.headers.get('Access-Control-Allow-Headers') || '', /X-Mons-CSRF/);
     const denied = await handleRequest(request('OPTIONS', 'https://vvv.so'), {} as Env, failOnDeferredWork, { log: () => undefined });
     assert.equal(denied.status, 403);
-    if (path === TAROT_API_PATHS.prepare) continue;
+    if (path === TAROT_API_PATHS.prepare || path === TAROT_API_PATHS.claim) continue;
     const get = await handleRequest(request('GET'), {} as Env, failOnDeferredWork, { log: () => undefined });
     assert.equal(get.status, 405);
     assert.equal(get.headers.get('Allow'), 'POST, OPTIONS');

@@ -88,6 +88,42 @@ test('a fresh activation resolves readiness without requesting accounts when no 
   assert.equal(wallet.requests.length, 0);
 });
 
+test('provider availability distinguishes completed absence from a disconnected installed wallet', async () => {
+  const view = renderWallet();
+  assert.equal(view.result.current.providerAvailability, 'unknown');
+  await waitFor(() => assert.equal(view.result.current.providerAvailability, 'unavailable'));
+  const provider = makeWallet();
+  act(() => provider.announce());
+  assert.equal(view.result.current.providerAvailability, 'available');
+  assert.equal(view.result.current.status, 'disconnected');
+  assert.equal(provider.requests.length, 0);
+});
+
+test('an installed provider remains available after rejecting connection', async () => {
+  const provider = makeWallet();
+  provider.install();
+  const view = renderWallet();
+  await waitFor(() => assert.equal(view.result.current.providerAvailability, 'available'));
+  act(() => view.result.current.connect());
+  await waitForRequests(provider, 1);
+  await act(async () => provider.requests[0].reject({ code: 4001 }));
+  assert.equal(view.result.current.status, 'disconnected');
+  assert.equal(view.result.current.providerAvailability, 'available');
+});
+
+test('late legacy initialization updates availability without connecting', async () => {
+  const view = renderWallet();
+  await waitFor(() => assert.equal(view.result.current.providerAvailability, 'unavailable'));
+  const provider = makeWallet();
+  act(() => {
+    setLegacy(provider);
+    window.dispatchEvent(new dom.window.Event('ethereum#initialized'));
+  });
+  assert.equal(view.result.current.providerAvailability, 'available');
+  assert.equal(view.result.current.status, 'disconnected');
+  assert.equal(provider.requests.length, 0);
+});
+
 test('remembered wallet readiness stays unresolved through the initial commit, discovery, and passive account read', async () => {
   const wallet = makeWallet();
   wallet.install();
@@ -590,6 +626,9 @@ test('explicit selection of a single legacy wallet remembers the legacy provider
   act(() => result.current.chooseWallet());
   await waitFor(() => assert.equal(result.current.wallets.length, 1));
   assert.equal(wallet.requests.length, 0);
+  act(() => window.dispatchEvent(new dom.window.Event('ethereum#initialized')));
+  assert.equal(result.current.wallets.length, 1);
+  assert.equal(result.current.wallets[0].provider, wallet.wallet.provider);
   act(() => result.current.selectWallet(result.current.wallets[0]));
   await settle(wallet);
   assert.equal(result.current.status, 'connected');

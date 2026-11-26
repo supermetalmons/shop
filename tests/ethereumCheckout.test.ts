@@ -51,7 +51,7 @@ function snapshot(overrides: Partial<EthereumCheckoutStatusResponse> = {}): Ethe
 }
 
 function wallet(address: string | null = owner, send: () => Promise<string> = async () => transactionHash): EthereumWallet {
-  return { address, status: address ? 'connected' : 'disconnected', ready: true, wallets: [], error: null,
+  return { address, status: address ? 'connected' : 'disconnected', ready: true, providerAvailability: 'available', wallets: [], error: null,
     provider: address ? { request: async ({ method }) => {
       if (method === 'eth_sendTransaction') { sends.push('send'); return send(); }
       if (method === 'eth_chainId') return '0xaa36a7';

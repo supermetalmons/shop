@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { normalizeMiNoteAddress } from '../../shared/miNoteCards.ts';
 import {
   getLegacyInjectedProvider,
+  getInjectedEthereumProviderAvailability,
   listInjectedEthereumProviders,
   primeInjectedEthereumProviderDiscovery,
   subscribeInjectedEthereumProviders,
@@ -77,6 +78,8 @@ function legacyWallet(): EIP6963ProviderDetail | null {
 }
 
 export function useMiNoteEthereumWallet(active: boolean) {
+  const providerAvailability = useSyncExternalStore(subscribeInjectedEthereumProviders,
+    getInjectedEthereumProviderAvailability, () => 'unknown' as const);
   const activationScope = useMemo(() => ({ active }), [active]);
   const [initializedScope, setInitializedScope] = useState<typeof activationScope | null>(null);
   const [state, setState] = useState<WalletState>(disconnectedState);
@@ -331,9 +334,12 @@ export function useMiNoteEthereumWallet(active: boolean) {
       return;
     }
     const unsubscribe = subscribeInjectedEthereumProviders((wallets) => {
-      if (stateRef.current.status === 'choosing') update({ ...stateRef.current, wallets });
+      if (stateRef.current.status !== 'choosing') return;
+      const fallback = wallets.length ? null : legacyWallet();
+      update({ ...stateRef.current, wallets: fallback ? [fallback] : wallets });
     });
     primeInjectedEthereumProviderDiscovery();
+    void listInjectedEthereumProviders().catch(() => {});
     if (!sessionRef.current?.established) {
       const remembered = readRememberedWallet();
       if (remembered) {
@@ -359,5 +365,5 @@ export function useMiNoteEthereumWallet(active: boolean) {
   }, [active, activationScope, cancel, readWallet, update]);
 
   const ready = state.status !== 'restoring' && (sessionRef.current?.established === true || initializedScope === activationScope);
-  return { ...state, ready, connect, chooseWallet, changeAccount, checkAccount, selectWallet, cancel, disconnect };
+  return { ...state, ready, providerAvailability, connect, chooseWallet, changeAccount, checkAccount, selectWallet, cancel, disconnect };
 }

@@ -23,7 +23,10 @@ type Discovery = {
   listeners: Set<(wallets: EIP6963ProviderDetail[]) => void>;
   lastAnnouncementAt: number;
   scan: Promise<EIP6963ProviderDetail[]> | null;
+  completed: boolean;
 };
+
+export type EthereumProviderAvailability = 'unknown' | 'available' | 'unavailable';
 
 const discoveries = new WeakMap<Window, Discovery>();
 
@@ -45,9 +48,12 @@ function getDiscovery(): Discovery | null {
   if (typeof window === 'undefined') return null;
   let discovery = discoveries.get(window);
   if (!discovery) {
-    discovery = { wallets: new Map(), listeners: new Set(), lastAnnouncementAt: 0, scan: null };
+    discovery = { wallets: new Map(), listeners: new Set(), lastAnnouncementAt: 0, scan: null, completed: false };
     discoveries.set(window, discovery);
     const current = discovery;
+    window.addEventListener('ethereum#initialized', () => {
+      for (const listener of current.listeners) listener([...current.wallets.values()]);
+    });
     window.addEventListener('eip6963:announceProvider', (event) => {
       const wallet = readAnnouncedWallet(event);
       if (!wallet || current.wallets.has(wallet.info.uuid)) return;
@@ -75,6 +81,12 @@ export function getLegacyInjectedProvider(): EIP1193Provider | null {
   return provider && typeof provider.request === 'function' ? provider : null;
 }
 
+export function getInjectedEthereumProviderAvailability(): EthereumProviderAvailability {
+  const discovery = getDiscovery();
+  if (getLegacyInjectedProvider() || discovery?.wallets.size) return 'available';
+  return discovery?.completed ? 'unavailable' : 'unknown';
+}
+
 export async function listInjectedEthereumProviders(): Promise<EIP6963ProviderDetail[]> {
   const discovery = getDiscovery();
   if (!discovery) return [];
@@ -87,6 +99,8 @@ export async function listInjectedEthereumProviders(): Promise<EIP6963ProviderDe
         await new Promise<void>((resolve) => window.setTimeout(resolve, 20));
         if (discovery.wallets.size > 0 && Date.now() - Math.max(startedAt, discovery.lastAnnouncementAt) >= 60) break;
       } while (Date.now() - startedAt < maxWait);
+      discovery.completed = true;
+      for (const listener of discovery.listeners) listener([...discovery.wallets.values()]);
       return [...discovery.wallets.values()];
     })().finally(() => { discovery.scan = null; });
   }

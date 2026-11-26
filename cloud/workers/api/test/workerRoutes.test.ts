@@ -106,6 +106,7 @@ const EXPECTED_EXACT_ROUTES = [
   ['/ethereum/tarot/status', 'ethereum', true, 'skip', false, 'profile', '/ethereum/tarot/status'],
   ['/ethereum/tarot/prepare', 'ethereum', true, 'skip', true, 'profile', '/ethereum/tarot/prepare'],
   ['/ethereum/tarot/confirm', 'ethereum', true, 'skip', false, 'profile', '/ethereum/tarot/confirm'],
+  ['/ethereum/tarot/claim', 'ethereum', true, 'skip', true, 'profile', '/ethereum/tarot/claim'],
 ] satisfies readonly ExpectedExactRoute[];
 
 function routeContract(pathname: string) {
@@ -179,6 +180,7 @@ test('route CORS policies preserve preflight, response, and error headers across
     { path: '/ethereum/tarot/status', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
     { path: '/ethereum/tarot/prepare', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
     { path: '/ethereum/tarot/confirm', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
+    { path: '/ethereum/tarot/claim', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`, partner: false },
     { path: '/ethereum/111k/config', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`,
       partner: true, partnerMethods: 'GET, OPTIONS', partnerHeaders: 'Accept, Content-Type', legacyMons: true },
     { path: '/ethereum/111k/transactions/confirm', methods: 'GET, POST, OPTIONS', headers: `${profileHeaders}, X-Mons-Ethereum-Session`,

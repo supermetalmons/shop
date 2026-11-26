@@ -1,12 +1,14 @@
 import { encodeTarotClaim, TAROT_API_PATHS, TAROT_MAX_CARDS, tarotChainId, tarotReceiptTokenId,
+  type TarotBackendClaim, type TarotClaimRequest, type TarotClaimResponse,
   type TarotConfig, type TarotConfirmRequest, type TarotConfirmResponse, type TarotPrepareRequest,
-  type TarotPrepareResponse, type TarotRequest, type TarotStatus } from '../../shared/ethereum/tarot';
+  type TarotPrepareResponse, type TarotRequest, type TarotStatus, type TarotStatusRequest } from '../../shared/ethereum/tarot';
 import { normalizeEthereumAddress } from '../../shared/ethereum/protocol';
 import { ethereumRetryAfterMs } from './retryAfter';
 
 export class TarotApiError extends Error {
   constructor(message: string, readonly status: number, readonly retryAt: number | null = null,
-    readonly credentialRejected = false) { super(message); }
+    readonly credentialRejected = false, readonly field: 'recipient' | null = null,
+    readonly claimAccepted?: false) { super(message); }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -30,6 +32,17 @@ function parseConfig(value: unknown, request: TarotRequest): TarotConfig {
   return { ...value, contractAddress: address } as TarotConfig;
 }
 
+function parseBackendClaim(value: unknown): TarotBackendClaim {
+  if (!record(value) || typeof value.requestId !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value.requestId) ||
+    !['submitting', 'pending', 'confirmed', 'failed', 'recovery-required'].includes(String(value.state)) ||
+    !normalizeEthereumAddress(value.recipient) || /^0x0{40}$/i.test(String(value.recipient)) ||
+    value.transactionHash !== null && !hash(value.transactionHash) ||
+    value.error !== undefined && typeof value.error !== 'string' ||
+    (value.state === 'pending' || value.state === 'confirmed') && !hash(value.transactionHash)) return invalid();
+  return { ...value, recipient: normalizeEthereumAddress(value.recipient)!,
+    transactionHash: typeof value.transactionHash === 'string' ? value.transactionHash.toLowerCase() : null } as TarotBackendClaim;
+}
+
 async function post(path: string, body: TarotRequest, signal?: AbortSignal): Promise<unknown> {
   const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
   const response = await fetch(`/api${path}`, {
@@ -49,12 +62,16 @@ async function post(path: string, body: TarotRequest, signal?: AbortSignal): Pro
     const detail = record(value) && record(value.error) ? value.error : null;
     const delay = ethereumRetryAfterMs(response.headers.get('Retry-After'),
       detail && record(detail.details) ? detail.details.retryAfterMs : undefined);
-    const message = response.status === 429 ? 'Too many attempts. Please wait a minute and try again.' :
+    const recipientError = path === TAROT_API_PATHS.claim && response.status === 400 && detail?.code === 'invalid-argument' &&
+      record(detail.details) && detail.details.field === 'recipient';
+    const claimRejected = path === TAROT_API_PATHS.claim && detail && record(detail.details) && detail.details.claimAccepted === false;
+    const message = (recipientError || claimRejected && response.status !== 401 && response.status !== 403) && typeof detail?.message === 'string' ? detail.message :
+      response.status === 429 ? 'Too many attempts. Please wait a minute and try again.' :
       response.status === 400 || response.status === 401 || response.status === 403 || response.status === 404 ?
         'This Tarot claim link is invalid.' : response.status === 409 ? 'This card’s claim changed. Please try again.' :
           'Couldn’t load this Tarot claim. Please try again.';
     throw new TarotApiError(message, response.status, delay === null ? null : Date.now() + delay,
-      response.status === 401 && detail?.code === 'unauthenticated');
+      response.status === 401 && detail?.code === 'unauthenticated', recipientError ? 'recipient' : null, claimRejected ? false : undefined);
   }
   return value;
 }
@@ -64,11 +81,19 @@ function matchesCard(value: Record<string, unknown>, request: TarotRequest): boo
 }
 
 export const tarotApi = {
-  async status(request: TarotRequest, signal?: AbortSignal): Promise<TarotStatus> {
+  async status(request: TarotStatusRequest, signal?: AbortSignal): Promise<TarotStatus> {
     const value = await post(TAROT_API_PATHS.status, request, signal);
     if (!record(value) || !matchesCard(value, request) || typeof value.claimed !== 'boolean' ||
       !integer(value.observedBlock) || !integer(value.observedTimestamp) || !hash(value.blockHash)) return invalid();
-    return { ...value, config: parseConfig(value.config, request) } as TarotStatus;
+    const backendClaim = value.backendClaim == null ? value.backendClaim : parseBackendClaim(value.backendClaim);
+    if (request.requestId && backendClaim && backendClaim.requestId !== request.requestId) return invalid();
+    return { ...value, config: parseConfig(value.config, request),
+      ...(backendClaim !== undefined ? { backendClaim } : {}) } as TarotStatus;
+  },
+  async claim(request: TarotClaimRequest, signal?: AbortSignal): Promise<TarotClaimResponse> {
+    const value = await post(TAROT_API_PATHS.claim, request, signal);
+    if (!record(value) || !matchesCard(value, request)) return invalid();
+    return { tokenId: request.tokenId, receiptTokenId: tarotReceiptTokenId(request.tokenId), backendClaim: parseBackendClaim(value.backendClaim) };
   },
   async prepare(request: TarotPrepareRequest, config: TarotConfig, signal?: AbortSignal): Promise<TarotPrepareResponse> {
     const expected = parseConfig(config, request);

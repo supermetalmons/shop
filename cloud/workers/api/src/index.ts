@@ -48,6 +48,7 @@ export { EthereumRevealPublisherObject } from './ethereumRevealPublisherObject.j
 export { EthereumRevealMaintenance } from './ethereumRevealMaintenance.js';
 export { EthereumProviderBudgetObject } from './ethereumProviderBudgetObject.js';
 export { EthereumPublicReadCacheObject } from './ethereumPublicReadCacheObject.js';
+export { TarotClaimRelayerObject } from './tarotClaimRelayerObject.js';
 
 type RequestExecution = {
   defer: DeferredWork;

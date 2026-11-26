@@ -8,6 +8,7 @@ import { TarotApiError, tarotApi } from './tarotApi';
 import { readSavedNfcCode, settleNfcScan } from './nfcScan';
 import { abortableEthereumOperation } from './operationReconciliation';
 import { definiteEthereumSubmissionRejection } from './dropOperations';
+import { useTarotBackendClaim } from './useTarotBackendClaim';
 
 type PendingClaim = { id: string; wallet: string; transactionHash: string | null; deadline: number };
 type ChainObservation = { blockNumber: number; blockHash: string; claimed: boolean };
@@ -360,6 +361,7 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
       }
       setState({ identity, status, loading: false, error: null });
       if (status.claimed) { setClaimFeedback(null); return true; }
+      if (status.backendClaim && status.backendClaim.state !== 'failed') return false;
       const authorization = await tarotApi.prepare({ ...request, wallet: operation.address }, config, signal);
       operation.assertCurrent();
       signal.throwIfAborted();
@@ -398,8 +400,10 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
   };
 
   const coolingDown = retryDeadline !== null && retryDeadline > Date.now();
+  const backend = useTarotBackendClaim({ request, status: currentStatus, wallet, suspended,
+    blocked: Boolean(pending || currentStatus?.claimed || coolingDown || state.loading), refresh, reportError: recordError });
   const action = useEthereumWalletAction({
-    wallet, config: currentStatus?.config, blocked: Boolean(pending || currentStatus?.claimed || coolingDown), suspended,
+    wallet, config: currentStatus?.config, blocked: Boolean(pending || currentStatus?.claimed || coolingDown || backend.pending), suspended,
     loadError: !currentStatus ? state.error : null,
   }, {
     canStart: () => Boolean(currentStatus && !state.loading && retryAt.current <= Date.now()),
@@ -420,7 +424,12 @@ export function useTarotClaim(request: TarotRequest, wallet: EthereumWallet, sus
   const actionError = currentStatus?.config.enabled && action.error === CLAIMS_UNAVAILABLE ? null : action.error;
   const claimError = !currentStatus?.claimed && claimFeedback?.identity === identity ? claimFeedback.error || actionError : null;
   return { status: currentStatus, loading: state.loading, coolingDown, error: state.error || actionError || wallet.error, claimError,
-    claim: action.start, cancel: action.cancel, connecting: action.connecting,
-    pending: Boolean(pending) || action.pending,
-    submitted: Boolean(pending && (!action.pending || pending.transactionHash !== null)), refresh };
+    claim: () => backend.claim(action.start), cancel: action.cancel, connecting: action.connecting || backend.discovering,
+    pending: Boolean(pending) || action.pending || backend.pending || backend.discovering,
+    submitted: backend.pending || Boolean(pending && (!action.pending || pending.transactionHash !== null)),
+    recipientForm: backend.formVisible, recipient: backend.recipient, setRecipient: backend.setRecipient,
+    recipientValid: backend.recipientValid, submitRecipient: backend.submitRecipient, recipientError: backend.error,
+    backendPending: backend.pending,
+    transactionUrl: backend.transactionHash && currentStatus ? `${currentStatus.config.explorerUrl}/tx/${backend.transactionHash}` : null,
+    refresh };
 }

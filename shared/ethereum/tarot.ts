@@ -10,6 +10,7 @@ export const TAROT_API_PATHS = {
   status: '/ethereum/tarot/status',
   prepare: '/ethereum/tarot/prepare',
   confirm: '/ethereum/tarot/confirm',
+  claim: '/ethereum/tarot/claim',
 } as const;
 export const TAROT_RECEIPT_OFFSET = DMX_RECEIPT_OFFSET;
 export const TAROT_AUTHORIZATION_TTL_SECONDS = 600;
@@ -22,11 +23,24 @@ export type TarotConfig = {
   confirmationBlocks: number; maxCards: number;
 };
 export type TarotRequest = { tokenId: number; testnet: boolean; code: string };
+export type TarotStatusRequest = TarotRequest & { requestId?: string };
 export type TarotPrepareRequest = TarotRequest & { wallet: string };
 export type TarotConfirmRequest = TarotPrepareRequest & { transactionHash: string };
+export type TarotClaimRequest = TarotRequest & { recipient: string; requestId: string };
+export type TarotBackendClaim = {
+  requestId: string;
+  state: 'submitting' | 'pending' | 'confirmed' | 'failed' | 'recovery-required';
+  recipient: string;
+  transactionHash: string | null;
+  error?: string;
+};
+export type TarotClaimResponse = {
+  tokenId: number; receiptTokenId: number; backendClaim: TarotBackendClaim;
+};
 export type TarotStatus = {
   config: TarotConfig; tokenId: number; receiptTokenId: number; claimed: boolean;
   observedBlock: number; observedTimestamp: number; blockHash: string;
+  backendClaim?: TarotBackendClaim | null;
 };
 export type TarotPrepareResponse = {
   tokenId: number; receiptTokenId: number; wallet: string; deadline: number; expiresAtMs: number;

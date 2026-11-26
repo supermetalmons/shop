@@ -18,7 +18,7 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
   tokenId: number; header?: ReactNode; model?: ReturnType<typeof useTarotClaim>; suspended?: boolean; pickerOpen?: boolean; headerWalletOpen?: boolean;
 }) {
   const { visible: walletModalVisible } = useWalletModal();
-  const eligible = Boolean(model?.status && !model.status.claimed && model.status.config.enabled);
+  const eligible = Boolean(model?.status && !model.status.claimed && (model.status.config.enabled || model.backendPending));
   const { cardRef, receiptRef, receiptState, compact, transitioning, animateCard } =
     useTarotCardTransition(eligible, suspended || walletModalVisible || pickerOpen || headerWalletOpen);
   const initialScrollPending = useRef(true);
@@ -54,10 +54,20 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
         </li>}
       </ul>
       {compact && model && <div className="nfc-tarot-page__action nfc-claim-reveal">
-        <button type="button" className="nfc-claim-button" onClick={transitioning ? undefined : model.claim}
+        {model.transactionUrl ? <a className="nfc-claim-button nfc-claim-transaction" href={model.transactionUrl}
+          target="_blank" rel="noopener noreferrer" inert={transitioning}>View transaction</a> :
+          model.recipientForm ? <form className="nfc-claim-recipient" onSubmit={event => { event.preventDefault(); if (!transitioning) model.submitRecipient(); }}>
+            <input type="text" value={model.recipient} onChange={event => model.setRecipient(event.target.value)}
+              aria-label="Ethereum address or ENS name" placeholder="Address or ENS" autoFocus autoComplete="off"
+              autoCapitalize="none" spellCheck={false} aria-invalid={Boolean(model.recipientError)}
+              aria-describedby={model.recipientError ? 'nfc-recipient-error' : undefined}
+              disabled={transitioning || model.pending || model.coolingDown || suspended || walletModalVisible} />
+            <button type="submit" disabled={!model.recipientValid || transitioning || model.pending || model.loading || model.coolingDown || suspended || walletModalVisible}>OK</button>
+          </form> : <button type="button" className="nfc-claim-button" onClick={transitioning ? undefined : model.claim}
           inert={transitioning} disabled={model.pending || model.loading || model.coolingDown || suspended || walletModalVisible}>
           {model.submitted ? 'Claiming…' : model.connecting ? 'Connecting…' : model.pending ? 'Confirm in wallet…' : model.coolingDown ? 'Please wait…' : 'Claim'}
-        </button>
+        </button>}
+        {model.recipientError && <p id="nfc-recipient-error" className="nfc-claim-error" role="alert">{model.recipientError}</p>}
       </div>}
     </main>
   </>;

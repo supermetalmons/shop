@@ -181,6 +181,7 @@
     "stripe": "22.4.0",
     "three": "^0.185.1",
     "tweetnacl": "^1.0.3",
+    "viem": "2.58.7",
     "zod": "^4.4.3"
   },
   "devDependencies": {

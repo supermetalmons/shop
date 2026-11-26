@@ -42,7 +42,7 @@ function item(tokenId = '111112', kind: EthereumInventoryItem['kind'] = 'crate')
 }
 const wallet: EthereumWallet = {
   address: owner, provider: { request: async ({ method }) => method === 'eth_chainId' ? '0xaa36a7' : method === 'eth_getTransactionCount' ? '0x7' : [owner] },
-  ready: true, status: 'connected', wallets: [], error: null,
+  ready: true, providerAvailability: 'available', status: 'connected', wallets: [], error: null,
   connect() {}, cancel() {}, disconnect() {}, selectWallet() {},
   chooseWallet() {}, changeAccount() {}, checkAccount() {},
 };

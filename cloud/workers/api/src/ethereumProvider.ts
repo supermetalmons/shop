@@ -67,11 +67,14 @@ const COSTS: Readonly<Record<string, number>> = {
   eth_getTransactionByHash: 20, eth_getBlockByNumber: 20, eth_getBlockByHash: 20,
   eth_getCode: 20, eth_getTransactionCount: 20, eth_getLogs: 60, eth_getBalance: 20,
   eth_getStorageAt: 20, eth_estimateGas: 20, eth_feeHistory: 10, eth_gasPrice: 20,
+  eth_sendRawTransaction: 40,
 };
 
-export function ethereumProviderCost(method: string, provider: ProviderName): number {
+export function ethereumProviderCost(method: string, provider: ProviderName, allowTransactionSubmission = false): number {
   const cost = COSTS[method];
-  if (cost === undefined) throw new EthereumApiError('unavailable', 'Ethereum provider method is not configured.');
+  if (cost === undefined || method === 'eth_sendRawTransaction' && !allowTransactionSubmission) {
+    throw new EthereumApiError('unavailable', 'Ethereum provider method is not configured.');
+  }
   return provider === 'quicknode' ? 1 : cost;
 }
 
@@ -207,6 +210,7 @@ export function createEthereumProviderAttempt(env: EthereumProviderEnvironment, 
   provider: ProviderName | 'local', parentSignal: AbortSignal, options: {
     lane?: ProviderLane; budgetClient?: EthereumProviderBudget; fetch?: typeof fetch;
     publicAdmissionDeadlineMs?: number; publicAdmissionComplete?: boolean; onInitialCapacityWait?: () => void;
+    allowTransactionSubmission?: boolean;
   } = {}): EthereumProviderAttempt {
   const url = providerUrl(env, chainId, provider);
   const lane = options.lane ?? 'public';
@@ -223,7 +227,8 @@ export function createEthereumProviderAttempt(env: EthereumProviderEnvironment, 
     const calls = Array.isArray(payload) ? payload : [payload];
     if (!calls.length || calls.length > 4 || calls.some(call => call.jsonrpc !== '2.0' || !Number.isSafeInteger(call.id) || !Array.isArray(call.params)) ||
       new Set(calls.map(call => call.id)).size !== calls.length) throw new EthereumApiError('unavailable', 'Ethereum provider batch is invalid.');
-    const cost = calls.reduce((total, call) => total + ethereumProviderCost(call.method, provider === 'quicknode' ? provider : 'alchemy'), 0);
+    const cost = calls.reduce((total, call) => total + ethereumProviderCost(call.method,
+      provider === 'quicknode' ? provider : 'alchemy', options.allowTransactionSubmission), 0);
     if (provider === 'quicknode' && Array.isArray(payload)) {
       const batchCancellation = new AbortController();
       const batchSignal = AbortSignal.any([operationSignal, batchCancellation.signal]);

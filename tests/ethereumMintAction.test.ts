@@ -14,7 +14,7 @@ const address = '0x1111111111111111111111111111111111111111';
 const provider = { request: async () => [address] };
 const config = { enabled: true, chainId: 11155111, contractAddress: '0x3333333333333333333333333333333333333333' };
 const disconnected: EthereumWallet = {
-  address: null, provider: null, ready: true, status: 'disconnected', wallets: [], error: null,
+  address: null, provider: null, ready: true, providerAvailability: 'available', status: 'disconnected', wallets: [], error: null,
   connect() {}, cancel() {}, disconnect() {}, selectWallet() {},
   chooseWallet() {}, changeAccount() {}, checkAccount() {},
 };

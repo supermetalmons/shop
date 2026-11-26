@@ -291,6 +291,92 @@ uses accepted snapshots and confirmed receipt blocks to ignore stale chain
 reads while still allowing fresh canonical reorg state. Deploy API changes
 before frontend code that requires new confirmation fields.
 
+### Backend-funded address and ENS fallback
+
+The storefront prefers a connected or discoverable Ethereum wallet. Clicking
+Claim without an EIP-6963 or legacy provider shows an address/ENS input with OK.
+Wallet rejection, locked accounts, and transaction errors do not enable this
+fallback. Provider absence is a browser decision; the server authenticates the
+NFC code and limits sponsorship independently.
+
+`POST /ethereum/tarot/claim` accepts the normal `code`, `tokenId`, and `testnet`
+fields plus `recipient` and a UUIDv4 `requestId`. ENS resolves the Ethereum
+address record on mainnet for both claim networks. The resolved recipient is
+fixed for that attempt. Both NFTs are issued through the existing `claimTo`
+function and current authorization signer, with a separate account paying gas.
+The authenticated status response includes `backendClaim` with the request ID,
+recipient, state, transaction hash, and any safe failure message. Never expose
+these responses through public caches or put NFC credentials in logs.
+Status requests may include `requestId` to read one previously accepted attempt
+when another tab has since retried the card.
+
+`TAROT_CLAIM_RELAYER` uses one SQLite Durable Object per network, named
+`tarot-claims:1` and `tarot-claims:11155111`. It serializes signing and first
+broadcast, reserves the nonce only when the complete signed transaction is
+persisted, and replays the same bytes after interruption. Repeating a request ID
+returns the original attempt. Only an explicit new request ID can retry a
+confirmed failure. A token cannot have multiple active sponsored attempts.
+Preflight rejections are persisted against their request IDs before reporting
+that no claim was accepted, so concurrent retries cannot reverse that outcome.
+
+The initial request leaves the form disabled while processing, then replaces it
+with View transaction. Refresh reads backend state before exposing Claim, even
+without browser storage. Three canonical confirmations enter the existing
+single-card view. Pending state wins over newly disabled minting or a newly
+connected wallet. Lost responses and absent receipts do not unlock a new claim.
+
+Configure these Worker secrets using the standard private secret provisioning
+process, separately from the authorization signer secrets:
+
+- `ETHEREUM_TAROT_MAINNET_RELAYER_SECRET`
+- `ETHEREUM_TAROT_SEPOLIA_RELAYER_SECRET`
+
+Each secret is a secp256k1 private key. Fund its address with ETH on the matching
+network before enabling the frontend release. Relayer addresses must differ
+from the authorization signer and must be used exclusively by this service;
+manual transactions from those accounts invalidate nonce coordination. Never
+put keys in tracked configuration, browser environment variables, or command
+arguments. Keep private provisioning records under `.operations/`.
+
+The per-network `ETHEREUM_TAROT_*_SPONSORSHIP_ENABLED` flags control new signing
+and rebroadcasting. `ETHEREUM_TAROT_*_MAX_CLAIM_FEE_WEI` defaults to
+`1500000000000000` (0.0015 ETH) on both networks. Transactions use estimated gas
+plus 20%, with a 600,000-gas maximum. EIP-1559 fees use twice the latest base fee
+plus the median reward from five blocks, clamped to a 0.1–2 gwei priority fee.
+Reject before signing if gas limit × maximum gas price exceeds the configured
+ceiling, or if the balance cannot cover that attempt plus outstanding signed
+commitments. These are limits, not a promise of current network fees.
+
+Alarms inspect receipts every 15 seconds and rebroadcast identical bytes no more
+than every 30 seconds while the authorization remains valid. There are no
+automatic fee increases, cancellations, or replacement transactions. An expired
+unresolved transaction keeps its hash and becomes `recovery-required`; unsigned
+queued requests fail without reserving a nonce. The per-network relayer pauses
+new signing until its unresolved transaction is confirmed or definitively
+reverted. It continues observing even if sponsorship is disabled or current
+signing keys are unavailable. The `tarot_claim_recovery_required` structured log
+identifies the network and durable attempt without exposing the NFC code.
+
+A temporary sponsorship pause leaves saved transactions pending. Re-enabling
+sponsorship resumes the same signed bytes while their authorization remains
+valid. An authorization revoked by quote-signer rotation is rejected before
+broadcast and requires recovery.
+
+For recovery, inspect the saved transaction and the relayer's canonical nonce
+before doing anything that spends gas. A missing receipt is not proof of a
+failed transaction. Restore provider access or funding as appropriate. Fee
+replacement or cancellation requires an explicit operator decision; this
+version does not reconcile an arbitrary replacement hash automatically. Do not
+delete an attempt or reset its nonce to make the claim button reappear. Rotate
+relayer keys only after signed unresolved attempts have been settled.
+
+Release the API with `npm run deploy:api`, then the frontend with `npm run deploy`
+after provisioning and funding both relayers. This adds a Durable Object binding
+and migration, without changing Commerce schemas or rows. Routine bounded
+Commerce validation is sufficient. Check both wallet and walletless paths,
+refresh while pending, then confirmation in a controlled Sepolia claim before
+using sponsored mainnet claims for live holders.
+
 ## Private credentials
 
 Codes are random UUIDv4 values. `OPS_DB.tarot_claim_codes` stores only SHA-256
@@ -664,6 +750,10 @@ Complete the v2-to-v3 replacement and cleanup in one rollout:
 3. Configure `ETHEREUM_TAROT_SEPOLIA_CONTRACT_ADDRESS`,
    `ETHEREUM_TAROT_SEPOLIA_DEPLOYMENT_BLOCK`, and the matching signer secret for
    the verified replacement, with `ETHEREUM_TAROT_SEPOLIA_ENABLED=false`.
+   Disable Sepolia sponsorship and drain all signed relayer attempts before
+   changing the active deployment or retiring its credentials. Pending relayer
+   transactions must reach a canonical receipt; retain their nonce records until
+   that is verified.
    Deploy this retirement-aware API configuration with `npm run deploy:api` to
    stop issuing old-contract authorizations while replacement claims remain
    disabled.
@@ -699,8 +789,9 @@ Complete the v2-to-v3 replacement and cleanup in one rollout:
 8. Verify old credential rows and obsolete artifacts are absent, both old pause
    flags remain set, the old signer remains the burn address, and the replacement
    stays healthy. Repeat absence and health checks after a bounded observation
-   period. Tarot has no scheduler writer; do not treat the shared Worker
-   schedule as a Tarot cleanup job. Record completion only after the observation
+   period. Tarot relayer alarms can write submission state; verify old-scope
+   attempts are drained and cannot rebroadcast. The shared Worker cron is not a
+   Tarot cleanup job. Record completion only after the observation
    confirms retired data has not reappeared.
 
 Keep replacement evidence in the

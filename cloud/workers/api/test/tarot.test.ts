@@ -7,11 +7,14 @@ import { encodeAbi, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ethereumSignerAddress, recoverEthereumAddress } from '../../../../shared/ethereum/crypto.ts';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.ts';
 import { TAROT_API_PATHS, TAROT_CHAIN_ID, encodeTarotClaim, encodeTarotClaimTo, tarotCodeHashInput, tarotReceiptTokenId, tarotChainId,
-  type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
+  type TarotBackendClaim, type TarotPrepareResponse, type TarotStatus } from '../../../../shared/ethereum/tarot.ts';
 import { TAROT_CLAIMED_TOPIC, tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.ts';
 import { handleTarotRequest, type TarotEnvironment } from '../src/tarot.ts';
 import { tarotRoutes } from '../src/tarotRoutes.ts';
 import { d1Database } from './commerceD1Harness.ts';
+import type { TarotClaimInput, TarotClaimScope } from '../src/tarotClaimRelayer.ts';
+import { TarotClaimRejected, type TarotClaimFailure } from '../src/tarotClaimRejection.ts';
+import { TarotClaimRelayerStore, type TarotClaimSql } from '../src/tarotClaimRelayerStore.ts';
 
 const NOW = 2_000_000_000_000;
 const CONTRACT = `0x${'11'.repeat(20)}`;
@@ -545,7 +548,229 @@ test('Tarot credentials are constrained, deployment scoped and contain no plaint
     [TAROT_CHAIN_ID, CONTRACT, 2, CODE, NOW, null], [TAROT_CHAIN_ID, CONTRACT, 2, 'a'.repeat(64), NOW, NOW - 1],
   ]) assert.throws(() => f.db.prepare('INSERT INTO tarot_claim_codes VALUES (?, ?, ?, ?, ?, ?)')
     .run(chain!, contract!, token!, hash!, created!, revoked ?? null));
-  assert.equal(tarotRoutes.length, 3);
+  assert.equal(tarotRoutes.length, 4);
   assert.equal(tarotRoutes.find(route => route.path === TAROT_API_PATHS.prepare)?.commerceMutation, true);
+  assert.equal(tarotRoutes.find(route => route.path === TAROT_API_PATHS.claim)?.commerceMutation, true);
   assert.ok(tarotRoutes.every(route => route.profileOriginGate && route.staff === 'skip'));
+});
+
+function sponsoredFixture(f: ReturnType<typeof fixture>) {
+  const submitted: TarotClaimInput[] = [];
+  const reads: Array<TarotClaimScope & { requestId?: string }> = [];
+  const attempts = new Map<string, TarotBackendClaim>();
+  const rejections = new Map<string, TarotClaimFailure>();
+  let latest: TarotBackendClaim | null = null;
+  f.env.ETHEREUM_TAROT_MAINNET_SPONSORSHIP_ENABLED = 'true';
+  f.env.ETHEREUM_TAROT_SEPOLIA_SPONSORSHIP_ENABLED = 'true';
+  f.env.TAROT_CLAIM_RELAYER = { getByName(name) {
+    assert.equal(name, `tarot-claims:${tarotChainId(f.credentials.testnet)}`);
+    return {
+      async status(scope) { reads.push(scope); return scope.requestId ? attempts.get(scope.requestId) ?? null : latest; },
+      async claim(input) {
+        const rejection = rejections.get(input.requestId);
+        if (rejection) return { rejection };
+        submitted.push(input);
+        latest = { requestId: input.requestId, recipient: input.recipient, state: 'pending', transactionHash: HASH };
+        attempts.set(input.requestId, latest);
+        return latest;
+      },
+      async reject(input) {
+        const prior = attempts.get(input.requestId);
+        if (prior) return prior;
+        const rejection = rejections.get(input.requestId);
+        if (rejection) return { rejection };
+        if (latest && latest.state !== 'failed') return latest;
+        rejections.set(input.requestId, input.failure);
+        return { rejection: input.failure };
+      },
+    };
+  } };
+  const request = { ...f.credentials, recipient: WALLET, requestId: '55555555-5555-4555-8555-555555555555' };
+  return { submitted, reads, attempts, request, setLatest(value: TarotBackendClaim | null) { latest = value; } };
+}
+
+for (const testnet of [true, false]) test(`sponsored Tarot ${testnet ? 'Sepolia' : 'mainnet'} claims are authenticated and recover through status`, async t => {
+  const f = fixture(t, testnet);
+  const backend = sponsoredFixture(f);
+  const result = await f.call(TAROT_API_PATHS.claim, backend.request);
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body.backendClaim, { requestId: backend.request.requestId, recipient: WALLET, state: 'pending', transactionHash: HASH });
+  assert.equal(backend.submitted.length, 1);
+  assert.deepEqual(backend.submitted[0], { chainId: tarotChainId(testnet), contractAddress: CONTRACT, tokenId: 1,
+    recipient: WALLET, requestId: backend.request.requestId,
+    codeHash: createHash('sha256').update(tarotCodeHashInput({ chainId: tarotChainId(testnet), contractAddress: CONTRACT, tokenId: 1, code: CODE })).digest('hex') });
+  assert.ok(!JSON.stringify(backend.submitted).includes(CODE));
+  const refreshed = await f.call(TAROT_API_PATHS.status);
+  assert.deepEqual(refreshed.body.backendClaim, result.body.backendClaim);
+  assert.equal(refreshed.body.claimed, false);
+  assert.equal((await f.call(TAROT_API_PATHS.prepare, { ...f.credentials, wallet: WALLET })).response.status, 409);
+  f.state.claimed = 1;
+  assert.equal((await f.call(TAROT_API_PATHS.status)).body.claimed, true);
+});
+
+test('sponsored retries reuse the original attempt before resolving a changed recipient', async t => {
+  const f = fixture(t);
+  const backend = sponsoredFixture(f);
+  const first = await f.call(TAROT_API_PATHS.claim, backend.request);
+  for (const requestId of [backend.request.requestId, '66666666-6666-4666-8666-666666666666']) {
+    const replay = await f.call(TAROT_API_PATHS.claim, { ...backend.request, requestId, recipient: 'changed.eth' });
+    assert.deepEqual(replay.body, first.body);
+  }
+  assert.equal(backend.submitted.length, 1);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.limitKeys.prepare.length, 1);
+  backend.setLatest(null);
+  backend.attempts.set(backend.request.requestId, { requestId: backend.request.requestId,
+    recipient: WALLET, state: 'failed', transactionHash: null, error: 'Insufficient funding.' });
+  const replay = await f.call(TAROT_API_PATHS.claim, backend.request);
+  assert.equal((replay.body.backendClaim as TarotBackendClaim).state, 'failed');
+  assert.equal(backend.submitted.length, 1);
+});
+
+test('invalid sponsored credentials cannot read stored recipients or start resolution', async t => {
+  const f = fixture(t);
+  const backend = sponsoredFixture(f);
+  for (const path of [TAROT_API_PATHS.claim, TAROT_API_PATHS.status]) {
+    const request = path === TAROT_API_PATHS.claim ? backend.request : f.credentials;
+    assert.equal((await f.call(path, { ...request, code: BAD_CODE })).response.status, 401);
+  }
+  f.db.prepare('UPDATE tarot_claim_codes SET revoked_at_ms = created_at_ms').run();
+  assert.equal((await f.call(TAROT_API_PATHS.claim, backend.request)).response.status, 401);
+  assert.equal(backend.reads.length, 0);
+  assert.equal(backend.submitted.length, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test('recipient validation and disabled sponsorship cannot dispatch claims', async t => {
+  const f = fixture(t);
+  const backend = sponsoredFixture(f);
+  for (const [index, recipient] of ['0x1234', `0x${'0'.repeat(40)}`, 'invalid'].entries()) {
+    const result = await f.call(TAROT_API_PATHS.claim, { ...backend.request, recipient,
+      requestId: `66666666-6666-4666-8666-${String(index).padStart(12, '0')}` });
+    assert.equal(result.response.status, 400);
+    assert.deepEqual((result.body.error as { details: unknown }).details, { field: 'recipient', claimAccepted: false });
+  }
+  f.env.ETHEREUM_TAROT_SEPOLIA_SPONSORSHIP_ENABLED = 'false';
+  assert.equal((await f.call(TAROT_API_PATHS.claim, backend.request)).response.status, 503);
+  assert.equal(backend.submitted.length, 0);
+  const stored: TarotBackendClaim = { requestId: backend.request.requestId, recipient: WALLET, state: 'pending', transactionHash: HASH };
+  backend.setLatest(stored);
+  assert.deepEqual((await f.call(TAROT_API_PATHS.status)).body.backendClaim, stored);
+  assert.deepEqual((await f.call(TAROT_API_PATHS.claim, backend.request)).body.backendClaim, stored);
+});
+
+function durableAdmissionFixture(f: ReturnType<typeof fixture>) {
+  const sql: TarotClaimSql = { exec<T extends Record<string, string | number | null>>(query: string, ...bindings: Array<string | number | null>) {
+    const statement = f.db.prepare(query);
+    const rows = statement.columns().length ? statement.all(...bindings) : (statement.run(...bindings), []);
+    return { toArray: () => rows as T[] };
+  } };
+  const atomic = <T>(action: () => T): T => {
+    f.db.exec('BEGIN IMMEDIATE');
+    try { const result = action(); f.db.exec('COMMIT'); return result; }
+    catch (error) { f.db.exec('ROLLBACK'); throw error; }
+  };
+  const store = new TarotClaimRelayerStore(sql, atomic);
+  const present = (value: ReturnType<typeof store.admit>): TarotBackendClaim => ({
+    requestId: value.requestId, recipient: value.recipient, state: value.state, transactionHash: value.signed?.transactionHash ?? null,
+  });
+  f.env.ETHEREUM_TAROT_SEPOLIA_SPONSORSHIP_ENABLED = 'true';
+  f.env.TAROT_CLAIM_RELAYER = { getByName() { return {
+    async status(scope) { const value = store.status(scope); return value ? present(value) : null; },
+    async claim(input) {
+      try { return present(store.admit(input, NOW)); }
+      catch (error) { if (error instanceof TarotClaimRejected) return { rejection: error.rejection }; throw error; }
+    },
+    async reject(input) { const value = store.reject(input, NOW); return 'rejection' in value ? value : present(value); },
+  }; } };
+  const request = { ...f.credentials, recipient: 'example.eth', requestId: '55555555-5555-4555-8555-555555555555' };
+  const call = async (providerFetch: typeof fetch, body = request) => {
+    const response = await handleTarotRequest(new Request(`https://api.mons.shop${TAROT_API_PATHS.claim}`, {
+      method: 'POST', headers: { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.1',
+        'Content-Type': 'application/json', 'X-Mons-CSRF': '1' }, body: JSON.stringify(body),
+    }), f.env, TAROT_API_PATHS.claim, { nowMs: () => NOW, fetch: providerFetch });
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  };
+  const resolve: typeof fetch = async (_url, init) => {
+    const rpc = JSON.parse(String(init?.body)) as RpcRequest;
+    return Response.json({ id: rpc.id, jsonrpc: '2.0', result: rpc.method === 'eth_chainId' ? '0x1'
+      : encodeAbi(['bytes', 'address'], [encodeAbi(['bytes'], [WALLET]), WALLET]) });
+  };
+  return { store, request, call, resolve };
+}
+
+test('a concurrent accepted claim wins over a later ENS preflight failure for the same request', async t => {
+  const f = fixture(t);
+  const backend = durableAdmissionFixture(f);
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const first = backend.call(async () => {
+    started.resolve(); await release.promise; throw new Error('Temporary ENS transport failure.');
+  });
+  await started.promise;
+  const accepted = await backend.call(backend.resolve);
+  assert.equal(accepted.status, 200);
+  assert.equal((accepted.body.backendClaim as TarotBackendClaim).state, 'submitting');
+  release.resolve();
+  assert.deepEqual(await first, accepted);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM claim_rejections').get()?.count, 0);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM claim_attempts').get()?.count, 1);
+});
+
+test('a concurrent durable rejection prevents late ENS admission and replays without reserving a nonce', async t => {
+  const f = fixture(t);
+  const backend = durableAdmissionFixture(f);
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const delayed = backend.call(async (url, init) => {
+    started.resolve(); await release.promise; return backend.resolve(url, init);
+  });
+  await started.promise;
+  const rejected = await backend.call(async () => { throw new Error('Temporary ENS transport failure.'); });
+  assert.equal(rejected.status, 503);
+  assert.deepEqual((rejected.body.error as { details: unknown }).details, { claimAccepted: false });
+  release.resolve();
+  assert.deepEqual(await delayed, rejected);
+  assert.deepEqual(await backend.call(backend.resolve, { ...backend.request, recipient: WALLET }), rejected);
+  assert.deepEqual(await backend.call(backend.resolve, { ...backend.request, recipient: 'invalid' }), rejected);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM claim_rejections').get()?.count, 1);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM claim_attempts').get()?.count, 0);
+  assert.equal(backend.store.account(), null);
+  assert.equal(backend.store.outstandingFeeWei(), '0');
+  assert.equal((await backend.call(backend.resolve, { ...backend.request, recipient: WALLET,
+    requestId: '66666666-6666-4666-8666-666666666666' })).status, 200);
+});
+
+test('definitive claim rejection requires the durable relayer to be available', async t => {
+  const f = fixture(t);
+  const backend = durableAdmissionFixture(f);
+  delete f.env.TAROT_CLAIM_RELAYER;
+  const missing = await backend.call(backend.resolve);
+  assert.equal(missing.status, 503);
+  assert.equal((missing.body.error as { details?: unknown }).details, undefined);
+  f.env.TAROT_CLAIM_RELAYER = { getByName() { return {
+    async status() { return null; }, async claim() { throw new Error('Unavailable'); },
+    async reject() { throw new Error('Unavailable'); },
+  }; } };
+  const unavailable = await backend.call(backend.resolve, { ...backend.request, recipient: 'invalid' });
+  assert.equal(unavailable.status, 503);
+  assert.equal((unavailable.body.error as { details?: unknown }).details, undefined);
+});
+
+test('authenticated request-specific status returns the historical attempt instead of a newer retry', async t => {
+  const f = fixture(t);
+  const backend = sponsoredFixture(f);
+  const historical: TarotBackendClaim = { requestId: backend.request.requestId, recipient: WALLET,
+    state: 'failed', transactionHash: HASH };
+  const current: TarotBackendClaim = { requestId: '66666666-6666-4666-8666-666666666666', recipient: OTHER,
+    state: 'pending', transactionHash: `0x${'cc'.repeat(32)}` };
+  backend.attempts.set(historical.requestId, historical);
+  backend.setLatest(current);
+  assert.deepEqual((await f.call(TAROT_API_PATHS.status, { ...f.credentials, requestId: historical.requestId })).body.backendClaim, historical);
+  assert.deepEqual((await f.call(TAROT_API_PATHS.status)).body.backendClaim, current);
+  assert.equal((await f.call(TAROT_API_PATHS.status, { ...f.credentials, requestId: '77777777-7777-4777-8777-777777777777' })).body.backendClaim, null);
+  assert.equal((await f.call(TAROT_API_PATHS.status, { ...f.credentials, requestId: 'not-a-uuid' })).response.status, 400);
+  const readsBefore = backend.reads.length;
+  assert.equal((await f.call(TAROT_API_PATHS.status, { ...f.credentials, requestId: historical.requestId, code: BAD_CODE })).response.status, 401);
+  assert.equal(backend.reads.length, readsBefore);
 });

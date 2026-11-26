@@ -93,7 +93,7 @@ function wallet(address: string | null = owner) {
     throw new Error(`Unexpected ${method}`);
   } };
   let connections = 0;
-  const result: Wallet = { address, provider: address ? provider : null, status: address ? 'connected' : 'disconnected', ready: true,
+  const result: Wallet = { address, provider: address ? provider : null, status: address ? 'connected' : 'disconnected', ready: true, providerAvailability: 'available',
     wallets: [], error: null, connect() { connections++; }, disconnect() {}, cancel() {}, selectWallet() {}, chooseWallet() {}, changeAccount() {}, checkAccount() {} };
   return { ...result, sent, transactions, get connections() { return connections; } };
 }
