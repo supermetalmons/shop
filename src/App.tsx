@@ -96,6 +96,9 @@ function App({ route, suspended = false }: AppProps) {
   });
   const account = useShopAccount({ auth, connectedWallet, stripeCheckoutDataOwner: stripeRecovery.dataOwner,
     routeCluster: route.drop?.solanaCluster });
+  useEffect(() => {
+    if (isNfcPage) account.setSettingsOpen(false);
+  }, [isNfcPage, account.setSettingsOpen]);
   const { owner, localAccountWallet, isViewerMode, isSignedInWallet } = account;
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
@@ -396,7 +399,7 @@ function App({ route, suspended = false }: AppProps) {
     <ShopHeader
       onNavigateHome={drop.restoreHomeOnNextNavigation}
       scrollHomeToTop={dropsPanelFrameActive}
-      renderRight={({ interactive, xLink }) => <ShopHeaderActions
+      renderRight={({ interactive, xLink }) => isNfcPage ? xLink : <ShopHeaderActions
         {...account}
         interactive={interactive}
         xLink={xLink}
