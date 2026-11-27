@@ -305,7 +305,7 @@ address record on mainnet for both claim networks. The resolved recipient is
 fixed for that attempt. Both NFTs are issued through the existing `claimTo`
 function and current authorization signer, with a separate account paying gas.
 The authenticated status response includes `backendClaim` with the request ID,
-recipient, state, transaction hash, and any safe failure message. Never expose
+recipient, state, transaction hash, revision, finality, and any safe failure message. Never expose
 these responses through public caches or put NFC credentials in logs.
 Status requests may include `requestId` to read one previously accepted attempt
 when another tab has since retried the card.
@@ -314,8 +314,10 @@ when another tab has since retried the card.
 `tarot-claims:1` and `tarot-claims:11155111`. It serializes signing and first
 broadcast, reserves the nonce only when the complete signed transaction is
 persisted, and replays the same bytes after interruption. Repeating a request ID
-returns the original attempt. Only an explicit new request ID can retry a
-confirmed failure. A token cannot have multiple active sponsored attempts.
+returns the original attempt. Pre-signing failures can retry with a new request
+ID. One finalized paid failure ends sponsorship for that card on that chain and
+contract, regardless of request ID or recipient; a connected wallet can retry.
+A token cannot have multiple active sponsored attempts.
 Preflight rejections are persisted against their request IDs before reporting
 that no claim was accepted, so concurrent retries cannot reverse that outcome.
 
@@ -324,6 +326,9 @@ with View transaction. Refresh reads backend state before exposing Claim, even
 without browser storage. Three canonical confirmations enter the existing
 single-card view. Pending state wins over newly disabled minting or a newly
 connected wallet. Lost responses and absent receipts do not unlock a new claim.
+The backend keeps checking successful and failed receipts until Ethereum
+finality. A newer revision can restore pending state after a reorg; failed
+transactions remain pending in the UI until finalized.
 
 Configure these Worker secrets using the standard private secret provisioning
 process, separately from the authorization signer secrets:
@@ -341,7 +346,8 @@ arguments. Keep private provisioning records under `.operations/`.
 The per-network `ETHEREUM_TAROT_*_SPONSORSHIP_ENABLED` flags control new signing
 and rebroadcasting. `ETHEREUM_TAROT_*_MAX_CLAIM_FEE_WEI` defaults to
 `1500000000000000` (0.0015 ETH) on both networks. Transactions use estimated gas
-plus 20%, with a 600,000-gas maximum. EIP-1559 fees use twice the latest base fee
+plus 20%, with a 600,000-gas maximum. Estimation uses the same EIP-1559 fee caps
+as the signed transaction. Fees use twice the latest base fee
 plus the median reward from five blocks, clamped to a 0.1–2 gwei priority fee.
 Reject before signing if gas limit × maximum gas price exceeds the configured
 ceiling, or if the balance cannot cover that attempt plus outstanding signed
@@ -350,10 +356,12 @@ commitments. These are limits, not a promise of current network fees.
 Alarms inspect receipts every 15 seconds and rebroadcast identical bytes no more
 than every 30 seconds while the authorization remains valid. There are no
 automatic fee increases, cancellations, or replacement transactions. An expired
-unresolved transaction keeps its hash and becomes `recovery-required`; unsigned
+transaction without a canonical receipt keeps its hash and becomes `recovery-required`; unsigned
 queued requests fail without reserving a nonce. The per-network relayer pauses
-new signing until its unresolved transaction is confirmed or definitively
-reverted. It continues observing even if sponsorship is disabled or current
+new signing while a nonce is missing or requires recovery. An orphaned receipt
+reuses the saved bytes while authorization remains valid; expiry requires
+operator recovery. Included transactions stay under observation past expiry
+until finalized. It continues observing even if sponsorship is disabled or current
 signing keys are unavailable. The `tarot_claim_recovery_required` structured log
 identifies the network and durable attempt without exposing the NFC code.
 

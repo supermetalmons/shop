@@ -44,7 +44,7 @@ function scope(context: TarotContext, tokenId: number) {
 }
 
 function activeClaim(claim: TarotBackendClaim | null | undefined): boolean {
-  return !!claim && claim.state !== 'failed';
+  return !!claim && (claim.state !== 'failed' || claim.transactionHash !== null && claim.finalized !== true);
 }
 
 async function status(context: TarotContext, tokenId: number, requestId?: string): Promise<TarotStatus> {

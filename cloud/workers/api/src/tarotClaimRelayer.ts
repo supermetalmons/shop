@@ -1,7 +1,7 @@
 import type { TarotBackendClaim } from '../../../../shared/ethereum/tarot.js';
 import { EthereumApiError } from './ethereumError.js';
 import type { TarotClaimRejection, TarotClaimRejectionInput } from './tarotClaimRejection.js';
-import type { TarotClaimRelayerStore } from './tarotClaimRelayerStore.js';
+import { TAROT_SPONSORSHIP_LIMIT_MESSAGE, type TarotClaimRelayerStore } from './tarotClaimRelayerStore.js';
 
 export type TarotClaimScope = { chainId: 1 | 11155111; contractAddress: string; tokenId: number };
 export type TarotClaimInput = TarotClaimScope & { requestId: string; recipient: string; codeHash: string };
@@ -13,14 +13,18 @@ export type TarotClaimAttempt = TarotClaimInput & {
   id: number; state: TarotBackendClaim['state']; createdAtMs: number; updatedAtMs: number;
   signed: TarotSignedClaim | null; lastBroadcastAtMs: number | null; lastCheckedAtMs: number | null;
   broadcastAccepted: boolean; error: string | null;
+  receiptBlockNumber: number | null; receiptBlockHash: string | null; finalized: boolean; revision: number;
 };
 export type TarotSignedAttempt = TarotClaimAttempt & { signed: TarotSignedClaim };
+export type TarotClaimInspection = {
+  status: 'pending' | 'confirmed' | 'failed'; blockNumber: number | null; blockHash: string | null; finalized: boolean;
+};
 export interface TarotClaimChain {
   relayerAddress(chainId: 1 | 11155111): string;
   nonce(scope: TarotClaimScope): Promise<{ latest: string; pending: string }>;
   validate(input: TarotClaimInput): Promise<void>;
   prepare(input: TarotClaimInput, nonce: string, outstandingFeeWei: string): Promise<TarotSignedClaim>;
-  inspect(attempt: TarotSignedAttempt): Promise<'pending' | 'confirmed' | 'failed'>;
+  inspect(attempt: TarotSignedAttempt): Promise<TarotClaimInspection>;
   broadcast(attempt: TarotSignedAttempt): Promise<void>;
 }
 export interface TarotClaimRelayerNamespace {
@@ -55,8 +59,10 @@ function validateInput(input: TarotClaimInput): void {
 }
 
 function presentation(attempt: TarotClaimAttempt): TarotBackendClaim {
-  return { requestId: attempt.requestId, state: attempt.state, recipient: attempt.recipient,
-    transactionHash: attempt.signed?.transactionHash ?? null, ...(attempt.error ? { error: attempt.error } : {}) };
+  const state = attempt.signed && attempt.state === 'failed' && !attempt.finalized ? 'pending' : attempt.state;
+  return { requestId: attempt.requestId, state, recipient: attempt.recipient,
+    transactionHash: attempt.signed?.transactionHash ?? null, revision: attempt.revision, finalized: attempt.finalized,
+    ...(attempt.error && state !== 'pending' ? { error: attempt.error } : {}) };
 }
 
 function failureMessage(error: unknown): string {
@@ -74,7 +80,7 @@ export class TarotClaimRelayer {
     validateInput(input);
     await this.schedule(this.now() + POLL_MS);
     const attempt = this.store.admit(input, this.now());
-    if (attempt.state === 'confirmed' || attempt.state === 'failed') return presentation(attempt);
+    if (attempt.finalized || !attempt.signed && attempt.state === 'failed') return presentation(attempt);
     await this.tick();
     return presentation(this.store.get(attempt.id));
   }
@@ -96,7 +102,7 @@ export class TarotClaimRelayer {
     const reconcileStopAt = this.now() + 20_000;
     const signingBlocked = (now = this.now()): boolean => this.store.unresolved().some(attempt =>
       attempt.state === 'recovery-required' || attempt.signed &&
-      (!attempt.broadcastAccepted || attempt.signed.authorizationDeadline * 1000 <= now));
+      attempt.receiptBlockHash === null && (!attempt.broadcastAccepted || attempt.signed.authorizationDeadline * 1000 <= now));
     try {
       const pending = this.store.unresolved().filter((attempt): attempt is TarotSignedAttempt => attempt.signed !== null)
         .sort((left, right) => (left.lastCheckedAtMs ?? 0) - (right.lastCheckedAtMs ?? 0) || left.id - right.id);
@@ -115,22 +121,22 @@ export class TarotClaimRelayer {
       for (const attempt of this.store.unresolved()) {
         if (this.now() >= signingStopAt || signingBlocked()) break;
         if (attempt.signed || attempt.state !== 'submitting') continue;
+        if (this.store.hasUnfinalizedClaim(attempt, attempt.id)) continue;
         try {
+          if (this.store.sponsorshipExhausted(attempt)) {
+            throw new EthereumApiError('failed-precondition', TAROT_SPONSORSHIP_LIMIT_MESSAGE);
+          }
           this.store.pinAccount(attempt.chainId, this.chain.relayerAddress(attempt.chainId));
           await this.chain.validate(attempt);
           if (signingBlocked()) return;
           const network = await this.chain.nonce(attempt);
           if (signingBlocked()) return;
-          if (!DECIMAL.test(network.latest) || !DECIMAL.test(network.pending) || BigInt(network.pending) < BigInt(network.latest)) {
-            throw new EthereumApiError('unavailable', 'The claim relayer nonce is unavailable.');
-          }
           const account = this.store.account()!;
           const nextNonce = account.nextNonce ?? network.latest;
-          if (account.nextNonce === null && network.latest !== network.pending || BigInt(network.latest) > BigInt(nextNonce) ||
-            BigInt(network.pending) > BigInt(nextNonce)) {
-            throw new EthereumApiError('unavailable', 'The claim relayer account needs attention.');
-          }
+          if (!this.nonceReady(network, nextNonce)) return;
           const signed = await this.chain.prepare(attempt, nextNonce, this.store.outstandingFeeWei());
+          if (signingBlocked()) return;
+          if (!this.nonceReady(await this.chain.nonce(attempt), nextNonce)) return;
           const preparedAt = this.now();
           if (signingBlocked(preparedAt)) return;
           if (!/^0x(?:[0-9a-f]{2})+$/i.test(signed.rawTransaction) || !HASH.test(signed.transactionHash) ||
@@ -150,17 +156,32 @@ export class TarotClaimRelayer {
     }
   }
 
+  private nonceReady(network: { latest: string; pending: string }, nextNonce: string): boolean {
+    if (!DECIMAL.test(network.latest) || !DECIMAL.test(network.pending) || !DECIMAL.test(nextNonce) ||
+      BigInt(network.pending) < BigInt(network.latest)) {
+      throw new EthereumApiError('unavailable', 'The claim relayer nonce is unavailable.');
+    }
+    if (BigInt(network.latest) > BigInt(nextNonce) || BigInt(network.pending) > BigInt(nextNonce)) {
+      throw new EthereumApiError('unavailable', 'The claim relayer account needs attention.');
+    }
+    return network.pending === nextNonce;
+  }
+
   private async reconcile(attempt: TarotSignedAttempt): Promise<void> {
     if (attempt.lastCheckedAtMs === null || this.now() - attempt.lastCheckedAtMs >= POLL_MS) {
       this.store.checked(attempt.id, this.now());
       try {
-        const state = await this.chain.inspect(attempt);
-        if (state !== 'pending') {
-          this.store.settle(attempt.id, state, state === 'failed' ? 'The claim transaction failed. Please try again.' : null, this.now());
-          return;
-        }
+        const inspection = await this.chain.inspect(attempt);
+        if (!['pending', 'confirmed', 'failed'].includes(inspection.status) || typeof inspection.finalized !== 'boolean' ||
+          (inspection.blockNumber === null ? inspection.blockHash !== null || inspection.status !== 'pending' || inspection.finalized
+            : !Number.isSafeInteger(inspection.blockNumber) || inspection.blockNumber < 0 ||
+              typeof inspection.blockHash !== 'string' || !HASH.test(inspection.blockHash)) ||
+          inspection.finalized && inspection.status === 'pending') throw new Error('Invalid Tarot claim receipt.');
+        this.store.observe(attempt.id, inspection, this.now());
       } catch {}
     }
+    attempt = this.store.get(attempt.id) as TarotSignedAttempt;
+    if (attempt.finalized || attempt.receiptBlockHash !== null) return;
     if (attempt.signed.authorizationDeadline * 1000 <= this.now()) {
       this.recovery(attempt, 'The claim transaction needs attention. Its status will continue to be checked.');
       return;

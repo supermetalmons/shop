@@ -50,11 +50,16 @@ function fixture(t: TestContext) {
   const state = { now: NOW, gas: 130_000n, baseFee: 1_000_000_000n, reward: 100_000_000n, balance: 1_000_000_000_000_000_000n,
     claimed: false, paused: false, signer: SIGNER, blockNumber: 102, chainId: CHAIN, latestNonce: 4n, pendingNonce: 5n,
     blockTimestamp: null as number | null,
+    finalizedBlock: { number: '0x63', hash: BLOCK } as unknown,
+    blockOverrides: new Map<string, unknown>(),
+    estimateError: null as { code: number; message: string } | null,
     sendError: null as { code: number; message: string } | null,
     sendResult: null as string | null, receipt: null as Record<string, unknown> | null,
     transaction: null as Record<string, unknown> | null, canonicalHash: BLOCK };
   const result = (rpc: Rpc): unknown => {
     if (rpc.method === 'eth_chainId') return ethereumHexQuantity(state.chainId);
+    if (rpc.method === 'eth_getBlockByNumber' && rpc.params[0] === 'finalized') return state.finalizedBlock;
+    if (rpc.method === 'eth_getBlockByNumber' && state.blockOverrides.has(String(rpc.params[0]))) return state.blockOverrides.get(String(rpc.params[0]));
     if (rpc.method === 'eth_getBlockByNumber') return { number: ethereumHexQuantity(rpc.params[0] === 'latest' ? state.blockNumber : Number(rpc.params[0])),
       hash: state.canonicalHash, timestamp: ethereumHexQuantity(state.blockTimestamp ?? Math.floor(state.now / 1000)) };
     if (rpc.method === 'eth_blockNumber') return ethereumHexQuantity(state.blockNumber);
@@ -87,14 +92,29 @@ function fixture(t: TestContext) {
     const respond = (rpc: Rpc) => {
       onRpc?.(rpc);
       calls.push(rpc);
-      return { id: rpc.id, jsonrpc: '2.0', ...(rpc.method === 'eth_sendRawTransaction' && state.sendError ? { error: state.sendError } : { result: result(rpc) }) };
+      const error = rpc.method === 'eth_sendRawTransaction' ? state.sendError : rpc.method === 'eth_estimateGas' ? state.estimateError : null;
+      return { id: rpc.id, jsonrpc: '2.0', ...(error ? { error } : { result: result(rpc) }) };
     };
     return Response.json(Array.isArray(payload) ? payload.map(respond) : respond(payload));
   };
   const chain = createTarotClaimChain(env, { fetch: providerFetch, nowMs: () => state.now });
   const attempt = (signed: TarotSignedClaim): TarotSignedAttempt => ({ ...input, id: 1, state: 'pending', createdAtMs: NOW,
-    updatedAtMs: NOW, lastBroadcastAtMs: NOW, lastCheckedAtMs: null, broadcastAccepted: false, error: null, signed });
-  return { db, env, state, calls, chain, attempt, beforeRpc: (value: ((rpc: Rpc) => void) | null) => { onRpc = value; } };
+    updatedAtMs: NOW, lastBroadcastAtMs: NOW, lastCheckedAtMs: null, broadcastAccepted: false, error: null, signed,
+    receiptBlockNumber: null, receiptBlockHash: null, finalized: false, revision: 0 });
+  const mined = (signed: TarotSignedClaim, successful = false, blockNumber = 100, blockHash = BLOCK) => {
+    const data = parseTransaction(signed.rawTransaction as `0x02${string}`).data;
+    const word = (value: number | string) => encodeAbi([typeof value === 'number' ? 'uint256' : 'address'], [value]);
+    const log = (topics: string[]) => ({ address: CONTRACT, transactionHash: signed.transactionHash,
+      blockNumber: ethereumHexQuantity(blockNumber), blockHash, removed: false, data: '0x', topics });
+    const transfer = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+    const logs = successful ? [log([TAROT_CLAIMED_TOPIC, word(RECIPIENT), word(1), word(1_000_000)]),
+      ...[1, 1_000_000].map(token => log([transfer, word(0), word(RECIPIENT), word(token)]))] : [];
+    state.receipt = { transactionHash: signed.transactionHash, from: RELAYER, to: CONTRACT,
+      blockNumber: ethereumHexQuantity(blockNumber), blockHash, status: successful ? '0x1' : '0x0', logs };
+    state.transaction = { hash: signed.transactionHash, from: RELAYER, to: CONTRACT, value: '0x0',
+      blockNumber: ethereumHexQuantity(blockNumber), blockHash, chainId: ethereumHexQuantity(CHAIN), input: data };
+  };
+  return { db, env, state, calls, chain, attempt, mined, beforeRpc: (value: ((rpc: Rpc) => void) | null) => { onRpc = value; } };
 }
 
 test('sponsored claim signs the exact recipient-bound claimTo with an exclusive relayer and estimated bounded fees', async t => {
@@ -111,6 +131,10 @@ test('sponsored claim signs the exact recipient-bound claimTo with an exclusive 
   assert.equal(parsed.gas, 156_000n);
   assert.equal(parsed.maxFeePerGas, 2_100_000_000n);
   assert.equal(parsed.maxPriorityFeePerGas, 100_000_000n);
+  const estimate = f.calls.find(call => call.method === 'eth_estimateGas')!.params[0] as Record<string, unknown>;
+  assert.equal(estimate.maxFeePerGas, ethereumHexQuantity(parsed.maxFeePerGas!));
+  assert.equal(estimate.maxPriorityFeePerGas, ethereumHexQuantity(parsed.maxPriorityFeePerGas!));
+  assert.ok(f.calls.findIndex(call => call.method === 'eth_feeHistory') < f.calls.findIndex(call => call.method === 'eth_estimateGas'));
   assert.equal(signed.maximumFeeWei, '327600000000000');
   assert.equal(signed.transactionHash, keccak256(raw));
   assert.equal((await recoverTransactionAddress({ serializedTransaction: raw })).toLowerCase(), RELAYER);
@@ -120,6 +144,19 @@ test('sponsored claim signs the exact recipient-bound claimTo with an exclusive 
   assert.equal(deadline, BigInt(NOW / 1000 + 600));
   assert.equal(recoverEthereumAddress(tarotClaimDigest({ chainId: CHAIN, contractAddress: CONTRACT,
     tokenId: 1, wallet: RECIPIENT, deadline: deadline as bigint }), String(signature)), SIGNER);
+  assert.equal(f.calls.filter(call => call.method === 'eth_sendRawTransaction').length, 0);
+});
+
+test('a recipient that rejects paid execution fails fee-aware estimation before a transaction is signed', async t => {
+  const f = fixture(t);
+  f.beforeRpc(rpc => {
+    if (rpc.method !== 'eth_estimateGas') return;
+    const transaction = rpc.params[0] as Record<string, string>;
+    if (BigInt(transaction.maxFeePerGas ?? '0x0') > 0n) {
+      f.state.estimateError = { code: 3, message: 'execution reverted: paid callbacks rejected' };
+    }
+  });
+  await assert.rejects(f.chain.prepare(input, '5', '0'), error => error instanceof EthereumApiError && error.code === 'unavailable');
   assert.equal(f.calls.filter(call => call.method === 'eth_sendRawTransaction').length, 0);
 });
 
@@ -203,7 +240,7 @@ test('broadcast rejects saved authorizations revoked by quote signer rotation wh
   await assert.rejects(f.chain.broadcast(attempt), (error: unknown) => error instanceof EthereumApiError &&
     error.code === 'failed-precondition' && /authorization is no longer valid/.test(error.message));
   assert.equal(f.calls.filter(call => call.method === 'eth_sendRawTransaction').length, 0);
-  assert.equal(await f.chain.inspect(attempt), 'pending');
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'pending', blockNumber: null, blockHash: null, finalized: false });
 });
 
 test('broadcast refuses revoked credentials, expired signatures and tampered transactions', async t => {
@@ -279,21 +316,17 @@ test('inspection verifies reverted relayer calls and canonical confirmations wit
   const f = fixture(t);
   const signed = await f.chain.prepare(input, '5', '0');
   const attempt = f.attempt(signed);
-  const data = parseTransaction(signed.rawTransaction as `0x02${string}`).data;
-  f.state.receipt = { transactionHash: signed.transactionHash, from: RELAYER, to: CONTRACT,
-    blockNumber: '0x64', blockHash: BLOCK, status: '0x0', logs: [] };
-  f.state.transaction = { hash: signed.transactionHash, from: RELAYER, to: CONTRACT, value: '0x0',
-    blockNumber: '0x64', blockHash: BLOCK, chainId: ethereumHexQuantity(CHAIN), input: data };
+  f.mined(signed);
   delete f.env.ETHEREUM_TAROT_SEPOLIA_RELAYER_SECRET;
   f.env.ETHEREUM_TAROT_SEPOLIA_SPONSORSHIP_ENABLED = 'false';
-  assert.equal(await f.chain.inspect(attempt), 'failed');
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'failed', blockNumber: 100, blockHash: BLOCK, finalized: false });
   f.state.blockNumber = 101;
-  assert.equal(await f.chain.inspect(attempt), 'pending');
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'pending', blockNumber: 100, blockHash: BLOCK, finalized: false });
   f.state.blockNumber = 102;
   f.state.canonicalHash = `0x${'ab'.repeat(32)}`;
-  assert.equal(await f.chain.inspect(attempt), 'pending');
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'pending', blockNumber: null, blockHash: null, finalized: false });
   f.state.canonicalHash = BLOCK;
-  f.state.transaction.input = '0x1234';
+  f.state.transaction!.input = '0x1234';
   await assert.rejects(f.chain.inspect(attempt), /does not match the backend claim/);
 });
 
@@ -301,22 +334,105 @@ test('a relayed claim confirms only when both recipient mints are present and th
   const f = fixture(t);
   const signed = await f.chain.prepare(input, '5', '0');
   const attempt = f.attempt(signed);
-  const data = parseTransaction(signed.rawTransaction as `0x02${string}`).data;
-  const word = (value: number | string) => encodeAbi([typeof value === 'number' ? 'uint256' : 'address'], [value]);
-  const log = (topics: string[]) => ({ address: CONTRACT, transactionHash: signed.transactionHash, blockNumber: '0x64',
-    blockHash: BLOCK, removed: false, data: '0x', topics });
-  const transfer = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-  const logs = [log([TAROT_CLAIMED_TOPIC, word(RECIPIENT), word(1), word(1_000_000)]),
-    ...[1, 1_000_000].map(token => log([transfer, word(0), word(RECIPIENT), word(token)]))];
-  f.state.receipt = { transactionHash: signed.transactionHash, from: RELAYER, to: CONTRACT,
-    blockNumber: '0x64', blockHash: BLOCK, status: '0x1', logs };
-  f.state.transaction = { hash: signed.transactionHash, from: RELAYER, to: CONTRACT, value: '0x0',
-    blockNumber: '0x64', blockHash: BLOCK, chainId: ethereumHexQuantity(CHAIN), input: data };
-  assert.equal(await f.chain.inspect(attempt), 'confirmed');
-  f.state.receipt.logs = logs.slice(0, 2);
+  f.mined(signed, true);
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'confirmed', blockNumber: 100, blockHash: BLOCK, finalized: false });
+  f.state.receipt!.logs = (f.state.receipt!.logs as unknown[]).slice(0, 2);
   await assert.rejects(f.chain.inspect(attempt), /card and receipt claim/i);
   f.state.chainId = 1;
   await assert.rejects(f.chain.prepare(input, '6', '0'), /wrong network/);
+});
+
+for (const successful of [true, false]) test(`${successful ? 'successful' : 'reverted'} receipts remain provisional until canonical finality covers them`, async t => {
+  const f = fixture(t);
+  const signed = await f.chain.prepare(input, '5', '0');
+  const attempt = f.attempt(signed);
+  f.mined(signed, successful);
+  const provisional = { status: successful ? 'confirmed' : 'failed', blockNumber: 100, blockHash: BLOCK, finalized: false };
+  assert.deepEqual(await f.chain.inspect(attempt), provisional);
+  f.state.finalizedBlock = { number: '0x64', hash: BLOCK };
+  assert.deepEqual(await f.chain.inspect(attempt), { ...provisional, finalized: true });
+  f.state.receipt = null;
+  const calls = f.calls.length;
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'pending', blockNumber: null, blockHash: null, finalized: false });
+  assert.ok(!f.calls.slice(calls).some(call => call.method === 'eth_getBlockByNumber' && call.params[0] === 'finalized'));
+});
+
+for (const successful of [true, false]) test(`${successful ? 'successful' : 'reverted'} receipts cannot finalize against a different hash at the same height`, async t => {
+  const f = fixture(t);
+  const signed = await f.chain.prepare(input, '5', '0');
+  f.mined(signed, successful);
+  const finalizedHash = `0x${'aa'.repeat(32)}`;
+  f.state.finalizedBlock = { number: '0x64', hash: finalizedHash };
+  let readsAtReceiptHeight = 0;
+  f.beforeRpc(rpc => {
+    if (rpc.method === 'eth_getBlockByNumber' && rpc.params[0] === '0x64') {
+      readsAtReceiptHeight++;
+      f.state.canonicalHash = readsAtReceiptHeight === 5 ? finalizedHash : BLOCK;
+    }
+  });
+  assert.deepEqual(await f.chain.inspect(f.attempt(signed)), {
+    status: successful ? 'confirmed' : 'failed', blockNumber: 100, blockHash: BLOCK, finalized: false,
+  });
+  assert.equal(readsAtReceiptHeight, 5);
+});
+
+test('unavailable finality preserves an expired authorization’s included receipt and still rechecks for a reorg', async t => {
+  const f = fixture(t);
+  const signed = await f.chain.prepare(input, '5', '0');
+  const attempt = f.attempt(signed);
+  f.mined(signed, true);
+  f.state.now = (signed.authorizationDeadline + 1) * 1000;
+  let removeReceipt = false;
+  f.beforeRpc(rpc => {
+    if (rpc.method === 'eth_getBlockByNumber' && rpc.params[0] === 'finalized') {
+      if (removeReceipt) f.state.receipt = null;
+      throw new Error('Finalized tag is unavailable.');
+    }
+  });
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'confirmed', blockNumber: 100, blockHash: BLOCK, finalized: false });
+  assert.equal(f.calls.filter(call => call.method === 'eth_getTransactionReceipt').length, 2);
+  removeReceipt = true;
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'pending', blockNumber: null, blockHash: null, finalized: false });
+});
+
+for (const change of ['missing', 'orphaned', 'reincluded'] as const) test(`finality inspection revalidates a receipt ${change} during the finalized read`, async t => {
+  const f = fixture(t);
+  const signed = await f.chain.prepare(input, '5', '0');
+  const attempt = f.attempt(signed);
+  f.mined(signed);
+  f.state.finalizedBlock = { number: '0x64', hash: BLOCK };
+  const replacementHash = `0x${'cc'.repeat(32)}`;
+  f.beforeRpc(rpc => {
+    if (rpc.method !== 'eth_getBlockByNumber' || rpc.params[0] !== 'finalized') return;
+    if (change === 'missing') f.state.receipt = null;
+    else {
+      f.state.canonicalHash = replacementHash;
+      if (change === 'reincluded') f.mined(signed, false, 101, replacementHash);
+    }
+  });
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'pending',
+    blockNumber: change === 'reincluded' ? 101 : null, blockHash: change === 'reincluded' ? replacementHash : null, finalized: false });
+});
+
+test('malformed or noncanonical finalized blocks cannot retire an observed receipt', async t => {
+  const f = fixture(t);
+  const signed = await f.chain.prepare(input, '5', '0');
+  const attempt = f.attempt(signed);
+  f.mined(signed);
+  for (const value of [null, {}, { number: 'invalid', hash: BLOCK }, { number: '0x64', hash: '0x1234' },
+    { number: '0x64', hash: `0x${'cc'.repeat(32)}` }]) {
+    f.state.finalizedBlock = value;
+    assert.deepEqual(await f.chain.inspect(attempt), { status: 'failed', blockNumber: 100, blockHash: BLOCK, finalized: false });
+  }
+  f.state.blockNumber = 110;
+  f.state.finalizedBlock = { number: '0x69', hash: BLOCK };
+  f.state.blockOverrides.set('0x69', { number: '0x68', hash: BLOCK });
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'failed', blockNumber: 100, blockHash: BLOCK, finalized: false });
+  f.state.blockOverrides.clear();
+  f.beforeRpc(rpc => {
+    if (rpc.method === 'eth_getBlockByNumber' && rpc.params[0] === '0x69') throw new Error('Finalized block verification unavailable.');
+  });
+  assert.deepEqual(await f.chain.inspect(attempt), { status: 'failed', blockNumber: 100, blockHash: BLOCK, finalized: false });
 });
 
 test('recipient addresses are trimmed and validated before any provider request', async () => {

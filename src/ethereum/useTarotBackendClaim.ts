@@ -12,6 +12,7 @@ type Options = {
 };
 const memory = new WeakMap<Window, Map<string, Intent | null>>();
 const terminal = (operation: TarotBackendClaim) => operation.state === 'failed' || operation.state === 'confirmed';
+const WALLET_RETRY = 'This sponsored claim failed. Connect an Ethereum wallet to try again.';
 
 function readIntent(browser: Window, key: string): Intent | null {
   const cached = memory.get(browser);
@@ -55,6 +56,7 @@ export function useTarotBackendClaim(options: Options) {
   const lifetime = useRef<AbortController | null>(null);
   const activeScope = useRef(scope);
   const intentRef = useRef<Intent | null>(null);
+  const sponsorshipLimit = useRef<string | null>(null);
   const recoveryRequest = useRef<string | null>(null);
   const sending = useRef(false);
   const retryAt = useRef(0);
@@ -66,6 +68,9 @@ export function useTarotBackendClaim(options: Options) {
   const intent = scope ? intentState.scope === scope ? intentState.intent : readIntent(browser, scope) : null;
   const reported = status?.backendClaim;
   const operation = intent?.operation ?? (reported && (!intent || reported.requestId === intent.requestId || !terminal(reported)) ? reported : null);
+  const requiresWallet = (candidate: TarotBackendClaim | null | undefined) =>
+    scope !== null && sponsorshipLimit.current === scope ||
+    candidate?.state === 'failed' && candidate.finalized === true && candidate.transactionHash !== null;
   const pending = !status?.claimed && Boolean(operation ? operation.state !== 'failed' : intent);
   const providerAvailable = () => Boolean(latest.current.wallet.provider || latest.current.wallet.providerAvailability === 'available' ||
     getInjectedEthereumProviderAvailability() === 'available');
@@ -82,13 +87,22 @@ export function useTarotBackendClaim(options: Options) {
   };
   const accept = (key: string, incoming: TarotBackendClaim) => {
     const previous = intentRef.current;
-    if (previous && previous.requestId !== incoming.requestId && terminal(incoming)) return;
+    const activeSigned = previous?.operation?.transactionHash && previous.operation.state !== 'failed';
+    if (previous && previous.requestId !== incoming.requestId && terminal(incoming) &&
+      (!requiresWallet(incoming) || activeSigned)) return;
     const existing = previous?.requestId === incoming.requestId ? previous.operation : null;
-    if (existing && (terminal(existing) && !terminal(incoming) || existing.transactionHash && !incoming.transactionHash)) return;
+    if (existing) {
+      const versioned = existing.revision !== undefined && incoming.revision !== undefined;
+      const newer = versioned && incoming.revision! > existing.revision!;
+      if (versioned && incoming.revision! < existing.revision! ||
+        terminal(existing) && !terminal(incoming) && !(newer && existing.finalized !== true && existing.transactionHash &&
+          incoming.transactionHash === existing.transactionHash) || existing.transactionHash && !incoming.transactionHash) return;
+    }
     update(key, { requestId: incoming.requestId,
       recipient: previous?.requestId === incoming.requestId ? previous.recipient : incoming.recipient, operation: incoming });
-    setError(incoming.state === 'failed' || incoming.state === 'recovery-required' ? incoming.error ?? 'This claim could not be completed. Please try again later.' : null);
-    if (incoming.state === 'failed' && providerUnavailable()) {
+    setError(requiresWallet(incoming) ? WALLET_RETRY : incoming.state === 'failed' || incoming.state === 'recovery-required'
+      ? incoming.error ?? 'This claim could not be completed. Please try again later.' : null);
+    if (incoming.state === 'failed' && !requiresWallet(incoming) && providerUnavailable()) {
       if (recoveryRequest.current !== incoming.requestId) {
         recoveryRequest.current = incoming.requestId;
         setRecipient(previous?.recipient ?? incoming.recipient);
@@ -115,11 +129,12 @@ export function useTarotBackendClaim(options: Options) {
 
   useLayoutEffect(() => {
     if (!scope || !status) return;
+    if (status.backendClaim) accept(scope, status.backendClaim);
     if (status.claimed) {
-      update(scope, null);
+      if (intentRef.current?.operation?.revision === undefined) update(scope, null);
       setFormVisible(false);
       setError(null);
-    } else if (status.backendClaim) accept(scope, status.backendClaim);
+    }
   }, [scope, status]);
 
   useEffect(() => {
@@ -137,7 +152,13 @@ export function useTarotBackendClaim(options: Options) {
       void latest.current.refresh();
     } catch (cause) {
       if (!current(controller, key) || intentRef.current?.requestId !== expected.requestId) return;
-      if (cause instanceof TarotApiError && (cause.field === 'recipient' || cause.claimAccepted === false)) {
+      if (cause instanceof TarotApiError && cause.sponsorshipExhausted) {
+        sponsorshipLimit.current = key;
+        update(key, null);
+        setFormVisible(false);
+        setError(WALLET_RETRY);
+        void latest.current.refresh();
+      } else if (cause instanceof TarotApiError && (cause.field === 'recipient' || cause.claimAccepted === false)) {
         update(key, null);
         setRecipient(expected.recipient);
         setFormVisible(true);
@@ -169,7 +190,8 @@ export function useTarotBackendClaim(options: Options) {
         if (snapshot && saved && !saved.operation && (!snapshot.backendClaim ||
           terminal(snapshot.backendClaim) && snapshot.backendClaim.requestId !== saved.requestId) && retryAt.current <= Date.now()) {
           await send(saved, scope, controller);
-        } else if (snapshot?.backendClaim && saved?.operation && !terminal(saved.operation) &&
+        } else if (snapshot?.backendClaim && saved?.operation &&
+          (!terminal(saved.operation) || saved.operation.state === 'confirmed' && saved.operation.finalized !== true) &&
           terminal(snapshot.backendClaim) && snapshot.backendClaim.requestId !== saved.requestId && retryAt.current <= Date.now()) {
           try {
             const history = await tarotApi.status({ ...latest.current.request, requestId: saved.requestId }, controller.signal);
@@ -199,6 +221,7 @@ export function useTarotBackendClaim(options: Options) {
   const claim = (walletClaim: () => void) => {
     if (latest.current.blocked || pending || intentPending() || discovering || latest.current.suspended || !latest.current.status?.config.enabled) return;
     if (providerAvailable()) { walletClaim(); return; }
+    if (requiresWallet(intentRef.current?.operation ?? operation)) { setFormVisible(false); setError(WALLET_RETRY); return; }
     if (providerUnavailable()) {
       setError(null);
       setFormVisible(true);
@@ -209,6 +232,7 @@ export function useTarotBackendClaim(options: Options) {
     void listInjectedEthereumProviders().then(() => {
       if (!controller || controller.signal.aborted || latest.current.suspended || latest.current.blocked) return;
       if (providerAvailable()) walletClaim();
+      else if (requiresWallet(intentRef.current?.operation ?? latest.current.status?.backendClaim)) { setFormVisible(false); setError(WALLET_RETRY); }
       else if (getInjectedEthereumProviderAvailability() === 'unavailable') { setError(null); setFormVisible(true); }
     }).catch(() => {}).finally(() => { if (controller && !controller.signal.aborted) setDiscovering(false); });
   };
@@ -216,6 +240,7 @@ export function useTarotBackendClaim(options: Options) {
   const submitRecipient = () => {
     const controller = lifetime.current;
     if (!scope || !controller || !formVisible || pending || intentPending() || sending.current || latest.current.blocked || latest.current.suspended) return;
+    if (requiresWallet(intentRef.current?.operation ?? operation)) { setFormVisible(false); setError(WALLET_RETRY); return; }
     if (providerAvailable()) { setFormVisible(false); setError(null); return; }
     if (!validRecipient(recipient)) { setError('Enter a valid Ethereum address or ENS name.'); return; }
     const next: Intent = { requestId: crypto.randomUUID(), recipient: recipient.trim(), operation: null };

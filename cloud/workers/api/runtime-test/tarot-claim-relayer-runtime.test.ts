@@ -49,13 +49,17 @@ async function fixture() {
   `;
   const adapter = `
     const payer='0x4444444444444444444444444444444444444444';
+    let networkNonce=0;
     export function createTarotClaimChain() { return {
-      relayerAddress:()=>payer, validate:async()=>{}, nonce:async()=>({latest:'0',pending:'0'}),
+      relayerAddress:()=>payer, validate:async()=>{}, nonce:async()=>({latest:'0',pending:String(networkNonce)}),
       async prepare(input,nonce) { return { rawTransaction:'0x0200'+Number(nonce).toString(16).padStart(2,'0'),
         transactionHash:'0x'+(Number(nonce)+1).toString(16).padStart(64,'0'),nonce,
         authorizationDeadline:Math.floor(Date.now()/1000)+600,maximumFeeWei:'1000',relayerAddress:payer }; },
-      inspect:async attempt=>attempt.tokenId===2?'confirmed':'pending',
-      async broadcast(attempt) { if(attempt.tokenId===1 && attempt.lastBroadcastAtMs===null) throw new Error('Lost broadcast response'); }
+      inspect:async attempt=>attempt.tokenId===2
+        ? {status:'confirmed',blockNumber:100,blockHash:'0x'+'bb'.repeat(32),finalized:false}
+        : {status:'pending',blockNumber:null,blockHash:null,finalized:false},
+      async broadcast(attempt) { networkNonce=Math.max(networkNonce,Number(attempt.signed.nonce)+1);
+        if(attempt.tokenId===1 && attempt.lastBroadcastAtMs===null) throw new Error('Lost broadcast response'); }
     }; }
   `;
   const bundle = await build({ stdin: { contents: source, resolveDir: resolve('.'), loader: 'ts' }, bundle: true,
@@ -135,7 +139,11 @@ test('native Tarot relayer fences network objects and restores durable pending c
       result = await f.run<TarotBackendClaim>('status', second);
     }
     assert.equal(result.state, 'confirmed');
+    assert.equal(result.finalized, false);
     assert.equal((await f.run<Details>('details')).account.next_nonce, '2');
+    await f.run('clearAlarm');
+    await f.evict();
+    assert.ok((await f.run<Details>('details')).alarmAt, 'Provisional terminal rows must wake reconciliation on construction.');
   } finally { await f.runtime.dispose(); }
 });
 
@@ -159,5 +167,29 @@ test('native Tarot rejection is serialized durably and excludes late admission a
     assert.deepEqual(await f.run<TarotBackendClaim>('reject', { ...retry, failure }), accepted);
     assert.deepEqual(await f.run<TarotClaimRejection>('claim'), rejected);
     assert.equal((await f.run<Details>('details')).account.next_nonce, '1');
+  } finally { await f.runtime.dispose(); }
+});
+
+test('native provisional success alone restarts reconciliation after eviction', { timeout: 30_000 }, async () => {
+  const f = await fixture();
+  const second = { ...input, tokenId: 2 };
+  try {
+    await f.run('claim', second);
+    await f.run('arm');
+    let result = await f.run<TarotBackendClaim>('status', second);
+    const deadline = Date.now() + 5_000;
+    while (result.state !== 'confirmed' && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      result = await f.run<TarotBackendClaim>('status', second);
+    }
+    assert.equal(result.state, 'confirmed');
+    assert.equal(result.finalized, false);
+    await f.run('clearAlarm');
+    await f.evict();
+    const details = await f.run<Details>('details');
+    assert.equal(details.rows.length, 1);
+    assert.equal(details.rows[0].state, 'confirmed');
+    assert.ok(details.alarmAt);
+    assert.deepEqual(await f.run<TarotBackendClaim>('status', second), result);
   } finally { await f.runtime.dispose(); }
 });

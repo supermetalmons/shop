@@ -16,6 +16,9 @@ export class TarotClaimRelayerObject extends DurableObject<Env> {
     this.store = new TarotClaimRelayerStore(ctx.storage.sql, action => ctx.storage.transactionSync(action));
     this.relayer = new TarotClaimRelayer(this.store,
       createTarotClaimChain(env), at => this.schedule(at));
+    ctx.blockConcurrencyWhile(async () => {
+      if (this.store.unresolved().length) await this.schedule(Date.now() + 15_000);
+    });
   }
 
   async claim(input: TarotClaimInput): Promise<TarotBackendClaim | TarotClaimRejection> {
@@ -36,7 +39,7 @@ export class TarotClaimRelayerObject extends DurableObject<Env> {
   async status(scope: TarotClaimScope & { requestId?: string }): Promise<TarotBackendClaim | null> {
     this.requireScope(scope);
     const result = this.relayer.status(scope);
-    if (result && ['submitting', 'pending', 'recovery-required'].includes(result.state)) await this.schedule(Date.now() + 15_000);
+    if (this.store.unresolved().length) await this.schedule(Date.now() + 15_000);
     return result;
   }
 

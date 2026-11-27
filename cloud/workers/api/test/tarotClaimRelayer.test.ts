@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { EthereumApiError } from '../src/ethereumError.ts';
-import { TarotClaimRelayer, type TarotClaimChain, type TarotClaimInput, type TarotSignedAttempt, type TarotSignedClaim } from '../src/tarotClaimRelayer.ts';
+import { TarotClaimRelayer, type TarotClaimChain, type TarotClaimInput, type TarotClaimInspection, type TarotSignedAttempt, type TarotSignedClaim } from '../src/tarotClaimRelayer.ts';
 import { TarotClaimRelayerStore, type TarotClaimSql } from '../src/tarotClaimRelayerStore.ts';
 import { TarotClaimRejected } from '../src/tarotClaimRejection.ts';
 
@@ -14,6 +14,10 @@ const codeHash = '55'.repeat(32);
 const requestId = (id: number) => `11111111-1111-4111-8111-${id.toString().padStart(12, '0')}`;
 const input = (id = 1, tokenId = id): TarotClaimInput => ({ chainId: 1, contractAddress: CONTRACT, tokenId,
   requestId: requestId(id), recipient: RECIPIENT, codeHash });
+const scope = ({ chainId, contractAddress, tokenId }: TarotClaimInput) => ({ chainId, contractAddress, tokenId });
+const observation = (status: TarotClaimInspection['status'], finalized = status !== 'pending',
+  blockNumber = 100, blockHash = `0x${'bb'.repeat(32)}`): TarotClaimInspection => ({ status, finalized,
+  blockNumber: status === 'pending' ? null : blockNumber, blockHash: status === 'pending' ? null : blockHash });
 
 function fixture(t: TestContext) {
   const db = new DatabaseSync(':memory:');
@@ -34,7 +38,7 @@ function fixture(t: TestContext) {
   const alarms: Array<number | null> = [];
   const sent: TarotSignedAttempt[] = [];
   const prepared: Array<{ input: TarotClaimInput; nonce: string; outstanding: string }> = [];
-  const receipts = new Map<string, 'pending' | 'confirmed' | 'failed'>();
+  const receipts = new Map<string, TarotClaimInspection['status'] | TarotClaimInspection>();
   let payer = PAYER;
   let nextNetworkNonce = '0';
   let validationFailure: Error | null = null;
@@ -57,12 +61,17 @@ function fixture(t: TestContext) {
       if (prepareFailure) throw prepareFailure;
       return signed(value, nonce);
     },
-    inspect: async value => receipts.get(value.signed.transactionHash) ?? 'pending',
+    inspect: async value => {
+      const receipt = receipts.get(value.signed.transactionHash) ?? 'pending';
+      return typeof receipt === 'string' ? observation(receipt) : receipt;
+    },
     broadcast: async value => {
       assert.deepEqual(store.get(value.id).signed, value.signed);
       assert.equal(store.get(value.id).lastBroadcastAtMs, now);
       sent.push(value);
       onBroadcast?.(value);
+      nextNetworkNonce = String(BigInt(value.signed.nonce) + 1n > BigInt(nextNetworkNonce)
+        ? BigInt(value.signed.nonce) + 1n : BigInt(nextNetworkNonce));
       if (broadcastFailure) throw broadcastFailure;
     },
   };
@@ -70,7 +79,7 @@ function fixture(t: TestContext) {
     async at => { alarms.push(at); }, () => now, event => events.push(event));
   return { store, chain, db, events, alarms, sent, prepared, receipts, signed, reopen, relayer: reopen(),
     advance: (ms: number) => { now += ms; }, now: () => now,
-    setPayer: (value: string) => { payer = value; }, setNonce: (value: string) => { nextNetworkNonce = value; },
+    setPayer: (value: string) => { payer = value; nextNetworkNonce = '0'; }, setNonce: (value: string) => { nextNetworkNonce = value; },
     failValidation: (value: Error | null) => { validationFailure = value; },
     failPrepare: (value: Error | null) => { prepareFailure = value; },
     failBroadcast: (value: Error | null) => { broadcastFailure = value; },
@@ -278,7 +287,7 @@ for (const [code, message] of [
   });
 }
 
-test('confirmed failures allow explicit retry at a fresh nonce while old request IDs stay failed', async t => {
+test('finalized sponsored failures prevent another paid attempt while old request IDs stay failed', async t => {
   const f = fixture(t);
   const pending = await f.relayer.claim(input());
   f.receipts.set(pending.transactionHash!, 'failed');
@@ -286,9 +295,15 @@ test('confirmed failures allow explicit retry at a fresh nonce while old request
   await f.relayer.tick();
   assert.equal((await f.relayer.claim(input())).state, 'failed');
   assert.equal(f.prepared.length, 1);
-  const retried = await f.relayer.claim(input(2, 1));
-  assert.equal(retried.state, 'pending');
-  assert.equal(f.prepared[1].nonce, '1');
+  for (const retry of [input(2, 1), { ...input(3, 1), recipient: OTHER }, { ...input(4, 1), codeHash: '66'.repeat(32) }]) {
+    await assert.rejects(f.relayer.claim(retry), error => error instanceof TarotClaimRejected && /wallet/.test(error.message));
+    await assert.rejects(f.reopen().claim(retry), error => error instanceof TarotClaimRejected && /wallet/.test(error.message));
+  }
+  assert.equal(f.prepared.length, 1);
+  assert.equal(f.store.account()?.nextNonce, '1');
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM claim_rejections').get()?.count, 3);
+  assert.equal(f.relayer.status(input())?.finalized, true);
+  assert.match(f.relayer.status(input())!.error!, /wallet/);
   assert.equal(f.relayer.status({ ...input(), requestId: input().requestId })?.state, 'failed');
 });
 
@@ -370,7 +385,7 @@ test('slow receipt checks rotate across pending attempts instead of starving lat
   await Promise.all([f.relayer.claim(input(1)), f.relayer.claim(input(2)), f.relayer.claim(input(3))]);
   await f.relayer.tick();
   const inspected: number[] = [];
-  f.chain.inspect = async attempt => { inspected.push(attempt.tokenId); f.advance(21_000); return 'pending'; };
+  f.chain.inspect = async attempt => { inspected.push(attempt.tokenId); f.advance(21_000); return observation('pending'); };
   f.advance(15_000);
   for (let index = 0; index < 3; index++) await f.relayer.tick();
   assert.deepEqual(inspected.toSorted(), [1, 2, 3]);
@@ -381,7 +396,7 @@ test('slow receipt checks leave a separate bounded window for signing queued cla
   await f.relayer.claim(input(1));
   f.store.admit(input(2), f.now());
   f.store.admit(input(3), f.now());
-  f.chain.inspect = async () => { f.advance(21_000); return 'pending'; };
+  f.chain.inspect = async () => { f.advance(21_000); return observation('pending'); };
   f.beforePrepare(async () => { f.advance(21_000); });
   f.advance(15_000);
   await f.relayer.tick();
@@ -406,7 +421,7 @@ test('an expired attempt blocks signing even when a slow receipt check leaves it
   f.advance(500_000);
   f.store.admit(input(3), f.now());
   const inspected: number[] = [];
-  f.chain.inspect = async attempt => { inspected.push(attempt.tokenId); f.advance(21_000); return 'pending'; };
+  f.chain.inspect = async attempt => { inspected.push(attempt.tokenId); f.advance(21_000); return observation('pending'); };
   await f.relayer.tick();
   assert.deepEqual(inspected, [2]);
   assert.equal(f.relayer.status(input(1))?.state, 'pending');
@@ -469,4 +484,230 @@ test('expiry during one queued broadcast stops later queue iterations from alloc
   assert.deepEqual(f.prepared.map(attempt => attempt.input.tokenId), [1, 2]);
   assert.equal(f.store.account()?.nextNonce, '2');
   assert.ok(f.sent.every(attempt => attempt.tokenId <= 2));
+});
+
+for (const state of ['confirmed', 'failed'] as const) {
+  test(`a provisional ${state} receipt stays watched and an orphan replays its original transaction`, async t => {
+    const f = fixture(t);
+    const pending = await f.relayer.claim(input());
+    const original = f.store.get(1).signed;
+    f.receipts.set(pending.transactionHash!, observation(state, false));
+    f.advance(15_000);
+    await f.relayer.tick();
+    const included = f.relayer.status(input())!;
+    assert.equal(included.state, state === 'failed' ? 'pending' : 'confirmed');
+    assert.equal(included.finalized, false);
+    assert.ok(included.revision! > pending.revision!);
+    assert.equal(f.store.unresolved().length, 1);
+    assert.equal(f.store.outstandingFeeWei(), '1000');
+    assert.equal((await f.relayer.claim({ ...input(2, 1), recipient: OTHER })).requestId, input().requestId);
+    assert.equal(f.prepared.length, 1);
+
+    f.receipts.set(pending.transactionHash!, observation('pending'));
+    f.setNonce('0');
+    f.advance(15_000);
+    await f.reopen().tick();
+    const orphaned = f.relayer.status(input())!;
+    assert.equal(orphaned.state, 'pending');
+    assert.equal(orphaned.transactionHash, pending.transactionHash);
+    assert.ok(orphaned.revision! > included.revision!);
+    assert.equal(f.store.get(1).receiptBlockHash, null);
+    assert.deepEqual(f.store.get(1).signed, original);
+    assert.equal(f.prepared.length, 1);
+    assert.deepEqual(f.sent.map(value => value.signed), [original, original]);
+    assert.equal(f.store.account()?.nextNonce, '1');
+  });
+
+  test(`an expired orphaned ${state} receipt enters recovery without replay or a new nonce`, async t => {
+    const f = fixture(t);
+    const pending = await f.relayer.claim(input());
+    f.receipts.set(pending.transactionHash!, observation(state, false));
+    f.advance(15_000);
+    await f.relayer.tick();
+    f.advance(600_000);
+    f.receipts.set(pending.transactionHash!, observation('pending'));
+    f.setNonce('0');
+    await f.reopen().tick();
+    assert.equal(f.relayer.status(input())?.state, 'recovery-required');
+    assert.equal(f.relayer.status(input())?.transactionHash, pending.transactionHash);
+    assert.equal((await f.relayer.claim(input(2))).state, 'failed');
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.prepared.length, 1);
+    assert.equal(f.store.account()?.nextNonce, '1');
+  });
+}
+
+test('included receipts survive authorization expiry and unavailable finality without rebroadcasting', async t => {
+  const f = fixture(t);
+  const pending = await f.relayer.claim(input());
+  f.receipts.set(pending.transactionHash!, observation('confirmed', false));
+  f.advance(15_000);
+  await f.relayer.tick();
+  const included = f.relayer.status(input())!;
+  f.advance(600_000);
+  f.chain.inspect = async () => { throw new Error('Finality is temporarily unavailable.'); };
+  await f.reopen().tick();
+  assert.deepEqual(f.relayer.status(input()), included);
+  assert.equal(f.sent.length, 1);
+  const next = await f.relayer.claim(input(2));
+  assert.equal(next.state, 'pending');
+  assert.equal(f.prepared[1].nonce, '1');
+  assert.equal(f.prepared[1].outstanding, '1000');
+  f.setPayer(OTHER);
+  assert.equal((await f.relayer.claim(input(3))).state, 'failed');
+  assert.equal(f.store.account()?.address, PAYER);
+  assert.equal(f.relayer.status(input())?.finalized, false);
+});
+
+test('receipt movement advances revision and finalized receipts leave reconciliation', async t => {
+  const f = fixture(t);
+  const pending = await f.relayer.claim(input());
+  f.receipts.set(pending.transactionHash!, observation('confirmed', false));
+  f.advance(15_000);
+  await f.relayer.tick();
+  const included = f.relayer.status(input())!;
+  const moved = observation('confirmed', false, 101, `0x${'cc'.repeat(32)}`);
+  f.receipts.set(pending.transactionHash!, moved);
+  f.advance(15_000);
+  await f.relayer.tick();
+  const relocated = f.relayer.status(input())!;
+  assert.ok(relocated.revision! > included.revision!);
+  assert.equal(f.store.get(1).receiptBlockNumber, 101);
+  assert.equal(f.store.get(1).receiptBlockHash, moved.blockHash);
+  assert.equal(f.sent.length, 1);
+  f.receipts.set(pending.transactionHash!, { ...moved, finalized: true });
+  f.advance(15_000);
+  await f.relayer.tick();
+  assert.equal(f.relayer.status(input())?.finalized, true);
+  assert.ok(f.relayer.status(input())!.revision! > relocated.revision!);
+  assert.equal(f.store.unresolved().length, 0);
+  assert.equal(f.store.outstandingFeeWei(), '0');
+  assert.equal(f.store.account()?.nextNonce, '1');
+  f.chain.inspect = async () => { assert.fail('Finalized receipts must not be polled.'); };
+  await f.reopen().tick();
+});
+
+test('a lower pending network nonce holds queued signing even when receipt polling has not reached its predecessor', async t => {
+  const f = fixture(t);
+  await f.relayer.claim(input(1));
+  await f.relayer.claim(input(2));
+  f.setNonce('0');
+  f.advance(15_000);
+  const inspected: number[] = [];
+  f.chain.inspect = async attempt => {
+    inspected.push(attempt.id);
+    f.advance(21_000);
+    return observation('confirmed', false);
+  };
+  const queued = await f.relayer.claim(input(3));
+  assert.deepEqual(inspected, [2]);
+  assert.equal(queued.state, 'submitting');
+  assert.equal(queued.transactionHash, null);
+  assert.deepEqual(f.prepared.map(value => value.nonce), ['0', '1']);
+  assert.equal(f.store.account()?.nextNonce, '2');
+});
+
+test('a nonce rollback during preparation prevents committing the higher signed nonce', async t => {
+  const f = fixture(t);
+  await f.relayer.claim(input(1));
+  f.beforePrepare(async () => { f.setNonce('0'); });
+  const queued = await f.relayer.claim(input(2));
+  assert.equal(queued.state, 'submitting');
+  assert.equal(queued.transactionHash, null);
+  assert.equal(f.store.get(2).signed, null);
+  assert.equal(f.store.account()?.nextNonce, '1');
+  assert.equal(f.sent.length, 1);
+  assert.deepEqual(f.prepared.map(value => value.nonce), ['0', '1']);
+});
+
+test('a finalized paid failure cannot be bypassed through an older unsigned failed attempt or a different request', async t => {
+  const f = fixture(t);
+  f.failPrepare(new Error('No transaction signed.'));
+  await f.relayer.claim(input(1));
+  f.failPrepare(null);
+  const paid = await f.relayer.claim(input(2, 1));
+  f.receipts.set(paid.transactionHash!, observation('failed'));
+  f.advance(15_000);
+  await f.relayer.tick();
+  assert.equal((await f.relayer.claim(input(1))).transactionHash, null);
+  await assert.rejects(f.relayer.claim(input(3, 1)), error => error instanceof TarotClaimRejected && /wallet/.test(error.message));
+  assert.equal(f.prepared.length, 2);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.store.sponsorshipExhausted({ ...input(), chainId: 11155111 }), false);
+  assert.equal(f.store.sponsorshipExhausted({ ...input(), contractAddress: OTHER }), false);
+  assert.equal(f.store.sponsorshipExhausted(input(4, 2)), false);
+});
+
+test('legacy signed terminal rows migrate as unfinalized and an orphan can coexist with a newer unsigned retry', async t => {
+  const f = fixture(t);
+  const paid = await f.relayer.claim(input(1));
+  f.store.settle(1, 'failed', 'Legacy failed receipt.', f.now());
+  f.db.prepare(`INSERT INTO claim_attempts(chain_id,contract_address,token_id,request_id,recipient,code_hash,state,created_at_ms,updated_at_ms)
+    VALUES(?,?,?,?,?,?,'submitting',?,?)`).run(1, CONTRACT, 1, requestId(2), OTHER, codeHash, f.now(), f.now());
+  const confirmed = await f.relayer.claim(input(3, 2));
+  f.store.settle(1, 'failed', 'Legacy failed receipt.', f.now());
+  f.store.settle(3, 'confirmed', null, f.now());
+  for (const column of ['receipt_block_number', 'receipt_block_hash', 'finalized', 'revision']) {
+    f.db.exec(`ALTER TABLE claim_attempts DROP COLUMN ${column}`);
+  }
+  f.db.exec(`CREATE UNIQUE INDEX claim_active_token ON claim_attempts(chain_id,contract_address,token_id) WHERE state<>'failed'`);
+  const restarted = f.reopen();
+  assert.equal(f.store.get(1).finalized, false);
+  assert.equal(f.store.get(3).finalized, false);
+  assert.equal(f.store.get(1).revision, 0);
+  assert.equal(f.store.get(3).receiptBlockHash, null);
+  assert.equal(f.store.unresolved().length, 3);
+  assert.equal(restarted.status(scope(input(1)))?.requestId, input(1).requestId);
+  assert.equal(restarted.status(scope(input(1)))?.state, 'pending');
+  assert.equal(restarted.status({ ...input(2, 1), requestId: requestId(2) })?.state, 'submitting');
+  f.receipts.set(paid.transactionHash!, observation('pending'));
+  f.receipts.set(confirmed.transactionHash!, observation('confirmed', false));
+  f.advance(15_000);
+  await restarted.tick();
+  assert.equal(f.store.get(1).state, 'pending');
+  assert.equal(f.store.get(2).state, 'submitting');
+  assert.equal(f.store.get(3).state, 'confirmed');
+  assert.equal(f.prepared.length, 2);
+  assert.equal(f.db.prepare("SELECT 1 FROM sqlite_schema WHERE name='claim_active_token'").get(), undefined);
+  f.receipts.set(paid.transactionHash!, observation('failed'));
+  f.advance(15_000);
+  await restarted.tick();
+  assert.equal(f.store.get(2).state, 'failed');
+  assert.equal(f.store.get(2).signed, null);
+  assert.match(f.store.get(2).error!, /wallet/);
+  assert.equal(f.prepared.length, 2);
+  assert.equal(f.store.account()?.nextNonce, '2');
+  const selected = restarted.status(scope(input(1)))!;
+  assert.equal(selected.requestId, input(1).requestId);
+  assert.equal(selected.state, 'failed');
+  assert.equal(selected.finalized, true);
+  assert.equal(selected.transactionHash, paid.transactionHash);
+  assert.equal(restarted.status({ ...input(2, 1), requestId: requestId(2) })?.transactionHash, null);
+});
+
+test('scope status cannot hide an unresolved signed claim behind a newer unsigned failure', async t => {
+  const f = fixture(t);
+  const paid = await f.relayer.claim(input(1));
+  f.db.prepare(`INSERT INTO claim_attempts(chain_id,contract_address,token_id,request_id,recipient,code_hash,state,error,created_at_ms,updated_at_ms)
+    VALUES(?,?,?,?,?,?,'failed','Legacy unsigned failure.',?,?)`).run(1, CONTRACT, 1, requestId(2), OTHER, codeHash, f.now(), f.now());
+  const restarted = f.reopen();
+  assert.equal(restarted.status(scope(input(1)))?.requestId, input(1).requestId);
+  assert.equal(restarted.status(scope(input(1)))?.state, 'pending');
+  const historical = restarted.status({ ...input(2, 1), requestId: requestId(2) });
+  assert.equal(historical?.state, 'failed');
+  assert.equal(historical?.transactionHash, null);
+  f.receipts.set(paid.transactionHash!, observation('failed', false));
+  f.advance(15_000);
+  await restarted.tick();
+  assert.equal(restarted.status(scope(input(1)))?.state, 'pending');
+  assert.equal(restarted.status(scope(input(1)))?.requestId, input(1).requestId);
+  f.receipts.set(paid.transactionHash!, observation('failed'));
+  f.advance(15_000);
+  await restarted.tick();
+  const limited = restarted.status(scope(input(1)))!;
+  assert.equal(limited.state, 'failed');
+  assert.equal(limited.finalized, true);
+  assert.equal(limited.transactionHash, paid.transactionHash);
+  assert.match(limited.error!, /wallet/);
+  assert.deepEqual(restarted.status({ ...input(2, 1), requestId: requestId(2) }), historical);
 });

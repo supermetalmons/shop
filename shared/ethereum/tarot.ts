@@ -33,6 +33,8 @@ export type TarotBackendClaim = {
   recipient: string;
   transactionHash: string | null;
   error?: string;
+  revision?: number;
+  finalized?: boolean;
 };
 export type TarotClaimResponse = {
   tokenId: number; receiptTokenId: number; backendClaim: TarotBackendClaim;

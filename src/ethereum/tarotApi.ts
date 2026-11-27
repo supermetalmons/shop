@@ -8,7 +8,7 @@ import { ethereumRetryAfterMs } from './retryAfter';
 export class TarotApiError extends Error {
   constructor(message: string, readonly status: number, readonly retryAt: number | null = null,
     readonly credentialRejected = false, readonly field: 'recipient' | null = null,
-    readonly claimAccepted?: false) { super(message); }
+    readonly claimAccepted?: false, readonly sponsorshipExhausted = false) { super(message); }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -38,6 +38,8 @@ function parseBackendClaim(value: unknown): TarotBackendClaim {
     !normalizeEthereumAddress(value.recipient) || /^0x0{40}$/i.test(String(value.recipient)) ||
     value.transactionHash !== null && !hash(value.transactionHash) ||
     value.error !== undefined && typeof value.error !== 'string' ||
+    value.revision !== undefined && !integer(value.revision) ||
+    value.finalized !== undefined && typeof value.finalized !== 'boolean' ||
     (value.state === 'pending' || value.state === 'confirmed') && !hash(value.transactionHash)) return invalid();
   return { ...value, recipient: normalizeEthereumAddress(value.recipient)!,
     transactionHash: typeof value.transactionHash === 'string' ? value.transactionHash.toLowerCase() : null } as TarotBackendClaim;
@@ -65,13 +67,16 @@ async function post(path: string, body: TarotRequest, signal?: AbortSignal): Pro
     const recipientError = path === TAROT_API_PATHS.claim && response.status === 400 && detail?.code === 'invalid-argument' &&
       record(detail.details) && detail.details.field === 'recipient';
     const claimRejected = path === TAROT_API_PATHS.claim && detail && record(detail.details) && detail.details.claimAccepted === false;
+    const sponsorshipExhausted = Boolean(claimRejected && response.status === 409 && detail?.code === 'failed-precondition' &&
+      record(detail.details) && detail.details.kind === 'sponsorship-limit');
     const message = (recipientError || claimRejected && response.status !== 401 && response.status !== 403) && typeof detail?.message === 'string' ? detail.message :
       response.status === 429 ? 'Too many attempts. Please wait a minute and try again.' :
       response.status === 400 || response.status === 401 || response.status === 403 || response.status === 404 ?
         'This Tarot claim link is invalid.' : response.status === 409 ? 'This card’s claim changed. Please try again.' :
           'Couldn’t load this Tarot claim. Please try again.';
     throw new TarotApiError(message, response.status, delay === null ? null : Date.now() + delay,
-      response.status === 401 && detail?.code === 'unauthenticated', recipientError ? 'recipient' : null, claimRejected ? false : undefined);
+      response.status === 401 && detail?.code === 'unauthenticated', recipientError ? 'recipient' : null,
+      claimRejected ? false : undefined, sponsorshipExhausted);
   }
   return value;
 }

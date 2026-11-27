@@ -6,12 +6,13 @@ import { mainnet } from 'viem/chains';
 import { normalize } from 'viem/ens';
 import { decodeReturn } from '../../../../shared/ethereum/abi.js';
 import { recoverEthereumAddress } from '../../../../shared/ethereum/crypto.js';
-import { encodeTarotClaimTo } from '../../../../shared/ethereum/tarot.js';
+import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
+import { encodeTarotClaimTo, type TarotConfirmResponse } from '../../../../shared/ethereum/tarot.js';
 import { tarotClaimDigest } from '../../../../shared/ethereum/tarotCrypto.js';
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
 import { EthereumApiError } from './ethereumError.js';
 import { createEthereumProviderAttempt, RpcProviderError, type EthereumProviderEnvironment } from './ethereumProvider.js';
-import { ethereumRpc } from './ethereumRuntime.js';
+import { ethereumRpc, rpcInteger } from './ethereumRuntime.js';
 import { confirmTarotClaim, createTarotAuthorization, requireTarotCodeHash, tarotConfig, tarotSigner, tarotState,
   type TarotContext, type TarotEnvironment } from './tarotClaimSupport.js';
 import type { TarotClaimAttempt, TarotClaimChain, TarotClaimInput, TarotClaimScope, TarotSignedClaim } from './tarotClaimRelayer.js';
@@ -213,14 +214,10 @@ export function createTarotClaimChain(env: TarotRelayerEnvironment, dependencies
       }
       const authorization = await createTarotAuthorization(read, input.tokenId, recipient);
       const data = encodeTarotClaimTo(recipient, input.tokenId, authorization.deadline, authorization.signature) as Hex;
-      const transaction = { from: account.address, to: input.contractAddress, value: '0x0', data };
-      const [estimate, historyValue, balance] = await Promise.all([
-        ethereumRpc(read, 'eth_estimateGas', [transaction]),
+      const [historyValue, balance] = await Promise.all([
         ethereumRpc(read, 'eth_feeHistory', ['0x5', 'latest', [50]]),
         ethereumRpc(read, 'eth_getBalance', [account.address, 'latest']),
       ]);
-      const gas = (quantity(estimate) * 120n + 99n) / 100n;
-      if (gas <= 0n || gas > MAXIMUM_GAS) throw new EthereumApiError('failed-precondition', 'This recipient cannot receive the card within the gas limit.');
       const history = object(historyValue);
       if (!Array.isArray(history.baseFeePerGas) || history.baseFeePerGas.length < 2 ||
         !Array.isArray(history.reward) || !history.reward.length || history.reward.length > 5 ||
@@ -232,6 +229,11 @@ export function createTarotClaimChain(env: TarotRelayerEnvironment, dependencies
       const median = rewards[Math.floor(rewards.length / 2)];
       const maxPriorityFeePerGas = median < MINIMUM_TIP_WEI ? MINIMUM_TIP_WEI : median > MAXIMUM_TIP_WEI ? MAXIMUM_TIP_WEI : median;
       const maxFeePerGas = quantity(history.baseFeePerGas.at(-2)) * 2n + maxPriorityFeePerGas;
+      const transaction = { from: account.address, to: input.contractAddress, value: '0x0', data,
+        maxFeePerGas: ethereumHexQuantity(maxFeePerGas), maxPriorityFeePerGas: ethereumHexQuantity(maxPriorityFeePerGas) };
+      const estimate = await ethereumRpc(read, 'eth_estimateGas', [transaction]);
+      const gas = (quantity(estimate) * 120n + 99n) / 100n;
+      if (gas <= 0n || gas > MAXIMUM_GAS) throw new EthereumApiError('failed-precondition', 'This recipient cannot receive the card within the gas limit.');
       const maximumFeeWei = gas * maxFeePerGas;
       if (maximumFeeWei > maximumFee(env, input.chainId)) {
         throw new EthereumApiError('failed-precondition', 'Network fees are too high. Please try again later.');
@@ -248,9 +250,29 @@ export function createTarotClaimChain(env: TarotRelayerEnvironment, dependencies
     },
     async inspect(attempt) {
       const { data } = await signedData(attempt);
-      const result = await confirmTarotClaim(context(attempt, true), attempt.tokenId, attempt.recipient,
+      const read = context(attempt, true);
+      const confirm = () => confirmTarotClaim(read, attempt.tokenId, attempt.recipient,
         attempt.signed.transactionHash, { sender: attempt.signed.relayerAddress, data });
-      return result.status;
+      const observation = (result: TarotConfirmResponse) => ({ status: result.status,
+        blockNumber: result.blockNumber, blockHash: result.blockHash, finalized: false });
+      let result = await confirm();
+      if (result.status === 'pending') return observation(result);
+      let finalizedSnapshot: { blockNumber: number; blockHash: string } | null = null;
+      try {
+        const finalized = object(await ethereumRpc(read, 'eth_getBlockByNumber', ['finalized', false]));
+        const blockNumber = rpcInteger(finalized.number);
+        if (typeof finalized.hash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(finalized.hash)) return unavailable();
+        finalizedSnapshot = { blockNumber, blockHash: finalized.hash.toLowerCase() };
+      } catch {}
+      try {
+        result = await confirm();
+        if (result.status === 'pending' || result.blockNumber === null || !finalizedSnapshot) return observation(result);
+        const canonical = object(await ethereumRpc(read, 'eth_getBlockByNumber', [ethereumHexQuantity(finalizedSnapshot.blockNumber), false]));
+        if (rpcInteger(canonical.number) !== finalizedSnapshot.blockNumber || typeof canonical.hash !== 'string' ||
+          canonical.hash.toLowerCase() !== finalizedSnapshot.blockHash ||
+          result.blockNumber === finalizedSnapshot.blockNumber && result.blockHash !== finalizedSnapshot.blockHash) return observation(result);
+        return { ...observation(result), finalized: finalizedSnapshot.blockNumber >= result.blockNumber };
+      } catch { return observation(result); }
     },
     async broadcast(attempt) {
       requireSponsorship(env, attempt.chainId);

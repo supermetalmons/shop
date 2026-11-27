@@ -1060,7 +1060,7 @@ for (const reload of [false, true]) test(`a queued backend response keeps the in
 });
 
 for (const testnet of [true, false]) test(`server pending restores the transaction directly without client storage (${testnet ? 'Sepolia' : 'Ethereum'})`, async () => {
-  mock.method(tarotApi, 'status', async () => ({ ...status(1, false, testnet), backendClaim: backendOperation() }));
+  mock.method(tarotApi, 'status', async () => ({ ...status(1, false, testnet), backendClaim: backendOperation({ revision: 1, finalized: false }) }));
   const claim = mock.method(tarotApi, 'claim', async () => { throw new Error('Must not resubmit'); });
   const value = noProviderWallet();
   const connect = mock.method(value, 'connect');
@@ -1115,6 +1115,217 @@ test('a failed backend transaction can be retried despite retaining its old hash
   assert.equal((input as HTMLInputElement).value, owner);
   assert.equal((view.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled, false);
   assert.equal(view.queryByRole('link', { name: 'View transaction' }), null);
+});
+
+for (const installed of [false, true]) test(`a finalized sponsored failure uses only the wallet retry path (installed=${installed})`, async () => {
+  mock.method(tarotApi, 'status', async () => ({ ...status(), backendClaim: backendOperation({ state: 'failed', revision: 3, finalized: true }) }));
+  const claim = mock.method(tarotApi, 'claim', async () => { throw new Error('Must not sponsor again'); });
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  mock.method(tarotApi, 'confirm', async () => confirmed());
+  const value = installed ? wallet(true) : noProviderWallet();
+  const view = render(page(search(), value));
+  const button = await view.findByRole('button', { name: 'Claim' });
+  assert.equal(view.queryByRole('textbox'), null);
+  assert.equal(view.getByRole('alert').textContent, 'This sponsored claim failed. Connect an Ethereum wallet to try again.');
+  await act(async () => fireEvent.click(button));
+  assert.equal(view.queryByRole('textbox'), null);
+  assert.equal(claim.mock.callCount(), 0);
+  assert.equal(prepare.mock.callCount(), installed ? 1 : 0);
+});
+
+test('a finalized sponsored failure in another tab replaces an unsigned failure with wallet retry', async () => {
+  let snapshot = { ...status(), backendClaim: backendOperation({ state: 'failed', transactionHash: null, revision: 1, finalized: true }) };
+  mock.method(tarotApi, 'status', async () => snapshot);
+  const claim = mock.method(tarotApi, 'claim', async () => { throw new Error('Must not sponsor again'); });
+  const view = render(page(search(), noProviderWallet()));
+  fireEvent.change(await view.findByRole('textbox'), { target: { value: 'holder.eth' } });
+  snapshot = { ...snapshot, backendClaim: backendOperation({ requestId: '00000000-0000-4000-8000-000000000003',
+    state: 'failed', revision: 4, finalized: true }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.queryByRole('textbox'), null);
+  assert.equal(view.getByRole('alert').textContent, 'This sponsored claim failed. Connect an Ethereum wallet to try again.');
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'Claim' })));
+  assert.equal(view.queryByRole('textbox'), null);
+  assert.equal(claim.mock.callCount(), 0);
+});
+
+for (const unavailable of [false, true]) test(`a sponsorship-limit rejection preserves wallet retry through stale status (unavailable=${unavailable})`, async () => {
+  let snapshot: TarotStatus = status();
+  let statusUnavailable = false;
+  let claims = 0;
+  mock.method(globalThis, 'fetch', async (path: string | URL | Request) => {
+    if (path === '/api/ethereum/tarot/status') return statusUnavailable
+      ? Response.json({ error: { code: 'unavailable' } }, { status: 503 }) : Response.json(snapshot);
+    assert.equal(path, '/api/ethereum/tarot/claim');
+    claims++;
+    return Response.json({ error: { code: 'failed-precondition',
+      message: 'This sponsored claim failed. Connect an Ethereum wallet to try again.',
+      details: { kind: 'sponsorship-limit', claimAccepted: false } } }, { status: 409 });
+  });
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  mock.method(tarotApi, 'confirm', async () => confirmed());
+  const view = renderHook(({ value }) => useTarotClaim(request, value), { initialProps: { value: noProviderWallet() } });
+  await act(async () => undefined);
+  act(() => view.result.current.claim());
+  act(() => view.result.current.setRecipient(owner));
+  snapshot = { ...status(), backendClaim: backendOperation({ state: 'failed', transactionHash: null, revision: 1, finalized: true }) };
+  statusUnavailable = unavailable;
+  await act(async () => view.result.current.submitRecipient());
+  assert.equal(claims, 1);
+  assert.equal(view.result.current.recipientForm, false);
+  assert.equal(view.result.current.pending, false);
+  assert.equal(view.result.current.recipientError, 'This sponsored claim failed. Connect an Ethereum wallet to try again.');
+  for (const failedRefresh of [false, true]) {
+    statusUnavailable = failedRefresh;
+    await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+    await act(async () => view.result.current.claim());
+    await act(async () => view.result.current.submitRecipient());
+    assert.equal(claims, 1);
+    assert.equal(view.result.current.recipientForm, false);
+    assert.equal(view.result.current.recipientError, 'This sponsored claim failed. Connect an Ethereum wallet to try again.');
+  }
+  statusUnavailable = false;
+  snapshot = { ...status(), backendClaim: backendOperation({ state: 'failed', revision: 4, finalized: true }) };
+  await act(async () => view.rerender({ value: wallet(true) }));
+  await act(async () => view.result.current.claim());
+  assert.equal(prepare.mock.callCount(), 1);
+  assert.equal(claims, 1);
+  assert.equal(view.result.current.status?.claimed, true);
+});
+
+for (const state of ['pending', 'recovery-required', 'confirmed'] as const) test(`another finalized failure cannot replace a signed ${state} claim`, async () => {
+  let snapshot = { ...status(), backendClaim: backendOperation({ state, revision: 2, finalized: false }) };
+  mock.method(tarotApi, 'status', async () => snapshot);
+  const view = renderHook(() => useTarotClaim(request, noProviderWallet()));
+  await act(async () => undefined);
+  const error = view.result.current.recipientError;
+  snapshot = { ...snapshot, backendClaim: backendOperation({ requestId: '00000000-0000-4000-8000-000000000003',
+    state: 'failed', transactionHash: `0x${'e'.repeat(64)}`, revision: 4, finalized: true }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.transactionUrl, `${config.explorerUrl}/tx/${transactionHash}`);
+  assert.equal(view.result.current.recipientError, error);
+  assert.equal(view.result.current.recipientForm, false);
+});
+
+test('a provisional confirmation recovers its own finalized failure when scope status selects another attempt', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  const original = backendOperation({ state: 'confirmed', revision: 4, finalized: false });
+  let snapshot: TarotStatus = { ...status(), backendClaim: original };
+  const service = mock.method(tarotApi, 'status', async (input: TarotStatusRequest) => input.requestId
+    ? { ...status(), observedBlock: 8, backendClaim: { ...original, state: 'failed' as const, revision: 6, finalized: true } } : snapshot);
+  const claim = mock.method(tarotApi, 'claim', async () => { throw new Error('Must not sponsor again'); });
+  const prepare = mock.method(tarotApi, 'prepare', async () => prepared());
+  mock.method(tarotApi, 'confirm', async () => confirmed(1, 9));
+  const view = renderHook(({ value }) => useTarotClaim(request, value), { initialProps: { value: noProviderWallet() } });
+  await act(async () => undefined);
+  assert.equal(view.result.current.backendPending, true);
+  snapshot = { ...status(), observedBlock: 8, backendClaim: backendOperation({ requestId: '00000000-0000-4000-8000-000000000003',
+    state: 'failed', transactionHash: `0x${'e'.repeat(64)}`, revision: 6, finalized: true }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.transactionUrl, `${config.explorerUrl}/tx/${transactionHash}`);
+  await act(async () => t.mock.timers.tick(4_000));
+  assert.equal(service.mock.calls.filter(call => call.arguments[0].requestId === original.requestId).length, 1);
+  assert.equal(view.result.current.backendPending, false);
+  assert.equal(view.result.current.transactionUrl, null);
+  assert.equal(view.result.current.recipientForm, false);
+  assert.equal(view.result.current.recipientError, 'This sponsored claim failed. Connect an Ethereum wallet to try again.');
+  await act(async () => view.result.current.claim());
+  assert.equal(view.result.current.recipientForm, false);
+  assert.equal(claim.mock.callCount(), 0);
+  await act(async () => view.rerender({ value: wallet(true) }));
+  await act(async () => view.result.current.claim());
+  assert.equal(prepare.mock.callCount(), 1);
+  assert.equal(claim.mock.callCount(), 0);
+  assert.equal(view.result.current.status?.claimed, true);
+  const reads = service.mock.callCount();
+  await act(async () => t.mock.timers.tick(60_000));
+  assert.equal(service.mock.callCount(), reads);
+});
+
+test('provider discovery preserves a finalized sponsored failure received while discovery is pending', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let snapshot: TarotStatus = status();
+  mock.method(tarotApi, 'status', async () => snapshot);
+  const claim = mock.method(tarotApi, 'claim', async () => { throw new Error('Must not sponsor again'); });
+  const view = renderHook(() => useTarotClaim(request, { ...wallet(), providerAvailability: 'unknown' }));
+  await act(async () => undefined);
+  act(() => view.result.current.claim());
+  assert.equal(view.result.current.connecting, true);
+  snapshot = { ...status(), backendClaim: backendOperation({ state: 'failed', revision: 4, finalized: true }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.recipientError, 'This sponsored claim failed. Connect an Ethereum wallet to try again.');
+  await act(async () => t.mock.timers.tick(300));
+  assert.equal(view.result.current.connecting, false);
+  assert.equal(view.result.current.recipientForm, false);
+  assert.equal(view.result.current.recipientError, 'This sponsored claim failed. Connect an Ethereum wallet to try again.');
+  await act(async () => view.result.current.claim());
+  assert.equal(view.result.current.recipientForm, false);
+  assert.equal(claim.mock.callCount(), 0);
+});
+
+test('a finalized failure before signing still allows recipient retry', async () => {
+  mock.method(tarotApi, 'status', async () => ({ ...status(), backendClaim: backendOperation({ state: 'failed', transactionHash: null,
+    revision: 2, finalized: true }) }));
+  const claim = mock.method(tarotApi, 'claim', async (input: TarotClaimRequest) => ({ tokenId: 1, receiptTokenId: tarotReceiptTokenId(1),
+    backendClaim: backendOperation({ requestId: input.requestId, revision: 1, finalized: false }) }));
+  const view = render(page(search(), noProviderWallet()));
+  assert.equal((await view.findByRole('textbox') as HTMLInputElement).value, owner);
+  await act(async () => fireEvent.click(view.getByRole('button', { name: 'OK' })));
+  assert.equal(claim.mock.callCount(), 1);
+  assert.ok(view.getByRole('link', { name: 'View transaction' }));
+});
+
+for (const state of ['pending', 'recovery-required'] as const) test(`a newer ${state} revision restores reorg recovery after the three-confirmation artwork view`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000_000 });
+  let snapshot = { ...status(1, true), backendClaim: backendOperation({ state: 'confirmed', revision: 4, finalized: false }) };
+  const service = mock.method(tarotApi, 'status', async () => snapshot);
+  const claim = mock.method(tarotApi, 'claim', async () => { throw new Error('Must not sponsor again'); });
+  const view = render(page(search(), noProviderWallet()));
+  await act(async () => undefined);
+  assertArtworkPage(view);
+  await act(async () => t.mock.timers.tick(60_000));
+  assert.equal(service.mock.callCount(), 1);
+  snapshot = { ...snapshot, claimed: false, observedBlock: 6, blockHash: receiptBlockHash,
+    backendClaim: backendOperation({ state, revision: 5, finalized: false, error: state === 'recovery-required' ? 'Receipt recovery is pending.' : undefined }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.ok(view.getByRole('link', { name: 'View transaction' }));
+  assert.equal(view.queryByRole('textbox'), null);
+  snapshot = { ...snapshot, backendClaim: backendOperation({ state: 'failed', revision: 4, finalized: true }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.ok(view.getByRole('link', { name: 'View transaction' }));
+  assert.equal(view.queryByRole('button', { name: 'Claim' }), null);
+  assert.equal(view.queryByRole('textbox'), null);
+  assert.equal(claim.mock.callCount(), 0);
+});
+
+for (const revision of [undefined, 9, 10]) test(`a terminal claim ignores a nonterminal rollback without a newer revision (${revision ?? 'legacy'})`, async () => {
+  let snapshot = { ...status(), backendClaim: backendOperation({ state: 'confirmed', revision: 10, finalized: false }) };
+  mock.method(tarotApi, 'status', async () => snapshot);
+  const view = renderHook(() => useTarotClaim(request, noProviderWallet()));
+  await act(async () => undefined);
+  snapshot = { ...snapshot, backendClaim: backendOperation({ state: 'recovery-required', revision, finalized: false, error: 'Stale recovery.' }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.recipientError, null);
+  assert.equal(view.result.current.transactionUrl, `${config.explorerUrl}/tx/${transactionHash}`);
+  assert.equal(view.result.current.recipientForm, false);
+});
+
+test('a newer rollback cannot replace the signed transaction hash or undo finality', async () => {
+  let snapshot = { ...status(), backendClaim: backendOperation({ state: 'confirmed', revision: 10, finalized: false }) };
+  mock.method(tarotApi, 'status', async () => snapshot);
+  const view = renderHook(() => useTarotClaim(request, noProviderWallet()));
+  await act(async () => undefined);
+  snapshot = { ...snapshot, backendClaim: backendOperation({ state: 'recovery-required', revision: 11, finalized: false,
+    transactionHash: `0x${'e'.repeat(64)}`, error: 'Changed transaction.' }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.recipientError, null);
+  assert.equal(view.result.current.transactionUrl, `${config.explorerUrl}/tx/${transactionHash}`);
+  snapshot = { ...snapshot, backendClaim: backendOperation({ state: 'confirmed', revision: 12, finalized: true }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  snapshot = { ...snapshot, backendClaim: backendOperation({ state: 'recovery-required', revision: 13, finalized: false, error: 'Finalized rollback.' }) };
+  await act(async () => window.dispatchEvent(new dom.window.Event('focus')));
+  assert.equal(view.result.current.recipientError, null);
+  assert.equal(view.result.current.transactionUrl, `${config.explorerUrl}/tx/${transactionHash}`);
 });
 
 for (const reload of [false, true]) test(`failed claim recovery preserves recipient edits across refreshes after remount (reload=${reload})`, async () => {
@@ -1822,10 +2033,11 @@ test('confirmation responses require paired canonical receipt proof for terminal
 });
 
 test('backend claim API validates operation states and keeps recipient requests private', async () => {
-  let response: unknown = { tokenId: 1, receiptTokenId: tarotReceiptTokenId(1), backendClaim: backendOperation() };
+  const operation = backendOperation({ revision: 7, finalized: false });
+  let response: unknown = { tokenId: 1, receiptTokenId: tarotReceiptTokenId(1), backendClaim: operation };
   const fetch = mock.method(globalThis, 'fetch', async (_path: string | URL | Request, _init?: RequestInit) => Response.json(response));
   const input = { ...request, requestId: backendRequestId, recipient: 'holder.eth' };
-  assert.equal((await tarotApi.claim(input)).backendClaim.transactionHash, transactionHash);
+  assert.deepEqual((await tarotApi.claim(input)).backendClaim, operation);
   const [path, init] = fetch.mock.calls[0].arguments;
   assert.equal(path, '/api/ethereum/tarot/claim');
   assert.equal(init?.method, 'POST');
@@ -1834,7 +2046,9 @@ test('backend claim API validates operation states and keeps recipient requests 
   assert.deepEqual(JSON.parse(String(init?.body)), input);
   for (const operation of [backendOperation({ requestId: 'wrong' }), backendOperation({ transactionHash: null }),
     backendOperation({ state: 'confirmed', transactionHash: null }), backendOperation({ recipient: 'holder.eth' }),
-    backendOperation({ recipient: '0x0000000000000000000000000000000000000000' }), { ...backendOperation(), state: 'unknown' }]) {
+    backendOperation({ recipient: '0x0000000000000000000000000000000000000000' }), { ...backendOperation(), state: 'unknown' },
+    backendOperation({ revision: -1 }), backendOperation({ revision: 1.5 }), { ...backendOperation(), revision: '1' },
+    { ...backendOperation(), finalized: 'false' }]) {
     response = { tokenId: 1, receiptTokenId: tarotReceiptTokenId(1), backendClaim: operation };
     await assert.rejects(tarotApi.claim(input), /verify/);
     response = { ...status(), backendClaim: operation };
@@ -1866,6 +2080,25 @@ test('only explicit claim rejection details permit safe recipient retry', async 
   details = { field: 'recipient', claimAccepted: false };
   await assert.rejects(tarotApi.status(request), (error: unknown) => error instanceof TarotApiError &&
     error.field === null && error.claimAccepted === undefined);
+});
+
+test('only explicit sponsorship-limit claim rejections disable sponsorship', async () => {
+  const failure = { code: 'failed-precondition', message: 'Connect an Ethereum wallet to try again.',
+    details: { kind: 'sponsorship-limit', claimAccepted: false } };
+  let response = { status: 409, error: failure };
+  mock.method(globalThis, 'fetch', async () => Response.json({ error: response.error }, { status: response.status }));
+  const input = { ...request, requestId: backendRequestId, recipient: owner };
+  await assert.rejects(tarotApi.claim(input), (error: unknown) => error instanceof TarotApiError &&
+    error.sponsorshipExhausted && error.claimAccepted === false);
+  await assert.rejects(tarotApi.status(request), (error: unknown) => error instanceof TarotApiError && !error.sponsorshipExhausted);
+  for (const invalid of [
+    { status: 503, error: failure }, { status: 409, error: { ...failure, code: 'unavailable' } },
+    { status: 409, error: { ...failure, details: { ...failure.details, kind: 'another-limit' } } },
+    { status: 409, error: { ...failure, details: { ...failure.details, claimAccepted: true } } },
+  ]) {
+    response = invalid;
+    await assert.rejects(tarotApi.claim(input), (error: unknown) => error instanceof TarotApiError && !error.sponsorshipExhausted);
+  }
 });
 
 test('initial rate limits retry automatically at Retry-After without wallet interaction and stop after success', async t => {
