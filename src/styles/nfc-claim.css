@@ -155,6 +155,19 @@
   animation: none;
 }
 
+.nfc-tarot-token-id {
+  position: fixed;
+  bottom: min(calc(12px + env(safe-area-inset-bottom, 0px)), calc(var(--page-padding-bottom) - 1em - 2px));
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  font-size: clamp(6px, calc(var(--page-padding-bottom) - env(safe-area-inset-bottom, 0px) - 4px), 12px);
+  font-weight: 300;
+  line-height: 1;
+  pointer-events: none;
+}
+
 .nfc-tarot-page__action {
   display: flex;
   flex-direction: column;

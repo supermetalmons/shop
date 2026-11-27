@@ -39,7 +39,7 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
       <ul className="nfc-claim-nfts" aria-label={compact ? 'Your NFTs' : undefined} role={compact ? 'list' : 'presentation'}>
         <li className="nfc-claim-nft" role={compact ? undefined : 'presentation'}>
           <NfcTarotCard tokenId={tokenId} heroRef={cardRef} animate={animateCard} />
-          {compact && <div className="nfc-claim-nft__copy nfc-claim-reveal"><h2>Mutating Card</h2><p>Evolve it and get it physically delivered when you’re ready.</p></div>}
+          {compact && <div className="nfc-claim-nft__copy nfc-claim-reveal"><h2>Mutating Card #{tokenId}</h2><p>Evolve it and get it physically delivered when you’re ready.</p></div>}
         </li>
         {eligible && <li className="nfc-claim-nft nfc-claim-reveal" hidden={!compact}>
           <img ref={receiptRef} className="nfc-claim-nft__image--certificate nfc-tarot-receipt"
@@ -50,7 +50,7 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
           {receiptState === 'failed' && <span className="nfc-claim-nft__image--certificate nfc-tarot-receipt__fallback">
             Receipt image unavailable
           </span>}
-          <div className="nfc-claim-nft__copy"><h2>NFC Card Receipt</h2><p>Proves the authenticity of the physical card you just scanned.</p></div>
+          <div className="nfc-claim-nft__copy"><h2>NFC Card Receipt #{tokenId}</h2><p>Proves the authenticity of the physical card you just scanned.</p></div>
         </li>}
       </ul>
       {compact && model && <div className="nfc-tarot-page__action nfc-claim-reveal">
@@ -70,6 +70,7 @@ function TarotCardPage({ tokenId, header, model, suspended = false, pickerOpen =
         {model.recipientError && <p id="nfc-recipient-error" className="nfc-claim-error" role="alert">{model.recipientError}</p>}
       </div>}
     </main>
+    {!compact && <span className="nfc-tarot-token-id">{tokenId}</span>}
   </>;
 }
 
